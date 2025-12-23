@@ -7,60 +7,90 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## ✨ Features
+![Screenshot_20251223_084225](https://github.com/user-attachments/assets/615b97dc-9a63-4d27-90b5-6e4444350ff0)
+![Screenshot_20251223_085843](https://github.com/user-attachments/assets/95fef9c7-dbff-494e-9a8e-34797402b8f2)
+![Screenshot_20251223_084243](https://github.com/user-attachments/assets/dd8ad945-66cc-4d63-89b3-4621b3582cad)
+![Screenshot_20251223_084146](https://github.com/user-attachments/assets/a2022fab-70a2-498d-bf2d-631b903948da)
+
+- Send videos, PDFs, images and audio files to the app through share intents to process them
 
 ### 🤖 AI Chat
 - Chat with Large Language Models (LLMs) completely offline
 - Support for GGUF model format
 - OpenAI-compatible server mode on port **8080**
 - Multiple model support with easy switching
-- Customizable system prompts
+- Support for LAN visible server through settings
+![Screenshot_20251223_084258](https://github.com/user-attachments/assets/01a98c6d-f45c-4ec7-abdb-2d6c36067ba1)
+
 
 ### 🎨 Image Generation
 - Generate images from text prompts
 - **Supported models:**
   - Stable Diffusion (SD 1.5, SD 2.1, SDXL)
-  - FLUX (schnell, dev)
-- Adjustable parameters (steps, CFG scale, dimensions)
+  - FLUX (schnell, dev) (very slow)
+- Adjustable parameters (steps, CFG scale, dimensions, tiling)
+![Screenshot_20251223_084402](https://github.com/user-attachments/assets/9f169dfa-8e3c-4301-83fa-0c1f41679888)
+![Screenshot_20251223_090817](https://github.com/user-attachments/assets/858856c9-05b8-4285-a446-fb8c5e922106)
+
 
 ### 🎙️ Audio Transcription
-- Transcribe audio files to text using Whisper
+- Transcribe audio and video files to text using Whisper
 - Support for multiple languages
 - Various model sizes (tiny, base, small, medium, large)
+![Screenshot_20251223_084914](https://github.com/user-attachments/assets/8e64591e-111b-47e7-9c29-bff786de7734)
 
 ### 🎬 Video Summarization  
 - Extract audio from videos
 - Transcribe and summarize video content
 - Uses FFmpeg for audio extraction
+![Screenshot_20251223_085016](https://github.com/user-attachments/assets/aba2846b-e30b-4f0a-a585-5b57db2347f9)
 
 ### 📄 PDF Tools
 - Extract text from PDFs
 - Summarize documents with AI
 - OCR support for scanned documents
+- Much more
+![Screenshot_20251223_084949](https://github.com/user-attachments/assets/7a11a764-622c-4232-ae66-3cd5f8439390)
+![Screenshot_20251223_085000](https://github.com/user-attachments/assets/cd7cf6ca-0e3f-42f9-87ca-eb22469802d7)
 
 ### 🖼️ Image Upscaling
 - Upscale images with RealESRGAN
 - Multiple scale factors (2x, 3x, 4x)
 - High-quality AI enhancement
+![Screenshot_20251223_084829](https://github.com/user-attachments/assets/846244e5-0cda-46a4-80b3-18cc58b341ac)
+![Screenshot_20251223_090343](https://github.com/user-attachments/assets/cf3333df-7396-4fd3-b703-d2831e90eb3b)
 
 ### 📚 Offline Wikipedia (Kiwix)
 - Browse Wikipedia without internet
-- ZIM file support
+- ZIM file support (download them through the catalog or import them from internal storage)
 - Built-in Kiwix server on port **8888**
 - Access from any device on your network
+![Screenshot_20251223_085915](https://github.com/user-attachments/assets/0618ac08-07f1-4b62-b345-274170254e2e)
+![Screenshot_20251223_090007](https://github.com/user-attachments/assets/96639c84-1afb-4d87-b8e9-addd91ad9501)
+![Screenshot_20251223_090024](https://github.com/user-attachments/assets/847eda4f-c346-4898-9440-2334fd2f02f5)
 
 ### 📤 Model & File Sharing
 - Share AI models over LAN
 - Web UI for downloading models
 - QR codes for easy connection
 - ZIM file sharing for offline content
+![Screenshot_20251223_083546](https://github.com/user-attachments/assets/51b7bdf2-e84b-4726-b23d-1e1acef0fbf0)
+![Screenshot_20251223_083519](https://github.com/user-attachments/assets/c3d64778-fdce-40b5-b4d7-108be49de4d4)
+![Screenshot_20251223_083528](https://github.com/user-attachments/assets/14c5c464-8b6b-4520-a6ae-ec11d15252aa)
+![Screenshot_20251223_083624](https://github.com/user-attachments/assets/a71b4664-2662-4c4e-9de8-80e4f2a2e130)
+![Screenshot_20251223_083635](https://github.com/user-attachments/assets/8956c59a-dadb-4bfc-bf05-80a5e70c3a2a)
+![Screenshot_20251223_083705](https://github.com/user-attachments/assets/8621d42d-e207-449e-a6c4-03ae9ad04f27)
+
 
 ### 📝 Notes
 - Create and manage notes
 - AI-powered note summarization
 - Markdown support
+![Screenshot_20251223_083650](https://github.com/user-attachments/assets/acb50b21-6079-42ed-9abc-925c64325b73)
 
 ## 🏗️ How It Was Built
 
+Built with the help of Antigravity
 This app integrates several native C++ AI inference engines into an Android app using JNI and native binaries:
 
 ### Core Technologies
@@ -110,10 +140,6 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 ### Download Models
 
 Models are downloaded separately from within the app. The app includes a curated model catalog with popular options for each task.
-
-## 📱 Screenshots
-
-*Coming soon*
 
 ## 🤝 Contributing
 
