@@ -190,9 +190,9 @@ If you find this app useful, consider supporting development:
 - ☕ [Ko-fi](https://ko-fi.com/L3L61QAJ1S)
 - 💳 [PayPal](https://paypal.me/ManuelG815)
 
-## 📄 License
+## License
 
-This project is open source. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License, Version 2.0.
 
 ## 👨‍💻 Author
 
