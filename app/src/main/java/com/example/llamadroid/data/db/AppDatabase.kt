@@ -108,9 +108,16 @@ class Converters {
         OrganizerEventEntity::class,
         OrganizerAlarmEntity::class,
         OrganizerLlmSettingsEntity::class,
-        SavedCommand::class
+        SavedCommand::class,
+        QuadtrixProfileEntity::class,
+        QuadtrixRunEntity::class,
+        QuadtrixMetricEntity::class,
+        KnowledgeBaseEntity::class,
+        KnowledgeSourceEntity::class,
+        KnowledgeChunkEntity::class,
+        com.example.llamadroid.data.model.LiteRtModelEntity::class
     ], 
-    version = 56,
+    version = 65,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -139,6 +146,11 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaMessageDao(): com.example.llamadroid.data.dao.LlamaMessageDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
     abstract fun organizerDao(): OrganizerDao
+    abstract fun quadtrixProfileDao(): QuadtrixProfileDao
+    abstract fun quadtrixRunDao(): QuadtrixRunDao
+    abstract fun quadtrixMetricDao(): QuadtrixMetricDao
+    abstract fun knowledgeBaseDao(): KnowledgeBaseDao
+    abstract fun liteRtModelDao(): com.example.llamadroid.data.dao.LiteRtModelDao
 
     companion object {
         @Volatile

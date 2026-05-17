@@ -108,8 +108,17 @@ class AgentForegroundService : Service() {
             recordBreadcrumb(
                 event = "start_requested",
                 phase = ACTION_START_AGENT,
-                details = "source=$startSource recoveryOnly=$recoveryOnly running=$isRunning"
+                details = "source=$startSource recoveryOnly=$recoveryOnly running=$isRunning liveInstance=${instance != null}"
             )
+            if (isRunning && instance == null) {
+                DebugLog.log("[$TAG] Resetting stale running state before foreground service start")
+                recordBreadcrumb(
+                    event = "stale_running_state_reset",
+                    phase = ACTION_START_AGENT,
+                    details = "source=$startSource"
+                )
+                isRunning = false
+            }
             if (isRunning) {
                 updateStatus(context, status)
                 if (recoveryOnly) {
@@ -215,7 +224,7 @@ class AgentForegroundService : Service() {
          * Update the notification status text.
          */
         fun updateStatus(context: Context, status: String) {
-            if (!isRunning) return
+            if (!isRunning || instance == null) return
             
             val intent = Intent(context, AgentForegroundService::class.java).apply {
                 action = ACTION_UPDATE_STATUS
@@ -403,9 +412,17 @@ class AgentForegroundService : Service() {
         startSource: String = "direct",
         requestedAction: String = ACTION_START_AGENT
     ) {
-        if (isRunning) {
+        if (isRunning && notificationTaskId != null) {
             updateNotificationStatus(status)
             return
+        }
+        if (isRunning) {
+            recordBreadcrumb(
+                event = "foreground_state_repair",
+                phase = requestedAction,
+                details = "source=$startSource notificationTaskId=$notificationTaskId immediate=$immediateForegroundActive"
+            )
+            isRunning = false
         }
         
         isRunning = true
@@ -462,7 +479,7 @@ class AgentForegroundService : Service() {
     }
 
     private fun startImmediateForeground(status: String, startSource: String) {
-        if (isRunning || immediateForegroundActive) return
+        if (immediateForegroundActive || notificationTaskId != null) return
         try {
             val notification = UnifiedNotificationManager.createBasicForegroundNotification(status)
             startForeground(IMMEDIATE_FOREGROUND_ID, notification)
@@ -563,8 +580,10 @@ class AgentForegroundService : Service() {
         super.onDestroy()
         instance = null
         isRunning = false
+        immediateForegroundActive = false
         releaseWakeLock()
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
+        notificationTaskId = null
         serviceScope.cancel()
         DebugLog.log("[$TAG] Service destroyed")
     }

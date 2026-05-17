@@ -163,10 +163,14 @@ object FarmTradeItemCatalog {
 
 object FarmShopCatalog {
     const val FERTILIZER_BUY_PRICE = 50
+    const val FUEL_BUCKET_BUY_BATCH_SIZE = 50
 
     fun materialBuyPrice(inventoryId: String): Int = when (inventoryId) {
         "fertilizer" -> FERTILIZER_BUY_PRICE
+        FARM_FUEL_BUCKET_ID -> 1
         "water" -> 5
         else -> 5
     }
+
+    fun fuelBucketBatchPrice(): Int = materialBuyPrice(FARM_FUEL_BUCKET_ID) * FUEL_BUCKET_BUY_BATCH_SIZE
 }

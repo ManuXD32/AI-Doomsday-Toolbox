@@ -2,6 +2,7 @@ package com.example.llamadroid.data.db
 
 import androidx.room.testing.MigrationTestHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import com.example.llamadroid.quadtrix.QuadtrixOptionKeys
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
@@ -874,6 +875,630 @@ class AppDatabaseMigrationTest {
             assertTrue(cursor.moveToFirst())
             assertEquals("Tech news", cursor.getString(0))
             assertEquals("QUEUED", cursor.getString(1))
+        }
+    }
+
+    @Test
+    fun migrate56To57_addsBenchmarkRunMetadata() {
+        helper.createDatabase(TEST_DB, 56).apply {
+            execSQL(
+                """
+                INSERT INTO benchmark_results (
+                    modelPath,
+                    modelName,
+                    threads,
+                    promptTokensPerSecond,
+                    genTokensPerSecond,
+                    promptTokens,
+                    genTokens,
+                    timestamp
+                ) VALUES (
+                    '/models/test.gguf',
+                    'test.gguf',
+                    4,
+                    12.5,
+                    8.75,
+                    512,
+                    128,
+                    123456789
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO benchmark_results (
+                    modelPath,
+                    modelName,
+                    threads,
+                    promptTokensPerSecond,
+                    genTokensPerSecond,
+                    promptTokens,
+                    genTokens,
+                    timestamp
+                ) VALUES (
+                    '/models/test.gguf',
+                    'test.gguf',
+                    8,
+                    18.25,
+                    11.5,
+                    512,
+                    128,
+                    123456999
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            57,
+            true,
+            Migrations.MIGRATION_56_57
+        )
+
+        migratedDb.query(
+            "SELECT runStartedAt, runName, timestamp FROM benchmark_results WHERE modelPath = '/models/test.gguf' ORDER BY threads ASC"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(123456789L, cursor.getLong(0))
+            assertEquals("", cursor.getString(1))
+            assertEquals(123456789L, cursor.getLong(2))
+            assertTrue(cursor.moveToNext())
+            assertEquals(123456789L, cursor.getLong(0))
+            assertEquals("", cursor.getString(1))
+            assertEquals(123456999L, cursor.getLong(2))
+        }
+    }
+
+    @Test
+    fun migrate57To58_clearsDatasetSourceTextAndPreservesChunks() {
+        helper.createDatabase(TEST_DB, 57).apply {
+            execSQL(
+                """
+                INSERT INTO dataset_projects (
+                    id,
+                    name,
+                    createdAt,
+                    backend,
+                    serverUrl,
+                    ollamaUrl,
+                    ollamaModel,
+                    ollamaNumCtx,
+                    ollamaThreads,
+                    ollamaMmap,
+                    temperature,
+                    maxTokens,
+                    useCoT,
+                    finalLanguage,
+                    chunkSize,
+                    questionsPerChunk
+                ) VALUES (
+                    1,
+                    'Large PDF dataset',
+                    123456789,
+                    'llama_server',
+                    'http://127.0.0.1:8080',
+                    'http://127.0.0.1:11434',
+                    NULL,
+                    4096,
+                    4,
+                    0,
+                    0.7,
+                    512,
+                    0,
+                    '',
+                    1000,
+                    5
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO dataset_sources (
+                    id,
+                    projectId,
+                    type,
+                    uri,
+                    name,
+                    extractedText,
+                    addedAt
+                ) VALUES (
+                    10,
+                    1,
+                    'PDF',
+                    'content://dataset/large.pdf',
+                    'large.pdf',
+                    'very large extracted source text',
+                    123456790
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO dataset_chunks (
+                    id,
+                    projectId,
+                    sourceId,
+                    chunkIndex,
+                    originalText,
+                    cleanedText,
+                    status
+                ) VALUES (
+                    20,
+                    1,
+                    10,
+                    0,
+                    'chunk text stays durable',
+                    NULL,
+                    'PENDING'
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            58,
+            true,
+            Migrations.MIGRATION_57_58
+        )
+
+        migratedDb.query(
+            "SELECT extractedText FROM dataset_sources WHERE id = 10"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertNull(cursor.getString(0))
+        }
+        migratedDb.query(
+            "SELECT originalText FROM dataset_chunks WHERE id = 20"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("chunk text stays durable", cursor.getString(0))
+        }
+    }
+
+    @Test
+    fun migrate58To59_createsQuadtrixTables() {
+        helper.createDatabase(TEST_DB, 58).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            59,
+            true,
+            Migrations.MIGRATION_58_59
+        )
+
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='quadtrix_profiles'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='quadtrix_runs'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='quadtrix_metrics'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+    }
+
+    @Test
+    fun migrate59To60_addsQuadtrixQwenGgufAndStreamingColumns() {
+        helper.createDatabase(TEST_DB, 59).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            60,
+            true,
+            Migrations.MIGRATION_59_60
+        )
+
+        listOf(
+            "arch",
+            "tokenizer",
+            "qwenTokenizerJsonPath",
+            "nKvHead",
+            "headDim",
+            "intermediateSize",
+            "exportGgufPath",
+            "saveGgufAfterTrain",
+            "ggufOuttype",
+            "showGgufInModels",
+            "streamProgress",
+            "streamPort"
+        ).forEach { column ->
+            migratedDb.query("PRAGMA table_info(quadtrix_profiles)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                var found = false
+                while (cursor.moveToNext()) {
+                    found = found || cursor.getString(nameIndex) == column
+                }
+                assertTrue("Missing quadtrix_profiles.$column", found)
+            }
+        }
+    }
+
+    @Test
+    fun migrate60To61_addsQuadtrixTokenCacheAndStreamConnectionColumns() {
+        helper.createDatabase(TEST_DB, 60).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            61,
+            true,
+            Migrations.MIGRATION_60_61
+        )
+
+        listOf(
+            "streamHost",
+            "streamLanEnabled",
+            "remoteStreamHost",
+            "remoteStreamPort",
+            "remoteStreamToken",
+            "tokenCacheMode",
+            "tokenCacheDir",
+            "tokenizationMode",
+            "tokenizeLogIntervalSec"
+        ).forEach { column ->
+            migratedDb.query("PRAGMA table_info(quadtrix_profiles)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                var found = false
+                while (cursor.moveToNext()) {
+                    found = found || cursor.getString(nameIndex) == column
+                }
+                assertTrue("Missing quadtrix_profiles.$column", found)
+            }
+        }
+    }
+
+    @Test
+    fun migrate61To62_addsQuadtrixOptionEnablementColumns() {
+        helper.createDatabase(TEST_DB, 61).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            62,
+            true,
+            Migrations.MIGRATION_61_62
+        )
+
+        listOf(
+            "distCoordinatorOnly",
+            "printSystemInfo",
+            "noGenerateAfterTrain",
+            "enabledOptions"
+        ).forEach { column ->
+            migratedDb.query("PRAGMA table_info(quadtrix_profiles)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                var found = false
+                while (cursor.moveToNext()) {
+                    found = found || cursor.getString(nameIndex) == column
+                }
+                assertTrue("Missing quadtrix_profiles.$column", found)
+            }
+        }
+
+        migratedDb.query("PRAGMA table_info(quadtrix_profiles)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val defaultIndex = cursor.getColumnIndex("dflt_value")
+            var defaultEnabledOptions = ""
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex) == "enabledOptions") {
+                    defaultEnabledOptions = cursor.getString(defaultIndex).trim('\'')
+                }
+            }
+            assertEquals(QuadtrixOptionKeys.defaultCsv, defaultEnabledOptions)
+        }
+    }
+
+    @Test
+    fun migrate62To63_addsKnowledgeBaseTablesAndAgentScope() {
+        helper.createDatabase(TEST_DB, 62).apply {
+            execSQL(
+                """
+                INSERT INTO agent_conversations (
+                    id,
+                    title,
+                    projectFolder,
+                    lastAgentRole,
+                    lastTask,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    1,
+                    'Medicine project',
+                    'medicine_project',
+                    'ORCHESTRATOR',
+                    NULL,
+                    1000,
+                    1000
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            63,
+            true,
+            Migrations.MIGRATION_62_63
+        )
+
+        listOf(
+            "knowledge_bases" to "name",
+            "knowledge_sources" to "knowledgeBaseId",
+            "knowledge_sources" to "sourceRef",
+            "knowledge_sources" to "enabled",
+            "knowledge_sources" to "status",
+            "knowledge_chunks" to "sourceId",
+            "knowledge_chunks" to "chunkIndex",
+            "agent_conversations" to "knowledgeBaseIds"
+        ).forEach { (table, column) ->
+            migratedDb.query("PRAGMA table_info($table)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                var found = false
+                while (cursor.moveToNext()) {
+                    found = found || cursor.getString(nameIndex) == column
+                }
+                assertTrue("Missing $table.$column", found)
+            }
+        }
+
+        migratedDb.query("SELECT knowledgeBaseIds FROM agent_conversations WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("", cursor.getString(0))
+        }
+
+        migratedDb.execSQL("PRAGMA foreign_keys=ON")
+        migratedDb.execSQL(
+            """
+            INSERT INTO knowledge_bases (
+                id,
+                name,
+                description,
+                createdAt,
+                updatedAt
+            ) VALUES (
+                10,
+                'Medicine',
+                '',
+                2000,
+                2000
+            )
+            """.trimIndent()
+        )
+        migratedDb.execSQL(
+            """
+            INSERT INTO knowledge_sources (
+                id,
+                knowledgeBaseId,
+                type,
+                sourceRef,
+                title,
+                contentHash,
+                enabled,
+                status,
+                errorMessage,
+                embeddingModelPath,
+                embeddingDim,
+                chunkCount,
+                createdAt,
+                updatedAt,
+                indexedAt
+            ) VALUES (
+                20,
+                10,
+                'file',
+                'content://medicine',
+                'Medicine notes',
+                'hash',
+                1,
+                'indexed',
+                NULL,
+                NULL,
+                0,
+                1,
+                2000,
+                2000,
+                2000
+            )
+            """.trimIndent()
+        )
+        migratedDb.execSQL(
+            """
+            INSERT INTO knowledge_chunks (
+                id,
+                knowledgeBaseId,
+                sourceId,
+                chunkIndex,
+                text,
+                startOffset,
+                endOffset,
+                embedding,
+                embeddingNorm,
+                createdAt
+            ) VALUES (
+                30,
+                10,
+                20,
+                0,
+                'Aspirin notes',
+                0,
+                13,
+                NULL,
+                NULL,
+                2000
+            )
+            """.trimIndent()
+        )
+        migratedDb.execSQL("DELETE FROM knowledge_bases WHERE id = 10")
+
+        migratedDb.query("SELECT COUNT(*) FROM knowledge_sources WHERE knowledgeBaseId = 10").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+        migratedDb.query("SELECT COUNT(*) FROM knowledge_chunks WHERE knowledgeBaseId = 10").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+    }
+
+    @Test
+    fun migrate63To64_addsKnowledgeBaseProgressFieldsAndBackfillsVectorCounts() {
+        helper.createDatabase(TEST_DB, 63).apply {
+            execSQL(
+                """
+                INSERT INTO knowledge_bases (
+                    id,
+                    name,
+                    description,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    10,
+                    'Medicine',
+                    '',
+                    2000,
+                    2000
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO knowledge_sources (
+                    id,
+                    knowledgeBaseId,
+                    type,
+                    sourceRef,
+                    title,
+                    contentHash,
+                    enabled,
+                    status,
+                    errorMessage,
+                    embeddingModelPath,
+                    embeddingDim,
+                    chunkCount,
+                    createdAt,
+                    updatedAt,
+                    indexedAt
+                ) VALUES (
+                    20,
+                    10,
+                    'file',
+                    'content://medicine',
+                    'Medicine notes',
+                    'hash',
+                    1,
+                    'indexed',
+                    NULL,
+                    '/models/embed.gguf',
+                    3,
+                    2,
+                    2000,
+                    2000,
+                    2000
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO knowledge_chunks (
+                    id,
+                    knowledgeBaseId,
+                    sourceId,
+                    chunkIndex,
+                    text,
+                    startOffset,
+                    endOffset,
+                    embedding,
+                    embeddingNorm,
+                    createdAt
+                ) VALUES (
+                    30,
+                    10,
+                    20,
+                    0,
+                    'Aspirin notes',
+                    0,
+                    13,
+                    X'0000803F0000000000000000',
+                    1.0,
+                    2000
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO knowledge_chunks (
+                    id,
+                    knowledgeBaseId,
+                    sourceId,
+                    chunkIndex,
+                    text,
+                    startOffset,
+                    endOffset,
+                    embedding,
+                    embeddingNorm,
+                    createdAt
+                ) VALUES (
+                    31,
+                    10,
+                    20,
+                    1,
+                    'Raw extracted notes',
+                    14,
+                    33,
+                    NULL,
+                    NULL,
+                    2000
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            64,
+            true,
+            Migrations.MIGRATION_63_64
+        )
+
+        listOf(
+            "embeddingBackend",
+            "embeddingConfigHash",
+            "embeddedChunkCount",
+            "processingStage",
+            "progressTotal",
+            "progressDone",
+            "progressUpdatedAt"
+        ).forEach { column ->
+            migratedDb.query("PRAGMA table_info(knowledge_sources)").use { cursor ->
+                val nameIndex = cursor.getColumnIndex("name")
+                var found = false
+                while (cursor.moveToNext()) {
+                    found = found || cursor.getString(nameIndex) == column
+                }
+                assertTrue("Missing knowledge_sources.$column", found)
+            }
+        }
+
+        migratedDb.query(
+            "SELECT embeddedChunkCount, progressTotal, progressDone, processingStage FROM knowledge_sources WHERE id = 20"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+            assertEquals(2, cursor.getInt(1))
+            assertEquals(1, cursor.getInt(2))
+            assertEquals("indexed", cursor.getString(3))
         }
     }
 

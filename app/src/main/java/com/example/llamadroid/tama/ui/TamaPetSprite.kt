@@ -34,6 +34,7 @@ private const val WALK_FRAME_DURATION_MS = 240
 private const val EAT_FRAME_DURATION_MS = 90
 private const val EGG_IDLE_CYCLE_MS = 2400
 private const val EGG_BLINK_WINDOW_MS = 220
+private const val TAMA_PET_VISUAL_SCALE = 0.8f
 
 @Composable
 fun TamaPetSprite(
@@ -61,7 +62,7 @@ fun TamaPetSprite(
     AsyncImage(
         model = "file:///android_asset/$assetPath",
         contentDescription = null,
-        modifier = modifier.size(size),
+        modifier = modifier.size(size * TAMA_PET_VISUAL_SCALE),
         contentScale = ContentScale.Fit,
         filterQuality = FilterQuality.None
     )
@@ -227,6 +228,7 @@ private fun locationSceneAssetPath(sceneKey: String, homeRoomId: String?): Strin
     "hospital" -> "tama/backgrounds/hospital.png"
     "farm" -> "tama/backgrounds/farm.png"
     "dungeon" -> "tama/backgrounds/dungeon.png"
+    "adventure_gate" -> "tama/backgrounds/adventure_gate.png"
     "arcade" -> "tama/backgrounds/arcade_location.png"
     "shop" -> "tama/backgrounds/shop.png"
     "alchemist" -> "tama/backgrounds/alchemist.png"

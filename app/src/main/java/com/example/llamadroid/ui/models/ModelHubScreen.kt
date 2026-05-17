@@ -87,6 +87,17 @@ fun ModelHubScreen(navController: NavController) {
             )
 
             ModelFeatureCard(
+                title = stringResource(R.string.models_litert),
+                description = stringResource(R.string.models_litert_desc),
+                icon = Icons.Default.Star,
+                gradientColors = listOf(
+                    Color(0xFF7E57C2).copy(alpha = 0.15f),
+                    Color(0xFF26A69A).copy(alpha = 0.25f)
+                ),
+                onClick = { navController.navigate(Screen.LiteRtModels.route) }
+            )
+
+            ModelFeatureCard(
                 title = "🎙️ " + stringResource(R.string.models_whisper),
                 description = stringResource(R.string.models_whisper_desc),
                 icon = Icons.Default.Create,

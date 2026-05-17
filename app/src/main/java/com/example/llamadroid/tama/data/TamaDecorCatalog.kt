@@ -7,7 +7,8 @@ data class TamaDecorDefinition(
     val id: String,
     val titleRes: Int,
     val price: Int,
-    val assetPath: String
+    val assetPath: String,
+    val season: TamaSeason? = null
 )
 
 enum class TamaDecorSlot {
@@ -29,7 +30,7 @@ object TamaDecorCatalog {
     const val TINY_AQUARIUM_ID = "toy_tiny_aquarium"
     const val ROBOT_VACUUM_ID = "toy_robot_vacuum"
 
-    val toys: List<TamaDecorDefinition> = listOf(
+    val standardToys: List<TamaDecorDefinition> = listOf(
         TamaDecorDefinition(
             id = BALL_PLUSH_ID,
             titleRes = R.string.tama_toy_ball_plush,
@@ -104,11 +105,45 @@ object TamaDecorCatalog {
         )
     )
 
+    val seasonalToys: List<TamaDecorDefinition> = listOf(
+        seasonal("seasonal_spring_blossom_chime", R.string.tama_toy_seasonal_spring_blossom_chime, 950, "blossom_chime", TamaSeason.SPRING),
+        seasonal("seasonal_spring_dewdrop_mushroom_lamp", R.string.tama_toy_seasonal_spring_dewdrop_mushroom_lamp, 1150, "dewdrop_mushroom_lamp", TamaSeason.SPRING),
+        seasonal("seasonal_spring_rainbow_seedling_pot", R.string.tama_toy_seasonal_spring_rainbow_seedling_pot, 1050, "rainbow_seedling_pot", TamaSeason.SPRING),
+        seasonal("seasonal_spring_butterfly_mailbox", R.string.tama_toy_seasonal_spring_butterfly_mailbox, 1250, "butterfly_mailbox", TamaSeason.SPRING),
+        seasonal("seasonal_spring_sprout_crystal_bell", R.string.tama_toy_seasonal_spring_sprout_crystal_bell, 1350, "sprout_crystal_bell", TamaSeason.SPRING),
+        seasonal("seasonal_spring_puddle_star_umbrella", R.string.tama_toy_seasonal_spring_puddle_star_umbrella, 1000, "puddle_star_umbrella", TamaSeason.SPRING),
+        seasonal("seasonal_summer_seashell_radio", R.string.tama_toy_seasonal_summer_seashell_radio, 1100, "seashell_radio", TamaSeason.SUMMER),
+        seasonal("seasonal_summer_sun_charm_mobile", R.string.tama_toy_seasonal_summer_sun_charm_mobile, 950, "sun_charm_mobile", TamaSeason.SUMMER),
+        seasonal("seasonal_summer_firefly_jar", R.string.tama_toy_seasonal_summer_firefly_jar, 1200, "firefly_jar", TamaSeason.SUMMER),
+        seasonal("seasonal_summer_melon_picnic_basket", R.string.tama_toy_seasonal_summer_melon_picnic_basket, 1050, "melon_picnic_basket", TamaSeason.SUMMER),
+        seasonal("seasonal_summer_bubbleglass_fan", R.string.tama_toy_seasonal_summer_bubbleglass_fan, 1300, "bubbleglass_fan", TamaSeason.SUMMER),
+        seasonal("seasonal_summer_starfish_cushion", R.string.tama_toy_seasonal_summer_starfish_cushion, 1000, "starfish_cushion", TamaSeason.SUMMER),
+        seasonal("seasonal_autumn_acorn_tea_set", R.string.tama_toy_seasonal_autumn_acorn_tea_set, 1050, "acorn_tea_set", TamaSeason.AUTUMN),
+        seasonal("seasonal_autumn_maple_garland", R.string.tama_toy_seasonal_autumn_maple_garland, 900, "maple_garland", TamaSeason.AUTUMN),
+        seasonal("seasonal_autumn_mushroom_stool", R.string.tama_toy_seasonal_autumn_mushroom_stool, 1150, "mushroom_stool", TamaSeason.AUTUMN),
+        seasonal("seasonal_autumn_pumpkin_candle", R.string.tama_toy_seasonal_autumn_pumpkin_candle, 950, "pumpkin_candle", TamaSeason.AUTUMN),
+        seasonal("seasonal_autumn_harvest_cauldron", R.string.tama_toy_seasonal_autumn_harvest_cauldron, 1400, "harvest_cauldron", TamaSeason.AUTUMN),
+        seasonal("seasonal_autumn_tiny_scarecrow", R.string.tama_toy_seasonal_autumn_tiny_scarecrow, 1000, "tiny_scarecrow", TamaSeason.AUTUMN),
+        seasonal("seasonal_winter_snowglobe_cottage", R.string.tama_toy_seasonal_winter_snowglobe_cottage, 1200, "snowglobe_cottage", TamaSeason.WINTER),
+        seasonal("seasonal_winter_candy_cane_sled", R.string.tama_toy_seasonal_winter_candy_cane_sled, 1100, "candy_cane_sled", TamaSeason.WINTER),
+        seasonal("seasonal_winter_frost_crystal_tree", R.string.tama_toy_seasonal_winter_frost_crystal_tree, 1450, "frost_crystal_tree", TamaSeason.WINTER),
+        seasonal("seasonal_winter_knitted_star_blanket", R.string.tama_toy_seasonal_winter_knitted_star_blanket, 950, "knitted_star_blanket", TamaSeason.WINTER),
+        seasonal("seasonal_winter_gingerbread_clock", R.string.tama_toy_seasonal_winter_gingerbread_clock, 1250, "gingerbread_clock", TamaSeason.WINTER),
+        seasonal("seasonal_winter_cocoa_kettle", R.string.tama_toy_seasonal_winter_cocoa_kettle, 1000, "cocoa_kettle", TamaSeason.WINTER)
+    )
+
+    val toys: List<TamaDecorDefinition> = standardToys + seasonalToys
+
     fun decorById(itemId: String?): TamaDecorDefinition? {
         return toys.firstOrNull { it.id.equals(itemId, ignoreCase = true) }
     }
 
     fun isDecorId(itemId: String?): Boolean = decorById(itemId) != null
+
+    fun shopDecor(): List<TamaDecorDefinition> = standardToys
+
+    fun seasonalDecorForSeason(season: TamaSeason): List<TamaDecorDefinition> =
+        seasonalToys.filter { it.season == season }
 
     fun decorInventoryItem(context: Context, decorId: String): InventoryItem? {
         val decor = decorById(decorId) ?: return null
@@ -119,4 +154,18 @@ object TamaDecorCatalog {
             quantity = 1
         )
     }
+
+    private fun seasonal(
+        id: String,
+        titleRes: Int,
+        price: Int,
+        fileName: String,
+        season: TamaSeason
+    ): TamaDecorDefinition = TamaDecorDefinition(
+        id = id,
+        titleRes = titleRes,
+        price = price,
+        assetPath = "tama/decor/seasonal/$fileName.webp",
+        season = season
+    )
 }

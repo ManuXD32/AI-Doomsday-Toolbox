@@ -459,8 +459,18 @@ object VideoSumupService {
             currentRemoteClient = client
             val orchestrator = RemoteSummaryOrchestrator(client)
 
-            if (snapshot.backend == SettingsRepository.PDF_BACKEND_OLLAMA && snapshot.ollamaModel.isNullOrBlank()) {
-                throw IllegalStateException(context.getString(R.string.pdf_error_missing_ollama_model))
+            val selectedModel = when (SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)) {
+                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapModel
+                SettingsRepository.PDF_BACKEND_OLLAMA -> snapshot.ollamaModel
+                else -> snapshot.llamaServerModelLabel
+            }
+            if (SettingsRepository.requiresSelectedRemoteModel(snapshot.backend) && selectedModel.isNullOrBlank()) {
+                val message = if (SettingsRepository.isLlamaSwapBackend(snapshot.backend)) {
+                    context.getString(R.string.pdf_error_missing_llama_swap_model)
+                } else {
+                    context.getString(R.string.pdf_error_missing_ollama_model)
+                }
+                throw IllegalStateException(message)
             }
 
             val summaryPrompt = snapshot.summaryPrompt ?: SettingsRepository.DEFAULT_TRANSCRIPT_SUMMARY_PROMPT

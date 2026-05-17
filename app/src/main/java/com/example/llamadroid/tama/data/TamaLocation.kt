@@ -101,7 +101,14 @@ enum class LocationType(
     |DNG|
     | ? |
     |___|
-    """.trimIndent(), "tama/map/dungeon.png")
+    """.trimIndent(), "tama/map/dungeon.png"),
+
+    ADVENTURE_GATE("🌀", R.string.tama_location_adventure_gate, R.string.tama_location_adventure_gate_desc, """
+     ___
+    |ADV|
+    | > |
+    |___|
+    """.trimIndent(), "tama/map/adventure_gate.png")
 }
 
 fun LocationType.localizedName(context: Context): String = context.getString(displayNameRes)

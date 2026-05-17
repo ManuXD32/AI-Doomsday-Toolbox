@@ -38,9 +38,16 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LlamaDroid"
         android:usesCleartextTraffic="true"
+        android:largeHeap="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:requestLegacyExternalStorage="true"
         tools:targetApi="31">
+
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-pixel.so" android:required="false" />
+        <uses-native-library android:name="libOpenCL-car.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+        <uses-native-library android:name="libcdsprpc.so" android:required="false" />
         
         <activity
             android:name=".MainActivity"
@@ -107,6 +114,16 @@
 
         <service
             android:name=".service.OnnxImageGenerationService"
+            android:foregroundServiceType="mediaProcessing"
+            android:exported="false" />
+
+        <service
+            android:name=".service.OnnxTtsGenerationService"
+            android:foregroundServiceType="mediaProcessing"
+            android:exported="false" />
+
+        <service
+            android:name=".service.OnnxBackgroundRemovalService"
             android:foregroundServiceType="mediaProcessing"
             android:exported="false" />
 
@@ -190,13 +207,33 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <service
+            android:name=".service.KnowledgeBaseIndexingService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <service
+            android:name=".service.DeepResearchService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
         <service 
             android:name=".service.LlamaClientService" 
             android:foregroundServiceType="dataSync" 
             android:exported="false" />
 
         <service
+            android:name=".service.LiteRtLmWorkerService"
+            android:process=":litert_lm"
+            android:exported="false" />
+
+        <service
             android:name=".service.LlamaScheduledTaskService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <service
+            android:name=".service.QuadtrixTrainingService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />
             
@@ -214,7 +251,6 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
@@ -224,6 +260,10 @@
 
         <receiver
             android:name=".service.OrganizerAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".service.OrganizerAlarmBootReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -233,6 +273,10 @@
 
         <receiver
             android:name=".service.LlamaScheduledTaskReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name=".service.LlamaScheduledTaskBootReceiver"
             android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -242,7 +286,8 @@
 
         <receiver
             android:name=".widget.OrganizerCalendarWidgetProvider"
-            android:exported="true">
+            android:exported="true"
+            android:label="@string/widget_calendar_month_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
@@ -253,7 +298,8 @@
 
         <receiver
             android:name=".widget.OrganizerUpcomingEventsWidgetProvider"
-            android:exported="true">
+            android:exported="true"
+            android:label="@string/widget_calendar_upcoming_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
@@ -279,13 +325,43 @@
 
         <receiver
             android:name=".widget.NoteDisplayWidgetProvider"
-            android:exported="true">
+            android:exported="true"
+            android:label="@string/widget_note_label">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_note_display" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.TamaPetWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_tama_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_tama_pet" />
+        </receiver>
+
+        <activity
+            android:name=".widget.TamaFarmWidgetConfigActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LlamaDroid" />
+
+        <receiver
+            android:name=".widget.TamaFarmWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_tama_farm_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_tama_farm" />
         </receiver>
 
         <!-- FileProvider for sharing generated images -->

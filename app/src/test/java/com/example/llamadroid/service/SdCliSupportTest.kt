@@ -1,6 +1,7 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.sd.SdLoraApplyMode
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -176,5 +177,11 @@ class SdCliSupportTest {
         assertTrue(args.contains("-t"))
         assertTrue(args.contains("4"))
         assertFalse(args.contains("-p"))
+    }
+
+    private fun assertOption(args: List<String>, flag: String, value: String) {
+        val index = args.indexOf(flag)
+        assertTrue("$flag should be present", index >= 0)
+        assertEquals(value, args.getOrNull(index + 1))
     }
 }

@@ -39,4 +39,13 @@ interface ModelDao {
      */
     @Query("UPDATE models SET filename = :newFilename, path = :newPath WHERE filename = :oldFilename")
     suspend fun updateFilename(oldFilename: String, newFilename: String, newPath: String)
+
+    @Query("UPDATE models SET filename = :newFilename, path = :newPath, type = :newType, isVision = :isVision WHERE filename = :oldFilename")
+    suspend fun updateMetadata(
+        oldFilename: String,
+        newFilename: String,
+        newPath: String,
+        newType: ModelType,
+        isVision: Boolean
+    )
 }

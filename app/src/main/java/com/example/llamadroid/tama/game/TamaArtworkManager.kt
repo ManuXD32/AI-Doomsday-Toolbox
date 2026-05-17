@@ -214,6 +214,7 @@ object TamaArtworkManager {
         return when (provider) {
             OnnxCatalogProvider.SDAI -> context.getString(R.string.onnx_models_provider_sdai)
             OnnxCatalogProvider.MANUXD32 -> context.getString(R.string.onnx_models_provider_manuxd32)
+            OnnxCatalogProvider.SUPERTONIC -> context.getString(R.string.onnx_models_provider_supertonic)
         }
     }
 }

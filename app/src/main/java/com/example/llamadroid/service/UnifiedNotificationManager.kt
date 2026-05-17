@@ -39,6 +39,7 @@ object UnifiedNotificationManager {
     private const val COMPLETION_CHANNEL_ID = "doomsday_completion"
     private const val COMPLETION_CHANNEL_NAME = "Task Completions"
     private const val AGENT_ATTENTION_ID = 98
+    private const val AI_RUNTIME_RECOVERY_ID = 490_000
     private const val TAMA_NEEDS_CHANNEL_ID = "tama_pet_needs"
     private const val TAMA_FARM_CHANNEL_ID = "tama_crop_ready"
     private const val TAMA_POOP_CHANNEL_ID = "tama_poop_alerts"
@@ -77,6 +78,7 @@ object UnifiedNotificationManager {
         val title: String,
         val progress: Float = 0f,  // 0.0 to 1.0
         val progressText: String = "",
+        val progressDetails: List<String> = emptyList(),
         val completionAlertPolicy: CompletionAlertPolicy = type.defaultCompletionAlertPolicy,
         val isComplete: Boolean = false,
         val isError: Boolean = false,
@@ -95,15 +97,20 @@ object UnifiedNotificationManager {
         LLM_CHAT("💬", "Chat"),
         DOWNLOAD("📥", "Download"),
         PDF_SUMMARY("📄", "PDF Summary"),
+        PDF_TRANSLATION("🌐", "PDF Translation"),
         FILE_SERVER("📂", "File Server"),
         MODEL_SHARE("🔁", "Model Share"),
         LLAMA_SERVER("🦙", "LLM Server"),
         LLAMA_CLIENT("💭", "Llama Chat"),
+        KNOWLEDGE_BASE("📚", "Knowledge Base"),
+        ONNX_TTS("🔊", "Text to Speech"),
+        BACKGROUND_REMOVAL("🪄", "Background Removal"),
         LLAMA_SCHEDULED_TASK("🗓", "Scheduled Llama Task", CompletionAlertPolicy.SUCCESS_ONLY),
         ZIM_SHARE("📚", "ZIM File Share"),
         BENCHMARK("⚡", "Benchmark"),
         ADVENTURE("⚔️", "Adventure"),
-        AGENT("🤖", "AI Agent", CompletionAlertPolicy.SUCCESS_ONLY)
+        AGENT("🤖", "AI Agent", CompletionAlertPolicy.SUCCESS_ONLY),
+        QUADTRIX("🧬", "Quadtrix Training", CompletionAlertPolicy.SUCCESS_ONLY)
     }
     
     // Active tasks
@@ -334,10 +341,15 @@ object UnifiedNotificationManager {
      * Update task progress
      */
     fun updateProgress(taskId: Int, progress: Float, progressText: String) {
+        updateProgressWithDetails(taskId, progress, progressText, emptyList())
+    }
+
+    fun updateProgressWithDetails(taskId: Int, progress: Float, progressText: String, details: List<String>) {
         _activeTasks[taskId]?.let { task ->
             val updated = task.copy(
                 progress = progress,
-                progressText = progressText
+                progressText = progressText,
+                progressDetails = details.takeLast(5)
             )
             _activeTasks[taskId] = updated
             updateTasksFlow()
@@ -509,6 +521,44 @@ object UnifiedNotificationManager {
         }
     }
 
+    fun showAiRuntimeRecoveryNotification(
+        recoverableCount: Int,
+        route: String
+    ) {
+        if (!::appContext.isInitialized || recoverableCount <= 0) return
+
+        val intent = Intent(appContext, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            putExtra(MainActivity.EXTRA_OPEN_ROUTE, route)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            appContext,
+            AI_RUNTIME_RECOVERY_ID,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val builder = NotificationCompat.Builder(appContext, COMPLETION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(appContext.getString(R.string.ai_runtime_recovery_notification_title))
+            .setContentText(appContext.getString(R.string.ai_runtime_recovery_notification_body, recoverableCount))
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    appContext.getString(R.string.ai_runtime_recovery_notification_body, recoverableCount)
+                )
+            )
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+
+        try {
+            NotificationManagerCompat.from(appContext).notify(AI_RUNTIME_RECOVERY_ID, builder.build())
+        } catch (_: SecurityException) {
+            // Notification permission not granted
+        }
+    }
+
     fun dismissAgentAttention() {
         if (!::appContext.isInitialized) return
         try {
@@ -541,15 +591,20 @@ object UnifiedNotificationManager {
             TaskType.LLM_CHAT -> android.R.drawable.ic_menu_send
             TaskType.DOWNLOAD -> android.R.drawable.stat_sys_download
             TaskType.PDF_SUMMARY -> android.R.drawable.ic_menu_agenda
+            TaskType.PDF_TRANSLATION -> android.R.drawable.ic_menu_upload
             TaskType.FILE_SERVER -> android.R.drawable.ic_menu_share
             TaskType.MODEL_SHARE -> android.R.drawable.ic_menu_upload
             TaskType.LLAMA_SERVER -> android.R.drawable.ic_menu_manage
             TaskType.LLAMA_CLIENT -> android.R.drawable.ic_menu_send
+            TaskType.KNOWLEDGE_BASE -> android.R.drawable.ic_menu_search
+            TaskType.ONNX_TTS -> android.R.drawable.ic_btn_speak_now
+            TaskType.BACKGROUND_REMOVAL -> android.R.drawable.ic_menu_crop
             TaskType.LLAMA_SCHEDULED_TASK -> android.R.drawable.ic_menu_today
             TaskType.ZIM_SHARE -> android.R.drawable.ic_menu_share
             TaskType.BENCHMARK -> android.R.drawable.ic_menu_compass
             TaskType.ADVENTURE -> android.R.drawable.ic_menu_compass
             TaskType.AGENT -> android.R.drawable.ic_menu_manage
+            TaskType.QUADTRIX -> android.R.drawable.ic_menu_upload
         }
         
         val builder = NotificationCompat.Builder(appContext, CHANNEL_ID)
@@ -560,10 +615,25 @@ object UnifiedNotificationManager {
             .setGroup(GROUP_KEY)
             .setOngoing(!task.isComplete && !task.isError)
             .setAutoCancel(task.isComplete || task.isError)
+
+        if (task.progressDetails.isNotEmpty()) {
+            builder.setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    buildString {
+                        appendLine(task.progressText)
+                        task.progressDetails.forEach { appendLine(it) }
+                    }.trim()
+                )
+            )
+        }
         
         // Add progress bar for incomplete tasks
         if (!task.isComplete && !task.isError) {
-            builder.setProgress(100, (task.progress * 100).toInt(), false)
+            if (task.progress < 0f) {
+                builder.setProgress(0, 0, true)
+            } else {
+                builder.setProgress(100, (task.progress.coerceIn(0f, 1f) * 100).toInt(), false)
+            }
         }
         
         // Set appropriate priority/icon for completion state
@@ -576,6 +646,28 @@ object UnifiedNotificationManager {
                 builder.setSmallIcon(android.R.drawable.stat_notify_error)
                 builder.setProgress(0, 0, false)
             }
+        }
+
+        if (task.type == TaskType.DOWNLOAD && !task.isComplete && !task.isError) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelDownloadPendingIntent(task.title, task.id)
+            )
+        }
+        if (task.type == TaskType.ONNX_TTS && !task.isComplete && !task.isError) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelOnnxTtsPendingIntent(task.id)
+            )
+        }
+        if (task.type == TaskType.BACKGROUND_REMOVAL && !task.isComplete && !task.isError) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelOnnxBgrPendingIntent(task.id)
+            )
         }
         
         try {
@@ -692,7 +784,59 @@ object UnifiedNotificationManager {
                 stopPendingIntent
             )
         }
+        if (task.type == TaskType.DOWNLOAD) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelDownloadPendingIntent(task.title, taskId)
+            )
+        }
+        if (task.type == TaskType.ONNX_TTS) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelOnnxTtsPendingIntent(taskId)
+            )
+        }
+        if (task.type == TaskType.BACKGROUND_REMOVAL) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelOnnxBgrPendingIntent(taskId)
+            )
+        }
         return builder.build()
+    }
+
+    private fun createCancelOnnxBgrPendingIntent(requestCode: Int): PendingIntent {
+        return PendingIntent.getService(
+            appContext,
+            requestCode + 70_000,
+            OnnxBackgroundRemovalService.cancelIntent(appContext),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun createCancelOnnxTtsPendingIntent(requestCode: Int): PendingIntent {
+        return PendingIntent.getService(
+            appContext,
+            requestCode + 60_000,
+            OnnxTtsGenerationService.cancelIntent(appContext),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    private fun createCancelDownloadPendingIntent(filename: String, requestCode: Int): PendingIntent {
+        val intent = Intent(appContext, DownloadService::class.java).apply {
+            action = DownloadService.ACTION_CANCEL_DOWNLOAD
+            putExtra(DownloadService.EXTRA_FILENAME, filename)
+        }
+        return PendingIntent.getService(
+            appContext,
+            requestCode + 50_000,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
     
     /**

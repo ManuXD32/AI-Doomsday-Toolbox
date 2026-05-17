@@ -80,7 +80,9 @@ fun VideoSumupScreen(navController: NavController) {
     val backend by settingsRepo.videoSummaryBackend.collectAsState()
     val ollamaUrl by settingsRepo.videoSummaryOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.videoSummaryLlamaServerUrl.collectAsState()
+    val llamaSwapUrl by settingsRepo.videoSummaryLlamaSwapUrl.collectAsState()
     val ollamaModel by settingsRepo.videoSummaryOllamaModel.collectAsState()
+    val llamaSwapModel by settingsRepo.videoSummaryLlamaSwapModel.collectAsState()
     val thinkingEnabled by settingsRepo.videoSummaryThinkingEnabled.collectAsState()
     val videoSummaryPrompt by settingsRepo.videoSummaryPrompt.collectAsState()
     val targetLanguage by settingsRepo.videoSummaryTargetLanguage.collectAsState()
@@ -113,16 +115,18 @@ fun VideoSumupScreen(navController: NavController) {
         }
     }
 
-    val backendReady = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-        llamaServerUrl.isNotBlank()
-    } else {
-        ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
+    val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
+        else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
     }
 
     fun persistMetadata(metadata: com.example.llamadroid.service.RemoteSummaryMetadata) {
-        settingsRepo.setVideoSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-        settingsRepo.setVideoSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-        settingsRepo.setVideoSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+            settingsRepo.setVideoSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+            settingsRepo.setVideoSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+            settingsRepo.setVideoSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+        }
     }
 
     Scaffold(
@@ -226,8 +230,12 @@ fun VideoSumupScreen(navController: NavController) {
                 onOllamaUrlChange = settingsRepo::setVideoSummaryOllamaUrl,
                 llamaServerUrl = llamaServerUrl,
                 onLlamaServerUrlChange = settingsRepo::setVideoSummaryLlamaServerUrl,
+                llamaSwapUrl = llamaSwapUrl,
+                onLlamaSwapUrlChange = settingsRepo::setVideoSummaryLlamaSwapUrl,
                 ollamaModel = ollamaModel,
                 onOllamaModelSelected = settingsRepo::setVideoSummaryOllamaModel,
+                llamaSwapModel = llamaSwapModel,
+                onLlamaSwapModelSelected = settingsRepo::setVideoSummaryLlamaSwapModel,
                 llamaServerModelLabel = serverModelLabel,
                 llamaServerContextLabel = serverContextLabel,
                 llamaServerContextTokens = serverContextTokens,

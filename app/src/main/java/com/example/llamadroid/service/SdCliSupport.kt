@@ -67,6 +67,15 @@ fun buildSdCommandArgs(
         }
     }
 
+    fun addFlagIfSupported(flag: String) {
+        if (binaryCapabilities == null ||
+            binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+            binaryCapabilities.supports(flag)
+        ) {
+            args.add(flag)
+        }
+    }
+
     when (config.mode) {
         SDMode.TXT2IMG, SDMode.IMG2IMG -> args.addAll(listOf("-M", "img_gen"))
         SDMode.UPSCALE -> args.addAll(listOf("-M", "upscale"))

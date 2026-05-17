@@ -385,7 +385,7 @@ object TamaDailyDreamManager {
             .ifBlank { context.getString(R.string.tama_status_inventory_empty) }
         val desiredLanguage = settingsRepo.tamaDeepDreamDesiredLanguage.value.trim().ifBlank { "English" }
         val backendConfig = RemoteSummaryBackendConfig(
-            backend = settingsRepo.tamaBackend.value,
+            backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value),
             baseUrl = activeBaseUrl(settingsRepo),
             model = activeModel(settingsRepo),
             timeoutMinutes = DEEP_DREAM_STEP_TIMEOUT_MINUTES
@@ -623,7 +623,7 @@ object TamaDailyDreamManager {
         settingsRepo: SettingsRepository,
         petId: String
     ): Result<Boolean> {
-        if (settingsRepo.tamaBackend.value != SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+        if (!SettingsRepository.isLlamaServerBackend(settingsRepo.tamaBackend.value)) {
             return Result.success(false)
         }
 
@@ -733,7 +733,7 @@ object TamaDailyDreamManager {
         settingsRepo: SettingsRepository,
         error: Throwable
     ): Boolean {
-        return settingsRepo.tamaBackend.value == SettingsRepository.PDF_BACKEND_LLAMA_SERVER &&
+        return SettingsRepository.isLlamaServerBackend(settingsRepo.tamaBackend.value) &&
             isLocalLlamaServer(activeBaseUrl(settingsRepo)) &&
             RemoteBackendResilience.isRecoverable(error)
     }
@@ -779,31 +779,32 @@ object TamaDailyDreamManager {
     }
 
     private fun activeBaseUrl(settingsRepo: SettingsRepository): String {
-        return if (settingsRepo.tamaBackend.value == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-            settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/')
-        } else {
-            settingsRepo.tamaOllamaUrl.value.trim().trimEnd('/')
+        return when (SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/')
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> settingsRepo.tamaLlamaSwapUrl.value.trim().trimEnd('/')
+            else -> settingsRepo.tamaOllamaUrl.value.trim().trimEnd('/')
         }
     }
 
     private fun activeModel(settingsRepo: SettingsRepository): String? {
-        return if (settingsRepo.tamaBackend.value == SettingsRepository.PDF_BACKEND_OLLAMA) {
-            settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
-        } else {
-            settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
+        return when (SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
+                settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
+            else ->
+                settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
         }
     }
 
     private suspend fun fetchBackendMetadata(settingsRepo: SettingsRepository): Result<RemoteSummaryMetadata> {
         return RemoteSummaryClientFactory.fromConfig(
             RemoteSummaryBackendConfig(
-                backend = settingsRepo.tamaBackend.value,
+                backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value),
                 baseUrl = activeBaseUrl(settingsRepo),
                 model = activeModel(settingsRepo),
                 timeoutMinutes = DEEP_DREAM_METADATA_TIMEOUT_MINUTES
             )
         ).fetchMetadata().recoverCatching { error ->
-            if (settingsRepo.tamaBackend.value != SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+            if (!SettingsRepository.isLlamaServerBackend(settingsRepo.tamaBackend.value)) {
                 throw error
             }
             val cachedModel = settingsRepo.tamaLlamaServerModelLabel.value?.trim().orEmpty()
@@ -813,7 +814,7 @@ object TamaDailyDreamManager {
                 throw error
             }
             RemoteSummaryMetadata(
-                backend = settingsRepo.tamaBackend.value,
+                backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
                 baseUrl = activeBaseUrl(settingsRepo),
                 selectedModel = cachedModel.ifBlank { null },
                 serverModelLabel = cachedModel.ifBlank { null },
@@ -829,7 +830,7 @@ object TamaDailyDreamManager {
         petId: String,
         localLlamaAutostartReporter: suspend (Boolean) -> Unit
     ): Result<RemoteSummaryMetadata> {
-        val backend = settingsRepo.tamaBackend.value
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
         val baseUrl = activeBaseUrl(settingsRepo)
         if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER && isLocalLlamaServer(baseUrl)) {
             if (!llamaServerChatService.checkConnection(baseUrl)) {
@@ -905,11 +906,11 @@ object TamaDailyDreamManager {
     }
 
     private fun persistMetadata(settingsRepo: SettingsRepository, metadata: RemoteSummaryMetadata) {
-        if (metadata.backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
             settingsRepo.setTamaLlamaServerModelLabel(metadata.serverModelLabel)
             settingsRepo.setTamaLlamaServerContextTokens(metadata.serverContextTokens)
             settingsRepo.setTamaLlamaServerContextLabel(metadata.serverContextLabel)
-        } else if (!metadata.selectedModel.isNullOrBlank()) {
+        } else if (SettingsRepository.requiresSelectedRemoteModel(metadata.backend) && !metadata.selectedModel.isNullOrBlank()) {
             settingsRepo.setTamaSummarizerModel(metadata.selectedModel)
         }
     }
@@ -1131,12 +1132,14 @@ object TamaDailyDreamManager {
 
     private fun parsePlainTextStep(raw: String, requirePrefix: String?): String {
         val cleaned = sanitizeTamaModelOutput(extractAssistantContentEnvelope(raw))
-        val extracted = extractDreamTextValue(
-            cleaned = cleaned,
-            preferredKeys = when {
-                requirePrefix != null -> listOf("content", "text", "story", "summary", "prompt")
-                else -> listOf("story", "closing", "content", "text", "summary", "prompt")
-            }
+        val extracted = stripLeakedReasoningFromDreamText(
+            extractDreamTextValue(
+                cleaned = cleaned,
+                preferredKeys = when {
+                    requirePrefix != null -> listOf("content", "text", "story", "summary", "prompt")
+                    else -> listOf("story", "closing", "content", "text", "summary", "prompt")
+                }
+            )
         )
         val normalized = extracted
             .lineSequence()
@@ -1204,6 +1207,29 @@ object TamaDailyDreamManager {
         return trimmed
             .removePrefix("{")
             .removeSuffix("}")
+            .trim()
+    }
+
+    private fun stripLeakedReasoningFromDreamText(raw: String): String {
+        return raw
+            .replace(Regex("(?is)<(think|thinking|reasoning)>.*?</\\1>"), " ")
+            .replace(Regex("(?is)\\[Start thinking].*?\\[End thinking]"), " ")
+            .replace(
+                Regex(
+                    "(?ims)^\\s*(Thinking Process|Reasoning|Thoughts|Analysis)\\s*:\\s*.*?(?=^\\s*(Final answer|Answer|Dream|Story|Content|Summary|Prompt|Closing)\\s*:|\\z)"
+                ),
+                ""
+            )
+            .lineSequence()
+            .filterNot { line ->
+                val normalized = line.trim().lowercase()
+                normalized.startsWith("reasoning_content") ||
+                    normalized.startsWith("reasoning:") ||
+                    normalized.startsWith("thinking:") ||
+                    normalized.startsWith("thoughts:") ||
+                    normalized.startsWith("analysis:")
+            }
+            .joinToString("\n")
             .trim()
     }
 

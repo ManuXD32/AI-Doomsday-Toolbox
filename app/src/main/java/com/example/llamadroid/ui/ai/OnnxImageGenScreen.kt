@@ -2183,6 +2183,8 @@ private fun onnxProviderLabel(
             context.getString(R.string.onnx_models_provider_sdai)
         com.example.llamadroid.onnx.OnnxCatalogProvider.MANUXD32 ->
             context.getString(R.string.onnx_models_provider_manuxd32)
+        com.example.llamadroid.onnx.OnnxCatalogProvider.SUPERTONIC ->
+            context.getString(R.string.onnx_models_provider_supertonic)
     }
 }
 

@@ -11,17 +11,13 @@ import org.json.JSONObject
 class FarmEngine(
     private val repository: FarmRepository
 ) {
-    companion object {
-        private const val CROP_DECAY_AFTER_MATURE_MS = 15 * 3600000L
-    }
-
     /**
      * Update all farm elements based on current time.
      * This handles "offline" progress.
      */
     suspend fun updateFarm(petId: String, now: Long = System.currentTimeMillis()) {
-        val tiles = repository.getTiles(petId)
-        val updatedTiles = tiles.map { updateTile(it, now) }
+        val tiles = repository.ensureUnlockedFarmTiles(petId)
+        val updatedTiles = tiles.map { advanceFarmTileCrop(it, now) }
         // Compare each updated tile with its original using zip, not by ID index
         tiles.zip(updatedTiles).forEach { (original, updated) ->
             if (updated != original) repository.saveTile(petId, updated, rescheduleNotifications = false)
@@ -33,52 +29,12 @@ class FarmEngine(
             if (updated != upgrade) repository.saveUpgrade(updated, rescheduleNotifications = false)
         }
 
+        updateDrones(petId, now)
+
         val livestock = repository.getLivestock(petId)
         livestock.forEach { structure ->
             val updated = updateLivestock(structure, now)
             if (updated != structure) repository.saveLivestock(updated, rescheduleNotifications = false)
-        }
-    }
-
-    private fun updateTile(tile: FarmTile, now: Long): FarmTile {
-        val crop = tile.crop ?: return tile
-        if (crop.isDecayed) return tile
-
-        val definitions = CropDefinitions.CROPS[crop.type] ?: return tile
-        var currentStage = crop.stage
-        var lastUpdate = crop.lastStageUpdateTime
-        var updated = false
-        var decayed = false
-
-        while (currentStage < 3) {
-            val baseTime = definitions.stageTimes[currentStage]
-            val timeToNext = if (crop.isFertilized) baseTime / 2 else baseTime
-            
-            if (now >= lastUpdate + timeToNext) {
-                lastUpdate += timeToNext
-                currentStage++
-                updated = true
-            } else {
-                break
-            }
-        }
-
-        // Check for decay if final stage
-        if (currentStage == 3) {
-            if (now >= lastUpdate + CROP_DECAY_AFTER_MATURE_MS) {
-                decayed = true
-                updated = true
-            }
-        }
-
-        return if (updated) {
-            tile.copy(crop = crop.copy(
-                stage = currentStage,
-                lastStageUpdateTime = lastUpdate,
-                isDecayed = decayed
-            ))
-        } else {
-            tile
         }
     }
 
@@ -87,6 +43,37 @@ class FarmEngine(
             "well" -> updateWell(upgrade, now)
             "composter" -> updateComposter(upgrade, now)
             else -> upgrade
+        }
+    }
+
+    private suspend fun updateDrones(petId: String, now: Long) {
+        val plantingUpgrade = repository.getUpgrade(petId, FARM_PLANTING_DRONE_ID)
+        val harvesterUpgrade = repository.getUpgrade(petId, FARM_HARVESTING_DRONE_ID)
+        if (plantingUpgrade?.isPurchased != true && harvesterUpgrade?.isPurchased != true) return
+
+        val currentTiles = repository.ensureUnlockedFarmTiles(petId)
+        val plantingState = repository.decodePlantingDroneState(plantingUpgrade, now)
+        val harvesterState = repository.decodeHarvesterDroneState(harvesterUpgrade, now)
+        val result = simulateFarmDrones(
+            tiles = currentTiles,
+            plantingDrone = plantingState,
+            harvesterDrone = harvesterState,
+            now = now
+        )
+
+        currentTiles.sortedBy { it.id }
+            .zip(result.tiles.sortedBy { it.id })
+            .forEach { (original, updated) ->
+                if (original != updated) {
+                    repository.saveTile(petId, updated, rescheduleNotifications = false, syncDroneWatchers = false)
+                }
+            }
+
+        if (plantingUpgrade?.isPurchased == true && result.plantingDrone != plantingState) {
+            repository.savePlantingDroneState(petId, result.plantingDrone, rescheduleNotifications = false)
+        }
+        if (harvesterUpgrade?.isPurchased == true && result.harvesterDrone != harvesterState) {
+            repository.saveHarvesterDroneState(petId, result.harvesterDrone, rescheduleNotifications = false)
         }
     }
 

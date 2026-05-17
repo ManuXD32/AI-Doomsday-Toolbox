@@ -570,10 +570,12 @@ fun ConnectionSettingsDialog(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Backend Selector (Ollama / llama-server)
+                // Backend Selector (Ollama / llama-server / llama-swap)
                 val agentBackend by settingsRepo.agentBackend.collectAsState()
                 val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(agentBackend)
+                val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(agentBackend)
                 val llamaServerUrl by settingsRepo.llamaServerUrl.collectAsState()
+                val llamaSwapUrl by settingsRepo.agentLlamaSwapUrl.collectAsState()
                 var showBackendDropdown by remember { mutableStateOf(false) }
                 
                 Text(stringResource(R.string.agent_backend_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
@@ -582,38 +584,66 @@ fun ConnectionSettingsDialog(
                 
                 Box {
                     OutlinedButton(onClick = { showBackendDropdown = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (isAgentLlamaServer) "llama-server" else "Ollama")
+                        Text(
+                            when {
+                                isAgentLlamaServer -> stringResource(R.string.pdf_backend_llama_server)
+                                isAgentLlamaSwap -> stringResource(R.string.pdf_backend_llama_swap)
+                                else -> stringResource(R.string.pdf_backend_ollama)
+                            }
+                        )
                     }
                     DropdownMenu(expanded = showBackendDropdown, onDismissRequest = { showBackendDropdown = false }) {
-                        DropdownMenuItem(text = { Text("Ollama") }, onClick = {
-                            settingsRepo.setAgentBackend("ollama")
+                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_ollama)) }, onClick = {
+                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_OLLAMA)
                             showBackendDropdown = false
                         })
-                        DropdownMenuItem(text = { Text("llama-server") }, onClick = {
-                            settingsRepo.setAgentBackend("llama-server")
+                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_llama_server)) }, onClick = {
+                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LLAMA_SERVER)
+                            showBackendDropdown = false
+                        })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_llama_swap)) }, onClick = {
+                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LLAMA_SWAP)
                             showBackendDropdown = false
                         })
                     }
                 }
                 
-                if (isAgentLlamaServer) {
+                if (isAgentLlamaServer || isAgentLlamaSwap) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    var editedLlamaUrl by remember { mutableStateOf(llamaServerUrl) }
+                    var editedLlamaUrl by remember(isAgentLlamaSwap) {
+                        mutableStateOf(if (isAgentLlamaSwap) llamaSwapUrl else llamaServerUrl)
+                    }
                     OutlinedTextField(
                         value = editedLlamaUrl,
                         onValueChange = { editedLlamaUrl = it },
-                        label = { Text(stringResource(R.string.agent_llama_server_url)) },
+                        label = {
+                            Text(
+                                if (isAgentLlamaSwap) {
+                                    stringResource(R.string.agent_llama_swap_url)
+                                } else {
+                                    stringResource(R.string.agent_llama_server_url)
+                                }
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
-                    LaunchedEffect(editedLlamaUrl) {
-                        if (editedLlamaUrl != llamaServerUrl) {
+                    LaunchedEffect(editedLlamaUrl, isAgentLlamaSwap) {
+                        if (isAgentLlamaSwap) {
+                            if (editedLlamaUrl != llamaSwapUrl) {
+                                settingsRepo.setAgentLlamaSwapUrl(editedLlamaUrl)
+                            }
+                        } else if (editedLlamaUrl != llamaServerUrl) {
                             settingsRepo.setLlamaServerUrl(editedLlamaUrl)
                         }
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        stringResource(R.string.agent_llama_server_note),
+                        if (isAgentLlamaSwap) {
+                            stringResource(R.string.agent_llama_swap_note)
+                        } else {
+                            stringResource(R.string.agent_llama_server_note)
+                        },
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.tertiary,
                         fontStyle = androidx.compose.ui.text.font.FontStyle.Italic

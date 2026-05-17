@@ -187,6 +187,7 @@ fun LocationDetailsDialog(
             LocationType.ALCHEMIST -> "tama/backgrounds/alchemist.png"
             LocationType.FARM -> "tama/backgrounds/farm.png"
             LocationType.DUNGEON -> "tama/backgrounds/dungeon.png"
+            LocationType.ADVENTURE_GATE -> "tama/backgrounds/adventure_gate.png"
             else -> "tama/backgrounds/principal_room.png"
         },
         compact = true,
@@ -284,6 +285,16 @@ fun LocationDetailsDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = stringResource(R.string.tama_arcade_location_desc),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = TamaMutedText
+                )
+            }
+
+            if (location.type == LocationType.ADVENTURE_GATE) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.adventure_gate_location_hint),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
                     color = TamaMutedText

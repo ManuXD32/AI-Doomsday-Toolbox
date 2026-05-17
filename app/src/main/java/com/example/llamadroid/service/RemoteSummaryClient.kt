@@ -27,8 +27,16 @@ data class RemoteSummaryRequest(
     val contextSize: Int,
     val maxTokens: Int,
     val temperature: Float,
-    val thinkingEnabled: Boolean
+    val thinkingEnabled: Boolean,
+    val imageAttachments: List<RemoteSummaryImageAttachment> = emptyList()
 )
+
+data class RemoteSummaryImageAttachment(
+    val base64: String,
+    val mimeType: String = "image/jpeg"
+) {
+    val dataUrl: String get() = "data:$mimeType;base64,$base64"
+}
 
 data class RemoteSummaryMetadata(
     val backend: String,
@@ -67,28 +75,29 @@ interface RemoteSummaryClient {
 
 object RemoteSummaryClientFactory {
     fun fromSnapshot(snapshot: RemoteSummarySettingsSnapshot): RemoteSummaryClient {
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)
         val config = RemoteSummaryBackendConfig(
-            backend = snapshot.backend,
-            baseUrl = if (snapshot.backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                snapshot.llamaServerUrl
-            } else {
-                snapshot.ollamaUrl
+            backend = backend,
+            baseUrl = when (backend) {
+                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> snapshot.llamaServerUrl
+                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapUrl
+                else -> snapshot.ollamaUrl
             }.trim().trimEnd('/'),
-            model = if (snapshot.backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
-                snapshot.ollamaModel?.trim()?.ifBlank { null }
-            } else {
-                snapshot.llamaServerModelLabel?.trim()?.ifBlank { null }
-            },
+            model = when (backend) {
+                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> snapshot.llamaServerModelLabel
+                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapModel
+                else -> snapshot.ollamaModel
+            }?.trim()?.ifBlank { null },
             timeoutMinutes = snapshot.timeoutMinutes
         )
         return fromConfig(config)
     }
 
     fun fromConfig(config: RemoteSummaryBackendConfig): RemoteSummaryClient {
-        return if (config.backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-            LlamaServerRemoteSummaryClient(config)
-        } else {
-            OllamaRemoteSummaryClient(config)
+        return when (SettingsRepository.normalizeOllamaOrLlamaBackend(config.backend)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> LlamaServerRemoteSummaryClient(config)
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> LlamaSwapRemoteSummaryClient(config)
+            else -> OllamaRemoteSummaryClient(config)
         }
     }
 }
@@ -107,17 +116,31 @@ internal fun buildLlamaServerSummaryRequestJson(
     return buildJsonObject(buildLlamaServerSummaryRequestPayload(config, request))
 }
 
+internal fun buildLlamaSwapSummaryRequestJson(
+    config: RemoteSummaryBackendConfig,
+    request: RemoteSummaryRequest
+): JSONObject {
+    return buildJsonObject(buildLlamaSwapSummaryRequestPayload(config, request))
+}
+
 internal fun buildOllamaSummaryRequestPayload(
     config: RemoteSummaryBackendConfig,
     request: RemoteSummaryRequest
 ): Map<String, Any?> {
+    val userMessage = linkedMapOf<String, Any?>(
+        "role" to "user",
+        "content" to request.userPrompt
+    )
+    if (request.imageAttachments.isNotEmpty()) {
+        userMessage["images"] = request.imageAttachments.map { it.base64 }
+    }
     return mapOf(
         "model" to config.model,
         "stream" to false,
         "think" to request.thinkingEnabled,
         "messages" to listOf(
             mapOf("role" to "system", "content" to request.systemPrompt),
-            mapOf("role" to "user", "content" to request.userPrompt)
+            userMessage
         ),
         "options" to mapOf(
             "num_ctx" to request.contextSize,
@@ -138,7 +161,7 @@ internal fun buildLlamaServerSummaryRequestPayload(
         "max_tokens" to request.maxTokens,
         "messages" to listOf(
             mapOf("role" to "system", "content" to request.systemPrompt),
-            mapOf("role" to "user", "content" to request.userPrompt)
+            mapOf("role" to "user", "content" to openAiCompatibleUserContent(request))
         ),
         "chat_template_kwargs" to mapOf("enable_thinking" to request.thinkingEnabled)
     )
@@ -147,6 +170,47 @@ internal fun buildLlamaServerSummaryRequestPayload(
         payload["reasoning"] = mapOf("effort" to "none")
     }
     return payload
+}
+
+internal fun buildLlamaSwapSummaryRequestPayload(
+    config: RemoteSummaryBackendConfig,
+    request: RemoteSummaryRequest
+): Map<String, Any?> {
+    val model = requireNotNull(config.model?.takeIf { it.isNotBlank() }) {
+        "No llama-swap model selected"
+    }
+    val payload = linkedMapOf<String, Any?>(
+        "model" to model,
+        "stream" to false,
+        "temperature" to request.temperature.toDouble(),
+        "max_tokens" to request.maxTokens,
+        "messages" to listOf(
+            mapOf("role" to "system", "content" to request.systemPrompt),
+            mapOf("role" to "user", "content" to openAiCompatibleUserContent(request))
+        ),
+        "chat_template_kwargs" to mapOf("enable_thinking" to request.thinkingEnabled)
+    )
+    if (!request.thinkingEnabled) {
+        payload["reasoning_effort"] = "none"
+        payload["reasoning"] = mapOf("effort" to "none")
+    }
+    return payload
+}
+
+private fun openAiCompatibleUserContent(request: RemoteSummaryRequest): Any {
+    if (request.imageAttachments.isEmpty()) return request.userPrompt
+    return buildList {
+        add(mapOf("type" to "text", "text" to request.userPrompt))
+        request.imageAttachments.forEach { image ->
+            add(
+                mapOf(
+                    "type" to "image_url",
+                    "image_url" to mapOf("url" to image.dataUrl)
+                )
+            )
+            Unit
+        }
+    }
 }
 
 internal fun buildJsonObject(payload: Map<String, Any?>): JSONObject {
@@ -184,6 +248,19 @@ internal fun parseLlamaServerContextTokens(body: String): Int? {
         ?.groupValues
         ?.getOrNull(1)
         ?.toIntOrNull()
+}
+
+internal fun parseOpenAiModelIds(body: String): List<String> {
+    val json = JSONObject(body)
+    val data = json.optJSONArray("data") ?: JSONArray()
+    return buildList {
+        for (i in 0 until data.length()) {
+            val id = data.optJSONObject(i)?.optString("id").orEmpty().ifBlank { null }
+            if (id != null) {
+                add(id)
+            }
+        }
+    }
 }
 
 private abstract class BaseRemoteSummaryClient(
@@ -507,11 +584,7 @@ private class LlamaServerRemoteSummaryClient(
                 timeoutMinutes = timeoutMinutes
             )
             if (status !in 200..299) return@runCatching null
-            val json = JSONObject(body)
-            json.optJSONArray("data")
-                ?.optJSONObject(0)
-                ?.optString("id")
-                ?.ifBlank { null }
+            parseOpenAiModelIds(body).firstOrNull()
         }.getOrNull()
     }
 
@@ -540,5 +613,79 @@ private class LlamaServerRemoteSummaryClient(
             if (status !in 200..299) return@runCatching null
             parseLlamaServerContextTokens(body)
         }.getOrNull()
+    }
+}
+
+private class LlamaSwapRemoteSummaryClient(
+    config: RemoteSummaryBackendConfig
+) : BaseRemoteSummaryClient(config) {
+    override suspend fun fetchMetadata(): Result<RemoteSummaryMetadata> = withContext(Dispatchers.IO) {
+        runCatching {
+            val timeoutMinutes = config.timeoutMinutes.coerceAtLeast(1)
+            val (status, body) = executeJson(
+                path = "/v1/models",
+                requestBuilder = Request.Builder().get(),
+                timeoutMinutes = timeoutMinutes
+            )
+            if (status !in 200..299) {
+                throw classifyFailure(parseErrorMessage(body, "llama-swap metadata request failed"))
+            }
+            val models = parseOpenAiModelIds(body)
+            RemoteSummaryMetadata(
+                backend = config.backend,
+                baseUrl = config.baseUrl,
+                availableModels = models,
+                selectedModel = config.model,
+                serverModelLabel = config.model,
+                tokenCountMode = TokenCountMode.APPROXIMATE
+            )
+        }
+    }
+
+    override suspend fun countRenderedPromptTokens(systemPrompt: String, userPrompt: String): RemoteSummaryTokenCount =
+        withContext(Dispatchers.IO) {
+            val prompt = combinePromptForCounting(systemPrompt, userPrompt)
+            RemoteSummaryTokenCount(PDFSummaryLogic.approximateTokens(prompt), TokenCountMode.APPROXIMATE)
+        }
+
+    override suspend fun summarize(request: RemoteSummaryRequest): RemoteSummaryResponse = withContext(Dispatchers.IO) {
+        val model = config.model?.takeIf { it.isNotBlank() }
+            ?: throw IllegalStateException("No llama-swap model selected")
+        val payload = buildLlamaSwapSummaryRequestJson(config.copy(model = model), request)
+
+        val (status, body) = executeJson(
+            path = "/v1/chat/completions",
+            requestBuilder = Request.Builder()
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .header("Content-Type", "application/json")
+        )
+        if (status !in 200..299) {
+            throw classifyFailure(parseErrorMessage(body, "llama-swap summary request failed"))
+        }
+
+        val json = JSONObject(body)
+        if (json.has("error")) {
+            throw classifyFailure(parseErrorMessage(body, "llama-swap summary request failed"))
+        }
+
+        val choice = json.optJSONArray("choices")?.optJSONObject(0)
+        val message = choice?.optJSONObject("message")
+        val rawContent = buildString {
+            append(message?.optString("reasoning_content").orEmpty())
+            if (isNotBlank()) appendLine()
+            append(message?.optString("content").orEmpty())
+        }.trim()
+        val cleaned = PDFSummaryLogic.cleanLlamaOutput(rawContent)
+        if (cleaned.isBlank()) {
+            throw IllegalStateException("blank_output")
+        }
+
+        val usage = json.optJSONObject("usage")
+        RemoteSummaryResponse(
+            output = cleaned,
+            rawOutput = body,
+            promptTokens = usage?.optInt("prompt_tokens", -1)?.takeIf { it >= 0 },
+            completionTokens = usage?.optInt("completion_tokens", -1)?.takeIf { it >= 0 }
+        )
     }
 }

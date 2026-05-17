@@ -93,6 +93,32 @@ class LlamaServerChatServiceTest {
     }
 
     @Test
+    fun `buildLlamaServerChatRequestPayload moves transient system reminders to the beginning`() {
+        val payload = buildLlamaServerChatRequestPayload(
+            messages = listOf(
+                OllamaService.ChatMessage(role = "system", content = "Base prompt"),
+                OllamaService.ChatMessage(role = "user", content = "hello"),
+                OllamaService.ChatMessage(role = "assistant", content = "hi"),
+                OllamaService.ChatMessage(role = "system", content = "Tool reminder"),
+                OllamaService.ChatMessage(role = "user", content = "use the note tools")
+            ),
+            tools = emptyList(),
+            thinkingEnabled = false,
+            maxTokens = 1024
+        )
+
+        val messages = payload["messages"] as List<*>
+        assertEquals(4, messages.size)
+        val first = messages.first() as Map<*, *>
+        assertEquals("system", first["role"])
+        assertEquals("Base prompt\n\nTool reminder", first["content"])
+        assertEquals(
+            listOf("system", "user", "assistant", "user"),
+            messages.map { (it as Map<*, *>)["role"] }
+        )
+    }
+
+    @Test
     fun `buildLlamaServerChatRequestPayload includes tools tool result and sampling params`() {
         val payload = buildLlamaServerChatRequestPayload(
             messages = listOf(

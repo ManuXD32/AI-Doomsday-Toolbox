@@ -60,6 +60,49 @@ class PdfSummaryRemoteClientTest {
     }
 
     @Test
+    fun `ollama payload adds image attachments to user message`() {
+        val payload = buildOllamaSummaryRequestPayload(
+            RemoteSummaryBackendConfig("ollama", "http://localhost:11434", "vision", 0),
+            RemoteSummaryRequest(
+                systemPrompt = "system",
+                userPrompt = "user",
+                contextSize = 4096,
+                maxTokens = 256,
+                temperature = 0.1f,
+                thinkingEnabled = false,
+                imageAttachments = listOf(RemoteSummaryImageAttachment("abc123"))
+            )
+        )
+
+        val userMessage = (payload["messages"] as List<*>)[1] as Map<*, *>
+        assertEquals(listOf("abc123"), userMessage["images"])
+    }
+
+    @Test
+    fun `openai compatible payload adds image url content parts`() {
+        val payload = buildLlamaServerSummaryRequestPayload(
+            RemoteSummaryBackendConfig("llama-server", "http://localhost:8080", "vision", 0),
+            RemoteSummaryRequest(
+                systemPrompt = "system",
+                userPrompt = "user",
+                contextSize = 4096,
+                maxTokens = 256,
+                temperature = 0.1f,
+                thinkingEnabled = false,
+                imageAttachments = listOf(RemoteSummaryImageAttachment("abc123", "image/png"))
+            )
+        )
+
+        val userMessage = (payload["messages"] as List<*>)[1] as Map<*, *>
+        val content = userMessage["content"] as List<*>
+        assertEquals("text", (content[0] as Map<*, *>)["type"])
+        assertEquals("image_url", (content[1] as Map<*, *>)["type"])
+        val imageUrl = ((content[1] as Map<*, *>)["image_url"] as Map<*, *>)["url"] as String
+        assertTrue(imageUrl.startsWith("data:image/png;base64,abc123"))
+    }
+
+
+    @Test
     fun `parseLlamaServerContextTokens reads props response`() {
         val body = """
             {
@@ -100,5 +143,37 @@ class PdfSummaryRemoteClientTest {
         assertEquals(true, (payload["chat_template_kwargs"] as Map<*, *>)["enable_thinking"])
         assertNotNull(payload["messages"])
         assertFalse(payload.containsKey("reasoning_effort"))
+    }
+
+    @Test
+    fun `buildLlamaSwapSummaryRequestJson uses selected swap model`() {
+        val config = RemoteSummaryBackendConfig(
+            backend = "llama-swap",
+            baseUrl = "http://localhost:9292",
+            model = "swap-qwen",
+            timeoutMinutes = 0
+        )
+        val request = RemoteSummaryRequest(
+            systemPrompt = "system",
+            userPrompt = "user",
+            contextSize = 4096,
+            maxTokens = 256,
+            temperature = 0.3f,
+            thinkingEnabled = false
+        )
+
+        val payload = buildLlamaSwapSummaryRequestPayload(config, request)
+
+        assertEquals("swap-qwen", payload["model"])
+        assertEquals(false, payload["stream"])
+        assertEquals(256, payload["max_tokens"])
+        assertEquals("none", payload["reasoning_effort"])
+    }
+
+    @Test
+    fun `parseOpenAiModelIds reads model list`() {
+        val body = """{"data":[{"id":"qwen"},{"id":"mistral"}]}"""
+
+        assertEquals(listOf("qwen", "mistral"), parseOpenAiModelIds(body))
     }
 }

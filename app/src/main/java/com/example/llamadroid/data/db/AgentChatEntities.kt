@@ -15,6 +15,7 @@ data class AgentConversationEntity(
     val projectFolder: String = "default_project", // Per-project folder name
     val lastAgentRole: String? = "ORCHESTRATOR",
     val lastTask: String? = null,
+    val knowledgeBaseIds: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

@@ -112,6 +112,8 @@ class AdventureForegroundService : Service() {
     private var processingJob: Job? = null
     private var notificationTaskId: Int? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var diagnosticSessionId: String? = null
+    private var diagnosticMode: String? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -150,7 +152,12 @@ class AdventureForegroundService : Service() {
                 updateNotificationStatus(status, progress)
             }
 
-            ACTION_STOP -> stopForegroundMode()
+            ACTION_STOP -> {
+                finishDiagnosticSession("cancelled", "stop action")
+                diagnosticSessionId = null
+                diagnosticMode = null
+                stopForegroundMode()
+            }
         }
         return START_STICKY
     }
@@ -166,6 +173,10 @@ class AdventureForegroundService : Service() {
                 progress = 0.05f,
                 isBuildingWorld = true
             )
+        )
+        startDiagnosticSession(
+            mode = "adventure_world_build",
+            details = "petId=$petId dungeon=$dungeonTypeName"
         )
         val database = TamaDatabase.getInstance(applicationContext)
         val service = AdventureService(database, SettingsRepository(applicationContext), applicationContext)
@@ -183,6 +194,11 @@ class AdventureForegroundService : Service() {
                             isBuildingWorld = true
                         )
                     )
+                    recordDiagnosticBreadcrumb(
+                        event = "progress",
+                        phase = status,
+                        details = "progress=$progress"
+                    )
                     updateNotificationStatus(status, progress)
                 }
             )
@@ -197,13 +213,16 @@ class AdventureForegroundService : Service() {
                 body = getString(R.string.adventure_world_ready_notification_body),
                 dungeonTypeName = dungeonTypeName
             )
+            finishDiagnosticSession("success", "world build complete")
         } else {
+            val message = result.exceptionOrNull()?.message ?: getString(R.string.error_generic)
             notificationTaskId?.let {
                 UnifiedNotificationManager.failTask(
                     it,
-                    result.exceptionOrNull()?.message ?: getString(R.string.error_generic)
+                    message
                 )
             }
+            finishDiagnosticSession("failed", message)
         }
         finishRun()
     }
@@ -219,6 +238,10 @@ class AdventureForegroundService : Service() {
                 progress = 0.05f,
                 isBuildingWorld = false
             )
+        )
+        startDiagnosticSession(
+            mode = "adventure_choice",
+            details = "petId=$petId dungeon=$dungeonTypeName choiceLength=${playerChoice.length}"
         )
         val database = TamaDatabase.getInstance(applicationContext)
         val service = AdventureService(database, SettingsRepository(applicationContext), applicationContext)
@@ -237,6 +260,11 @@ class AdventureForegroundService : Service() {
                             isBuildingWorld = false
                         )
                     )
+                    recordDiagnosticBreadcrumb(
+                        event = "progress",
+                        phase = status,
+                        details = "progress=$progress"
+                    )
                     updateNotificationStatus(status, progress)
                 }
             )
@@ -251,13 +279,16 @@ class AdventureForegroundService : Service() {
                 body = getString(R.string.adventure_next_scene_notification_body),
                 dungeonTypeName = dungeonTypeName
             )
+            finishDiagnosticSession("success", "choice generation complete")
         } else {
+            val message = result.exceptionOrNull()?.message ?: getString(R.string.error_generic)
             notificationTaskId?.let {
                 UnifiedNotificationManager.failTask(
                     it,
-                    result.exceptionOrNull()?.message ?: getString(R.string.error_generic)
+                    message
                 )
             }
+            finishDiagnosticSession("failed", message)
         }
         finishRun()
     }
@@ -296,6 +327,8 @@ class AdventureForegroundService : Service() {
     private fun finishRun() {
         publishState(null)
         processingJob = null
+        diagnosticSessionId = null
+        diagnosticMode = null
         stopForegroundMode()
     }
 
@@ -333,8 +366,72 @@ class AdventureForegroundService : Service() {
         }
     }
 
+    private fun startDiagnosticSession(mode: String, details: String) {
+        runCatching {
+            GenerationDiagnosticsStore.init(applicationContext)
+            diagnosticMode = mode
+            diagnosticSessionId = GenerationDiagnosticsStore.startSession(
+                source = TAG,
+                mode = mode,
+                details = details,
+                phase = "starting",
+                wakeLockHeld = wakeLock?.isHeld,
+                notificationActive = notificationTaskId != null,
+                batteryExempt = null,
+                interactive = null,
+                powerSaveMode = null
+            )
+        }.onFailure { error ->
+            DebugLog.log("[$TAG] Failed to start diagnostics: ${error.message}")
+        }
+    }
+
+    private fun recordDiagnosticBreadcrumb(
+        event: String,
+        phase: String?,
+        details: String? = null
+    ) {
+        runCatching {
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = TAG,
+                sessionId = diagnosticSessionId,
+                mode = diagnosticMode,
+                event = event,
+                phase = phase,
+                details = details,
+                wakeLockHeld = wakeLock?.isHeld,
+                notificationActive = notificationTaskId != null,
+                batteryExempt = null,
+                interactive = null,
+                powerSaveMode = null
+            )
+        }.onFailure { error ->
+            DebugLog.log("[$TAG] Failed to record diagnostics: ${error.message}")
+        }
+    }
+
+    private fun finishDiagnosticSession(outcome: String, details: String?) {
+        runCatching {
+            GenerationDiagnosticsStore.finishSession(
+                sessionId = diagnosticSessionId,
+                source = TAG,
+                mode = diagnosticMode,
+                outcome = outcome,
+                details = details,
+                wakeLockHeld = wakeLock?.isHeld,
+                notificationActive = notificationTaskId != null,
+                batteryExempt = null,
+                interactive = null,
+                powerSaveMode = null
+            )
+        }.onFailure { error ->
+            DebugLog.log("[$TAG] Failed to finish diagnostics: ${error.message}")
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        finishDiagnosticSession("destroyed", "service destroyed")
         processingJob?.cancel()
         serviceScope.cancel()
         publishState(null)

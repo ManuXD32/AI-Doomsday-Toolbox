@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.TextUnit
 import coil.compose.AsyncImage
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.db.TamaArtworkEntity
+import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.db.TamaQuestChecklistItemEntity
 import com.example.llamadroid.tama.db.TamaStudyLabelEntity
 import com.example.llamadroid.tama.db.TamaStudySessionEntity
@@ -62,6 +63,12 @@ import com.example.llamadroid.tama.game.TamaArtworkManager
 import com.example.llamadroid.tama.game.TamaDailyDreamManager
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.TamaStudySessionSupport
+import com.example.llamadroid.tama.rpg.AdventureGateCatalog
+import com.example.llamadroid.tama.rpg.AdventureGateProfile
+import com.example.llamadroid.tama.rpg.AdventureGateRepository
+import com.example.llamadroid.tama.rpg.AdventureGateSupplyDefinition
+import com.example.llamadroid.tama.rpg.AdventureGateSupplyKind
+import com.example.llamadroid.tama.rpg.NightArenaGenerator
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.navigation.Screen
@@ -343,6 +350,7 @@ fun TamaScreen(
             Triple(2, 1, com.example.llamadroid.tama.data.LocationType.WORKPLACE),
             Triple(3, 1, com.example.llamadroid.tama.data.LocationType.FARM),
             Triple(0, 2, com.example.llamadroid.tama.data.LocationType.DUNGEON),
+            Triple(2, 2, com.example.llamadroid.tama.data.LocationType.ADVENTURE_GATE),
             Triple(4, 2, com.example.llamadroid.tama.data.LocationType.DUNGEON),
         )
 
@@ -370,12 +378,23 @@ fun TamaScreen(
         else -> 1500L
     }
 
+    fun shouldShowResultToast(result: TamaGameEngine.ActionResult): Boolean {
+        if (!result.success) return true
+        return result.action in setOf("harvesting", "buying", "selling", "transforming", "sleeping")
+    }
+
+    fun showResultToast(result: TamaGameEngine.ActionResult, force: Boolean = false) {
+        if (force || shouldShowResultToast(result)) {
+            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun performAction(action: suspend () -> TamaGameEngine.ActionResult) {
         if (actionCooldown) return
         actionCooldown = true
         scope.launch {
             val result = action()
-            Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+            showResultToast(result)
             if (result.success) {
                 currentAction = result.action
                 kotlinx.coroutines.delay(actionDisplayDuration(result.action))
@@ -510,13 +529,13 @@ fun TamaScreen(
                     TextButton(onClick = { showMap = false }) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             TamaEmojiIcon(TAMA_PET_VIEW_EMOJI, fontSize = 16.sp)
-                            if (!showMap) Text("✓", fontSize = 14.sp, color = TamaLight)
+                            if (!showMap) TamaEmojiIcon("✓", fontSize = 14.sp)
                         }
                     }
                     TextButton(onClick = { showMap = true }) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             TamaEmojiIcon(TAMA_MAP_VIEW_EMOJI, fontSize = 16.sp)
-                            if (showMap) Text("✓", fontSize = 14.sp, color = TamaLight)
+                            if (showMap) TamaEmojiIcon("✓", fontSize = 14.sp)
                         }
                     }
                 }
@@ -579,10 +598,7 @@ fun TamaScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text(
-                        "🥚",
-                        fontSize = 48.sp
-                    )
+                    TamaEmojiIcon("🥚", fontSize = 48.sp)
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
                         stringResource(R.string.tama_no_pet_yet),
@@ -606,6 +622,7 @@ fun TamaScreen(
             currentLocationId = currentLocation?.type?.name?.lowercase()
                 ?: currentLocation?.name?.lowercase()
                 ?: "home",
+            currentTime = currentTime,
             activeStudySession = activeStudySession,
             onFeed = {
                 showFeedDialog = true
@@ -694,6 +711,8 @@ fun TamaScreen(
             onBuy = { showShopDialog = true },
             onChat = onChat,
             onDungeon = { navController.navigate(Screen.Dungeon.route) },
+            onAdventureGate = { navController.navigate(Screen.AdventureGate.route) },
+            onNightArena = { navController.navigate(Screen.NightArena.route) },
             onInventory = { showInventoryDialog = true },
             onChecklist = { showQuestChecklistDialog = true },
             onArcade = { navController.navigate(Screen.Arcade.route) },
@@ -834,6 +853,7 @@ fun TamaScreen(
                 LocationType.ALCHEMIST -> "tama/backgrounds/alchemist.png"
                 LocationType.FARM -> "tama/backgrounds/farm.png"
                 LocationType.DUNGEON -> "tama/backgrounds/dungeon.png"
+                LocationType.ADVENTURE_GATE -> "tama/backgrounds/adventure_gate.png"
                 else -> "tama/backgrounds/principal_room.png"
             },
             compact = true,
@@ -903,6 +923,9 @@ fun TamaScreen(
                         LocationType.ALCHEMIST -> {
                             Text(stringResource(R.string.tama_alchemist_location_hint), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                         }
+                        LocationType.ADVENTURE_GATE -> {
+                            Text(stringResource(R.string.adventure_gate_location_hint), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                        }
                         else -> {}
                     }
                 } else {
@@ -926,12 +949,10 @@ fun TamaScreen(
                                 if (result.success) {
                                     if (!alreadyDiscovered) {
                                         Toast.makeText(context, context.getString(R.string.tama_discovered, loc.name, loc.description), Toast.LENGTH_LONG).show()
-                                    } else {
-                                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                                     }
                                     showMap = false  // Switch to pet view
                                 } else {
-                                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                                    showResultToast(result)
                                 }
                             }
                             selectedLocation = null
@@ -996,6 +1017,12 @@ fun TamaScreen(
                                 showMap = false
                             }) { Text(stringResource(R.string.tama_btn_heal)) }
                         }
+                        LocationType.ADVENTURE_GATE -> {
+                            TextButton(onClick = {
+                                selectedLocation = null
+                                navController.navigate(Screen.AdventureGate.route)
+                            }) { Text(stringResource(R.string.tama_btn_adventure_gate)) }
+                        }
                         else -> {
                             TextButton(onClick = { selectedLocation = null }) { Text(stringResource(R.string.action_ok)) }
                         }
@@ -1044,6 +1071,9 @@ fun TamaScreen(
             onUsePotion = { potionId ->
                 performAction { gameEngine.usePotion(potionId) }
             },
+            onUseAdventureGateSupply = { supplyId ->
+                performAction { gameEngine.useAdventureGateSupply(supplyId) }
+            },
             onDismiss = { showFeedDialog = false }
         )
     }
@@ -1068,7 +1098,7 @@ fun TamaScreen(
             onUseRoom = { roomId ->
                 scope.launch {
                     val result = gameEngine.setHomeRoom(roomId)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                     if (result.success) {
                         showInventoryDialog = false
                     }
@@ -1078,7 +1108,7 @@ fun TamaScreen(
             onRemoveDecor = { slot ->
                 scope.launch {
                     val result = gameEngine.removeDecoration(slot)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onDismiss = { showInventoryDialog = false }
@@ -1092,25 +1122,25 @@ fun TamaScreen(
             onAddItem = { itemId ->
                 scope.launch {
                     val result = gameEngine.addQuestChecklistItem(itemId)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onUpdateItem = { itemId, quantity, checked ->
                 scope.launch {
                     val result = gameEngine.updateQuestChecklistItem(itemId, quantity, checked)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onDeleteItem = { itemId ->
                 scope.launch {
                     val result = gameEngine.deleteQuestChecklistItem(itemId)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onClearChecked = {
                 scope.launch {
                     val result = gameEngine.clearCheckedQuestChecklistItems()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onDismiss = { showQuestChecklistDialog = false }
@@ -1142,6 +1172,7 @@ fun TamaScreen(
                     Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                 }
             },
+            onBrew = { ingredients -> gameEngine.brewAdventureGatePotion(ingredients) },
             onDismiss = { showAlchemistDialog = false }
         )
     }
@@ -1191,7 +1222,7 @@ fun TamaScreen(
             onAddToChecklist = { questId ->
                 scope.launch {
                     val result = gameEngine.addQuestToChecklist(questId, currentTime)
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onDismiss = { showQuestBoardDialog = false }
@@ -1216,7 +1247,7 @@ fun TamaScreen(
                 onPlace = { slot ->
                     scope.launch {
                         val result = gameEngine.placeDecoration(decorId, slot)
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                        showResultToast(result)
                         if (result.success) {
                             pendingDecorationId = null
                         }
@@ -1236,7 +1267,7 @@ fun TamaScreen(
             onDismissRegular = {
                 scope.launch {
                     val result = gameEngine.dismissParkEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onAcceptRecycler = {
@@ -1248,7 +1279,7 @@ fun TamaScreen(
             onDeclineRecycler = {
                 scope.launch {
                     val result = gameEngine.declineRecyclerEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onFinishRecycler = {
@@ -1260,19 +1291,19 @@ fun TamaScreen(
             onAcceptSeller = {
                 scope.launch {
                     val result = gameEngine.acceptSellerEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onDeclineSeller = {
                 scope.launch {
                     val result = gameEngine.declineSellerEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onFinishSeller = {
                 scope.launch {
                     val result = gameEngine.finishSellerEncounter()
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    showResultToast(result)
                 }
             },
             onSellCrop = { item, quantity ->
@@ -1753,19 +1784,26 @@ private fun ParkSellerCropRow(
                 color = Color(0xFFE8F5E9),
                 shape = RoundedCornerShape(999.dp)
             ) {
-                Text(
-                    text = "$totalLabel 🪙",
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 10.dp),
-                    color = Color(0xFF2E7D32),
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center
-                )
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = totalLabel,
+                        color = Color(0xFF2E7D32),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    TamaEmojiIcon("🪙", fontSize = 13.sp)
+                }
             }
             Button(
                 onClick = {
@@ -2301,7 +2339,8 @@ private data class TamaDreamSlide(
 fun ShopDialog(
     pet: TamaPet,
     onBuy: (InventoryItem, Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    currentSeason: TamaSeason = TamaSeason.current()
 ) {
     val context = LocalContext.current
     val shopItems = listOf(
@@ -2314,10 +2353,11 @@ fun ShopDialog(
         FoodItem("donut", "🍩", stringResource(R.string.tama_food_donut), 5, 20, 20, true),
         FoodItem("salad", "🥗", stringResource(R.string.tama_food_salad), 20, 2, 12, true)
     )
-    val roomItems = remember(pet.inventory, pet.homeRoomId) {
-        TamaRoomCatalog.rooms.filter { it.id != TamaRoomCatalog.PRINCIPAL_ROOM_ID }
-    }
-    val toyItems = TamaDecorCatalog.toys
+    var selectedCategory by rememberSaveable { mutableStateOf<TamaShopCategory?>(null) }
+    val roomItems = remember { TamaRoomCatalog.shopRooms() }
+    val seasonalRoomItems = remember(currentSeason) { TamaRoomCatalog.seasonalRoomsForSeason(currentSeason) }
+    val toyItems = remember { TamaDecorCatalog.shopDecor() }
+    val seasonalToyItems = remember(currentSeason) { TamaDecorCatalog.seasonalDecorForSeason(currentSeason) }
 
     TamaPopupDialog(
         title = stringResource(R.string.tama_shop_title),
@@ -2331,81 +2371,50 @@ fun ShopDialog(
                 fontWeight = FontWeight.Bold,
                 color = TamaDark
             )
-            ShopSectionTitle(stringResource(R.string.tama_shop_category_food))
-            shopItems.forEach { item ->
-                val canAfford = pet.money >= (item.cost ?: 0)
-                val inventoryItem = item.toInventoryItem()
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (canAfford) TamaLight.copy(alpha = 0.35f) else Color.Gray.copy(alpha = 0.2f))
-                        .clickable(enabled = canAfford) {
-                            item.cost?.let { cost ->
-                                onBuy(inventoryItem, cost)
-                            }
-                        }
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TamaEmojiIcon(item.emoji, fontSize = 20.sp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column(modifier = Modifier.widthIn(min = 0.dp)) {
-                            Text(
-                                item.name,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 14.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                "+${item.hungerGain} +${item.happinessGain}",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                color = TamaMutedText
-                            )
-                        }
-                    }
-                    Text(
-                        item.cost.toString(),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = if (canAfford) TamaAccent else Color.Red
+            val category = selectedCategory
+            if (category == null) {
+                ShopCategoryMenu(
+                    currentSeason = currentSeason,
+                    seasonalDecorCount = seasonalToyItems.size,
+                    seasonalRoomCount = seasonalRoomItems.size,
+                    onSelectCategory = { selectedCategory = it }
+                )
+            } else {
+                ShopCategoryHeader(
+                    title = stringResource(category.titleRes),
+                    onBack = { selectedCategory = null }
+                )
+                when (category) {
+                    TamaShopCategory.FOOD -> ShopFoodList(
+                        items = shopItems,
+                        pet = pet,
+                        onBuy = onBuy
+                    )
+                    TamaShopCategory.TOYS -> ShopDecorList(
+                        decorItems = toyItems,
+                        pet = pet,
+                        context = context,
+                        onBuy = onBuy
+                    )
+                    TamaShopCategory.ROOMS -> ShopRoomList(
+                        roomItems = roomItems,
+                        pet = pet,
+                        context = context,
+                        onBuy = onBuy
+                    )
+                    TamaShopCategory.SEASONAL_DECOR -> ShopDecorList(
+                        decorItems = seasonalToyItems,
+                        pet = pet,
+                        context = context,
+                        onBuy = onBuy
+                    )
+                    TamaShopCategory.SEASONAL_ROOMS -> ShopRoomList(
+                        roomItems = seasonalRoomItems,
+                        pet = pet,
+                        context = context,
+                        onBuy = onBuy
                     )
                 }
-            }
-
-            HorizontalDivider()
-            ShopSectionTitle(stringResource(R.string.tama_shop_category_toys))
-            toyItems.forEach { toy ->
-                val inventoryItem = TamaDecorCatalog.decorInventoryItem(context, toy.id) ?: return@forEach
-                val alreadyOwned = pet.inventory.any { it.id.equals(toy.id, ignoreCase = true) } ||
-                    pet.leftDecorationId.equals(toy.id, ignoreCase = true) ||
-                    pet.rightDecorationId.equals(toy.id, ignoreCase = true)
-                DecorShopRow(
-                    decor = toy,
-                    canBuy = pet.money >= toy.price && !alreadyOwned,
-                    owned = alreadyOwned,
-                    onBuy = { onBuy(inventoryItem, toy.price) }
-                )
-            }
-
-            HorizontalDivider()
-            ShopSectionTitle(stringResource(R.string.tama_shop_category_rooms))
-            roomItems.forEach { room ->
-                val inventoryItem = TamaRoomCatalog.roomInventoryItem(context, room.id) ?: return@forEach
-                val alreadyOwned = pet.homeRoomId.equals(room.id, ignoreCase = true) ||
-                    pet.inventory.any { it.id.equals(room.id, ignoreCase = true) }
-                RoomShopRow(
-                    room = room,
-                    price = room.price,
-                    canBuy = pet.money >= room.price && !alreadyOwned,
-                    owned = alreadyOwned,
-                    onBuy = { onBuy(inventoryItem, room.price) }
-                )
             }
         },
         footerContent = {
@@ -2416,21 +2425,685 @@ fun ShopDialog(
     )
 }
 
+private enum class TamaShopCategory(
+    val iconAssetPath: String,
+    val titleRes: Int
+) {
+    FOOD("tama/icons/shop_categories/food.webp", R.string.tama_shop_category_food),
+    TOYS("tama/icons/shop_categories/toys.webp", R.string.tama_shop_category_toys),
+    ROOMS("tama/icons/shop_categories/rooms.webp", R.string.tama_shop_category_rooms),
+    SEASONAL_DECOR("tama/icons/shop_categories/seasonal_decor.webp", R.string.tama_shop_category_seasonal_decor),
+    SEASONAL_ROOMS("tama/icons/shop_categories/seasonal_rooms.webp", R.string.tama_shop_category_seasonal_rooms)
+}
+
+@Composable
+private fun ShopCategoryMenu(
+    currentSeason: TamaSeason,
+    seasonalDecorCount: Int,
+    seasonalRoomCount: Int,
+    onSelectCategory: (TamaShopCategory) -> Unit
+) {
+    ShopCategoryRow(
+        category = TamaShopCategory.FOOD,
+        summary = stringResource(R.string.tama_shop_category_food_desc),
+        onClick = { onSelectCategory(TamaShopCategory.FOOD) }
+    )
+    ShopCategoryRow(
+        category = TamaShopCategory.TOYS,
+        summary = stringResource(R.string.tama_shop_category_toys_desc),
+        onClick = { onSelectCategory(TamaShopCategory.TOYS) }
+    )
+    ShopCategoryRow(
+        category = TamaShopCategory.ROOMS,
+        summary = stringResource(R.string.tama_shop_category_rooms_desc),
+        onClick = { onSelectCategory(TamaShopCategory.ROOMS) }
+    )
+    ShopCategoryRow(
+        category = TamaShopCategory.SEASONAL_DECOR,
+        summary = stringResource(
+            R.string.tama_shop_category_seasonal_summary,
+            stringResource(currentSeason.titleRes()),
+            seasonalDecorCount
+        ),
+        onClick = { onSelectCategory(TamaShopCategory.SEASONAL_DECOR) }
+    )
+    ShopCategoryRow(
+        category = TamaShopCategory.SEASONAL_ROOMS,
+        summary = stringResource(
+            R.string.tama_shop_category_seasonal_summary,
+            stringResource(currentSeason.titleRes()),
+            seasonalRoomCount
+        ),
+        onClick = { onSelectCategory(TamaShopCategory.SEASONAL_ROOMS) }
+    )
+}
+
+@Composable
+private fun ShopCategoryRow(
+    category: TamaShopCategory,
+    summary: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(TamaLight.copy(alpha = 0.35f))
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(TamaDark.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = "file:///android_asset/${category.iconAssetPath}",
+                contentDescription = null,
+                modifier = Modifier.size(38.dp),
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.None
+            )
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .widthIn(min = 0.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            Text(
+                stringResource(category.titleRes),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Visible
+            )
+            Text(
+                summary,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = TamaMutedText,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            tint = TamaDark
+        )
+    }
+}
+
+@Composable
+private fun ShopCategoryHeader(
+    title: String,
+    onBack: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = onBack) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = null
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(stringResource(R.string.tama_shop_back_to_categories))
+        }
+        Text(
+            title,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            color = TamaDark,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun ShopFoodList(
+    items: List<FoodItem>,
+    pet: TamaPet,
+    onBuy: (InventoryItem, Int) -> Unit
+) {
+    ShopSectionTitle(stringResource(R.string.tama_shop_category_food))
+    items.forEach { item ->
+        val cost = item.cost ?: 0
+        val canAfford = pet.money >= cost
+        val inventoryItem = item.toInventoryItem()
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (canAfford) TamaLight.copy(alpha = 0.35f) else Color.Gray.copy(alpha = 0.2f))
+                .clickable(enabled = canAfford) { onBuy(inventoryItem, cost) }
+                .padding(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .widthIn(min = 0.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TamaEmojiIcon(item.emoji, fontSize = 20.sp)
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .widthIn(min = 0.dp)
+                ) {
+                    Text(
+                        item.name,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        "+${item.hungerGain} +${item.happinessGain}",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = TamaMutedText
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.tama_shop_price_coins, cost),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 12.sp,
+                color = if (canAfford) TamaAccent else Color.Red,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun ShopDecorList(
+    decorItems: List<TamaDecorDefinition>,
+    pet: TamaPet,
+    context: Context,
+    onBuy: (InventoryItem, Int) -> Unit
+) {
+    decorItems.forEach { decor ->
+        val inventoryItem = TamaDecorCatalog.decorInventoryItem(context, decor.id) ?: return@forEach
+        val alreadyOwned = pet.inventory.any { it.id.equals(decor.id, ignoreCase = true) } ||
+            pet.leftDecorationId.equals(decor.id, ignoreCase = true) ||
+            pet.rightDecorationId.equals(decor.id, ignoreCase = true)
+        DecorShopRow(
+            decor = decor,
+            canBuy = pet.money >= decor.price && !alreadyOwned,
+            owned = alreadyOwned,
+            onBuy = { onBuy(inventoryItem, decor.price) }
+        )
+    }
+}
+
+@Composable
+private fun ShopRoomList(
+    roomItems: List<TamaRoomDefinition>,
+    pet: TamaPet,
+    context: Context,
+    onBuy: (InventoryItem, Int) -> Unit
+) {
+    roomItems.forEach { room ->
+        val inventoryItem = TamaRoomCatalog.roomInventoryItem(context, room.id) ?: return@forEach
+        val alreadyOwned = pet.homeRoomId.equals(room.id, ignoreCase = true) ||
+            pet.inventory.any { it.id.equals(room.id, ignoreCase = true) }
+        RoomShopRow(
+            room = room,
+            price = room.price,
+            canBuy = pet.money >= room.price && !alreadyOwned,
+            owned = alreadyOwned,
+            onBuy = { onBuy(inventoryItem, room.price) }
+        )
+    }
+}
+
+private fun TamaSeason.titleRes(): Int = when (this) {
+    TamaSeason.SPRING -> R.string.tama_season_spring
+    TamaSeason.SUMMER -> R.string.tama_season_summer
+    TamaSeason.AUTUMN -> R.string.tama_season_autumn
+    TamaSeason.WINTER -> R.string.tama_season_winter
+}
+
 @Composable
 private fun AlchemistDialog(
     pet: TamaPet,
     onBuy: (InventoryItem, Int) -> Unit,
+    onBrew: suspend (List<String>) -> TamaGameEngine.ActionResult,
     onDismiss: () -> Unit
 ) {
-    PotionMerchantDialog(
-        pet = pet,
-        vendor = TamaPotionVendor.ALCHEMIST,
+    var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var selectedIngredients by remember { mutableStateOf<List<String>>(emptyList()) }
+    var brewResult by remember { mutableStateOf<TamaGameEngine.ActionResult?>(null) }
+    var pendingPotion by remember { mutableStateOf<TamaPotionDefinition?>(null) }
+    val scope = rememberCoroutineScope()
+    TamaPopupDialog(
         title = stringResource(R.string.tama_alchemist_dialog_title),
-        body = stringResource(R.string.tama_alchemist_dialog_body),
         backgroundAsset = "tama/backgrounds/alchemist_dialog.png",
-        onBuy = onBuy,
-        onDismiss = onDismiss
+        onDismissRequest = onDismiss,
+        bodyContent = {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                listOf(
+                    R.string.tama_alchemist_tab_shop,
+                    R.string.tama_alchemist_tab_kitchen
+                ).forEachIndexed { index, labelRes ->
+                    Button(
+                        onClick = { selectedTab = index },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (selectedTab == index) TamaDark else TamaLight
+                        ),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = stringResource(labelRes),
+                            color = if (selectedTab == index) TamaLight else TamaDark,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+            if (selectedTab == 0) {
+                AlchemistPotionShopTab(
+                    pet = pet,
+                    onRequestBuy = { pendingPotion = it }
+                )
+            } else {
+                AlchemistPotionKitchenTab(
+                    pet = pet,
+                    selectedIngredients = selectedIngredients,
+                    onAddIngredient = { selectedIngredients = selectedIngredients + it },
+                    onRemoveIngredient = { index ->
+                        selectedIngredients = selectedIngredients.filterIndexed { itemIndex, _ -> itemIndex != index }
+                    },
+                    onClearIngredients = { selectedIngredients = emptyList() },
+                    onBrew = {
+                        scope.launch {
+                            val result = onBrew(selectedIngredients)
+                            brewResult = result
+                            if (result.success) {
+                                selectedIngredients = emptyList()
+                            }
+                        }
+                    }
+                )
+            }
+        },
+        footerContent = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
     )
+    brewResult?.let { result ->
+        AlertDialog(
+            onDismissRequest = { brewResult = null },
+            title = {
+                Text(
+                    stringResource(if (result.action == "alchemy_success") R.string.tama_alchemist_kitchen_success_title else R.string.tama_alchemist_kitchen_failure_title),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AsyncImage(
+                        model = "file:///android_asset/tama/npcs/alchemist_keeper.png",
+                        contentDescription = null,
+                        modifier = Modifier.size(70.dp),
+                        contentScale = ContentScale.Fit,
+                        filterQuality = FilterQuality.None
+                    )
+                    Text(result.message, fontFamily = FontFamily.Monospace, lineHeight = 18.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { brewResult = null }) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            }
+        )
+    }
+    pendingPotion?.let { potion ->
+        val context = LocalContext.current
+        val potionName = stringResource(potion.titleRes)
+        AlertDialog(
+            onDismissRequest = { pendingPotion = null },
+            title = {
+                Text(
+                    stringResource(R.string.tama_alchemist_buy_confirm_title),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    stringResource(R.string.tama_alchemist_buy_confirm_body, potionName, potion.price),
+                    fontFamily = FontFamily.Monospace,
+                    lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onBuy(potion.toInventoryItem(context), potion.price)
+                    pendingPotion = null
+                }) {
+                    Text(stringResource(R.string.tama_farm_store_buy))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPotion = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AlchemistPotionShopTab(
+    pet: TamaPet,
+    onRequestBuy: (TamaPotionDefinition) -> Unit
+) {
+    val potions = remember { TamaPotionCatalog.byVendor(TamaPotionVendor.ALCHEMIST) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.tama_alchemist_dialog_body),
+            fontFamily = FontFamily.Monospace,
+            color = TamaDark,
+            fontSize = 12.sp,
+            lineHeight = 15.sp
+        )
+        Text(
+            stringResource(R.string.tama_money_label, pet.money),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            color = TamaDark
+        )
+        potions.forEach { potion ->
+            AlchemistPotionRow(pet = pet, potion = potion, onRequestBuy = onRequestBuy)
+        }
+    }
+}
+
+@Composable
+private fun AlchemistPotionRow(
+    pet: TamaPet,
+    potion: TamaPotionDefinition,
+    onRequestBuy: (TamaPotionDefinition) -> Unit
+) {
+    val canAfford = pet.money >= potion.price
+    val redundant = when (potion.kind) {
+        TamaPotionKind.STAGE -> pet.stage == potion.targetStage
+        TamaPotionKind.SPECIES -> pet.species.equals(potion.targetSpecies?.id, ignoreCase = true)
+        TamaPotionKind.GROWTH_LOCK -> pet.growthLocked
+        TamaPotionKind.GROWTH_UNLOCK -> !pet.growthLocked
+        TamaPotionKind.HEALING -> false
+    }
+    val enabled = canAfford && !redundant
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (enabled) TamaLight.copy(alpha = 0.86f) else Color.Gray.copy(alpha = 0.28f))
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            stringResource(R.string.tama_shop_price_coins, potion.price),
+            modifier = Modifier.align(Alignment.End),
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            color = if (canAfford) TamaDark else Color.Red,
+            fontSize = 11.sp,
+            maxLines = 1
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AsyncImage(
+                model = "file:///android_asset/${potion.assetPath}",
+                contentDescription = null,
+                modifier = Modifier.size(44.dp),
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.None
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(potion.titleRes),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = TamaDark,
+                    fontSize = 13.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    stringResource(potion.descriptionRes),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 9.sp,
+                    lineHeight = 11.sp,
+                    color = TamaMutedText
+                )
+                if (redundant) {
+                    Text(
+                        text = when (potion.kind) {
+                            TamaPotionKind.STAGE -> stringResource(R.string.tama_potion_stage_already_current)
+                            TamaPotionKind.SPECIES -> stringResource(R.string.tama_potion_species_already_current)
+                            TamaPotionKind.GROWTH_LOCK -> stringResource(R.string.tama_potion_growth_lock_already)
+                            TamaPotionKind.GROWTH_UNLOCK -> stringResource(R.string.tama_potion_growth_unlock_already)
+                            TamaPotionKind.HEALING -> ""
+                        },
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp,
+                        color = TamaMutedText
+                    )
+                }
+            }
+        }
+        Button(
+            onClick = { onRequestBuy(potion) },
+            enabled = enabled,
+            modifier = Modifier.align(Alignment.End),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+        ) {
+            Text(stringResource(R.string.tama_farm_store_buy), fontFamily = FontFamily.Monospace, fontSize = 10.sp)
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AlchemistPotionKitchenTab(
+    pet: TamaPet,
+    selectedIngredients: List<String>,
+    onAddIngredient: (String) -> Unit,
+    onRemoveIngredient: (Int) -> Unit,
+    onClearIngredients: () -> Unit,
+    onBrew: () -> Unit
+) {
+    val context = LocalContext.current
+    val locale = context.resources.configuration.locales[0]
+    val cropItems = pet.inventory
+        .filter { it.id.startsWith("crop_") && FarmTradeItemCatalog.isTradeItem(it.id) && it.quantity > 0 }
+        .sortedBy { FarmTradeItemCatalog.displayName(it.id, locale) }
+    val selectedCounts = selectedIngredients.groupingBy { it }.eachCount()
+    val ownedRecipes = pet.inventory
+        .filter { it.type == ItemType.RECIPE }
+        .mapNotNull { AdventureGateCatalog.recipe(it.id) }
+        .sortedBy { AdventureGateCatalog.supply(it.supplyId)?.nameRes ?: 0 }
+    var expandedRecipeId by rememberSaveable { mutableStateOf<String?>(null) }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text(
+            stringResource(R.string.tama_alchemist_kitchen_body),
+            fontFamily = FontFamily.Monospace,
+            color = TamaDark,
+            lineHeight = 16.sp
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(18.dp))
+                .background(TamaDark.copy(alpha = 0.12f))
+                .padding(14.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            AsyncImage(
+                model = "file:///android_asset/tama/potions/alchemy_cauldron.png",
+                contentDescription = null,
+                modifier = Modifier.size(116.dp),
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.None
+            )
+        }
+        Text(stringResource(R.string.tama_alchemist_kitchen_selected), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = TamaDark)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (selectedIngredients.isEmpty()) {
+                Text(stringResource(R.string.tama_alchemist_kitchen_selected_empty), fontFamily = FontFamily.Monospace, color = TamaMutedText, fontSize = 12.sp)
+            }
+            selectedIngredients.forEachIndexed { index, itemId ->
+                AssistChip(
+                    onClick = { onRemoveIngredient(index) },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = TamaLight,
+                        labelColor = TamaDark,
+                        leadingIconContentColor = TamaDark,
+                        disabledContainerColor = TamaLight.copy(alpha = 0.72f),
+                        disabledLabelColor = TamaDark
+                    ),
+                    label = {
+                        Text(
+                            FarmTradeItemCatalog.displayName(itemId, locale),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    leadingIcon = {
+                        InventoryMiniIcon(itemId = itemId, fallbackEmoji = "🌾", size = 22.dp)
+                    }
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = onBrew, enabled = selectedIngredients.isNotEmpty()) {
+                Text(stringResource(R.string.tama_alchemist_kitchen_brew), fontFamily = FontFamily.Monospace)
+            }
+            OutlinedButton(onClick = onClearIngredients, enabled = selectedIngredients.isNotEmpty()) {
+                Text(stringResource(R.string.tama_alchemist_kitchen_clear), fontFamily = FontFamily.Monospace)
+            }
+        }
+        Text(stringResource(R.string.tama_alchemist_kitchen_ingredients), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = TamaDark)
+        if (cropItems.isEmpty()) {
+            Text(stringResource(R.string.tama_alchemist_kitchen_no_crops), fontFamily = FontFamily.Monospace, color = TamaMutedText)
+        } else {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                cropItems.forEach { item ->
+                    val selected = selectedCounts[item.id] ?: 0
+                    FilterChip(
+                        selected = selected > 0,
+                        onClick = { if (selected < item.quantity) onAddIngredient(item.id) },
+                        enabled = selected < item.quantity,
+                        colors = FilterChipDefaults.filterChipColors(
+                            containerColor = TamaLight,
+                            labelColor = TamaDark,
+                            iconColor = TamaDark,
+                            selectedContainerColor = Color(0xFFFFF4B8),
+                            selectedLabelColor = TamaDark,
+                            selectedLeadingIconColor = TamaDark,
+                            disabledContainerColor = TamaLight.copy(alpha = 0.72f),
+                            disabledLabelColor = TamaDark.copy(alpha = 0.72f),
+                            disabledLeadingIconColor = TamaDark.copy(alpha = 0.72f)
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = selected < item.quantity,
+                            selected = selected > 0,
+                            borderColor = TamaDark.copy(alpha = 0.58f),
+                            selectedBorderColor = TamaDark
+                        ),
+                        label = {
+                            Text(
+                                "${FarmTradeItemCatalog.displayName(item.id, locale)} ${item.quantity - selected}/${item.quantity}",
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp
+                            )
+                        },
+                        leadingIcon = { InventoryMiniIcon(itemId = item.id, fallbackEmoji = "🌾", size = 22.dp) }
+                    )
+                }
+            }
+        }
+        Text(stringResource(R.string.tama_alchemist_kitchen_recipes), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = TamaDark)
+        if (ownedRecipes.isEmpty()) {
+            Text(stringResource(R.string.tama_alchemist_kitchen_no_recipes), fontFamily = FontFamily.Monospace, color = TamaMutedText, lineHeight = 16.sp)
+        } else {
+            ownedRecipes.forEach { recipe ->
+                val supply = AdventureGateCatalog.supply(recipe.supplyId)
+                val expanded = expandedRecipeId == recipe.id
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(TamaLight.copy(alpha = 0.82f))
+                        .clickable { expandedRecipeId = if (expanded) null else recipe.id }
+                        .padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        AsyncImage(
+                            model = "file:///android_asset/tama/potions/recipe_scroll.png",
+                            contentDescription = null,
+                            modifier = Modifier.size(34.dp),
+                            contentScale = ContentScale.Fit,
+                            filterQuality = FilterQuality.None
+                        )
+                        Text(
+                            stringResource(R.string.adventure_gate_recipe_title, supply?.let { stringResource(it.nameRes) } ?: recipe.supplyId),
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = TamaDark,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (expanded) {
+                        Text(
+                            recipeIngredientText(context, recipe),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            color = TamaMutedText
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -2581,6 +3254,16 @@ private fun FoodItem.toInventoryItem(): InventoryItem {
         type = ItemType.FOOD,
         quantity = 1
     )
+}
+
+private fun recipeIngredientText(context: Context, recipe: com.example.llamadroid.tama.rpg.AdventureGateRecipeDefinition): String {
+    val locale = context.resources.configuration.locales[0]
+    return recipe.ingredientCounts.entries
+        .sortedBy { FarmTradeItemCatalog.displayName(it.key, locale) }
+        .joinToString(", ") { (itemId, count) ->
+            val name = FarmTradeItemCatalog.displayName(itemId, locale)
+            if (count > 1) "${count}x $name" else name
+        }
 }
 
 private fun List<InventoryItem>.quantityByName(): Map<String, Int> {
@@ -3097,6 +3780,13 @@ private fun inventoryDisplayNameForItemId(context: Context, itemId: String, fall
         itemId.startsWith("seed_") -> seedDisplayText(itemId.removePrefix("seed_")).resolve(locale)
         FarmTradeItemCatalog.isTradeItem(itemId) -> FarmTradeItemCatalog.displayName(itemId, locale)
         TamaPotionCatalog.byId(itemId) != null -> context.getString(checkNotNull(TamaPotionCatalog.byId(itemId)).titleRes)
+        AdventureGateCatalog.supply(itemId) != null -> context.getString(checkNotNull(AdventureGateCatalog.supply(itemId)).nameRes)
+        AdventureGateCatalog.recipe(itemId) != null -> {
+            val recipe = checkNotNull(AdventureGateCatalog.recipe(itemId))
+            val supply = AdventureGateCatalog.supply(recipe.supplyId)
+            context.getString(R.string.adventure_gate_recipe_title, supply?.let { context.getString(it.nameRes) } ?: recipe.supplyId)
+        }
+        AdventureGateCatalog.equipment(itemId) != null -> context.getString(checkNotNull(AdventureGateCatalog.equipment(itemId)).nameRes)
         TamaDecorCatalog.decorById(itemId) != null -> context.getString(checkNotNull(TamaDecorCatalog.decorById(itemId)).titleRes)
         TamaRoomCatalog.roomById(itemId) != null -> context.getString(checkNotNull(TamaRoomCatalog.roomById(itemId)).titleRes)
         itemId.contains("watering_can", ignoreCase = true) -> context.getString(R.string.tama_inventory_watering_can)
@@ -3107,12 +3797,16 @@ private fun inventoryDisplayNameForItemId(context: Context, itemId: String, fall
 
 private fun inventoryAssetPathForItemId(itemId: String): String? {
     return when {
+        TamaUiIconCatalog.assetPathForFoodItemId(itemId) != null -> TamaUiIconCatalog.assetPathForFoodItemId(itemId)
         itemId == "water" -> "farm/Others/water.png"
         itemId == "fertilizer" -> "farm/Others/fertilizer.png"
         itemId == "rotten_crop" -> "farm/Others/rotten_crop.png"
         itemId.startsWith("seed_") -> "farm/Crops/seed/${itemId.removePrefix("seed_")}.png"
         FarmTradeItemCatalog.assetPath(itemId) != null -> FarmTradeItemCatalog.assetPath(itemId)
         TamaPotionCatalog.byId(itemId) != null -> TamaPotionCatalog.byId(itemId)?.assetPath
+        AdventureGateCatalog.supply(itemId) != null -> AdventureGateCatalog.supply(itemId)?.assetPath
+        AdventureGateCatalog.recipe(itemId) != null -> "tama/potions/recipe_scroll.png"
+        AdventureGateCatalog.equipment(itemId) != null -> AdventureGateCatalog.equipment(itemId)?.assetPath
         TamaDecorCatalog.decorById(itemId) != null -> TamaDecorCatalog.decorById(itemId)?.assetPath
         TamaRoomCatalog.roomById(itemId) != null -> TamaRoomCatalog.roomById(itemId)?.assetPath
         itemId.contains("watering_can", ignoreCase = true) -> "farm/Others/watering_can.png"
@@ -3147,7 +3841,7 @@ private fun InventoryMiniIcon(
                 filterQuality = FilterQuality.None
             )
         } else {
-            Text(fallbackEmoji, fontSize = 20.sp)
+            TamaUiIcon(fallbackEmoji, fontSize = 20.sp)
         }
     }
 }
@@ -3739,6 +4433,7 @@ fun FeedingDialog(
     pet: TamaPet,
     onFeed: (String, Int, Int) -> Unit,
     onUsePotion: (String) -> Unit,
+    onUseAdventureGateSupply: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     // Free foods always available
@@ -3768,6 +4463,12 @@ fun FeedingDialog(
         pet.inventory
             .filter { it.type == ItemType.POTION }
             .mapNotNull { item -> TamaPotionCatalog.byId(item.id)?.let { potion -> potion to item.quantity } }
+    }
+    val ownedAdventureGateSupplies = remember(pet.inventory) {
+        pet.inventory
+            .filter { it.type == ItemType.POTION || it.type == ItemType.TREASURE }
+            .mapNotNull { item -> AdventureGateCatalog.supply(item.id)?.let { supply -> supply to item.quantity } }
+            .filter { (supply, _) -> supply.kind != AdventureGateSupplyKind.CLEANSE }
     }
 
     TamaPopupDialog(
@@ -3839,6 +4540,30 @@ fun FeedingDialog(
                     )
                 }
             }
+            if (ownedAdventureGateSupplies.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    stringResource(R.string.tama_feed_adventure_gate_supplies),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = TamaMutedText
+                )
+                ownedAdventureGateSupplies.forEach { (supply, count) ->
+                    AdventureGateSupplyFeedRow(
+                        title = stringResource(supply.nameRes),
+                        effect = stringResource(
+                            R.string.tama_feed_adventure_gate_supply_effect,
+                            adventureGateSupplyEffectText(supply)
+                        ),
+                        assetPath = supply.assetPath,
+                        count = count,
+                        onClick = {
+                            onUseAdventureGateSupply(supply.id)
+                            onDismiss()
+                        }
+                    )
+                }
+            }
         },
         footerContent = {
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) }
@@ -3901,6 +4626,73 @@ private fun PotionItemRow(
         )
     }
 }
+
+@Composable
+private fun AdventureGateSupplyFeedRow(
+    title: String,
+    effect: String,
+    assetPath: String,
+    count: Int,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(TamaLight.copy(alpha = 0.35f))
+            .clickable { onClick() }
+            .padding(8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AsyncImage(
+                model = "file:///android_asset/$assetPath",
+                contentDescription = null,
+                modifier = Modifier.size(42.dp),
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.None
+            )
+            Column(modifier = Modifier.weight(1f, fill = false)) {
+                Text(
+                    title,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = TamaDark,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    effect,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 10.sp,
+                    color = TamaMutedText,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        Text(
+            "x$count",
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp
+        )
+    }
+}
+
+@Composable
+private fun adventureGateSupplyEffectText(supply: AdventureGateSupplyDefinition): String =
+    when (supply.kind) {
+        AdventureGateSupplyKind.HP -> stringResource(R.string.adventure_gate_shop_restore_hp, supply.amount)
+        AdventureGateSupplyKind.MANA -> stringResource(R.string.adventure_gate_shop_restore_mana, supply.amount)
+        AdventureGateSupplyKind.CLEANSE -> stringResource(R.string.adventure_gate_shop_cleanse_bad_statuses)
+        AdventureGateSupplyKind.SKILL_POINT -> stringResource(R.string.adventure_gate_shop_grants_skill_point)
+    }
 
 @Composable
 fun FoodItemRow(food: FoodItem, count: Int?, onClick: () -> Unit) {
@@ -4262,7 +5054,7 @@ fun TamaPetDisplay(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            Text("📜", fontSize = 22.sp)
+                            TamaEmojiIcon("📜", fontSize = 22.sp)
                             Text(
                                 text = stringResource(R.string.tama_quest_board_title),
                                 fontFamily = FontFamily.Monospace,
@@ -4497,6 +5289,7 @@ fun TamaControls(
     isSleeping: Boolean,
     isBusy: Boolean = false,
     currentLocationId: String = "home",
+    currentTime: Long = System.currentTimeMillis(),
     activeStudySession: TamaStudySessionEntity? = null,
     onFeed: () -> Unit,
     onClean: () -> Unit,
@@ -4518,6 +5311,8 @@ fun TamaControls(
     onHeal: () -> Unit = {},
     onChat: () -> Unit = {},
     onDungeon: () -> Unit = {},
+    onAdventureGate: () -> Unit = {},
+    onNightArena: () -> Unit = {},
     onInventory: () -> Unit = {},
     onChecklist: () -> Unit = {},
     onArcade: () -> Unit = {},
@@ -4526,6 +5321,7 @@ fun TamaControls(
     val canAct = pet != null && pet.stage != GrowthStage.EGG && !isSleeping && !isBusy
     val isDoingActivity = pet?.currentActivity != ActivityType.NONE
     val isHome = currentLocationId == "home" || currentLocationId.startsWith("home")
+    val nightArenaAvailable = isSleeping && NightArenaGenerator.isActiveWindow(currentTime)
     val actions = buildList {
         if (pet != null) {
             add(TamaControlConfig(icon = TAMA_INVENTORY_EMOJI, label = stringResource(R.string.tama_btn_inventory), enabled = true, onClick = onInventory))
@@ -4551,6 +5347,9 @@ fun TamaControls(
                     TamaControlConfig(icon = TAMA_SLEEP_EMOJI, label = stringResource(R.string.tama_btn_sleep), enabled = canAct, onClick = onSleepOrWake)
                 }
             )
+            if (nightArenaAvailable) {
+                add(TamaControlConfig(icon = "🌙", label = stringResource(R.string.tama_btn_night_arena), enabled = pet != null && !isBusy, onClick = onNightArena))
+            }
             if (isSleeping) {
                 add(TamaControlConfig(icon = "✨", label = stringResource(R.string.tama_btn_deep_dream_test), enabled = pet != null && !isBusy, onClick = onDebugDeepDream))
             }
@@ -4587,6 +5386,9 @@ fun TamaControls(
                 }
                 currentLocationId.contains("dungeon", ignoreCase = true) -> {
                     add(TamaControlConfig(icon = LocationType.DUNGEON.emoji, label = stringResource(R.string.tama_btn_dungeon), enabled = canAct, onClick = onDungeon))
+                }
+                currentLocationId.contains("adventure_gate", ignoreCase = true) -> {
+                    add(TamaControlConfig(icon = LocationType.ADVENTURE_GATE.emoji, label = stringResource(R.string.tama_btn_adventure_gate), enabled = canAct, onClick = onAdventureGate))
                 }
             }
         }
@@ -4635,7 +5437,7 @@ fun TamaButton(
         if (assetPath != null) {
             TamaActionAsset(assetPath = assetPath, size = 30.dp)
         } else {
-            Text(icon.orEmpty(), fontSize = 22.sp)
+            TamaEmojiIcon(icon.orEmpty(), fontSize = 22.sp)
         }
         Spacer(modifier = Modifier.height(6.dp))
         Text(
@@ -4682,11 +5484,10 @@ private fun TamaEmojiIcon(
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 18.sp
 ) {
-    Text(
-        text = emoji,
+    TamaUiIcon(
+        emoji = emoji,
         modifier = modifier,
-        fontSize = fontSize,
-        lineHeight = fontSize
+        fontSize = fontSize
     )
 }
 
@@ -5011,6 +5812,7 @@ private fun TamaSettingsDialog(
     val tamaOllamaUrl by settingsRepo.tamaOllamaUrl.collectAsState()
     val tamaSummarizerModel by settingsRepo.tamaSummarizerModel.collectAsState()
     val tamaLlamaServerUrl by settingsRepo.tamaLlamaServerUrl.collectAsState()
+    val tamaLlamaSwapUrl by settingsRepo.tamaLlamaSwapUrl.collectAsState()
     val serverModelLabel by settingsRepo.tamaLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.tamaLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.tamaLlamaServerContextTokens.collectAsState()
@@ -5035,10 +5837,12 @@ private fun TamaSettingsDialog(
     var showResolutionMenu by remember { mutableStateOf(false) }
 
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
-        settingsRepo.setTamaLlamaServerModelLabel(metadata.serverModelLabel)
-        settingsRepo.setTamaLlamaServerContextTokens(metadata.serverContextTokens)
-        settingsRepo.setTamaLlamaServerContextLabel(metadata.serverContextLabel)
-        if (!metadata.selectedModel.isNullOrBlank()) {
+        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+            settingsRepo.setTamaLlamaServerModelLabel(metadata.serverModelLabel)
+            settingsRepo.setTamaLlamaServerContextTokens(metadata.serverContextTokens)
+            settingsRepo.setTamaLlamaServerContextLabel(metadata.serverContextLabel)
+        }
+        if (SettingsRepository.requiresSelectedRemoteModel(metadata.backend) && !metadata.selectedModel.isNullOrBlank()) {
             settingsRepo.setTamaSummarizerModel(metadata.selectedModel)
         }
     }
@@ -5101,8 +5905,12 @@ private fun TamaSettingsDialog(
                     onOllamaUrlChange = settingsRepo::setTamaOllamaUrl,
                     llamaServerUrl = tamaLlamaServerUrl,
                     onLlamaServerUrlChange = settingsRepo::setTamaLlamaServerUrl,
+                    llamaSwapUrl = tamaLlamaSwapUrl,
+                    onLlamaSwapUrlChange = settingsRepo::setTamaLlamaSwapUrl,
                     ollamaModel = tamaSummarizerModel,
                     onOllamaModelSelected = settingsRepo::setTamaSummarizerModel,
+                    llamaSwapModel = tamaSummarizerModel,
+                    onLlamaSwapModelSelected = settingsRepo::setTamaSummarizerModel,
                     llamaServerModelLabel = serverModelLabel,
                     llamaServerContextLabel = serverContextLabel,
                     llamaServerContextTokens = serverContextTokens,
@@ -5111,15 +5919,14 @@ private fun TamaSettingsDialog(
                         RemoteSummaryClientFactory.fromConfig(
                             RemoteSummaryBackendConfig(
                                 backend = backend,
-                                baseUrl = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                                    tamaLlamaServerUrl.trim()
-                                } else {
-                                    tamaOllamaUrl.trim()
+                                baseUrl = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tamaLlamaServerUrl.trim()
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tamaLlamaSwapUrl.trim()
+                                    else -> tamaOllamaUrl.trim()
                                 },
-                                model = if (backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
-                                    tamaSummarizerModel.trim().ifBlank { null }
-                                } else {
-                                    serverModelLabel?.trim()?.ifBlank { null }
+                                model = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> serverModelLabel?.trim()?.ifBlank { null }
+                                    else -> tamaSummarizerModel.trim().ifBlank { null }
                                 },
                                 timeoutMinutes = 1
                             )
@@ -5448,6 +6255,10 @@ fun PetStatusDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val adventureGateRepository = remember(context) {
+        AdventureGateRepository(TamaDatabase.getInstance(context))
+    }
+    var adventureGateProfile by remember(pet.id) { mutableStateOf<AdventureGateProfile?>(null) }
     val speciesName = remember(pet.species, pet.genetics.bodyStyle) {
         speciesDisplayName(context, pet.species, pet.genetics.bodyStyle)
     }
@@ -5456,6 +6267,10 @@ fun PetStatusDialog(
         stringResource(R.string.tama_age_minutes, ageMinutes)
     } else {
         stringResource(R.string.tama_age_hours_minutes, ageMinutes / 60, ageMinutes % 60)
+    }
+
+    LaunchedEffect(pet.id) {
+        adventureGateProfile = adventureGateRepository.getOrCreateProfile(pet.id)
     }
 
     TamaPopupDialog(
@@ -5482,6 +6297,80 @@ fun PetStatusDialog(
                 StatBarRow(stringResource(R.string.tama_status_hygiene), pet.stats.hygiene)
                 StatBarRow(stringResource(R.string.tama_status_energy), pet.stats.energy)
                 StatBarRow(stringResource(R.string.tama_status_health), pet.stats.health)
+
+                adventureGateProfile?.let { profile ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        stringResource(R.string.adventure_gate_pet_status),
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        color = TamaAccent
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.adventure_gate_level_xp, profile.level, profile.xp, profile.xpToNext),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = TamaMutedText
+                    )
+                    AdventureGatePetStatRow(
+                        stringResource(R.string.adventure_gate_stat_hp),
+                        "${profile.currentHp}/${profile.stats.maxHp}"
+                    )
+                    AdventureGatePetStatRow(
+                        stringResource(R.string.adventure_gate_stat_mana),
+                        "${profile.currentMana}/${profile.stats.maxMana}"
+                    )
+                    AdventureGatePetStatRow(
+                        stringResource(R.string.adventure_gate_skill_points_short),
+                        profile.skillPoints.toString()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AdventureGatePetStatRow(
+                            stringResource(R.string.adventure_gate_stat_attack),
+                            profile.stats.attack.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        AdventureGatePetStatRow(
+                            stringResource(R.string.adventure_gate_stat_magic),
+                            profile.stats.magic.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AdventureGatePetStatRow(
+                            stringResource(R.string.adventure_gate_stat_defense),
+                            profile.stats.defense.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        AdventureGatePetStatRow(
+                            stringResource(R.string.adventure_gate_stat_speed),
+                            profile.stats.speed.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        AdventureGatePetStatRow(
+                            stringResource(R.string.adventure_gate_stat_accuracy),
+                            profile.stats.accuracy.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                        AdventureGatePetStatRow(
+                            stringResource(R.string.adventure_gate_stat_evasion),
+                            profile.stats.evasion.toString(),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -5550,6 +6439,38 @@ fun StatBarRow(label: String, value: Float) {
 }
 
 @Composable
+private fun AdventureGatePetStatRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            color = TamaMutedText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            value,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = TamaDark,
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = 8.dp)
+        )
+    }
+}
+
+@Composable
 private fun statusLabel(status: String): String {
     return when (status) {
         TamaArtworkStatus.QUEUED.name -> stringResource(R.string.tama_gallery_status_queued)
@@ -5567,6 +6488,7 @@ private fun tamaModelLabel(model: com.example.llamadroid.data.db.ModelEntity): S
         val providerLabel = when (entry.provider) {
             OnnxCatalogProvider.SDAI -> stringResource(R.string.onnx_models_provider_sdai)
             OnnxCatalogProvider.MANUXD32 -> stringResource(R.string.onnx_models_provider_manuxd32)
+            OnnxCatalogProvider.SUPERTONIC -> stringResource(R.string.onnx_models_provider_supertonic)
         }
         "${entry.title} · $providerLabel"
     } else {

@@ -60,7 +60,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.data.db.AgentMessageEntity
+import com.example.llamadroid.data.db.KnowledgeBaseEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.service.AgentForegroundService
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.AgentService
@@ -98,10 +100,22 @@ fun AgentScreen(navController: NavController) {
     val ollamaService = remember { AgentForegroundService.getOllamaService(context) }
     val agentService = remember { AgentForegroundService.getAgentService(context) }
     val db = remember { com.example.llamadroid.data.db.AppDatabase.getDatabase(context) }
+    val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, db) }
     val settingsRepository = remember { SettingsRepository(context) }
     val lifecycleOwner = LocalLifecycleOwner.current
     val density = LocalDensity.current
     val rootView = LocalView.current
+    val onKnowledgeLinkClick: (String) -> Boolean = remember(navController) {
+        { uri ->
+            val chunkId = Screen.KnowledgeChunkReader.chunkIdFromUri(uri)
+            if (chunkId != null) {
+                navController.navigate(Screen.KnowledgeChunkReader.createRoute(chunkId))
+                true
+            } else {
+                false
+            }
+        }
+    }
     var chatContentBottomInWindowPx by remember { mutableIntStateOf(0) }
     val fullWindowHeightPx = maxOf(
         rootView.rootView.height,
@@ -127,6 +141,7 @@ fun AgentScreen(navController: NavController) {
     val currentTask by AgentService.currentTask.collectAsStateWithLifecycle()
     val runtimeActiveConversationId by AgentService.activeConversationId.collectAsStateWithLifecycle()
     val debugLog by AgentService.debugLog.collectAsStateWithLifecycle()
+    val selectedKnowledgeBaseIds by AgentService.selectedKnowledgeBaseIds.collectAsStateWithLifecycle()
 
     // UI Local state
     var inputText by rememberSaveable { mutableStateOf("") }
@@ -135,7 +150,10 @@ fun AgentScreen(navController: NavController) {
     val listState = rememberLazyListState()
     val agentBackend by settingsRepository.agentBackend.collectAsStateWithLifecycle()
     val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(agentBackend)
+    val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(agentBackend)
+    val isAgentOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(agentBackend)
     val llamaServerUrl by settingsRepository.llamaServerUrl.collectAsStateWithLifecycle()
+    val llamaSwapUrl by settingsRepository.agentLlamaSwapUrl.collectAsStateWithLifecycle()
     val llamaServerRuntimeState by AgentService.llamaServerRuntimeState.collectAsStateWithLifecycle()
     val orchestratorVisionEnabled by settingsRepository.agentOrchestratorVisionEnabled.collectAsStateWithLifecycle()
 
@@ -150,10 +168,11 @@ fun AgentScreen(navController: NavController) {
     var showConversations by remember { mutableStateOf(false) }
     var restoreToken by remember { mutableIntStateOf(0) }
 
-    LaunchedEffect(agentBackend, llamaServerUrl) {
+    LaunchedEffect(agentBackend, llamaServerUrl, llamaSwapUrl) {
         delay(350)
-        if (isAgentLlamaServer) {
-            if (llamaServerUrl.isNotBlank()) {
+        if (isAgentOpenAiBackend) {
+            val remoteUrl = if (isAgentLlamaSwap) llamaSwapUrl else llamaServerUrl
+            if (remoteUrl.isNotBlank()) {
                 agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
             }
         } else {
@@ -248,6 +267,7 @@ fun AgentScreen(navController: NavController) {
     
     // Database and conversation management
     val conversations by db.agentChatDao().getAllConversations().collectAsState(initial = emptyList())
+    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases().collectAsState(initial = emptyList())
     val activeRuntimeJobs by db.aiRuntimeJobDao().observeActiveJobs().collectAsState(initial = emptyList())
     val selectedConversationMessageFlow = remember(selectedConversationId) {
         selectedConversationId?.let { db.agentChatDao().getMessagesForConversation(it) }
@@ -352,6 +372,7 @@ fun AgentScreen(navController: NavController) {
         restoredRole: AgentService.Companion.AgentRole,
         restoredTask: String?,
         restoredMessages: List<AgentService.Companion.ChatMessage>,
+        knowledgeBaseIdsCsv: String = "",
         dismissPicker: Boolean,
         token: Int? = null
     ) {
@@ -372,6 +393,7 @@ fun AgentScreen(navController: NavController) {
         AgentService.setCurrentProjectFolder(projectFolder)
         AgentService.setCurrentAgent(restoredRole)
         AgentService.setCurrentTask(restoredTask)
+        AgentService.setSelectedKnowledgeBaseIdsCsv(knowledgeBaseIdsCsv)
         val maxSeq = restoredMessages.maxOfOrNull { it.sequenceNumber } ?: 0
         AgentService.resetMessageCounter(maxSeq)
         AgentService.setMessages(restoredMessages)
@@ -445,6 +467,7 @@ fun AgentScreen(navController: NavController) {
                 AgentService.clearAllSessions()
                 AgentService.clearTransientConversationState()
                 AgentService.setActiveConversationId(null)
+                AgentService.setSelectedKnowledgeBaseIds(emptyList())
                 return
             }
 
@@ -461,6 +484,7 @@ fun AgentScreen(navController: NavController) {
                 restoredRole = restoredRole,
                 restoredTask = conv.lastTask,
                 restoredMessages = restoredMessages,
+                knowledgeBaseIdsCsv = conv.knowledgeBaseIds,
                 dismissPicker = dismissPicker,
                 token = token
             )
@@ -725,6 +749,7 @@ fun AgentScreen(navController: NavController) {
                     AgentService.clearAllSessions()
                     AgentService.clearTransientConversationState()
                     AgentService.setActiveConversationId(null)
+                    AgentService.setSelectedKnowledgeBaseIds(emptyList())
                 }
             }
             if (projectFolder != null && projectFolder.isNotBlank()) {
@@ -833,6 +858,18 @@ fun AgentScreen(navController: NavController) {
             selectedConversationMessages
         } else {
             messages
+        }
+    }
+
+    fun updateActiveKnowledgeBases(ids: List<Long>) {
+        val conversationId = activeUiConversationId ?: return
+        val normalized = ids.distinct().filter { it > 0L }
+        AgentService.setSelectedKnowledgeBaseIds(normalized)
+        scope.launch {
+            db.agentChatDao().updateKnowledgeBaseIds(
+                conversationId,
+                KnowledgeBaseRepository.selectedKnowledgeBaseIdsToCsv(normalized)
+            )
         }
     }
     val showSshWarning = !isAgentConnected &&
@@ -952,26 +989,36 @@ fun AgentScreen(navController: NavController) {
             ConnectionStatusBar(
                 isBackendConnected = if (isAgentLlamaServer) {
                     llamaServerRuntimeState.isConnected
+                } else if (isAgentLlamaSwap) {
+                    llamaServerRuntimeState.isConnected
                 } else {
                     isOllamaConnected
                 },
                 backendIsRecovering = if (isAgentLlamaServer) {
+                    llamaServerRuntimeState.isRefreshing
+                } else if (isAgentLlamaSwap) {
                     llamaServerRuntimeState.isRefreshing
                 } else {
                     ollamaIsRecovering
                 },
                 backendHasChecked = if (isAgentLlamaServer) {
                     llamaServerRuntimeState.hasChecked
+                } else if (isAgentLlamaSwap) {
+                    llamaServerRuntimeState.hasChecked
                 } else {
                     ollamaHasChecked
                 },
                 backendOfflineMessage = if (isAgentLlamaServer) {
                     stringResource(R.string.agent_llama_server_offline)
+                } else if (isAgentLlamaSwap) {
+                    stringResource(R.string.agent_llama_swap_offline)
                 } else {
                     stringResource(R.string.agent_ollama_offline)
                 },
                 backendReconnectingMessage = if (isAgentLlamaServer) {
                     stringResource(R.string.agent_llama_server_reconnecting)
+                } else if (isAgentLlamaSwap) {
+                    stringResource(R.string.agent_llama_swap_reconnecting)
                 } else {
                     stringResource(R.string.agent_ollama_reconnecting)
                 },
@@ -979,7 +1026,7 @@ fun AgentScreen(navController: NavController) {
                 retryMessage = retryMessage,
                 onRetry = {
                     scope.launch {
-                        if (isAgentLlamaServer) {
+                        if (isAgentOpenAiBackend) {
                             agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
                         } else if (!isOllamaConnected) {
                             ollamaService.checkConnection()
@@ -1021,6 +1068,15 @@ fun AgentScreen(navController: NavController) {
                     else -> lastOrchestratorPromptSnapshot
                 }
             )
+
+            if (activeUiConversationId != null) {
+                AgentKnowledgeBaseSelector(
+                    knowledgeBases = knowledgeBases,
+                    selectedIds = selectedKnowledgeBaseIds,
+                    onSelectionChange = { updateActiveKnowledgeBases(it) },
+                    onManage = { navController.navigate(Screen.KnowledgeBase.route) }
+                )
+            }
             
             if (showDebugPanel) {
                 DebugPanel(
@@ -1065,6 +1121,7 @@ fun AgentScreen(navController: NavController) {
                         onSaveEdit = { saveEdit() },
                         onCancelEdit = { editingMessageId = null },
                         onToggleOutput = { id -> AgentService.toggleMessageOutput(id) },
+                        onKnowledgeLinkClick = onKnowledgeLinkClick,
                         modifier = Modifier
                             .weight(1f)
                             .then(if (editingMessageId != null) Modifier.imePadding() else Modifier)
@@ -1117,7 +1174,7 @@ fun AgentScreen(navController: NavController) {
             onConnect = {
                 scope.launch {
                     val portInt = sshPort.toIntOrNull() ?: 8023
-                    if (isAgentLlamaServer) {
+                    if (isAgentOpenAiBackend) {
                         agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
                     } else {
                         ollamaService.initFromSettings()
@@ -1134,7 +1191,7 @@ fun AgentScreen(navController: NavController) {
     if (showAgentSettings) {
         // Refresh models list every time the dialog opens
         LaunchedEffect(Unit) {
-            if (isAgentLlamaServer) {
+            if (isAgentOpenAiBackend) {
                 agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
             } else {
                 ollamaService.checkConnection()
@@ -1142,7 +1199,11 @@ fun AgentScreen(navController: NavController) {
         }
         AgentSettingsDialog(
             settingsRepository = settingsRepository,
-            availableModels = availableModels,
+            availableModels = if (isAgentLlamaSwap) {
+                llamaServerRuntimeState.availableModels
+            } else {
+                availableModels
+            },
             availableImageGenerationModels = availableImageGenerationModels,
             onDismiss = { showAgentSettings = false }
         )
@@ -1516,6 +1577,74 @@ private fun AgentConversationStatePanel(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentKnowledgeBaseSelector(
+    knowledgeBases: List<KnowledgeBaseEntity>,
+    selectedIds: List<Long>,
+    onSelectionChange: (List<Long>) -> Unit,
+    onManage: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_kb_selector_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = if (selectedIds.isEmpty()) {
+                            stringResource(R.string.agent_kb_selector_none)
+                        } else {
+                            stringResource(R.string.agent_kb_selector_count, selectedIds.size)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                TextButton(onClick = onManage) {
+                    Text(stringResource(R.string.kb_manage_action))
+                }
+            }
+            if (knowledgeBases.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    knowledgeBases.forEach { kb ->
+                        val selected = kb.id in selectedIds
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                onSelectionChange(
+                                    if (selected) {
+                                        selectedIds - kb.id
+                                    } else {
+                                        (selectedIds + kb.id).distinct()
+                                    }
+                                )
+                            },
+                            label = {
+                                Text(kb.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        )
+                    }
+                }
             }
         }
     }

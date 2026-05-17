@@ -21,6 +21,10 @@ class DatasetBackendSupportTest {
             SettingsRepository.PDF_BACKEND_OLLAMA,
             normalizeDatasetBackend(SettingsRepository.PDF_BACKEND_OLLAMA)
         )
+        assertEquals(
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
+            normalizeDatasetBackend("llama_swap")
+        )
     }
 
     @Test
@@ -65,5 +69,30 @@ class DatasetBackendSupportTest {
         val extracted = extractDatasetQuestionLine("\n\nWhat is the main idea?\nA second line")
 
         assertEquals("What is the main idea?", extracted)
+    }
+
+    @Test
+    fun `buildDatasetLlamaSwapRequestPayload sends selected model through chat completions`() {
+        val project = DatasetProjectEntity(
+            name = "Dataset",
+            backend = SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
+            serverUrl = "http://localhost:9292",
+            ollamaModel = "swap-qwen"
+        )
+
+        val payload = buildDatasetLlamaSwapRequestPayload(
+            project = project,
+            prompt = "Answer this",
+            maxTokens = 320,
+            temperature = 0.45f,
+            stop = listOf("</s>")
+        )
+
+        assertEquals("swap-qwen", payload["model"])
+        assertEquals(false, payload["stream"])
+        assertEquals(320, payload["max_tokens"])
+        val messages = payload["messages"] as List<*>
+        assertEquals(mapOf("role" to "user", "content" to "Answer this"), messages.first())
+        assertEquals(listOf("</s>"), payload["stop"])
     }
 }

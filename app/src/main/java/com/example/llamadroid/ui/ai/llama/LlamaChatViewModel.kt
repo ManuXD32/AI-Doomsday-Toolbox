@@ -167,6 +167,16 @@ class LlamaChatViewModel(
     suspend fun deleteMessageNow(message: LlamaMessageEntity) {
         repository.deleteMessage(message)
     }
+
+    fun clearChat(chatId: Long) {
+        viewModelScope.launch {
+            repository.clearChatMessages(chatId)
+        }
+    }
+
+    suspend fun clearChatNow(chatId: Long) {
+        repository.clearChatMessages(chatId)
+    }
     
     fun updateMessage(id: Long, content: String) {
         viewModelScope.launch {

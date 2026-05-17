@@ -10,6 +10,7 @@ data class LlamaBuiltInPromptProfile(
 )
 
 object LlamaBuiltInPromptProfiles {
+    const val DEEP_RESEARCHER = "deep_researcher"
     const val RESEARCHER = "researcher"
     const val EXPERT_CODER = "expert_coder"
     const val STUDY_TUTOR = "study_tutor"
@@ -22,6 +23,11 @@ object LlamaBuiltInPromptProfiles {
     const val DATA_ANALYST = "data_analyst"
 
     val all: List<LlamaBuiltInPromptProfile> = listOf(
+        LlamaBuiltInPromptProfile(
+            key = DEEP_RESEARCHER,
+            nameRes = R.string.llama_prompt_profile_deep_researcher,
+            contentRes = R.string.llama_prompt_profile_deep_researcher_prompt
+        ),
         LlamaBuiltInPromptProfile(
             key = RESEARCHER,
             nameRes = R.string.llama_prompt_profile_researcher,

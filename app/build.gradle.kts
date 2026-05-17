@@ -54,8 +54,8 @@ android {
         applicationId = "com.manuxd32.aidoomsdaytoolbox"
         minSdk = 26
         targetSdk = 35
-        versionCode = 938
-        versionName = "0.938"
+        versionCode = 942
+        versionName = "0.942"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -116,6 +116,14 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
+            // LiteRT-LM GPU should mirror Gallery's native surface. Keep retired QNN/NPU
+            // experiments out of the base APK/AAB so their LiteRT dispatch plugins cannot be
+            // discovered during ordinary CPU/GPU Engine initialization.
+            excludes += setOf(
+                "**/libLiteRtCompilerPlugin_Qualcomm.so",
+                "**/libLiteRtDispatch_Qualcomm.so",
+                "**/libQnn*.so"
+            )
         }
     }
     
@@ -137,6 +145,7 @@ android {
     // Dynamic Features for native binaries execution (Install-Time/On-Demand)
     dynamicFeatures += setOf(
         ":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9",
+        ":feature_llm_snapdragon_opencl",
         ":feature_kiwix_baseline", ":feature_kiwix_dotprod", ":feature_kiwix_armv9",
         ":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9",
         ":feature_upscaler"
@@ -199,6 +208,11 @@ dependencies {
 
     // Official ONNX Runtime Android backend for local ONNX execution
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.21.0")
+
+    // LiteRT-LM chat backend for CPU/GPU packaged models
+    runtimeOnly("com.google.ai.edge.litertlm:litertlm-android:0.11.0") {
+        exclude(group = "org.jetbrains.kotlin")
+    }
     
     // Apache Commons Compress for tar extraction (handles hardlinks)
     implementation(libs.commons.compress)
@@ -236,4 +250,56 @@ dependencies {
     
     // Retrofit with kotlinx.serialization
     implementation("com.jakewharton.retrofit:retrofit2-kotlinx-serialization-converter:1.0.0")
+}
+
+val releaseFeatureSizeLimitBytes = 190L * 1024L * 1024L
+val releaseFeatureModules = listOf(
+    ":feature_llm_baseline",
+    ":feature_llm_dotprod",
+    ":feature_llm_armv9",
+    ":feature_llm_snapdragon_opencl",
+    ":feature_kiwix_baseline",
+    ":feature_kiwix_dotprod",
+    ":feature_kiwix_armv9",
+    ":feature_media_baseline",
+    ":feature_media_dotprod",
+    ":feature_media_armv9",
+    ":feature_upscaler"
+)
+
+tasks.register("checkReleaseFeatureSplitSizes") {
+    group = "verification"
+    description = "Fails release verification if a dynamic feature split exceeds 190 MiB."
+    mustRunAfter("bundleRelease")
+
+    doLast {
+        val oversized = releaseFeatureModules.flatMap { path ->
+            val projectDir = project(path).layout.buildDirectory.asFile.get()
+            if (!projectDir.exists()) {
+                emptyList()
+            } else {
+                projectDir.walkTopDown()
+                    .filter { file ->
+                        file.isFile &&
+                            (file.extension == "apk" || file.extension == "aab" || file.extension == "so") &&
+                            file.length() > releaseFeatureSizeLimitBytes
+                    }
+                    .map { file -> path to file }
+                    .toList()
+            }
+        }
+
+        if (oversized.isNotEmpty()) {
+            val details = oversized.joinToString("\n") { (module, file) ->
+                "$module ${file.name} ${file.length() / (1024L * 1024L)} MiB"
+            }
+            throw org.gradle.api.GradleException(
+                "Dynamic feature payloads must stay below 190 MiB:\n$details"
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    finalizedBy("checkReleaseFeatureSplitSizes")
 }

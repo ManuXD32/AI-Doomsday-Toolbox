@@ -68,6 +68,9 @@ private const val TAMA_CHAT_SENDER_TAMA_ASSET = "tama/chat/sender_tama.png"
 private const val TAMA_CHAT_AUDIO_ASSET = "tama/chat/audio.png"
 private const val TAMA_CHAT_TRANSCRIPT_ASSET = "tama/chat/transcript.png"
 private const val TAMA_CHAT_WARNING_ASSET = "tama/chat/warning.png"
+private val TamaChatSenderIconSize = 22.dp
+private val TamaChatInlineIconSize = 24.dp
+private val TamaChatTranscriptIconSize = 22.dp
 
 /**
  * TamaChatScreen - AI Chat interface for the virtual pet.
@@ -136,10 +139,10 @@ fun TamaChatScreen(
         }
     }
 
-    val backendLabel = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-        stringResource(R.string.tama_backend_llama_server)
-    } else {
-        stringResource(R.string.tama_backend_ollama)
+    val backendLabel = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.tama_backend_llama_server)
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.tama_backend_llama_swap)
+        else -> stringResource(R.string.tama_backend_ollama)
     }
 
     fun startVoiceRecording() {
@@ -679,7 +682,7 @@ private fun TamaChatBubble(
             AsyncImage(
                 model = "file:///android_asset/${if (isUser) TAMA_CHAT_SENDER_YOU_ASSET else TAMA_CHAT_SENDER_TAMA_ASSET}",
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
+                modifier = Modifier.size(TamaChatSenderIconSize),
                 contentScale = ContentScale.Fit
             )
             Text(
@@ -730,7 +733,7 @@ private fun TamaChatBubble(
                             AsyncImage(
                                 model = "file:///android_asset/$TAMA_CHAT_AUDIO_ASSET",
                                 contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                                modifier = Modifier.size(TamaChatInlineIconSize),
                                 contentScale = ContentScale.Fit
                             )
                             IconButton(
@@ -800,7 +803,7 @@ private fun TamaChatBubble(
                                     AsyncImage(
                                         model = "file:///android_asset/$TAMA_CHAT_TRANSCRIPT_ASSET",
                                         contentDescription = null,
-                                        modifier = Modifier.size(16.dp),
+                                        modifier = Modifier.size(TamaChatTranscriptIconSize),
                                         contentScale = ContentScale.Fit
                                     )
                                     Text(
@@ -847,7 +850,7 @@ private fun TamaChatBubble(
                                 AsyncImage(
                                     model = "file:///android_asset/$TAMA_CHAT_WARNING_ASSET",
                                     contentDescription = null,
-                                    modifier = Modifier.size(18.dp),
+                                    modifier = Modifier.size(TamaChatInlineIconSize),
                                     contentScale = ContentScale.Fit
                                 )
                             }
@@ -1156,6 +1159,7 @@ fun TamaChatSettingsDialog(
     val ollamaThreads by settingsRepo.tamaOllamaThreads.collectAsState()
     val ollamaNumCtx by settingsRepo.tamaOllamaNumCtx.collectAsState()
     val llamaServerUrl by settingsRepo.tamaLlamaServerUrl.collectAsState()
+    val llamaSwapUrl by settingsRepo.tamaLlamaSwapUrl.collectAsState()
     val llamaServerModelLabel by settingsRepo.tamaLlamaServerModelLabel.collectAsState()
     val llamaServerContextTokens by settingsRepo.tamaLlamaServerContextTokens.collectAsState()
     val llamaServerContextLabel by settingsRepo.tamaLlamaServerContextLabel.collectAsState()
@@ -1178,7 +1182,11 @@ fun TamaChatSettingsDialog(
     var tempSummarizerPrompt by remember { mutableStateOf(summarizerPrompt) }
     var tempOllamaUrl by remember { mutableStateOf(ollamaUrl) }
     var tempLlamaServerUrl by remember { mutableStateOf(llamaServerUrl) }
+    var tempLlamaSwapUrl by remember { mutableStateOf(llamaSwapUrl) }
     var tempNumCtx by remember { mutableStateOf(ollamaNumCtx.toString()) }
+    var availableLlamaSwapModels by remember(petModel, summarizerModel) {
+        mutableStateOf(listOf(petModel, summarizerModel).filter { it.isNotBlank() }.distinct())
+    }
     var metadataMessage by remember { mutableStateOf<String?>(null) }
     var showVoiceLanguageMenu by remember { mutableStateOf(false) }
 
@@ -1307,7 +1315,23 @@ fun TamaChatSettingsDialog(
                     TamaBackendChoiceButton(
                         label = stringResource(R.string.tama_backend_llama_server),
                         selected = tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
-                        onClick = { tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER },
+                        onClick = {
+                            tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER
+                            if (tempLlamaServerUrl.isBlank() || tempLlamaServerUrl == SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL) {
+                                tempLlamaServerUrl = SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    TamaBackendChoiceButton(
+                        label = stringResource(R.string.tama_backend_llama_swap),
+                        selected = tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
+                        onClick = {
+                            tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SWAP
+                            if (tempLlamaSwapUrl.isBlank() || tempLlamaSwapUrl == SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL) {
+                                tempLlamaSwapUrl = SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL
+                            }
+                        },
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -1318,20 +1342,24 @@ fun TamaChatSettingsDialog(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedTextField(
-                    value = if (tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) tempLlamaServerUrl else tempOllamaUrl,
+                    value = when (tempBackend) {
+                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tempLlamaServerUrl
+                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tempLlamaSwapUrl
+                        else -> tempOllamaUrl
+                    },
                     onValueChange = {
-                        if (tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                            tempLlamaServerUrl = it
-                        } else {
-                            tempOllamaUrl = it
+                        when (tempBackend) {
+                            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tempLlamaServerUrl = it
+                            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tempLlamaSwapUrl = it
+                            else -> tempOllamaUrl = it
                         }
                     },
                     label = {
                         Text(
-                            if (tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                                stringResource(R.string.pdf_llama_server_url_label)
-                            } else {
-                                stringResource(R.string.pdf_ollama_url_label)
+                            when (tempBackend) {
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_llama_server_url_label)
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_llama_swap_url_label)
+                                else -> stringResource(R.string.pdf_ollama_url_label)
                             },
                             fontSize = 10.sp
                         )
@@ -1343,14 +1371,26 @@ fun TamaChatSettingsDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                if (tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+                if (SettingsRepository.usesOpenAiChatBackend(tempBackend)) {
                     OutlinedButton(
                         onClick = {
-                            settingsRepo.setTamaLlamaServerUrl(tempLlamaServerUrl)
+                            settingsRepo.setTamaBackend(tempBackend)
+                            if (SettingsRepository.isLlamaSwapBackend(tempBackend)) {
+                                settingsRepo.setTamaLlamaSwapUrl(tempLlamaSwapUrl)
+                            } else {
+                                settingsRepo.setTamaLlamaServerUrl(tempLlamaServerUrl)
+                            }
                             scope.launch {
-                                metadataMessage = agentService.refreshLlamaServerMetadata()
+                                agentService.refreshRemoteBackendMetadata()
                                     .fold(
-                                        onSuccess = { context.getString(R.string.tama_chat_backend_info_loaded) },
+                                        onSuccess = { metadata ->
+                                            if (SettingsRepository.isLlamaSwapBackend(metadata.backend)) {
+                                                availableLlamaSwapModels = metadata.availableModels
+                                                context.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
+                                            } else {
+                                                context.getString(R.string.tama_chat_backend_info_loaded)
+                                            }
+                                        },
                                         onFailure = {
                                             context.getString(
                                                 R.string.tama_chat_backend_info_failed,
@@ -1375,38 +1415,56 @@ fun TamaChatSettingsDialog(
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(stringResource(R.string.tama_chat_models_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TamaDark)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.pdf_llama_server_model_label),
-                        fontSize = 12.sp,
-                        color = TamaDark,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        llamaServerModelLabel ?: stringResource(R.string.pdf_server_value_unavailable),
-                        fontSize = 12.sp,
-                        color = TamaDark
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.pdf_llama_server_context_label),
-                        fontSize = 12.sp,
-                        color = TamaDark,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        llamaServerContextLabel
-                            ?: llamaServerContextTokens.takeIf { it > 0 }?.toString()
-                            ?: stringResource(R.string.pdf_server_value_unavailable),
-                        fontSize = 12.sp,
-                        color = TamaDark
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.tama_chat_llama_shared_model_hint),
-                        fontSize = 11.sp,
-                        color = TamaMutedText,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    if (SettingsRepository.isLlamaSwapBackend(tempBackend)) {
+                        TamaModelSelector(
+                            label = stringResource(R.string.tama_chat_pet_model_label),
+                            selectedModel = petModel,
+                            availableModels = availableLlamaSwapModels,
+                            onModelChange = { settingsRepo.setTamaPetModel(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        TamaModelSelector(
+                            label = stringResource(R.string.tama_chat_summarizer_model_label),
+                            selectedModel = summarizerModel,
+                            availableModels = availableLlamaSwapModels,
+                            onModelChange = { settingsRepo.setTamaSummarizerModel(it) }
+                        )
+                    } else {
+                        Text(
+                            stringResource(R.string.pdf_llama_server_model_label),
+                            fontSize = 12.sp,
+                            color = TamaDark,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            llamaServerModelLabel ?: stringResource(R.string.pdf_server_value_unavailable),
+                            fontSize = 12.sp,
+                            color = TamaDark
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.pdf_llama_server_context_label),
+                            fontSize = 12.sp,
+                            color = TamaDark,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            llamaServerContextLabel
+                                ?: llamaServerContextTokens.takeIf { it > 0 }?.toString()
+                                ?: stringResource(R.string.pdf_server_value_unavailable),
+                            fontSize = 12.sp,
+                            color = TamaDark
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.tama_chat_llama_shared_model_hint),
+                            fontSize = 11.sp,
+                            color = TamaMutedText,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 } else {
                     Text(stringResource(R.string.tama_chat_models_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TamaDark)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -1565,6 +1623,7 @@ fun TamaChatSettingsDialog(
                                 settingsRepo.setTamaSummarizerPrompt(tempSummarizerPrompt)
                                 settingsRepo.setTamaOllamaUrl(tempOllamaUrl)
                                 settingsRepo.setTamaLlamaServerUrl(tempLlamaServerUrl)
+                                settingsRepo.setTamaLlamaSwapUrl(tempLlamaSwapUrl)
                                 agentService.ollamaService.setBaseUrl(tempOllamaUrl)
                                 tempNumCtx.toIntOrNull()?.let {
                                     settingsRepo.setTamaOllamaNumCtx(it)

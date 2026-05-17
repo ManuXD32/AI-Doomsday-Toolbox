@@ -71,10 +71,44 @@ fun WorkflowsScreen(navController: NavController) {
     val settingsRepo = remember { SettingsRepository(context) }
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
+    val pdfTranslationJobState by PDFTranslationJobService.state.collectAsState()
     
-    // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale
+    // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale, 3 = manga translation
     val scope = rememberCoroutineScope()
     var selectedWorkflow by remember { mutableIntStateOf(0) }
+    var mangaCbzUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var mangaIsRunning by remember { mutableStateOf(false) }
+    var mangaStep by remember { mutableStateOf("") }
+    var mangaProgress by remember { mutableFloatStateOf(0f) }
+    var mangaResults by remember { mutableStateOf<List<MangaTranslationFileResult>>(emptyList()) }
+    var mangaError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(
+        pdfTranslationJobState.isRunning,
+        pdfTranslationJobState.kind,
+        pdfTranslationJobState.progressMessage,
+        pdfTranslationJobState.progressFraction,
+        pdfTranslationJobState.mangaResults,
+        pdfTranslationJobState.errorMessage
+    ) {
+        if (pdfTranslationJobState.kind == PdfTranslationJobKind.MANGA_BATCH) {
+            mangaIsRunning = pdfTranslationJobState.isRunning
+            if (pdfTranslationJobState.isRunning) {
+                mangaStep = pdfTranslationJobState.progressMessage
+                mangaProgress = pdfTranslationJobState.progressFraction
+                mangaError = null
+            } else if (pdfTranslationJobState.mangaResults.isNotEmpty()) {
+                mangaResults = pdfTranslationJobState.mangaResults
+                mangaStep = context.getString(R.string.workflow_complete)
+                mangaProgress = 1f
+                mangaError = null
+            } else if (pdfTranslationJobState.errorMessage != null) {
+                mangaError = pdfTranslationJobState.errorMessage
+                mangaStep = ""
+                mangaProgress = 0f
+            }
+        }
+    }
     
     // Asset pack check state
     var showDownloadDialog by remember { mutableStateOf(false) }
@@ -175,7 +209,9 @@ fun WorkflowsScreen(navController: NavController) {
     val persistedSummaryBackend by settingsRepo.workflowSummaryBackend.collectAsState()
     val persistedSummaryOllamaUrl by settingsRepo.workflowSummaryOllamaUrl.collectAsState()
     val persistedSummaryLlamaUrl by settingsRepo.workflowSummaryLlamaServerUrl.collectAsState()
+    val persistedSummaryLlamaSwapUrl by settingsRepo.workflowSummaryLlamaSwapUrl.collectAsState()
     val persistedSummaryOllamaModel by settingsRepo.workflowSummaryOllamaModel.collectAsState()
+    val persistedSummaryLlamaSwapModel by settingsRepo.workflowSummaryLlamaSwapModel.collectAsState()
     val persistedSummaryTargetLanguage by settingsRepo.workflowSummaryTargetLanguage.collectAsState()
     val persistedSummaryContext by settingsRepo.workflowContext.collectAsState()
     val persistedSummaryMaxTokens by settingsRepo.workflowMaxTokens.collectAsState()
@@ -196,7 +232,9 @@ fun WorkflowsScreen(navController: NavController) {
     var summaryBackend by remember(persistedSummaryBackend) { mutableStateOf(persistedSummaryBackend) }
     var summaryOllamaUrl by remember(persistedSummaryOllamaUrl) { mutableStateOf(persistedSummaryOllamaUrl) }
     var summaryLlamaUrl by remember(persistedSummaryLlamaUrl) { mutableStateOf(persistedSummaryLlamaUrl) }
+    var summaryLlamaSwapUrl by remember(persistedSummaryLlamaSwapUrl) { mutableStateOf(persistedSummaryLlamaSwapUrl) }
     var summaryOllamaModel by remember(persistedSummaryOllamaModel) { mutableStateOf(persistedSummaryOllamaModel) }
+    var summaryLlamaSwapModel by remember(persistedSummaryLlamaSwapModel) { mutableStateOf(persistedSummaryLlamaSwapModel) }
     var summarySystemPrompt by remember(persistedWorkflowSummaryPrompt) {
         mutableStateOf(persistedWorkflowSummaryPrompt ?: SettingsRepository.DEFAULT_TRANSCRIPT_SUMMARY_PROMPT)
     }
@@ -255,6 +293,21 @@ fun WorkflowsScreen(navController: NavController) {
             WorkflowStateHolder.setError(context.getString(R.string.workflow_error_perm_denied))
         }
     }
+
+    val mangaCbzPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                try {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) {
+                }
+            }
+            mangaCbzUris = uris
+            selectedWorkflow = 3
+        }
+    }
     
     // Recording timer
     LaunchedEffect(isRecording) {
@@ -274,7 +327,9 @@ fun WorkflowsScreen(navController: NavController) {
     LaunchedEffect(summaryBackend) { settingsRepo.setWorkflowSummaryBackend(summaryBackend) }
     LaunchedEffect(summaryOllamaUrl) { settingsRepo.setWorkflowSummaryOllamaUrl(summaryOllamaUrl) }
     LaunchedEffect(summaryLlamaUrl) { settingsRepo.setWorkflowSummaryLlamaServerUrl(summaryLlamaUrl) }
+    LaunchedEffect(summaryLlamaSwapUrl) { settingsRepo.setWorkflowSummaryLlamaSwapUrl(summaryLlamaSwapUrl) }
     LaunchedEffect(summaryOllamaModel) { settingsRepo.setWorkflowSummaryOllamaModel(summaryOllamaModel) }
+    LaunchedEffect(summaryLlamaSwapModel) { settingsRepo.setWorkflowSummaryLlamaSwapModel(summaryLlamaSwapModel) }
     LaunchedEffect(summaryContext) { settingsRepo.setWorkflowContext(summaryContext) }
     LaunchedEffect(summaryMaxTokens) { settingsRepo.setWorkflowMaxTokens(summaryMaxTokens) }
     LaunchedEffect(summaryMergeContext) { settingsRepo.setWorkflowMergeContext(summaryMergeContext) }
@@ -387,6 +442,7 @@ fun WorkflowsScreen(navController: NavController) {
                 when (selectedWorkflow) {
                     1 -> stringResource(R.string.workflow_transcribe_summary)
                     2 -> stringResource(R.string.workflow_txt2img_upscale)
+                    3 -> stringResource(R.string.workflow_manga_translation)
                     else -> stringResource(R.string.workflow_title)
                 },
                 style = MaterialTheme.typography.headlineSmall.copy(
@@ -489,6 +545,19 @@ fun WorkflowsScreen(navController: NavController) {
                             }
                         }
                     )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    WorkflowCard(
+                        emoji = "📚→🌐",
+                        title = stringResource(R.string.workflow_manga_translation),
+                        description = stringResource(R.string.workflow_manga_translation_desc),
+                        gradientColors = listOf(
+                            Color(0xFFE91E63).copy(alpha = 0.15f),
+                            Color(0xFF3F51B5).copy(alpha = 0.3f)
+                        ),
+                        onClick = { selectedWorkflow = 3 }
+                    )
                 }
                 
                 1 -> {
@@ -507,8 +576,12 @@ fun WorkflowsScreen(navController: NavController) {
                         onSummaryOllamaUrlChange = { summaryOllamaUrl = it },
                         summaryLlamaUrl = summaryLlamaUrl,
                         onSummaryLlamaUrlChange = { summaryLlamaUrl = it },
+                        summaryLlamaSwapUrl = summaryLlamaSwapUrl,
+                        onSummaryLlamaSwapUrlChange = { summaryLlamaSwapUrl = it },
                         summaryOllamaModel = summaryOllamaModel,
                         onSummaryOllamaModelChange = { summaryOllamaModel = it },
+                        summaryLlamaSwapModel = summaryLlamaSwapModel,
+                        onSummaryLlamaSwapModelChange = { summaryLlamaSwapModel = it },
                         summaryLlamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
                         summaryLlamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
                         summaryLlamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
@@ -546,10 +619,10 @@ fun WorkflowsScreen(navController: NavController) {
                         cancelled = workflowCancelled,
                         errorMessage = transcribeError,
                         onRun = {
-                            val backendReady = if (summaryBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                                summaryLlamaUrl.isNotBlank()
-                            } else {
-                                summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
+                            val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+                                else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
                             }
                             if (audioPath != null && whisperModelPath != null && backendReady) {
                                 WorkflowStateHolder.setIsRunning(true)
@@ -661,6 +734,45 @@ fun WorkflowsScreen(navController: NavController) {
                         }
                     )
                 }
+
+                3 -> {
+                    MangaTranslationWorkflowContent(
+                        db = db,
+                        selectedUris = mangaCbzUris,
+                        isRunning = mangaIsRunning,
+                        currentStep = mangaStep,
+                        progress = mangaProgress,
+                        results = mangaResults,
+                        errorMessage = mangaError,
+                        onPickFiles = {
+                            mangaCbzPicker.launch(
+                                arrayOf(
+                                    "application/vnd.comicbook+zip",
+                                    "application/zip",
+                                    "application/octet-stream",
+                                    "*/*"
+                                )
+                            )
+                        },
+                        onOpenSettings = { navController.navigate("settings_pdf_translation") },
+                        onRun = {
+                            if (mangaCbzUris.isEmpty()) {
+                                mangaError = context.getString(R.string.workflow_manga_select_first)
+                            } else {
+                                mangaIsRunning = true
+                                mangaError = null
+                                mangaResults = emptyList()
+                                mangaStep = context.getString(R.string.workflow_step_starting)
+                                mangaProgress = 0f
+                                if (!PDFTranslationJobService.startMangaCbzBatchTranslation(context, mangaCbzUris)) {
+                                    mangaIsRunning = false
+                                    mangaError = context.getString(R.string.pdf_translation_already_running)
+                                    mangaStep = ""
+                                }
+                            }
+                        }
+                    )
+                }
             }
             
             Spacer(modifier = Modifier.height(16.dp))
@@ -769,6 +881,169 @@ fun WorkflowsScreen(navController: NavController) {
                 }) { Text(stringResource(R.string.action_cancel)) }
             }
         )
+    }
+}
+
+@Composable
+private fun MangaTranslationWorkflowContent(
+    db: AppDatabase,
+    selectedUris: List<Uri>,
+    isRunning: Boolean,
+    currentStep: String,
+    progress: Float,
+    results: List<MangaTranslationFileResult>,
+    errorMessage: String?,
+    onPickFiles: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onRun: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val templates by db.workflowTemplateDao()
+        .getByType(com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION)
+        .collectAsState(initial = emptyList())
+    var templateName by remember { mutableStateOf("") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.workflow_manga_translation),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    stringResource(R.string.workflow_manga_translation_help),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = onPickFiles, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                    Icon(Icons.Default.FolderOpen, null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.workflow_manga_select_cbz))
+                }
+                OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                    Icon(Icons.Default.Settings, null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.pdf_translation_settings_title))
+                }
+                if (selectedUris.isNotEmpty()) {
+                    Text(
+                        stringResource(R.string.workflow_manga_selected_count, selectedUris.size),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                    selectedUris.take(6).forEach { uri ->
+                        Text(
+                            uri.lastPathSegment?.substringAfterLast('/') ?: uri.toString(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.workflow_manga_presets_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                if (templates.isEmpty()) {
+                    Text(
+                        stringResource(R.string.workflow_no_templates),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    templates.take(4).forEach { template ->
+                        AssistChip(
+                            onClick = { },
+                            label = { Text(template.name, maxLines = 1) }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = templateName,
+                    onValueChange = { templateName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.workflow_template_name)) },
+                    singleLine = true
+                )
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            db.workflowTemplateDao().insert(
+                                com.example.llamadroid.data.db.WorkflowTemplateEntity(
+                                    name = templateName.ifBlank { "Manga Translation" },
+                                    type = com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION,
+                                    configJson = """{"workflow":"manga_translation","version":1}"""
+                                )
+                            )
+                            templateName = ""
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = templateName.isNotBlank()
+                ) {
+                    Text(stringResource(R.string.workflow_save_template))
+                }
+            }
+        }
+
+        if (isRunning) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
+                    Text(currentStep, style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+
+        errorMessage?.let {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Text(
+                    it,
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+
+        if (results.isNotEmpty()) {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(R.string.workflow_manga_results_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    results.forEach { result ->
+                        Text(
+                            if (result.isSuccess) {
+                                stringResource(R.string.workflow_manga_result_success, result.sourceName)
+                            } else {
+                                stringResource(R.string.workflow_manga_result_failed, result.sourceName, result.errorMessage.orEmpty())
+                            },
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        }
+
+        Button(
+            onClick = onRun,
+            enabled = !isRunning && selectedUris.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (isRunning) stringResource(R.string.workflow_running_btn) else stringResource(R.string.workflow_manga_run_batch))
+        }
     }
 }
 
@@ -1748,8 +2023,12 @@ private fun TranscribeSummaryWorkflowContent(
     onSummaryOllamaUrlChange: (String) -> Unit,
     summaryLlamaUrl: String,
     onSummaryLlamaUrlChange: (String) -> Unit,
+    summaryLlamaSwapUrl: String,
+    onSummaryLlamaSwapUrlChange: (String) -> Unit,
     summaryOllamaModel: String?,
     onSummaryOllamaModelChange: (String?) -> Unit,
+    summaryLlamaSwapModel: String?,
+    onSummaryLlamaSwapModelChange: (String?) -> Unit,
     summaryLlamaServerModelLabel: String?,
     summaryLlamaServerContextLabel: String?,
     summaryLlamaServerContextTokens: Int,
@@ -1868,7 +2147,9 @@ private fun TranscribeSummaryWorkflowContent(
                                         onSummaryBackendChange(config.optString("summaryBackend", SettingsRepository.PDF_BACKEND_OLLAMA))
                                         onSummaryOllamaUrlChange(config.optString("summaryOllamaUrl", summaryOllamaUrl))
                                         onSummaryLlamaUrlChange(config.optString("summaryLlamaUrl", summaryLlamaUrl))
+                                        onSummaryLlamaSwapUrlChange(config.optString("summaryLlamaSwapUrl", summaryLlamaSwapUrl))
                                         onSummaryOllamaModelChange(config.optString("summaryOllamaModel").takeIf { it.isNotEmpty() })
+                                        onSummaryLlamaSwapModelChange(config.optString("summaryLlamaSwapModel").takeIf { it.isNotEmpty() })
                                         onSummaryTargetLanguageChange(config.optString("summaryTargetLanguage", summaryTargetLanguage))
                                         onTemperatureChange(config.optDouble("temperature", 0.7).toFloat())
                                         onContextChange(config.optInt("contextSize", 2048))
@@ -1976,7 +2257,9 @@ private fun TranscribeSummaryWorkflowContent(
                                     put("summaryBackend", summaryBackend)
                                     put("summaryOllamaUrl", summaryOllamaUrl)
                                     put("summaryLlamaUrl", summaryLlamaUrl)
+                                    put("summaryLlamaSwapUrl", summaryLlamaSwapUrl)
                                     put("summaryOllamaModel", summaryOllamaModel ?: "")
+                                    put("summaryLlamaSwapModel", summaryLlamaSwapModel ?: "")
                                     put("summaryTargetLanguage", summaryTargetLanguage)
                                     put("temperature", temperature.toDouble())
                                     put("contextSize", contextSize)
@@ -2098,8 +2381,12 @@ private fun TranscribeSummaryWorkflowContent(
                     onOllamaUrlChange = onSummaryOllamaUrlChange,
                     llamaServerUrl = summaryLlamaUrl,
                     onLlamaServerUrlChange = onSummaryLlamaUrlChange,
+                    llamaSwapUrl = summaryLlamaSwapUrl,
+                    onLlamaSwapUrlChange = onSummaryLlamaSwapUrlChange,
                     ollamaModel = summaryOllamaModel,
                     onOllamaModelSelected = { onSummaryOllamaModelChange(it) },
+                    llamaSwapModel = summaryLlamaSwapModel,
+                    onLlamaSwapModelSelected = { onSummaryLlamaSwapModelChange(it) },
                     llamaServerModelLabel = summaryLlamaServerModelLabel,
                     llamaServerContextLabel = summaryLlamaServerContextLabel,
                     llamaServerContextTokens = summaryLlamaServerContextTokens,
@@ -2110,7 +2397,9 @@ private fun TranscribeSummaryWorkflowContent(
                                 backend = summaryBackend,
                                 ollamaUrl = summaryOllamaUrl,
                                 llamaServerUrl = summaryLlamaUrl,
+                                llamaSwapUrl = summaryLlamaSwapUrl,
                                 ollamaModel = summaryOllamaModel,
+                                llamaSwapModel = summaryLlamaSwapModel,
                                 thinkingEnabled = thinkingEnabled,
                                 llamaServerModelLabel = summaryLlamaServerModelLabel,
                                 llamaServerContextTokens = summaryLlamaServerContextTokens,
@@ -2128,9 +2417,11 @@ private fun TranscribeSummaryWorkflowContent(
                         ).fetchMetadata()
                     },
                     onMetadataLoaded = { metadata ->
-                        settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-                        settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-                        settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+                        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+                            settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+                            settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+                            settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+                        }
                     }
                 )
 
@@ -2298,10 +2589,10 @@ private fun TranscribeSummaryWorkflowContent(
         Spacer(modifier = Modifier.height(16.dp))
         
         // Run/Cancel buttons
-        val backendReady = if (summaryBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-            summaryLlamaUrl.isNotBlank()
-        } else {
-            summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
+        val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+            else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
         }
         val canRun = whisperModelPath != null && audioUri != null && backendReady && !isRunning
         

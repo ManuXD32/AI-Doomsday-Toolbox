@@ -7,10 +7,13 @@ import com.example.llamadroid.data.db.OrganizerAlarmEntity
 import com.example.llamadroid.data.db.OrganizerDao
 import com.example.llamadroid.data.db.OrganizerEventEntity
 import com.example.llamadroid.data.db.OrganizerLlmSettingsEntity
+import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
+import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
+import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.util.AIConstants
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -111,29 +114,100 @@ data class NativeChatToolConfig(
     val kiwixMaxChars: Int = DEFAULT_PAGE_CHARS,
     val fetchUrlEnabled: Boolean = false,
     val fetchUrlMaxChars: Int = DEFAULT_FETCH_CHARS,
+    val deepResearchEnabled: Boolean = false,
+    val deepResearchImportIntoSelectedKbEnabled: Boolean = false,
+    val deepResearchSourceLimit: Int = DeepResearchSupport.DEFAULT_SOURCE_LIMIT,
     val dateTimeEnabled: Boolean = true,
     val calculatorEnabled: Boolean = true,
     val noteToolsEnabled: Boolean = false,
     val todoToolsEnabled: Boolean = false,
     val calendarToolsEnabled: Boolean = false,
     val alarmToolsEnabled: Boolean = false,
+    val knowledgeBaseEnabled: Boolean = false,
+    val knowledgeBaseAutoContextEnabled: Boolean = false,
+    val selectedKnowledgeBaseIds: List<Long> = emptyList(),
+    val chatDocumentKnowledgeBaseId: Long? = null,
+    val knowledgeBaseMaxResults: Int = DEFAULT_KB_RESULTS,
     val imageGenerationEnabled: Boolean = false,
     val imageIterationEnabled: Boolean = false,
     val imageParams: NativeChatImageToolParams = NativeChatImageToolParams(),
+    val assistantTtsEnabled: Boolean = false,
+    val assistantTtsLanguage: String = SUPERTONIC_DEFAULT_LANGUAGE,
+    val assistantTtsVoiceName: String? = null,
     val maxToolRounds: Int = DEFAULT_TOOL_ROUNDS
 ) {
     fun hasEnabledTools(): Boolean = toolsEnabled && (
         webSearchEnabled ||
             kiwixSearchEnabled ||
             fetchUrlEnabled ||
+            deepResearchEnabled ||
             dateTimeEnabled ||
             calculatorEnabled ||
             noteToolsEnabled ||
             todoToolsEnabled ||
             calendarToolsEnabled ||
             alarmToolsEnabled ||
+            knowledgeBaseEnabled ||
             imageGenerationEnabled
         )
+
+    fun knowledgeBaseScopeIds(): List<Long> {
+        val chatDocumentId = chatDocumentKnowledgeBaseId?.takeIf { it > 0L }
+        if (chatDocumentId != null) return listOf(chatDocumentId)
+        return selectedKnowledgeBaseIds
+            .filter { it > 0L }
+            .distinct()
+    }
+
+    fun effectiveWithServerDefaults(serverDefaults: NativeChatToolConfig): NativeChatToolConfig {
+        val hasChatDocumentScope = chatDocumentKnowledgeBaseId?.let { it > 0L } == true
+        val effectiveChatToolsEnabled = toolsEnabled && serverDefaults.toolsEnabled
+        val forceChatDocumentKnowledgeBase = hasChatDocumentScope &&
+            serverDefaults.toolsEnabled &&
+            serverDefaults.knowledgeBaseEnabled
+        val effectiveToolsEnabled = effectiveChatToolsEnabled || forceChatDocumentKnowledgeBase
+        val effectiveKnowledgeBaseEnabled = (
+            effectiveChatToolsEnabled &&
+                knowledgeBaseEnabled &&
+                serverDefaults.knowledgeBaseEnabled
+            ) || forceChatDocumentKnowledgeBase
+        return copy(
+            toolsEnabled = effectiveToolsEnabled,
+            webSearchEnabled = effectiveChatToolsEnabled && webSearchEnabled && serverDefaults.webSearchEnabled,
+            kiwixSearchEnabled = effectiveChatToolsEnabled && kiwixSearchEnabled && serverDefaults.kiwixSearchEnabled,
+            fetchUrlEnabled = effectiveChatToolsEnabled && fetchUrlEnabled && serverDefaults.fetchUrlEnabled,
+            deepResearchEnabled = effectiveChatToolsEnabled && deepResearchEnabled && serverDefaults.deepResearchEnabled,
+            deepResearchImportIntoSelectedKbEnabled = effectiveChatToolsEnabled &&
+                deepResearchEnabled &&
+                serverDefaults.deepResearchEnabled &&
+                deepResearchImportIntoSelectedKbEnabled &&
+                serverDefaults.deepResearchImportIntoSelectedKbEnabled,
+            deepResearchSourceLimit = DeepResearchSupport.normalizeSourceLimit(deepResearchSourceLimit),
+            dateTimeEnabled = effectiveChatToolsEnabled && dateTimeEnabled && serverDefaults.dateTimeEnabled,
+            calculatorEnabled = effectiveChatToolsEnabled && calculatorEnabled && serverDefaults.calculatorEnabled,
+            noteToolsEnabled = effectiveChatToolsEnabled && noteToolsEnabled && serverDefaults.noteToolsEnabled,
+            todoToolsEnabled = effectiveChatToolsEnabled && todoToolsEnabled && serverDefaults.todoToolsEnabled,
+            calendarToolsEnabled = effectiveChatToolsEnabled && calendarToolsEnabled && serverDefaults.calendarToolsEnabled,
+            alarmToolsEnabled = effectiveChatToolsEnabled && alarmToolsEnabled && serverDefaults.alarmToolsEnabled,
+            knowledgeBaseEnabled = effectiveKnowledgeBaseEnabled,
+            knowledgeBaseAutoContextEnabled = forceChatDocumentKnowledgeBase || (
+                effectiveChatToolsEnabled &&
+                    knowledgeBaseEnabled &&
+                    serverDefaults.knowledgeBaseEnabled &&
+                    knowledgeBaseAutoContextEnabled &&
+                    serverDefaults.knowledgeBaseAutoContextEnabled
+                ),
+            imageGenerationEnabled = effectiveChatToolsEnabled && imageGenerationEnabled && serverDefaults.imageGenerationEnabled,
+            imageIterationEnabled = effectiveChatToolsEnabled &&
+                imageGenerationEnabled &&
+                serverDefaults.imageGenerationEnabled &&
+                imageIterationEnabled &&
+                serverDefaults.imageIterationEnabled,
+            assistantTtsEnabled = assistantTtsEnabled,
+            assistantTtsLanguage = assistantTtsLanguage,
+            assistantTtsVoiceName = assistantTtsVoiceName
+        )
+    }
 
     fun toParamMap(): Map<String, Any> = linkedMapOf<String, Any>().apply {
         put(KEY_TOOLS_ENABLED, toolsEnabled)
@@ -146,14 +220,25 @@ data class NativeChatToolConfig(
         put(KEY_KIWIX_MAX_CHARS, kiwixMaxChars.coerceIn(MIN_PAGE_CHARS, MAX_PAGE_CHARS))
         put(KEY_FETCH_URL_ENABLED, fetchUrlEnabled)
         put(KEY_FETCH_URL_MAX_CHARS, fetchUrlMaxChars.coerceIn(MIN_FETCH_CHARS, MAX_FETCH_CHARS))
+        put(KEY_DEEP_RESEARCH_ENABLED, deepResearchEnabled)
+        put(KEY_DEEP_RESEARCH_IMPORT_SELECTED_KB_ENABLED, deepResearchImportIntoSelectedKbEnabled)
+        put(KEY_DEEP_RESEARCH_SOURCE_LIMIT, DeepResearchSupport.normalizeSourceLimit(deepResearchSourceLimit))
         put(KEY_DATETIME_ENABLED, dateTimeEnabled)
         put(KEY_CALCULATOR_ENABLED, calculatorEnabled)
         put(KEY_NOTE_TOOLS_ENABLED, noteToolsEnabled)
         put(KEY_TODO_TOOLS_ENABLED, todoToolsEnabled)
         put(KEY_CALENDAR_TOOLS_ENABLED, calendarToolsEnabled)
         put(KEY_ALARM_TOOLS_ENABLED, alarmToolsEnabled)
+        put(KEY_KNOWLEDGE_BASE_ENABLED, knowledgeBaseEnabled)
+        put(KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, knowledgeBaseAutoContextEnabled)
+        put(KEY_KNOWLEDGE_BASE_IDS, KnowledgeBaseRepository.selectedKnowledgeBaseIdsToCsv(selectedKnowledgeBaseIds))
+        put(KEY_CHAT_DOCUMENT_KNOWLEDGE_BASE_ID, chatDocumentKnowledgeBaseId ?: 0L)
+        put(KEY_KNOWLEDGE_MAX_RESULTS, knowledgeBaseMaxResults.coerceIn(MIN_KB_RESULTS, MAX_KB_RESULTS))
         put(KEY_IMAGE_GENERATION_ENABLED, imageGenerationEnabled)
         put(KEY_IMAGE_ITERATION_ENABLED, imageIterationEnabled)
+        put(KEY_ASSISTANT_TTS_ENABLED, assistantTtsEnabled)
+        put(KEY_ASSISTANT_TTS_LANGUAGE, normalizedAssistantTtsLanguage())
+        assistantTtsVoiceName?.trim()?.takeIf { it.isNotBlank() }?.let { put(KEY_ASSISTANT_TTS_VOICE, it) }
         imageParams.toParamMap().forEach { (key, value) ->
             if (value != null) put(key, value)
         }
@@ -161,6 +246,9 @@ data class NativeChatToolConfig(
     }
 
     fun normalizedKiwixUrl(): String = kiwixServerUrl.trim().ifBlank { DEFAULT_KIWIX_URL }.trimEnd('/')
+
+    fun normalizedAssistantTtsLanguage(): String =
+        assistantTtsLanguage.trim().takeIf { it in supertonicLanguageCodes } ?: SUPERTONIC_DEFAULT_LANGUAGE
 
     companion object {
         const val KEY_TOOLS_ENABLED = "tools_enabled"
@@ -173,14 +261,25 @@ data class NativeChatToolConfig(
         const val KEY_KIWIX_MAX_CHARS = "tool_kiwix_max_chars"
         const val KEY_FETCH_URL_ENABLED = "tool_fetch_url_enabled"
         const val KEY_FETCH_URL_MAX_CHARS = "tool_fetch_url_max_chars"
+        const val KEY_DEEP_RESEARCH_ENABLED = "tool_deep_research_enabled"
+        const val KEY_DEEP_RESEARCH_IMPORT_SELECTED_KB_ENABLED = "tool_deep_research_import_selected_kb_enabled"
+        const val KEY_DEEP_RESEARCH_SOURCE_LIMIT = "tool_deep_research_source_limit"
         const val KEY_DATETIME_ENABLED = "tool_datetime_enabled"
         const val KEY_CALCULATOR_ENABLED = "tool_calculator_enabled"
         const val KEY_NOTE_TOOLS_ENABLED = "tool_note_tools_enabled"
         const val KEY_TODO_TOOLS_ENABLED = "tool_todo_tools_enabled"
         const val KEY_CALENDAR_TOOLS_ENABLED = "tool_calendar_tools_enabled"
         const val KEY_ALARM_TOOLS_ENABLED = "tool_alarm_tools_enabled"
+        const val KEY_KNOWLEDGE_BASE_ENABLED = "tool_knowledge_base_enabled"
+        const val KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED = "tool_knowledge_auto_context_enabled"
+        const val KEY_KNOWLEDGE_BASE_IDS = "tool_knowledge_base_ids"
+        const val KEY_CHAT_DOCUMENT_KNOWLEDGE_BASE_ID = "tool_chat_document_kb_id"
+        const val KEY_KNOWLEDGE_MAX_RESULTS = "tool_knowledge_max_results"
         const val KEY_IMAGE_GENERATION_ENABLED = "tool_image_generation_enabled"
         const val KEY_IMAGE_ITERATION_ENABLED = "tool_image_iteration_enabled"
+        const val KEY_ASSISTANT_TTS_ENABLED = "assistant_tts_enabled"
+        const val KEY_ASSISTANT_TTS_LANGUAGE = "assistant_tts_language"
+        const val KEY_ASSISTANT_TTS_VOICE = "assistant_tts_voice"
         const val KEY_IMAGE_MODEL = "tool_image_model"
         const val KEY_IMAGE_WIDTH = "tool_image_width"
         const val KEY_IMAGE_HEIGHT = "tool_image_height"
@@ -206,7 +305,10 @@ data class NativeChatToolConfig(
         const val DEFAULT_SEARCH_PAGES = 3
         const val DEFAULT_PAGE_CHARS = 2_000
         const val DEFAULT_FETCH_CHARS = 4_000
+        const val DEFAULT_DEEP_RESEARCH_SOURCE_LIMIT = DeepResearchSupport.DEFAULT_SOURCE_LIMIT
+        const val MIN_DEEP_RESEARCH_SOURCE_LIMIT = DeepResearchSupport.MIN_SOURCE_LIMIT
         const val DEFAULT_TOOL_ROUNDS = 12
+        const val DEFAULT_KB_RESULTS = 6
         const val MIN_SEARCH_PAGES = 1
         const val MAX_SEARCH_PAGES = 10
         const val MIN_PAGE_CHARS = 500
@@ -215,6 +317,8 @@ data class NativeChatToolConfig(
         const val MAX_FETCH_CHARS = 40_000
         const val MIN_TOOL_ROUNDS = 1
         const val MAX_TOOL_ROUNDS = 24
+        const val MIN_KB_RESULTS = 1
+        const val MAX_KB_RESULTS = 20
         const val DEFAULT_KIWIX_URL = "http://127.0.0.1:${AIConstants.Ports.KIWIX}"
 
         fun fromApiParams(apiParams: String?): NativeChatToolConfig {
@@ -248,15 +352,31 @@ data class NativeChatToolConfig(
             fetchUrlEnabled = booleanParam(params, KEY_FETCH_URL_ENABLED, false),
             fetchUrlMaxChars = intParam(params, KEY_FETCH_URL_MAX_CHARS, DEFAULT_FETCH_CHARS)
                 .coerceIn(MIN_FETCH_CHARS, MAX_FETCH_CHARS),
+            deepResearchEnabled = booleanParam(params, KEY_DEEP_RESEARCH_ENABLED, false),
+            deepResearchImportIntoSelectedKbEnabled = booleanParam(params, KEY_DEEP_RESEARCH_IMPORT_SELECTED_KB_ENABLED, false),
+            deepResearchSourceLimit = intParam(params, KEY_DEEP_RESEARCH_SOURCE_LIMIT, DEFAULT_DEEP_RESEARCH_SOURCE_LIMIT)
+                .coerceAtLeast(MIN_DEEP_RESEARCH_SOURCE_LIMIT),
             dateTimeEnabled = booleanParam(params, KEY_DATETIME_ENABLED, true),
             calculatorEnabled = booleanParam(params, KEY_CALCULATOR_ENABLED, true),
             noteToolsEnabled = booleanParam(params, KEY_NOTE_TOOLS_ENABLED, false),
             todoToolsEnabled = booleanParam(params, KEY_TODO_TOOLS_ENABLED, false),
             calendarToolsEnabled = booleanParam(params, KEY_CALENDAR_TOOLS_ENABLED, false),
             alarmToolsEnabled = booleanParam(params, KEY_ALARM_TOOLS_ENABLED, false),
+            knowledgeBaseEnabled = booleanParam(params, KEY_KNOWLEDGE_BASE_ENABLED, false),
+            knowledgeBaseAutoContextEnabled = booleanParam(params, KEY_KNOWLEDGE_AUTO_CONTEXT_ENABLED, false),
+            selectedKnowledgeBaseIds = knowledgeBaseIdsParam(params, KEY_KNOWLEDGE_BASE_IDS),
+            chatDocumentKnowledgeBaseId = optionalLongParam(params, KEY_CHAT_DOCUMENT_KNOWLEDGE_BASE_ID),
+            knowledgeBaseMaxResults = intParam(params, KEY_KNOWLEDGE_MAX_RESULTS, DEFAULT_KB_RESULTS)
+                .coerceIn(MIN_KB_RESULTS, MAX_KB_RESULTS),
             imageGenerationEnabled = booleanParam(params, KEY_IMAGE_GENERATION_ENABLED, false),
             imageIterationEnabled = booleanParam(params, KEY_IMAGE_ITERATION_ENABLED, false),
             imageParams = imageParamsFromParams(params),
+            assistantTtsEnabled = booleanParam(params, KEY_ASSISTANT_TTS_ENABLED, false),
+            assistantTtsLanguage = stringParam(params, KEY_ASSISTANT_TTS_LANGUAGE, SUPERTONIC_DEFAULT_LANGUAGE)
+                .trim()
+                .takeIf { it in supertonicLanguageCodes }
+                ?: SUPERTONIC_DEFAULT_LANGUAGE,
+            assistantTtsVoiceName = stringParam(params, KEY_ASSISTANT_TTS_VOICE, "").trim().takeIf { it.isNotBlank() },
             maxToolRounds = intParam(params, KEY_MAX_TOOL_ROUNDS, DEFAULT_TOOL_ROUNDS)
                 .coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS)
         )
@@ -313,6 +433,14 @@ data class NativeChatToolConfig(
             }
         }
 
+        private fun optionalLongParam(params: Map<String, Any?>, key: String): Long? {
+            return when (val value = params[key]) {
+                is Number -> value.toLong().takeIf { it > 0L }
+                is String -> value.toLongOrNull()?.takeIf { it > 0L }
+                else -> null
+            }
+        }
+
         private fun floatParam(params: Map<String, Any?>, key: String, default: Float): Float {
             return when (val value = params[key]) {
                 is Number -> value.toFloat()
@@ -325,6 +453,20 @@ data class NativeChatToolConfig(
             return when (val value = params[key]) {
                 is String -> value
                 else -> default
+            }
+        }
+
+        private fun knowledgeBaseIdsParam(params: Map<String, Any?>, key: String): List<Long> {
+            return when (val value = params[key]) {
+                is String -> KnowledgeBaseRepository.selectedKnowledgeBaseIdsFromCsv(value)
+                is Iterable<*> -> value.mapNotNull {
+                    when (it) {
+                        is Number -> it.toLong()
+                        is String -> it.toLongOrNull()
+                        else -> null
+                    }
+                }.filter { it > 0L }.distinct()
+                else -> emptyList()
             }
         }
 
@@ -342,6 +484,34 @@ data class NativeChatToolResult(
 
 private fun Throwable.asException(): Exception =
     this as? Exception ?: RuntimeException(message ?: javaClass.simpleName, this)
+
+private fun isDocumentSummaryRequest(query: String): Boolean {
+    val lower = query.lowercase(Locale.ROOT)
+    val mentionsDocument = listOf(
+        "document",
+        "doc ",
+        "docs",
+        "pdf",
+        "file",
+        "attachment",
+        "documento",
+        "archivo",
+        "adjunto"
+    ).any { it in lower }
+    val asksSummary = listOf(
+        "summarize",
+        "summary",
+        "summarise",
+        "resume",
+        "resumen",
+        "resumir",
+        "resúm",
+        "sintetiza",
+        "síntesis",
+        "abstract"
+    ).any { it in lower }
+    return asksSummary && (mentionsDocument || lower.length < 80)
+}
 
 data class NativeChatToolProgress(
     val status: String,
@@ -365,6 +535,7 @@ data class NativeChatSearchSummaryRequest(
 
 object NativeChatToolProgressPhase {
     const val SEARCHING = "searching"
+    const val RESEARCHING = "researching"
     const val FOUND = "found"
     const val READING = "reading"
     const val SUMMARIZED = "summarized"
@@ -378,12 +549,14 @@ data class NativeChatGeneratedImage(
 )
 
 class NativeChatToolRuntime(
+    private val context: android.content.Context? = null,
     private val noteDao: NoteDao? = null,
     private val organizerDao: OrganizerDao? = null,
     private val alarmScheduler: (suspend (OrganizerAlarmEntity) -> Unit)? = null,
     private val alarmCanceler: ((Long) -> Unit)? = null,
     private val organizerChanged: (() -> Unit)? = null,
     private val notesChanged: (() -> Unit)? = null,
+    private val knowledgeBaseRepository: KnowledgeBaseRepository? = null,
     private val imageGenerator: NativeChatImageGenerator? = null,
     private val pdfTextExtractor: (ByteArray, Int) -> String = ::extractNativePdfTextFromBytes,
     private val clientFactory: () -> OkHttpClient = { defaultNativeChatToolClient() }
@@ -407,7 +580,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_WEB_SEARCH,
-                        description = "Search the public web with a compact search worker. Returns result titles, URLs, and short page summaries only. For serious research, follow up by calling search_page to inspect links inside an interesting page, then fetch_url on authoritative or promising URLs to read full content before drawing conclusions. If note tools are enabled and the user wants saved research, create or update a note with source citations before the final answer.",
+                        description = "Search the public web with a compact search worker. Returns result titles, URLs, short page summaries, and Markdown citation links. Cite claims from these results with the returned citation links. For serious research, follow up by calling search_page to inspect links inside an interesting page, then fetch_url on authoritative or promising URLs to read full content before drawing conclusions. If note tools are enabled and the user wants saved research, create or update a note with source citations before the final answer.",
                         parameters = mapOf("query" to "Search query string"),
                         requiredParams = listOf("query")
                     )
@@ -432,7 +605,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_KIWIX_SEARCH,
-                        description = "Search the configured local Kiwix offline library and return article titles, URLs, and short summaries.",
+                        description = "Search the configured local Kiwix offline library and return article titles, URLs, short summaries, and Markdown citation links. Cite claims from these offline results with the returned citation links.",
                         parameters = mapOf("query" to "Search query string"),
                         requiredParams = listOf("query")
                     )
@@ -450,6 +623,27 @@ class NativeChatToolRuntime(
                             "max_links" to "Optional maximum matching page links to return"
                         ),
                         requiredParams = listOf("url")
+                    )
+                )
+            }
+            if (config.deepResearchEnabled) {
+                val selectedKbImportGuidance = if (config.deepResearchImportIntoSelectedKbEnabled && config.selectedKnowledgeBaseIds.any { it > 0L }) {
+                    " If the user asks to find new resources for the currently selected knowledge base, use target_knowledge_base_id with one of the selected KB ids instead of creating a new Deep Research KB."
+                } else {
+                    ""
+                }
+                add(
+                    AgentTool(
+                        name = TOOL_DEEP_RESEARCH,
+                        description = "Run a long Deep Research job and wait until it finishes. Use this when the user asks for broad, multi-source research that should become a reusable knowledge base. Provide a refined research query, optional title/focus, and optional source_limit as a maximum import count, not a required count. The job searches the web, downloads readable webpages/PDFs, extracts their text, imports the best sources into a normal visible knowledge base, vectorizes them, and selects that knowledge base for this chat.$selectedKbImportGuidance This tool is for source ingestion, not for writing a note. Do not send a final answer until this tool returns.",
+                        parameters = mapOf(
+                            "query" to "Refined research query",
+                            "title" to "Optional short topic title for the generated knowledge base",
+                            "focus" to "Optional extra focus, population, domain, or constraints",
+                            "source_limit" to "Optional maximum number of sources to import; minimum 1 and no maximum",
+                            "target_knowledge_base_id" to "Optional selected KB id to add new sources into. Only works when selected-KB imports are enabled for this chat and server."
+                        ),
+                        requiredParams = listOf("query")
                     )
                 )
             }
@@ -736,6 +930,48 @@ class NativeChatToolRuntime(
                     )
                 )
             }
+            if (config.knowledgeBaseEnabled) {
+                add(
+                    AgentTool(
+                        name = TOOL_KB_SEARCH,
+                        description = "Search only the knowledge bases selected for this chat, including documents uploaded into this chat. Pass either query for one search or queries as a JSON array/newline-separated list for multiple sequenced searches. Returns cited chunks with chunk_id values and Markdown citation links. Use those links when citing KB-derived claims.",
+                        parameters = mapOf(
+                            "query" to "Question or search text",
+                            "queries" to "Optional JSON array or newline-separated list of related search queries to run in sequence",
+                            "max_results" to "Optional maximum matching chunks to return per query"
+                        )
+                    )
+                )
+                add(
+                    AgentTool(
+                        name = TOOL_KB_READ_CHUNK,
+                        description = "Read a selected knowledge-base chunk by chunk_id. Set include_neighbors=true when the answer needs surrounding context.",
+                        parameters = mapOf(
+                            "chunk_id" to "Numeric chunk id returned by kb_search",
+                            "include_neighbors" to "Optional true to include adjacent chunks from the same source"
+                        ),
+                        requiredParams = listOf("chunk_id")
+                    )
+                )
+                add(
+                    AgentTool(
+                        name = TOOL_KB_READ_SOURCE,
+                        description = "Read ordered chunks from one selected knowledge-base source for document-level tasks such as summarizing an uploaded document. If the chat has an uploaded document and the user asks to summarize it, call this tool. Use start_chunk to continue through long documents.",
+                        parameters = mapOf(
+                            "source_id" to "Optional numeric source id returned by kb_list_sources. If omitted and the chat has one uploaded document, that source is used.",
+                            "start_chunk" to "Optional zero-based chunk index to start from when continuing a long source",
+                            "max_chunks" to "Optional maximum chunks to return, up to 40"
+                        )
+                    )
+                )
+                add(
+                    AgentTool(
+                        name = TOOL_KB_LIST_SOURCES,
+                        description = "List the sources available in the knowledge bases selected for this chat.",
+                        parameters = emptyMap()
+                    )
+                )
+            }
             if (config.imageGenerationEnabled) {
                 add(
                     AgentTool(
@@ -752,9 +988,53 @@ class NativeChatToolRuntime(
         }
     }
 
+    suspend fun buildAutoKnowledgeContext(query: String, config: NativeChatToolConfig): String? {
+        val hasChatDocumentScope = config.chatDocumentKnowledgeBaseId?.let { it > 0L } == true
+        if (!config.toolsEnabled || !config.knowledgeBaseEnabled) return null
+        if (!hasChatDocumentScope && !config.knowledgeBaseAutoContextEnabled) return null
+        val scopeIds = config.knowledgeBaseScopeIds()
+        if (scopeIds.isEmpty() || query.isBlank()) return null
+        val repo = knowledgeBaseRepository ?: return null
+        if (hasChatDocumentScope && isDocumentSummaryRequest(query)) {
+            return runCatching {
+                repo.readSourcesForSummary(
+                    knowledgeBaseIds = scopeIds,
+                    maxChunksPerSource = config.knowledgeBaseMaxResults.coerceIn(6, 20),
+                    maxCharsPerChunk = 850
+                )
+            }.getOrNull()?.let { sourceContext ->
+                buildString {
+                    appendLine("The user has asked to summarize uploaded document(s) in this chat. The following ordered chunks are from those chat documents. Produce a document summary from this material, cite KB-derived claims by copying the provided Markdown citation links exactly, for example [AL.pdf chunk 9](kb://chunk/123). Do not shorten them to bare labels like [AL.pdf chunk 9]. Call kb_read_source with a later start_chunk if more source text is needed.")
+                    appendLine()
+                    append(sourceContext)
+                }.trim()
+            }
+        }
+        val results = repo.search(
+            query = query,
+            knowledgeBaseIds = scopeIds,
+            maxResults = config.knowledgeBaseMaxResults
+        )
+        if (results.isEmpty()) return null
+        return buildString {
+            if (hasChatDocumentScope) {
+                appendLine("The user has uploaded document(s) to this chat. The following retrieved chunks are from those chat documents. Use them to answer document-referential questions and do not claim that no document was attached. Cite KB-derived claims by copying the provided Markdown citation links exactly, for example [AL.pdf chunk 9](kb://chunk/123). Do not shorten them to bare labels like [AL.pdf chunk 9].")
+            } else {
+                appendLine("Knowledge base context selected for this chat. Use it only when relevant. Cite KB-derived claims by copying the provided Markdown citation links exactly, not bare citation labels.")
+            }
+            results.forEachIndexed { index, result ->
+                appendLine()
+                appendLine("[KB${index + 1} chunk_id=${result.chunkId} source=\"${result.sourceTitle}\" base=\"${result.knowledgeBaseName}\"]")
+                appendLine("Citation: ${result.citationMarkdown}")
+                appendLine(result.text.take(1_200))
+            }
+        }.trim()
+    }
+
     suspend fun executeToolCall(
         toolCall: OllamaService.ToolCall,
         config: NativeChatToolConfig,
+        chatId: Long? = null,
         onProgress: (NativeChatToolProgress) -> Unit = {},
         searchSummarizer: (suspend (NativeChatSearchSummaryRequest) -> String)? = null
     ): Result<NativeChatToolResult> = withContext(Dispatchers.IO) {
@@ -780,6 +1060,91 @@ class NativeChatToolRuntime(
                         onProgress = onProgress,
                         searchSummarizer = searchSummarizer
                     )
+                }
+                TOOL_KB_SEARCH -> {
+                    require(config.toolsEnabled && config.knowledgeBaseEnabled) { "kb_search is disabled for this chat." }
+                    val scopeIds = config.knowledgeBaseScopeIds()
+                    require(scopeIds.isNotEmpty()) { "Select a knowledge base or upload a document to this chat before using kb_search." }
+                    val queries = parseToolStringList(toolCall.arguments, "queries", "query_list", "queryList")
+                        .ifEmpty {
+                            listOf(toolArg(toolCall.arguments, "query", "question").orEmpty().trim())
+                                .filter { it.isNotBlank() }
+                        }
+                    require(queries.isNotEmpty()) { "query or queries is required." }
+                    val maxResults = parseOptionalInt(toolArg(toolCall.arguments, "max_results", "limit"))
+                        ?: config.knowledgeBaseMaxResults
+                    onProgress(
+                        NativeChatToolProgress(
+                            status = "Searching knowledge base",
+                            phase = NativeChatToolProgressPhase.SEARCHING,
+                            outputPreview = queries.joinToString(" | ").take(300)
+                        )
+                    )
+                    val repo = requireNotNull(knowledgeBaseRepository) { "Knowledge base repository is unavailable." }
+                    buildString {
+                        appendLine("kb_search_queries: ${queries.size}")
+                        queries.forEachIndexed { queryIndex, query ->
+                            appendLine("query_${queryIndex + 1}: $query")
+                            val results = repo.search(
+                                query = query,
+                                knowledgeBaseIds = scopeIds,
+                                maxResults = maxResults
+                            )
+                            if (results.isEmpty()) {
+                                appendLine("No matching knowledge-base chunks found for query_${queryIndex + 1}.")
+                            } else {
+                                results.forEach { result ->
+                                    appendLine()
+                                    appendLine("[query_${queryIndex + 1} chunk_id=${result.chunkId}] ${result.knowledgeBaseName} / ${result.sourceTitle}")
+                                    appendLine("citation=${result.citationMarkdown}")
+                                    appendLine("score=${"%.3f".format(Locale.US, result.score)}")
+                                    appendLine(result.text.take(1_600))
+                                }
+                            }
+                            if (queryIndex != queries.lastIndex) appendLine()
+                        }
+                        appendLine()
+                        appendLine("final_answer_instruction: If these searches answer the user's request, send a visible chat response now and cite KB-derived claims with the citation links above.")
+                    }.trim()
+                }
+                TOOL_KB_READ_CHUNK -> {
+                    require(config.toolsEnabled && config.knowledgeBaseEnabled) { "kb_read_chunk is disabled for this chat." }
+                    val scopeIds = config.knowledgeBaseScopeIds()
+                    val chunkId = toolArg(toolCall.arguments, "chunk_id", "id")?.toLongOrNull()
+                        ?: error("chunk_id is required.")
+                    val includeNeighbors = toolArg(toolCall.arguments, "include_neighbors", "neighbors")
+                        ?.equals("true", ignoreCase = true) == true
+                    val repo = requireNotNull(knowledgeBaseRepository) { "Knowledge base repository is unavailable." }
+                    repo.readChunk(chunkId, includeNeighbors, scopeIds)
+                }
+                TOOL_KB_READ_SOURCE -> {
+                    require(config.toolsEnabled && config.knowledgeBaseEnabled) { "kb_read_source is disabled for this chat." }
+                    val scopeIds = config.knowledgeBaseScopeIds()
+                    require(scopeIds.isNotEmpty()) { "Select a knowledge base or upload a document to this chat before using kb_read_source." }
+                    val sourceId = toolArg(toolCall.arguments, "source_id", "id")?.toLongOrNull()
+                    val startChunk = parseOptionalInt(toolArg(toolCall.arguments, "start_chunk", "offset")) ?: 0
+                    val maxChunks = parseOptionalInt(toolArg(toolCall.arguments, "max_chunks", "limit")) ?: 18
+                    onProgress(
+                        NativeChatToolProgress(
+                            status = "Reading document chunks",
+                            phase = NativeChatToolProgressPhase.READING,
+                            outputPreview = sourceId?.let { "#$it" } ?: "chat document"
+                        )
+                    )
+                    val repo = requireNotNull(knowledgeBaseRepository) { "Knowledge base repository is unavailable." }
+                    repo.readSourcesForSummary(
+                        knowledgeBaseIds = scopeIds,
+                        sourceId = sourceId,
+                        startChunk = startChunk,
+                        maxChunksPerSource = maxChunks
+                    )
+                }
+                TOOL_KB_LIST_SOURCES -> {
+                    require(config.toolsEnabled && config.knowledgeBaseEnabled) { "kb_list_sources is disabled for this chat." }
+                    val scopeIds = config.knowledgeBaseScopeIds()
+                    require(scopeIds.isNotEmpty()) { "Select a knowledge base or upload a document to this chat before using kb_list_sources." }
+                    val repo = requireNotNull(knowledgeBaseRepository) { "Knowledge base repository is unavailable." }
+                    repo.listSources(scopeIds)
                 }
                 TOOL_SEARCH_PAGE -> {
                     require(config.toolsEnabled && (config.webSearchEnabled || config.fetchUrlEnabled)) { "search_page is disabled for this chat." }
@@ -818,6 +1183,75 @@ class NativeChatToolRuntime(
                         linkQuery = toolArg(toolCall.arguments, "link_query", "linkQuery", "navigate", "navigation_query", "navigationQuery"),
                         maxLinks = parseOptionalInt(toolArg(toolCall.arguments, "max_links", "maxLinks", "link_limit", "linkLimit"))
                     )
+                }
+                TOOL_DEEP_RESEARCH -> {
+                    require(config.toolsEnabled && config.deepResearchEnabled) { "deep_research is disabled for this chat." }
+                    val appContext = context?.applicationContext ?: error("Deep Research requires an application context.")
+                    val cleanQuery = toolArg(toolCall.arguments, "query", "q", "research_query", "researchQuery").orEmpty()
+                    require(cleanQuery.isNotBlank()) { "query is required." }
+                    val safeChatId = chatId?.takeIf { it > 0L } ?: error("Deep Research requires a chat id.")
+                    val sourceLimit = parseOptionalInt(toolArg(toolCall.arguments, "source_limit", "sourceLimit", "limit"))
+                        ?: config.deepResearchSourceLimit
+                    val selectedTargets = config.selectedKnowledgeBaseIds.filter { it > 0L }.distinct()
+                    val requestedTarget = parseOptionalLong(
+                        toolArg(
+                            toolCall.arguments,
+                            "target_knowledge_base_id",
+                            "targetKnowledgeBaseId",
+                            "knowledge_base_id",
+                            "knowledgeBaseId",
+                            "kb_id",
+                            "kbId"
+                        )
+                    )
+                    val targetKnowledgeBaseId = if (config.deepResearchImportIntoSelectedKbEnabled) {
+                        requestedTarget?.also { requested ->
+                            require(requested in selectedTargets) {
+                                "target_knowledge_base_id must be one of the knowledge bases selected for this chat."
+                            }
+                        } ?: selectedTargets.firstOrNull()
+                    } else {
+                        null
+                    }
+                    onProgress(
+                        NativeChatToolProgress(
+                            status = "Starting Deep Research",
+                            phase = NativeChatToolProgressPhase.RESEARCHING,
+                            outputPreview = cleanQuery
+                        )
+                    )
+                    val result = DeepResearchService.runAndAwait(
+                        context = appContext,
+                        chatId = safeChatId,
+                        query = cleanQuery,
+                        title = toolArg(toolCall.arguments, "title", "topic"),
+                        focus = toolArg(toolCall.arguments, "focus", "scope"),
+                        sourceLimit = DeepResearchSupport.normalizeSourceLimit(sourceLimit),
+                        targetKnowledgeBaseId = targetKnowledgeBaseId
+                    )
+                    onProgress(
+                        NativeChatToolProgress(
+                            status = "Deep Research finished",
+                            phase = NativeChatToolProgressPhase.RESEARCHING,
+                            outputPreview = "${result.importedSources}/${result.sourceLimit} sources"
+                        )
+                    )
+                    buildString {
+                        appendLine("Deep Research finished for: ${result.query}")
+                        appendLine("Imported sources: ${result.importedSources} (maximum ${result.sourceLimit})")
+                        appendLine("Knowledge base id: ${result.knowledgeBaseId}")
+                        appendLine(
+                            if (result.usedExistingKnowledgeBase) {
+                                "New sources were imported into the selected knowledge base for this chat."
+                            } else {
+                                "The knowledge base has been created, indexed, and selected for this chat."
+                            }
+                        )
+                        appendLine("final_answer_instruction: Send a visible chat message now. Briefly tell the user the Deep Research job finished, mention how many sources were imported, and offer to search or summarize the updated knowledge base. If you answer with facts from the KB, call kb_search or kb_read_source first and cite exact KB links.")
+                        if (!config.knowledgeBaseEnabled) {
+                            appendLine("Warning: knowledge-base search tools are currently disabled by the effective chat/server permissions. The generated KB will stay selected, but the chat cannot search it until KB tools are allowed.")
+                        }
+                    }.trim()
                 }
                 TOOL_GET_DATETIME -> {
                     require(config.toolsEnabled && config.dateTimeEnabled) { "get_datetime is disabled for this chat." }
@@ -1088,6 +1522,7 @@ class NativeChatToolRuntime(
             appendLine("mode: compact_search_agent")
             appendLine("query: $trimmedQuery")
             appendLine("results_returned: ${links.size}")
+            appendLine("citation_policy: Cite KB/web/Kiwix-derived claims using the returned Markdown citation links.")
             appendLine()
             links.forEachIndexed { index, link ->
                 onProgress(
@@ -1102,6 +1537,7 @@ class NativeChatToolRuntime(
                 )
                 appendLine("[${index + 1}] ${link.title}")
                 appendLine("source_url: ${link.url}")
+                appendLine("citation_token: [${index + 1}]")
                 val content = runCatching {
                     fetchUrlText(
                         initialUrl = link.url,
@@ -1123,6 +1559,7 @@ class NativeChatToolRuntime(
                     source = "web_search",
                     searchSummarizer = searchSummarizer
                 )
+                val citation = sourceCitationMarkdown(link.title, content.finalUrl)
                 onProgress(
                     NativeChatToolProgress(
                         status = "Summarized web result ${index + 1}/${links.size}",
@@ -1136,12 +1573,22 @@ class NativeChatToolRuntime(
                     )
                 )
                 appendLine("final_url: ${content.finalUrl}")
+                appendLine("citation: $citation")
+                appendLine("source_citation: $citation")
                 appendLine("content_type: ${content.contentType}")
                 appendLine("redirects_followed: ${content.redirectsFollowed}")
                 appendLine("summary:")
                 appendLine(summary)
                 appendLine()
             }
+            appendLine(
+                sourceCitationBlock(
+                    links.mapIndexed { index, link ->
+                        "${index + 1}. ${sourceCitationMarkdown(link.title, link.url)}"
+                    }
+                )
+            )
+            appendLine()
             appendLine("TIP: Results are compact summaries. For deep research, use fetch_url with promising or authoritative URLs above before relying on a source.")
             appendLine("TIP: To navigate within a result page, call search_page with that source_url and a query such as commits, releases, changelog, docs, or issues; then call fetch_url on the returned page link for full content.")
             appendLine("TIP: If note tools are enabled and the research should be saved, call create_note or update_note with cited sources before the final answer.")
@@ -1213,6 +1660,7 @@ class NativeChatToolRuntime(
             appendLine("query: $trimmedQuery")
             appendLine("kiwix_url: $normalizedBase")
             appendLine("results_returned: ${links.size}")
+            appendLine("citation_policy: Cite KB/web/Kiwix-derived claims using the returned Markdown citation links.")
             appendLine()
             links.forEachIndexed { index, link ->
                 onProgress(
@@ -1227,6 +1675,7 @@ class NativeChatToolRuntime(
                 )
                 appendLine("[${index + 1}] ${link.title}")
                 appendLine("source_url: ${link.url}")
+                appendLine("citation_token: [${index + 1}]")
                 val content = runCatching {
                     fetchUrlText(
                         initialUrl = link.url,
@@ -1248,6 +1697,7 @@ class NativeChatToolRuntime(
                     source = "kiwix_search",
                     searchSummarizer = searchSummarizer
                 )
+                val citation = sourceCitationMarkdown(link.title, content.finalUrl)
                 onProgress(
                     NativeChatToolProgress(
                         status = "Summarized Kiwix result ${index + 1}/${links.size}",
@@ -1260,11 +1710,22 @@ class NativeChatToolRuntime(
                         isComplete = true
                     )
                 )
+                appendLine("final_url: ${content.finalUrl}")
+                appendLine("citation: $citation")
+                appendLine("source_citation: $citation")
                 appendLine("content_type: ${content.contentType}")
                 appendLine("summary:")
                 appendLine(summary)
                 appendLine()
             }
+            appendLine(
+                sourceCitationBlock(
+                    links.mapIndexed { index, link ->
+                        "${index + 1}. ${sourceCitationMarkdown(link.title, link.url)}"
+                    }
+                )
+            )
+            appendLine()
             appendLine("TIP: Results are compact offline summaries. Run kiwix_search with a narrower query when you need more offline context; use fetch_url only for public HTTP/HTTPS URLs from other tools.")
         }.trimEnd()
     }
@@ -1329,9 +1790,14 @@ class NativeChatToolRuntime(
         )
 
         return buildString {
+            val pageCitation = sourceCitationMarkdown(content.finalUrl, content.finalUrl)
+            val sourceCitations = mutableListOf("1. $pageCitation")
             appendLine("trust: untrusted_external_content")
             appendLine("tool: search_page")
             appendLine("source_url: ${content.finalUrl}")
+            appendLine("citation_token: [1]")
+            appendLine("citation: $pageCitation")
+            appendLine("source_citation: $pageCitation")
             appendLine("content_type: ${content.contentType}")
             appendLine("redirects_followed: ${content.redirectsFollowed}")
             if (cleanQuery.isNotBlank()) appendLine("query: $cleanQuery")
@@ -1350,11 +1816,18 @@ class NativeChatToolRuntime(
             if (links.isNotEmpty()) {
                 appendLine("navigation_links:")
                 links.forEachIndexed { index, link ->
+                    val citation = sourceCitationMarkdown(link.title, link.url)
+                    sourceCitations += "${index + 2}. $citation"
                     appendLine("[${index + 1}] ${link.title}")
                     appendLine("url: ${link.url}")
+                    appendLine("citation_token: [${index + 2}]")
+                    appendLine("citation: $citation")
+                    appendLine("source_citation: $citation")
                 }
                 appendLine()
             }
+            appendLine(sourceCitationBlock(sourceCitations))
+            appendLine()
             appendLine("TIP: Use fetch_url on a returned URL to read full content; use search_page again on a returned URL to keep navigating within the site.")
         }.trimEnd()
     }
@@ -1382,9 +1855,14 @@ class NativeChatToolRuntime(
             emptyList()
         }
         return buildString {
+            val pageCitation = sourceCitationMarkdown(content.finalUrl, content.finalUrl)
+            val sourceCitations = mutableListOf("1. $pageCitation")
             appendLine("trust: untrusted_external_content")
             appendLine("tool: fetch_url")
             appendLine("source_url: ${content.finalUrl}")
+            appendLine("citation_token: [1]")
+            appendLine("citation: $pageCitation")
+            appendLine("source_citation: $pageCitation")
             appendLine("content_type: ${content.contentType}")
             appendLine("redirects_followed: ${content.redirectsFollowed}")
             appendLine("content:")
@@ -1402,10 +1880,17 @@ class NativeChatToolRuntime(
                 appendLine("link_query: $linksQuery")
                 appendLine("navigation_links_returned: ${links.size}")
                 links.forEachIndexed { index, link ->
+                    val citation = sourceCitationMarkdown(link.title, link.url)
+                    sourceCitations += "${index + 2}. $citation"
                     appendLine("[${index + 1}] ${link.title}")
                     appendLine("url: ${link.url}")
+                    appendLine("citation_token: [${index + 2}]")
+                    appendLine("citation: $citation")
+                    appendLine("source_citation: $citation")
                 }
             }
+            appendLine()
+            appendLine(sourceCitationBlock(sourceCitations))
         }.trimEnd()
     }
 
@@ -2174,6 +2659,24 @@ class NativeChatToolRuntime(
         return null
     }
 
+    private fun parseToolStringList(arguments: Map<String, String>, vararg names: String): List<String> {
+        val raw = toolArg(arguments, *names)?.trim().orEmpty()
+        if (raw.isBlank()) return emptyList()
+        if (raw.startsWith("[")) {
+            runCatching {
+                val array = JSONArray(raw)
+                return (0 until array.length())
+                    .mapNotNull { index -> array.optString(index).trim().takeIf { it.isNotBlank() } }
+                    .distinct()
+            }
+        }
+        return raw
+            .split('\n', ';')
+            .map { it.trim().trimStart('-', '*').trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+    }
+
     private fun normalizeToolArgName(name: String): String =
         name.filter { it.isLetterOrDigit() }.lowercase(Locale.US)
 
@@ -2305,6 +2808,7 @@ class NativeChatToolRuntime(
         const val TOOL_SEARCH_PAGE = "search_page"
         const val TOOL_KIWIX_SEARCH = "kiwix_search"
         const val TOOL_FETCH_URL = "fetch_url"
+        const val TOOL_DEEP_RESEARCH = "deep_research"
         const val TOOL_GET_DATETIME = "get_datetime"
         const val TOOL_CALCULATOR = "calculator"
         const val TOOL_LIST_NOTES = "list_notes"
@@ -2327,6 +2831,10 @@ class NativeChatToolRuntime(
         const val TOOL_CREATE_ALARM = "create_alarm"
         const val TOOL_UPDATE_ALARM = "update_alarm"
         const val TOOL_DELETE_ALARM = "delete_alarm"
+        const val TOOL_KB_SEARCH = "kb_search"
+        const val TOOL_KB_READ_CHUNK = "kb_read_chunk"
+        const val TOOL_KB_READ_SOURCE = "kb_read_source"
+        const val TOOL_KB_LIST_SOURCES = "kb_list_sources"
         const val TOOL_GENERATE_IMAGE = "generate_image"
 
         private const val USER_AGENT_HEADER = "User-Agent"
@@ -2350,6 +2858,28 @@ class NativeChatToolRuntime(
             Regex("""<a[^>]*class=["'][^"']*result__a[^"']*["'][^>]*href=["']([^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         private val KIWIX_RESULT_PATTERN =
             Regex("""<a[^>]*href=["'](/content/[^"']+)["'][^>]*>(.*?)</a>""", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+
+        fun sourceCitationMarkdown(title: String, url: String): String {
+            val cleanUrl = url.trim()
+            val label = title.trim().ifBlank { cleanUrl.ifBlank { "Source" } }
+                .replace("\\", "\\\\")
+                .replace("[", "\\[")
+                .replace("]", "\\]")
+            return "[$label]($cleanUrl)"
+        }
+
+        fun sourceCitationBlock(numberedCitations: List<String>): String {
+            val citations = numberedCitations
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+            if (citations.isEmpty()) return ""
+            return buildString {
+                appendLine("source_citations:")
+                citations.forEach { appendLine(it) }
+                append("final_answer_requirement: Use the source_citations Markdown links when answering from web, Kiwix, search_page, or fetch_url results. Do not use bare [1] citations unless they are Markdown links.")
+            }
+        }
     }
 
     private data class SearchLink(val url: String, val title: String)

@@ -51,6 +51,8 @@ fun LLMSettingsScreen(navController: NavController) {
     val draftMinTokens by settingsRepo.draftMinTokens.collectAsState()
     val draftPMin by settingsRepo.draftPMin.collectAsState()
     val flashAttentionEnabled by settingsRepo.flashAttentionEnabled.collectAsState()
+    val mtpDecodingEnabled by settingsRepo.mtpDecodingEnabled.collectAsState()
+    val mtpDraftMaxTokens by settingsRepo.mtpDraftMaxTokens.collectAsState()
     
     // Custom Commands Additions
     val customFlags by settingsRepo.customFlags.collectAsState()
@@ -531,6 +533,55 @@ fun LLMSettingsScreen(navController: NavController) {
                             Switch(
                                 checked = flashAttentionEnabled,
                                 onCheckedChange = { settingsRepo.setFlashAttentionEnabled(it) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // MTP Decoding
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(stringResource(R.string.general_mtp_decoding_title), fontWeight = FontWeight.Bold)
+                                Text(
+                                    stringResource(R.string.general_mtp_decoding_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = mtpDecodingEnabled,
+                                onCheckedChange = settingsRepo::setMtpDecodingEnabled
+                            )
+                        }
+                        Text(
+                            stringResource(R.string.general_mtp_decoding_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                        )
+                        if (mtpDecodingEnabled) {
+                            DraftIntTextField(
+                                value = mtpDraftMaxTokens,
+                                onValueChange = settingsRepo::setMtpDraftMaxTokens,
+                                label = { Text(stringResource(R.string.general_mtp_draft_max_label)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
                             )
                         }
                     }

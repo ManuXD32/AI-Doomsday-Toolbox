@@ -140,12 +140,16 @@ fun AdventureScreen(
             TopAppBar(
                 title = {
                     Column {
-                        Text(
-                            "${dungeonType.emoji} ${dungeonType.localizedName(context)}",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TamaUiIcon(dungeonType.emoji, fontSize = 16.sp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                dungeonType.localizedName(context),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp
+                            )
+                        }
                         session?.let {
                             Text(
                                 stringResource(

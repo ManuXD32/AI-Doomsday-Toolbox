@@ -38,4 +38,41 @@ class SettingsRepositoryBackendTest {
         )
         assertFalse(SettingsRepository.isLlamaServerBackend("something-else"))
     }
+
+    @Test
+    fun `llama swap aliases normalize to llama-swap`() {
+        val aliases = listOf("llama-swap", "llama_swap", "llamaswap", " LLAMA_SWAP ")
+
+        aliases.forEach { backend ->
+            assertEquals(
+                SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
+                SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
+            )
+            assertTrue(SettingsRepository.isLlamaSwapBackend(backend))
+            assertTrue(SettingsRepository.usesOpenAiChatBackend(backend))
+            assertTrue(SettingsRepository.requiresSelectedRemoteModel(backend))
+        }
+    }
+
+    @Test
+    fun `acceleration mode aliases normalize to runtime choices`() {
+        assertEquals(SettingsRepository.ACCELERATION_AUTO, SettingsRepository.normalizeAccelerationMode(null))
+        assertEquals(SettingsRepository.ACCELERATION_CPU, SettingsRepository.normalizeAccelerationMode("cpu_only"))
+        assertEquals(SettingsRepository.ACCELERATION_GPU, SettingsRepository.normalizeAccelerationMode("OpenCL"))
+        assertEquals(SettingsRepository.ACCELERATION_AUTO, SettingsRepository.normalizeAccelerationMode("vulkan"))
+        assertEquals(SettingsRepository.ACCELERATION_AUTO, SettingsRepository.normalizeAccelerationMode("hexagon"))
+        assertEquals(SettingsRepository.ACCELERATION_AUTO, SettingsRepository.normalizeAccelerationMode("unknown"))
+    }
+
+    @Test
+    fun `stable diffusion acceleration mode does not expose npu`() {
+        assertEquals(
+            SettingsRepository.ACCELERATION_CPU,
+            SettingsRepository.normalizeStableDiffusionAccelerationMode(SettingsRepository.ACCELERATION_NPU)
+        )
+        assertEquals(
+            SettingsRepository.ACCELERATION_CPU,
+            SettingsRepository.normalizeStableDiffusionAccelerationMode(SettingsRepository.ACCELERATION_CPU)
+        )
+    }
 }

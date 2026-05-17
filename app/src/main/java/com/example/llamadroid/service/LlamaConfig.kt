@@ -6,6 +6,7 @@ data class LlamaConfig(
     val contextSize: Int = 8192,
     val threads: Int = 4,
     val batchSize: Int = 512,
+    val physicalBatchSize: Int? = null,
     val port: Int = 8080,
     val temperature: Float = 0.8f,
     val host: String = "0.0.0.0",
@@ -29,6 +30,9 @@ data class LlamaConfig(
     val draftMax: Int = 16,               // Max tokens to draft per step
     val draftMin: Int = 0,                // Min tokens to draft
     val draftPMin: Float = 0.75f,         // Min probability threshold for acceptance
+    // Embedded MTP speculative decoding - requires a GGUF with MTP heads
+    val mtpDecodingEnabled: Boolean = false,
+    val mtpDraftMax: Int = 3,
     // Advanced overrides
     val parallel: Int? = null,
     val cacheRam: Int? = null,

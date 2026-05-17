@@ -504,10 +504,9 @@ private fun LivestockSlotCard(
                             .align(Alignment.TopStart)
                             .padding(6.dp)
                     ) {
-                        Text(
+                        TamaUiIcon(
                             "😡",
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                            color = Color.White,
                             fontSize = 10.sp
                         )
                     }

@@ -132,6 +132,50 @@ class TamaTransferBundleTest {
                 petId = pet.id,
                 completedDungeonCount = 4,
                 lastCompletedDungeonType = "cave"
+            ),
+            adventureGateProfile = TamaTransferAdventureGateProfile(
+                petId = pet.id,
+                level = 12,
+                xp = 345,
+                maxHp = 230,
+                maxMana = 95,
+                attack = 40,
+                magic = 38,
+                defense = 34,
+                speed = 16,
+                accuracy = 104,
+                evasion = 9,
+                currentHp = 177,
+                currentMana = 61,
+                skillPoints = 5,
+                purchasedSkillIdsJson = """["paw_strike","spark","guard","heal_dew"]""",
+                learnedAttackIdsJson = """["paw_strike","quick_claw"]""",
+                equippedAttackIdsJson = """["paw_strike","quick_claw"]""",
+                learnedMagicIdsJson = """["spark","guard","heal_dew"]""",
+                equippedMagicIdsJson = """["spark","heal_dew"]""",
+                equippedWeaponId = "ag_weapon_sprout_baton",
+                equippedShieldId = "ag_shield_leaf_shell",
+                equippedRingId = "ag_ring_dewdrop",
+                equippedRelicId = "ag_relic_nexum_heart",
+                lastRecoveryAt = 98L,
+                updatedAt = 99L
+            ),
+            adventureGateWorldProgress = listOf(
+                TamaTransferAdventureGateWorldProgress(
+                    petId = pet.id,
+                    worldId = "sproutvale_gate",
+                    highestClearedPhase = 7,
+                    midBossCleared = true,
+                    finalBossCleared = false,
+                    updatedAt = 100L
+                )
+            ),
+            adventureGateBattleState = TamaTransferAdventureGateBattleState(
+                petId = pet.id,
+                worldId = "sproutvale_gate",
+                phaseNumber = 8,
+                stateJson = """{"petId":"pet-1","skillCooldowns":{"quick_claw":1},"guardUses":2}""",
+                updatedAt = 101L
             )
         )
 
@@ -150,6 +194,13 @@ class TamaTransferBundleTest {
         assertEquals("adventure_worlds/session-1.png", parsed.adventureSessions.first().relativeWorldImagePath)
         assertEquals("adventure_stages/session-1/stage_1.png", parsed.adventureStages.first().relativeImagePath)
         assertEquals("cave", parsed.dungeonProgress?.lastCompletedDungeonType)
+        assertEquals(12, parsed.adventureGateProfile?.level)
+        assertEquals(61, parsed.adventureGateProfile?.currentMana)
+        assertEquals("ag_relic_nexum_heart", parsed.adventureGateProfile?.equippedRelicId)
+        assertEquals(1, parsed.adventureGateWorldProgress.size)
+        assertEquals(7, parsed.adventureGateWorldProgress.first().highestClearedPhase)
+        assertEquals("sproutvale_gate", parsed.adventureGateBattleState?.worldId)
+        assertTrue(parsed.adventureGateBattleState?.stateJson.orEmpty().contains("skillCooldowns"))
     }
 
     @Test

@@ -40,11 +40,15 @@ class LlamaScheduledTaskRunner(
         val params = parseChatParams(task.apiParams)
         val thinkingEnabled = (params["enable_thinking"] as? Boolean) ?: true
         val rawToolConfig = NativeChatToolConfig.fromParams(params)
+            .effectiveWithServerDefaults(NativeChatToolConfig.fromApiParams(server.defaultApiParams))
         val toolConfig = nativeChatToolRuntime.configWithOrganizerPermissions(rawToolConfig)
         val tools = nativeChatToolRuntime.availableTools(toolConfig)
         val modelName = if (server.isOllamaEngine()) {
             server.modelName?.takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException(context.getString(R.string.llama_ollama_model_required))
+        } else if (server.isLlamaSwapEngine()) {
+            server.modelName?.takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException(context.getString(R.string.llama_swap_model_required))
         } else {
             server.modelName?.takeIf { it.isNotBlank() }
         }

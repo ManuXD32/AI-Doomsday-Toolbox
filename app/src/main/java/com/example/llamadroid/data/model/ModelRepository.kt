@@ -17,8 +17,12 @@ import com.example.llamadroid.sd.buildSdCompatProfiles
 import com.example.llamadroid.sd.defaultCompatProfilesFor
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
 import com.example.llamadroid.sd.inferSdFamily
+import com.example.llamadroid.onnx.ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE
+import com.example.llamadroid.onnx.ONNX_ASSET_KIND_SUPERTONIC_CATALOG_BUNDLE
+import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_FILE
 import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
+import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_HF_TREE_BUNDLE
 import com.example.llamadroid.onnx.ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION
 import com.example.llamadroid.onnx.OnnxCatalogEntry
 import com.example.llamadroid.onnx.OnnxImportSupport
@@ -66,6 +70,10 @@ class ModelRepository(
     
     fun getLLMModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
         listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING)
+    )
+
+    fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
+        listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.QUADTRIX)
     )
     
     suspend fun searchModels(query: String, filter: String? = null): List<HfModelDto> = withContext(Dispatchers.IO) {
@@ -147,7 +155,7 @@ class ModelRepository(
     /**
      * Get the model directory based on storage settings and model type.
      * Uses app's external files directory if enabled, otherwise internal storage.
-     * Note: Native binaries (llama-cli, sd) can only access app-specific directories.
+     * Note: Native binaries (llama-server, sd) can only access app-specific directories.
      */
     fun getModelDir(type: ModelType): File {
         val useExternalStorage = settingsRepo.modelStorageUri.value != null
@@ -155,6 +163,7 @@ class ModelRepository(
         // Get subfolder based on type
         val subfolder = when (type) {
             ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.VISION, ModelType.MMPROJ -> "llm"
+            ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
             ModelType.SD_DIFFUSION -> "sd/flux"
             ModelType.SD_CLIP_L -> "sd/clip_l"
@@ -166,6 +175,7 @@ class ModelRepository(
             ModelType.SD_CONTROLNET -> "sd/controlnet"
             ModelType.SD_PHOTOMAKER -> "sd/photomaker"
             ModelType.ONNX_IMAGE_GEN,
+            ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
             ModelType.ONNX_IMAGE_UPSCALER -> return OnnxStorage.managedModelsRoot().apply {
                 OnnxStorage.ensureManagedRootsReady()
@@ -357,7 +367,19 @@ class ModelRepository(
         OnnxStorage.ensureManagedRootsReady()
         val modelId = buildOnnxCatalogStableId(entry.provider, entry.bundleId)
         val progressKey = "onnx:$modelId"
-        val tempArchive = File(OnnxStorage.tempDownloadDir(context).apply { mkdirs() }, "$modelId.zip")
+        val installKind = when (entry.assetKind) {
+            ONNX_ASSET_KIND_SUPERTONIC_CATALOG_BUNDLE -> ONNX_INSTALL_KIND_HF_TREE_BUNDLE
+            ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE -> ONNX_INSTALL_KIND_FILE
+            else -> ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
+        }
+        val tempDownload = if (installKind == ONNX_INSTALL_KIND_FILE) {
+            File(OnnxStorage.managedBundleDir(modelId).apply { mkdirs() }, File(entry.assetName).name)
+        } else {
+            File(
+                OnnxStorage.tempDownloadDir(context).apply { mkdirs() },
+                if (installKind == ONNX_INSTALL_KIND_HF_TREE_BUNDLE) "$modelId.download" else "$modelId.zip"
+            )
+        }
 
         DownloadProgressHolder.updateProgress(progressKey, modelId, 0f)
         DownloadProgressHolder.updateStatus(progressKey, "Downloading")
@@ -365,21 +387,22 @@ class ModelRepository(
             filename = modelId,
             repoId = entry.repoId,
             progressKey = progressKey,
-            type = ModelType.ONNX_IMAGE_GEN,
-            destPath = tempArchive.absolutePath,
-            onnxCapabilities = buildOnnxCapabilities(ONNX_CAPABILITY_TXT2IMG),
-            onnxAssetKind = ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE,
-            onnxPipelineFamily = ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION,
+            type = entry.modelType,
+            destPath = tempDownload.absolutePath,
+            onnxCapabilities = entry.capabilities,
+            onnxAssetKind = entry.assetKind,
+            onnxPipelineFamily = entry.pipelineFamily,
             onnxReferenceUri = entry.downloadUrl,
             onnxReferencePath = null,
-            onnxInstallKind = ONNX_INSTALL_KIND_ARCHIVE_BUNDLE,
-            onnxInstallDirPath = OnnxStorage.managedBundleDir(modelId).absolutePath
+            onnxInstallKind = installKind,
+            onnxInstallDirPath = if (installKind == ONNX_INSTALL_KIND_FILE) null else OnnxStorage.managedBundleDir(modelId).absolutePath,
+            huggingFaceToken = if (entry.gated) huggingFaceToken() else null
         )
 
         com.example.llamadroid.service.DownloadService.startDownload(
             context = context,
             url = entry.downloadUrl,
-            destPath = tempArchive.absolutePath,
+            destPath = tempDownload.absolutePath,
             filename = modelId
         )
     }
@@ -398,6 +421,20 @@ class ModelRepository(
     
     suspend fun insertModel(model: ModelEntity) {
         modelDao.insertModel(model)
+    }
+
+    fun huggingFaceToken(): String =
+        context.applicationContext
+            .getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(HF_TOKEN_KEY, "")
+            .orEmpty()
+
+    fun saveHuggingFaceToken(token: String) {
+        context.applicationContext
+            .getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(HF_TOKEN_KEY, token.trim())
+            .apply()
     }
 
     suspend fun updateModel(
@@ -504,6 +541,9 @@ class ModelRepository(
     }
 
     companion object {
+        private const val HF_PREFS_NAME = "litert_model_repository"
+        private const val HF_TOKEN_KEY = "hugging_face_token"
+
         fun resolveOnnxCapabilities(
             explicitCapabilities: String?,
             detectedCapabilities: Set<String>
@@ -645,7 +685,13 @@ data class PendingDownload(
     val onnxReferenceUri: String? = null,
     val onnxReferencePath: String? = null,
     val onnxInstallKind: String? = null,
-    val onnxInstallDirPath: String? = null
+    val onnxInstallDirPath: String? = null,
+    val huggingFaceToken: String? = null,
+    val liteRtDisplayName: String? = null,
+    val liteRtSourceUri: String? = null,
+    val liteRtBackendPreference: String? = null,
+    val liteRtSupportsCpu: Boolean? = null,
+    val liteRtSupportsGpu: Boolean? = null
 )
 
 object PendingDownloadHolder {
@@ -668,7 +714,13 @@ object PendingDownloadHolder {
         onnxReferenceUri: String? = null,
         onnxReferencePath: String? = null,
         onnxInstallKind: String? = null,
-        onnxInstallDirPath: String? = null
+        onnxInstallDirPath: String? = null,
+        huggingFaceToken: String? = null,
+        liteRtDisplayName: String? = null,
+        liteRtSourceUri: String? = null,
+        liteRtBackendPreference: String? = null,
+        liteRtSupportsCpu: Boolean? = null,
+        liteRtSupportsGpu: Boolean? = null
     ) {
         pendingDownloads[filename] = PendingDownload(
             filename = filename,
@@ -687,7 +739,13 @@ object PendingDownloadHolder {
             onnxReferenceUri = onnxReferenceUri,
             onnxReferencePath = onnxReferencePath,
             onnxInstallKind = onnxInstallKind,
-            onnxInstallDirPath = onnxInstallDirPath
+            onnxInstallDirPath = onnxInstallDirPath,
+            huggingFaceToken = huggingFaceToken,
+            liteRtDisplayName = liteRtDisplayName,
+            liteRtSourceUri = liteRtSourceUri,
+            liteRtBackendPreference = liteRtBackendPreference,
+            liteRtSupportsCpu = liteRtSupportsCpu,
+            liteRtSupportsGpu = liteRtSupportsGpu
         )
     }
     

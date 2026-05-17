@@ -544,6 +544,8 @@ private fun DatasetRuntimeBanner(
     onStop: () -> Unit
 ) {
     if (progress == null) return
+    var expanded by remember { mutableStateOf(false) }
+    val progressFraction = progress.current.toFloat() / progress.total.coerceAtLeast(1)
 
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
@@ -560,11 +562,19 @@ private fun DatasetRuntimeBanner(
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
-                TextButton(
-                    onClick = onStop,
-                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text(stringResource(R.string.action_stop))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { expanded = !expanded }) {
+                        Icon(
+                            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand)
+                        )
+                    }
+                    TextButton(
+                        onClick = onStop,
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text(stringResource(R.string.action_stop))
+                    }
                 }
             }
             Text(progress.stage, fontWeight = FontWeight.Medium, fontSize = 15.sp)
@@ -574,25 +584,27 @@ private fun DatasetRuntimeBanner(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             LinearProgressIndicator(
-                progress = { progress.current.toFloat() / progress.total.coerceAtLeast(1) },
+                progress = { progressFraction },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp)
             )
-            Text(
-                progress.currentItem,
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 6.dp)
-            )
-            Text(
-                stringResource(R.string.dataset_runtime_queue_count, queuedJobCount),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            if (expanded) {
+                Text(
+                    progress.currentItem,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                Text(
+                    stringResource(R.string.dataset_runtime_queue_count, queuedJobCount),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
         }
     }
 }
@@ -749,34 +761,48 @@ private fun DatasetImportProgressCard(
         .filter { it.isNotBlank() }
     val fileName = activeImportJob?.importFileName()?.takeIf { it.isNotBlank() }
     val indicatorColor = MaterialTheme.colorScheme.primary
+    var expanded by remember { mutableStateOf(false) }
+    val progressFraction = progress.current.toFloat() / progress.total.coerceAtLeast(1)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.dataset_import_title_running), fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                Text(
-                    progress.stage,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                fileName?.let {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.dataset_import_title_running), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Text(
-                        it,
-                        fontSize = 11.sp,
+                        progress.stage,
+                        fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
+                    )
+                    fileName?.let {
+                        Text(
+                            it,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand)
                     )
                 }
             }
 
             LinearProgressIndicator(
-                progress = { progress.current.toFloat() / progress.total.coerceAtLeast(1) },
+                progress = { progressFraction },
                 modifier = Modifier.fillMaxWidth(),
                 color = indicatorColor
             )
@@ -787,22 +813,24 @@ private fun DatasetImportProgressCard(
                 color = MaterialTheme.colorScheme.primary
             )
 
-            diagnostics.forEach { line ->
-                Text(
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    text = line,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            if (expanded) {
+                diagnostics.forEach { line ->
+                    Text(
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text = line,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
-            if (queuedImportJobs.isNotEmpty()) {
-                Text(
-                    stringResource(R.string.dataset_import_queued_count, queuedImportJobs.size),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (queuedImportJobs.isNotEmpty()) {
+                    Text(
+                        stringResource(R.string.dataset_import_queued_count, queuedImportJobs.size),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -1877,11 +1905,12 @@ fun SettingsTab(
     var editingPromptType by remember { mutableStateOf<PromptType?>(null) }
     var editingPromptContent by remember { mutableStateOf("") }
     var projectName by remember(project) { mutableStateOf(project?.name ?: "") }
-    val currentUrl = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) serverUrl else ollamaUrl
-    val defaultUrl = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-        SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL
-    } else {
-        OllamaService.DEFAULT_URL
+    val normalizedBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
+    val currentUrl = if (SettingsRepository.usesOpenAiChatBackend(normalizedBackend)) serverUrl else ollamaUrl
+    val defaultUrl = when (normalizedBackend) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL
+        else -> OllamaService.DEFAULT_URL
     }
     val visibleOllamaModels = mergeDatasetOllamaModels(ollamaModel, availableOllamaModels)
 
@@ -1899,12 +1928,13 @@ fun SettingsTab(
                 )
             ).fetchMetadata()
                 .onSuccess { metadata ->
-                    if (backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
+                    if (SettingsRepository.requiresSelectedRemoteModel(metadata.backend)) {
                         availableOllamaModels = mergeDatasetOllamaModels(ollamaModel, metadata.availableModels)
-                        metadataMessage = context.getString(
-                            R.string.pdf_metadata_ollama_loaded,
-                            metadata.availableModels.size
-                        )
+                        metadataMessage = if (SettingsRepository.isLlamaSwapBackend(metadata.backend)) {
+                            context.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
+                        } else {
+                            context.getString(R.string.pdf_metadata_ollama_loaded, metadata.availableModels.size)
+                        }
                     } else {
                         llamaServerModelLabel = metadata.serverModelLabel
                         llamaServerContextLabel = metadata.serverContextLabel
@@ -1970,14 +2000,30 @@ fun SettingsTab(
                     ) {
                         DatasetBackendChoiceButton(
                             label = stringResource(R.string.pdf_backend_ollama),
-                            selected = backend == SettingsRepository.PDF_BACKEND_OLLAMA,
+                            selected = normalizedBackend == SettingsRepository.PDF_BACKEND_OLLAMA,
                             onClick = { backend = SettingsRepository.PDF_BACKEND_OLLAMA },
                             modifier = Modifier.weight(1f)
                         )
                         DatasetBackendChoiceButton(
                             label = stringResource(R.string.pdf_backend_llama_server),
-                            selected = backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
-                            onClick = { backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER },
+                            selected = normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
+                            onClick = {
+                                backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER
+                                if (serverUrl.isBlank() || serverUrl == SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL) {
+                                    serverUrl = SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        DatasetBackendChoiceButton(
+                            label = stringResource(R.string.pdf_backend_llama_swap),
+                            selected = normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
+                            onClick = {
+                                backend = SettingsRepository.PDF_BACKEND_LLAMA_SWAP
+                                if (serverUrl.isBlank() || serverUrl == SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL) {
+                                    serverUrl = SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL
+                                }
+                            },
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -1987,7 +2033,7 @@ fun SettingsTab(
                     OutlinedTextField(
                         value = currentUrl,
                         onValueChange = {
-                            if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+                            if (SettingsRepository.usesOpenAiChatBackend(normalizedBackend)) {
                                 serverUrl = it
                             } else {
                                 ollamaUrl = it
@@ -1995,10 +2041,10 @@ fun SettingsTab(
                         },
                         label = {
                             Text(
-                                if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                                    stringResource(R.string.pdf_llama_server_url_label)
-                                } else {
-                                    stringResource(R.string.pdf_ollama_url_label)
+                                when (normalizedBackend) {
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_llama_server_url_label)
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_llama_swap_url_label)
+                                    else -> stringResource(R.string.pdf_ollama_url_label)
                                 }
                             )
                         },
@@ -2041,9 +2087,15 @@ fun SettingsTab(
 
                     Spacer(Modifier.height(12.dp))
 
-                    if (backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
+                    if (SettingsRepository.requiresSelectedRemoteModel(normalizedBackend)) {
                         Text(
-                            stringResource(R.string.dataset_ollama_model_label),
+                            stringResource(
+                                if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
+                                    R.string.dataset_llama_swap_model_label
+                                } else {
+                                    R.string.dataset_ollama_model_label
+                                }
+                            ),
                             style = MaterialTheme.typography.labelLarge
                         )
                         Spacer(Modifier.height(6.dp))
@@ -2055,7 +2107,13 @@ fun SettingsTab(
                             ) {
                                 Text(
                                     text = ollamaModel.ifBlank {
-                                        context.getString(R.string.pdf_select_ollama_model)
+                                        context.getString(
+                                            if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
+                                                R.string.pdf_select_llama_swap_model
+                                            } else {
+                                                R.string.pdf_select_ollama_model
+                                            }
+                                        )
                                     },
                                     modifier = Modifier.weight(1f),
                                     maxLines = 1,
@@ -2087,34 +2145,36 @@ fun SettingsTab(
                             }
                         }
 
-                        Spacer(Modifier.height(12.dp))
+                        if (normalizedBackend == SettingsRepository.PDF_BACKEND_OLLAMA) {
+                            Spacer(Modifier.height(12.dp))
 
-                        IntSliderWithInput(
-                            value = ollamaNumCtx,
-                            onValueChange = { ollamaNumCtx = it },
-                            valueRange = 512..32768,
-                            label = stringResource(R.string.tama_chat_context_size_label)
-                        )
+                            IntSliderWithInput(
+                                value = ollamaNumCtx,
+                                onValueChange = { ollamaNumCtx = it },
+                                valueRange = 512..32768,
+                                label = stringResource(R.string.tama_chat_context_size_label)
+                            )
 
-                        IntSliderWithInput(
-                            value = ollamaThreads,
-                            onValueChange = { ollamaThreads = it },
-                            valueRange = 1..16,
-                            label = stringResource(R.string.ollama_threads_label, ollamaThreads)
-                        )
+                            IntSliderWithInput(
+                                value = ollamaThreads,
+                                onValueChange = { ollamaThreads = it },
+                                valueRange = 1..16,
+                                label = stringResource(R.string.ollama_threads_label, ollamaThreads)
+                            )
 
-                        Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(8.dp))
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(stringResource(R.string.ollama_mmap_label))
-                                Text(
-                                    stringResource(R.string.ollama_mmap_desc),
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(stringResource(R.string.ollama_mmap_label))
+                                    Text(
+                                        stringResource(R.string.ollama_mmap_desc),
+                                        fontSize = 11.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+                                Switch(checked = ollamaMmap, onCheckedChange = { ollamaMmap = it })
                             }
-                            Switch(checked = ollamaMmap, onCheckedChange = { ollamaMmap = it })
                         }
                     } else {
                         Text(

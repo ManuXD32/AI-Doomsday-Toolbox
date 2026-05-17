@@ -14,6 +14,7 @@ import com.example.llamadroid.tama.data.TamaStudyStatus
 import com.example.llamadroid.tama.db.TamaDao
 import com.example.llamadroid.tama.db.TamaEventEntity
 import com.example.llamadroid.tama.db.TamaStudySessionEntity
+import com.example.llamadroid.widget.TamaPetWidgetProvider
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -146,13 +147,14 @@ object TamaStudySessionSupport {
                     currentActivity = ActivityType.NONE,
                     currentWorkJobId = null,
                     activityStartTime = null,
-                    educationLevel = (pet.educationLevel + education).coerceAtMost(100f)
+                    educationLevel = pet.educationLevel + education
                 ),
                 pausedDurationMs
             )
             val finalSession = session.copy(educationAwarded = education, lastUpdatedAt = now)
             dao.saveStudySession(finalSession)
             dao.savePet(PetMapper.toEntity(finalPet))
+            TamaPetWidgetProvider.refreshAll(context.applicationContext)
             dao.saveEvent(studyEvent(context, finalPet, finalSession, completedAt, completed = true))
             if (showNotification) {
                 UnifiedNotificationManager.showTamaStudyNotification(
@@ -216,12 +218,13 @@ object TamaStudySessionSupport {
                 currentActivity = ActivityType.NONE,
                 currentWorkJobId = null,
                 activityStartTime = null,
-                educationLevel = (pet.educationLevel + education).coerceAtMost(100f)
+                educationLevel = pet.educationLevel + education
             ),
             pausedDurationMs
         )
         dao.saveStudySession(session)
         dao.savePet(PetMapper.toEntity(updatedPet))
+        TamaPetWidgetProvider.refreshAll(context.applicationContext)
         dao.saveEvent(studyEvent(context, updatedPet, session, now, completed = false))
         return StudySessionResult(
             pet = updatedPet,

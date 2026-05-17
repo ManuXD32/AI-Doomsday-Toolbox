@@ -203,8 +203,12 @@ class OnnxTxt2ImgPipeline {
                     val outputFile = File(config.outputPath)
                     outputFile.parentFile?.mkdirs()
                     onProgress(0.985f, "Saving PNG")
-                    FileOutputStream(outputFile).use { output ->
-                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                    try {
+                        FileOutputStream(outputFile).use { output ->
+                            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                        }
+                    } finally {
+                        bitmap.recycle()
                     }
                     currentCoroutineContext().ensureActive()
                     onProgress(1f, "Complete")

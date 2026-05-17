@@ -18,7 +18,9 @@ data class RemoteSummarySettingsSnapshot(
     val backend: String,
     val ollamaUrl: String,
     val llamaServerUrl: String,
+    val llamaSwapUrl: String,
     val ollamaModel: String?,
+    val llamaSwapModel: String?,
     val thinkingEnabled: Boolean,
     val llamaServerModelLabel: String?,
     val llamaServerContextTokens: Int,
@@ -32,6 +34,13 @@ data class RemoteSummarySettingsSnapshot(
     val targetLanguage: String,
     val summaryPrompt: String?,
     val mergePrompt: String?
+)
+
+data class PdfTranslationOptionsSnapshot(
+    val usePageScreenshotContext: Boolean,
+    val screenshotMaxSide: Int,
+    val screenshotJpegQuality: Int,
+    val textOnlyFallbackEnabled: Boolean
 )
 
 class SettingsRepository(private val context: Context) {
@@ -64,6 +73,7 @@ class SettingsRepository(private val context: Context) {
         private val defaultMergePrompt: String?,
         private val defaultOllamaUrl: String = AIConstants.Urls.OLLAMA_DEFAULT,
         private val defaultLlamaServerUrl: String = PDF_LLAMA_SERVER_DEFAULT_URL,
+        private val defaultLlamaSwapUrl: String = PDF_LLAMA_SWAP_DEFAULT_URL,
         private val fallbackChunkContextKey: String? = null,
         private val fallbackChunkMaxTokensKey: String? = null,
         private val fallbackTemperatureKey: String? = null,
@@ -71,7 +81,8 @@ class SettingsRepository(private val context: Context) {
         private val fallbackThinkingEnabledKey: String? = null,
         private val fallbackSummaryPromptKey: String? = null,
         private val fallbackMergePromptKey: String? = null,
-        private val fallbackTargetLanguageKey: String? = null
+        private val fallbackTargetLanguageKey: String? = null,
+        private val defaultTargetLanguage: String = DEFAULT_SUMMARY_TARGET_LANGUAGE
     ) {
         private fun stringFlow(suffix: String, default: String? = null, fallbackKey: String? = null): MutableStateFlow<String?> {
             val key = "${keyPrefix}_$suffix"
@@ -183,11 +194,27 @@ class SettingsRepository(private val context: Context) {
             _llamaServerUrl.value = value
         }
 
+        private val _llamaSwapUrl = stringFlow("llama_swap_url", defaultLlamaSwapUrl).let {
+            MutableStateFlow(it.value ?: defaultLlamaSwapUrl)
+        }
+        val llamaSwapUrl = _llamaSwapUrl.asStateFlow()
+        fun setLlamaSwapUrl(value: String) {
+            putStringValue("llama_swap_url", value)
+            _llamaSwapUrl.value = value
+        }
+
         private val _ollamaModel = stringFlow("ollama_model")
         val ollamaModel = _ollamaModel.asStateFlow()
         fun setOllamaModel(value: String?) {
             putStringValue("ollama_model", value)
             _ollamaModel.value = value
+        }
+
+        private val _llamaSwapModel = stringFlow("llama_swap_model")
+        val llamaSwapModel = _llamaSwapModel.asStateFlow()
+        fun setLlamaSwapModel(value: String?) {
+            putStringValue("llama_swap_model", value)
+            _llamaSwapModel.value = value
         }
 
         private val _thinkingEnabled = boolFlow("thinking_enabled", false, fallbackThinkingEnabledKey)
@@ -298,12 +325,12 @@ class SettingsRepository(private val context: Context) {
 
         private val _targetLanguage = stringFlow(
             suffix = "target_language",
-            default = DEFAULT_SUMMARY_TARGET_LANGUAGE,
+            default = defaultTargetLanguage,
             fallbackKey = fallbackTargetLanguageKey
-        ).let { MutableStateFlow((it.value ?: DEFAULT_SUMMARY_TARGET_LANGUAGE).ifBlank { DEFAULT_SUMMARY_TARGET_LANGUAGE }) }
+        ).let { MutableStateFlow((it.value ?: defaultTargetLanguage).ifBlank { defaultTargetLanguage }) }
         val targetLanguage = _targetLanguage.asStateFlow()
         fun setTargetLanguage(value: String) {
-            val normalized = value.ifBlank { DEFAULT_SUMMARY_TARGET_LANGUAGE }
+            val normalized = value.ifBlank { defaultTargetLanguage }
             putStringValue("target_language", normalized)
             _targetLanguage.value = normalized
         }
@@ -327,7 +354,9 @@ class SettingsRepository(private val context: Context) {
                 backend = backend.value,
                 ollamaUrl = ollamaUrl.value,
                 llamaServerUrl = llamaServerUrl.value,
+                llamaSwapUrl = llamaSwapUrl.value,
                 ollamaModel = ollamaModel.value,
+                llamaSwapModel = llamaSwapModel.value,
                 thinkingEnabled = thinkingEnabled.value,
                 llamaServerModelLabel = llamaServerModelLabel.value,
                 llamaServerContextTokens = llamaServerContextTokens.value,
@@ -361,6 +390,148 @@ class SettingsRepository(private val context: Context) {
     fun setSelectedEmbeddingModelPath(path: String?) {
         prefs.edit().putString("selected_embedding_model_path", path).apply()
         _selectedEmbeddingModelPath.value = path
+    }
+
+    private val _knowledgeBaseChunkSize = MutableStateFlow(
+        normalizeKnowledgeBaseChunkSize(
+            prefs.getInt("knowledge_base_chunk_size", KB_DEFAULT_CHUNK_SIZE)
+        )
+    )
+    val knowledgeBaseChunkSize = _knowledgeBaseChunkSize.asStateFlow()
+
+    fun setKnowledgeBaseChunkSize(size: Int) {
+        val normalized = normalizeKnowledgeBaseChunkSize(size)
+        prefs.edit().putInt("knowledge_base_chunk_size", normalized).apply()
+        _knowledgeBaseChunkSize.value = normalized
+    }
+
+    private val _knowledgeEmbeddingBatchSize = MutableStateFlow(
+        normalizeKnowledgeEmbeddingBatchSize(
+            prefs.getInt(
+                "knowledge_embedding_batch_size",
+                knowledgeEmbeddingBatchSizeForChunkSize(_knowledgeBaseChunkSize.value)
+            )
+        )
+    )
+    val knowledgeEmbeddingBatchSize = _knowledgeEmbeddingBatchSize.asStateFlow()
+
+    fun setKnowledgeEmbeddingBatchSize(size: Int) {
+        val normalized = normalizeKnowledgeEmbeddingBatchSize(size)
+        prefs.edit().putInt("knowledge_embedding_batch_size", normalized).apply()
+        _knowledgeEmbeddingBatchSize.value = normalized
+    }
+
+    private val _knowledgeEmbeddingThreads = MutableStateFlow(
+        normalizeKnowledgeEmbeddingThreads(
+            prefs.getInt("knowledge_embedding_threads", KB_DEFAULT_EMBED_THREADS)
+        )
+    )
+    val knowledgeEmbeddingThreads = _knowledgeEmbeddingThreads.asStateFlow()
+
+    fun setKnowledgeEmbeddingThreads(count: Int) {
+        val normalized = normalizeKnowledgeEmbeddingThreads(count)
+        prefs.edit().putInt("knowledge_embedding_threads", normalized).apply()
+        _knowledgeEmbeddingThreads.value = normalized
+    }
+
+    private val _knowledgeEmbeddingNetworkVisible = MutableStateFlow(
+        prefs.getBoolean("knowledge_embedding_network_visible", false)
+    )
+    val knowledgeEmbeddingNetworkVisible = _knowledgeEmbeddingNetworkVisible.asStateFlow()
+
+    fun setKnowledgeEmbeddingNetworkVisible(enabled: Boolean) {
+        prefs.edit().putBoolean("knowledge_embedding_network_visible", enabled).apply()
+        _knowledgeEmbeddingNetworkVisible.value = enabled
+    }
+
+    private val _knowledgeEmbeddingBackend = MutableStateFlow(
+        normalizeKnowledgeEmbeddingBackend(
+            prefs.getString("knowledge_embedding_backend", KB_EMBED_BACKEND_LOCAL)
+        )
+    )
+    val knowledgeEmbeddingBackend = _knowledgeEmbeddingBackend.asStateFlow()
+
+    fun setKnowledgeEmbeddingBackend(backend: String) {
+        val normalized = normalizeKnowledgeEmbeddingBackend(backend)
+        prefs.edit().putString("knowledge_embedding_backend", normalized).apply()
+        _knowledgeEmbeddingBackend.value = normalized
+    }
+
+    private val _knowledgeEmbeddingLlamaServerUrl = MutableStateFlow(
+        prefs.getString("knowledge_embedding_llama_server_url", "http://127.0.0.1:8081")
+            ?: "http://127.0.0.1:8081"
+    )
+    val knowledgeEmbeddingLlamaServerUrl = _knowledgeEmbeddingLlamaServerUrl.asStateFlow()
+
+    fun setKnowledgeEmbeddingLlamaServerUrl(url: String) {
+        prefs.edit().putString("knowledge_embedding_llama_server_url", url).apply()
+        _knowledgeEmbeddingLlamaServerUrl.value = url
+    }
+
+    private val _knowledgeEmbeddingOllamaUrl = MutableStateFlow(
+        prefs.getString("knowledge_embedding_ollama_url", AIConstants.Urls.OLLAMA_DEFAULT)
+            ?: AIConstants.Urls.OLLAMA_DEFAULT
+    )
+    val knowledgeEmbeddingOllamaUrl = _knowledgeEmbeddingOllamaUrl.asStateFlow()
+
+    fun setKnowledgeEmbeddingOllamaUrl(url: String) {
+        prefs.edit().putString("knowledge_embedding_ollama_url", url).apply()
+        _knowledgeEmbeddingOllamaUrl.value = url
+    }
+
+    private val _knowledgeEmbeddingOllamaModel = MutableStateFlow(
+        prefs.getString("knowledge_embedding_ollama_model", null)
+    )
+    val knowledgeEmbeddingOllamaModel = _knowledgeEmbeddingOllamaModel.asStateFlow()
+
+    fun setKnowledgeEmbeddingOllamaModel(model: String?) {
+        prefs.edit().putString("knowledge_embedding_ollama_model", model).apply()
+        _knowledgeEmbeddingOllamaModel.value = model
+    }
+
+    private val _knowledgeEmbeddingLlamaSwapUrl = MutableStateFlow(
+        prefs.getString("knowledge_embedding_llama_swap_url", PDF_LLAMA_SWAP_DEFAULT_URL)
+            ?: PDF_LLAMA_SWAP_DEFAULT_URL
+    )
+    val knowledgeEmbeddingLlamaSwapUrl = _knowledgeEmbeddingLlamaSwapUrl.asStateFlow()
+
+    fun setKnowledgeEmbeddingLlamaSwapUrl(url: String) {
+        prefs.edit().putString("knowledge_embedding_llama_swap_url", url).apply()
+        _knowledgeEmbeddingLlamaSwapUrl.value = url
+    }
+
+    private val _knowledgeEmbeddingLlamaSwapModel = MutableStateFlow(
+        prefs.getString("knowledge_embedding_llama_swap_model", null)
+    )
+    val knowledgeEmbeddingLlamaSwapModel = _knowledgeEmbeddingLlamaSwapModel.asStateFlow()
+
+    fun setKnowledgeEmbeddingLlamaSwapModel(model: String?) {
+        prefs.edit().putString("knowledge_embedding_llama_swap_model", model).apply()
+        _knowledgeEmbeddingLlamaSwapModel.value = model
+    }
+
+    private val _llmAccelerationMode = MutableStateFlow(
+        normalizeAccelerationMode(prefs.getString("llm_acceleration_mode", ACCELERATION_AUTO))
+    )
+    val llmAccelerationMode = _llmAccelerationMode.asStateFlow()
+
+    fun setLlmAccelerationMode(mode: String) {
+        val normalized = normalizeAccelerationMode(mode)
+        prefs.edit().putString("llm_acceleration_mode", normalized).apply()
+        _llmAccelerationMode.value = normalized
+    }
+
+    private val _stableDiffusionAccelerationMode = MutableStateFlow(
+        normalizeStableDiffusionAccelerationMode(
+            prefs.getString("stable_diffusion_acceleration_mode", ACCELERATION_AUTO)
+        )
+    )
+    val stableDiffusionAccelerationMode = _stableDiffusionAccelerationMode.asStateFlow()
+
+    fun setStableDiffusionAccelerationMode(mode: String) {
+        val normalized = normalizeStableDiffusionAccelerationMode(mode)
+        prefs.edit().putString("stable_diffusion_acceleration_mode", normalized).apply()
+        _stableDiffusionAccelerationMode.value = normalized
     }
     
     // Context Size
@@ -408,7 +579,7 @@ class SettingsRepository(private val context: Context) {
         _commandAutoAccept.value = enabled
     }
     
-    // Agent backend: "ollama" or "llama-server"
+    // Agent backend: "ollama", "llama-server", or "llama-swap"
     private val _agentBackend = MutableStateFlow(normalizeOllamaOrLlamaBackend(prefs.getString("agent_backend", PDF_BACKEND_OLLAMA)))
     val agentBackend = _agentBackend.asStateFlow()
     fun setAgentBackend(backend: String) {
@@ -423,6 +594,16 @@ class SettingsRepository(private val context: Context) {
     fun setLlamaServerUrl(url: String) {
         prefs.edit().putString("llama_server_url", url).apply()
         _llamaServerUrl.value = url
+    }
+
+    // llama-swap URL (used when backend is "llama-swap")
+    private val _agentLlamaSwapUrl = MutableStateFlow(
+        prefs.getString("agent_llama_swap_url", PDF_LLAMA_SWAP_DEFAULT_URL) ?: PDF_LLAMA_SWAP_DEFAULT_URL
+    )
+    val agentLlamaSwapUrl = _agentLlamaSwapUrl.asStateFlow()
+    fun setAgentLlamaSwapUrl(url: String) {
+        prefs.edit().putString("agent_llama_swap_url", url).apply()
+        _agentLlamaSwapUrl.value = url
     }
 
     // Last known llama-server metadata for the agent runtime UI
@@ -500,6 +681,64 @@ class SettingsRepository(private val context: Context) {
     fun setOutputFolderUri(uri: String?) {
         prefs.edit().putString("output_folder_uri", uri).apply()
         _outputFolderUri.value = uri
+    }
+
+    // Quadtrix WebUI/worker workspace. The URI is the SAF permission source; the
+    // direct path is used as the native process working directory when Android
+    // can resolve it.
+    private val _quadtrixWorkspaceUri = MutableStateFlow(prefs.getString("quadtrix_workspace_uri", null))
+    val quadtrixWorkspaceUri = _quadtrixWorkspaceUri.asStateFlow()
+
+    private val _quadtrixWorkspacePath = MutableStateFlow(prefs.getString("quadtrix_workspace_path", null))
+    val quadtrixWorkspacePath = _quadtrixWorkspacePath.asStateFlow()
+
+    fun setQuadtrixWorkspace(uri: String?, directPath: String?) {
+        prefs.edit().apply {
+            if (uri.isNullOrBlank()) remove("quadtrix_workspace_uri") else putString("quadtrix_workspace_uri", uri)
+            if (directPath.isNullOrBlank()) remove("quadtrix_workspace_path") else putString("quadtrix_workspace_path", directPath)
+        }.apply()
+        _quadtrixWorkspaceUri.value = uri
+        _quadtrixWorkspacePath.value = directPath
+    }
+
+    private val _quadtrixWebHost = MutableStateFlow(prefs.getString("quadtrix_web_host", "127.0.0.1") ?: "127.0.0.1")
+    val quadtrixWebHost = _quadtrixWebHost.asStateFlow()
+
+    private val _quadtrixWebPort = MutableStateFlow(prefs.getInt("quadtrix_web_port", 8080))
+    val quadtrixWebPort = _quadtrixWebPort.asStateFlow()
+
+    fun setQuadtrixWebEndpoint(host: String, port: Int) {
+        prefs.edit()
+            .putString("quadtrix_web_host", host)
+            .putInt("quadtrix_web_port", port)
+            .apply()
+        _quadtrixWebHost.value = host
+        _quadtrixWebPort.value = port
+    }
+
+    private val _quadtrixWorkerHost = MutableStateFlow(prefs.getString("quadtrix_worker_host", "0.0.0.0") ?: "0.0.0.0")
+    val quadtrixWorkerHost = _quadtrixWorkerHost.asStateFlow()
+
+    private val _quadtrixWorkerPort = MutableStateFlow(prefs.getInt("quadtrix_worker_port", 9091))
+    val quadtrixWorkerPort = _quadtrixWorkerPort.asStateFlow()
+
+    private val _quadtrixWorkerToken = MutableStateFlow(prefs.getString("quadtrix_worker_token", "") ?: "")
+    val quadtrixWorkerToken = _quadtrixWorkerToken.asStateFlow()
+
+    private val _quadtrixWorkerThreads = MutableStateFlow(prefs.getInt("quadtrix_worker_threads", 4))
+    val quadtrixWorkerThreads = _quadtrixWorkerThreads.asStateFlow()
+
+    fun setQuadtrixWorkerEndpoint(host: String, port: Int, token: String, threads: Int) {
+        prefs.edit()
+            .putString("quadtrix_worker_host", host)
+            .putInt("quadtrix_worker_port", port)
+            .putString("quadtrix_worker_token", token)
+            .putInt("quadtrix_worker_threads", threads)
+            .apply()
+        _quadtrixWorkerHost.value = host
+        _quadtrixWorkerPort.value = port
+        _quadtrixWorkerToken.value = token
+        _quadtrixWorkerThreads.value = threads
     }
 
     private val _onnxCatalogProvider = MutableStateFlow(
@@ -815,8 +1054,14 @@ class SettingsRepository(private val context: Context) {
     val pdfSummaryLlamaServerUrl = pdfSummarySettings.llamaServerUrl
     fun setPdfSummaryLlamaServerUrl(url: String) = pdfSummarySettings.setLlamaServerUrl(url)
 
+    val pdfSummaryLlamaSwapUrl = pdfSummarySettings.llamaSwapUrl
+    fun setPdfSummaryLlamaSwapUrl(url: String) = pdfSummarySettings.setLlamaSwapUrl(url)
+
     val pdfSummaryOllamaModel = pdfSummarySettings.ollamaModel
     fun setPdfSummaryOllamaModel(model: String?) = pdfSummarySettings.setOllamaModel(model)
+
+    val pdfSummaryLlamaSwapModel = pdfSummarySettings.llamaSwapModel
+    fun setPdfSummaryLlamaSwapModel(model: String?) = pdfSummarySettings.setLlamaSwapModel(model)
 
     val pdfSummaryThinkingEnabled = pdfSummarySettings.thinkingEnabled
     fun setPdfSummaryThinkingEnabled(enabled: Boolean) = pdfSummarySettings.setThinkingEnabled(enabled)
@@ -873,6 +1118,118 @@ class SettingsRepository(private val context: Context) {
 
     val pdfSummaryTargetLanguage = pdfSummarySettings.targetLanguage
     fun setPdfSummaryTargetLanguage(value: String) = pdfSummarySettings.setTargetLanguage(value)
+
+    private fun defaultPdfTranslationLanguage(): String {
+        return com.example.llamadroid.service.PDFTranslationLogic.defaultTranslationLanguageForAppLanguage(
+            prefs.getString("selected_language", "system")
+        )
+    }
+
+    val pdfTranslationSettings = RemoteSummarySettingsGroup(
+        keyPrefix = "pdf_translation",
+        defaultSummaryPrompt = com.example.llamadroid.service.PDFTranslationLogic.DEFAULT_PAGE_TRANSLATION_SYSTEM_PROMPT,
+        defaultMergePrompt = null,
+        defaultLlamaServerUrl = PDF_LLAMA_SERVER_DEFAULT_URL,
+        fallbackChunkContextKey = "pdf_context_size",
+        fallbackChunkMaxTokensKey = "pdf_max_tokens",
+        fallbackTemperatureKey = "pdf_temperature",
+        fallbackTimeoutKey = "pdf_summary_timeout_minutes",
+        defaultTargetLanguage = defaultPdfTranslationLanguage()
+    )
+
+    val pdfTranslationBackend = pdfTranslationSettings.backend
+    fun setPdfTranslationBackend(backend: String) = pdfTranslationSettings.setBackend(backend)
+
+    val pdfTranslationOllamaUrl = pdfTranslationSettings.ollamaUrl
+    fun setPdfTranslationOllamaUrl(url: String) = pdfTranslationSettings.setOllamaUrl(url)
+
+    val pdfTranslationLlamaServerUrl = pdfTranslationSettings.llamaServerUrl
+    fun setPdfTranslationLlamaServerUrl(url: String) = pdfTranslationSettings.setLlamaServerUrl(url)
+
+    val pdfTranslationLlamaSwapUrl = pdfTranslationSettings.llamaSwapUrl
+    fun setPdfTranslationLlamaSwapUrl(url: String) = pdfTranslationSettings.setLlamaSwapUrl(url)
+
+    val pdfTranslationOllamaModel = pdfTranslationSettings.ollamaModel
+    fun setPdfTranslationOllamaModel(model: String?) = pdfTranslationSettings.setOllamaModel(model)
+
+    val pdfTranslationLlamaSwapModel = pdfTranslationSettings.llamaSwapModel
+    fun setPdfTranslationLlamaSwapModel(model: String?) = pdfTranslationSettings.setLlamaSwapModel(model)
+
+    val pdfTranslationLlamaServerModelLabel = pdfTranslationSettings.llamaServerModelLabel
+    fun setPdfTranslationLlamaServerModelLabel(label: String?) = pdfTranslationSettings.setLlamaServerModelLabel(label)
+
+    val pdfTranslationLlamaServerContextTokens = pdfTranslationSettings.llamaServerContextTokens
+    fun setPdfTranslationLlamaServerContextTokens(tokens: Int?) = pdfTranslationSettings.setLlamaServerContextTokens(tokens)
+
+    val pdfTranslationLlamaServerContextLabel = pdfTranslationSettings.llamaServerContextLabel
+    fun setPdfTranslationLlamaServerContextLabel(label: String?) = pdfTranslationSettings.setLlamaServerContextLabel(label)
+
+    val pdfTranslationContextSize = pdfTranslationSettings.chunkContext
+    fun setPdfTranslationContextSize(size: Int) = pdfTranslationSettings.setChunkContext(size)
+
+    val pdfTranslationMaxTokens = pdfTranslationSettings.chunkMaxTokens
+    fun setPdfTranslationMaxTokens(tokens: Int) = pdfTranslationSettings.setChunkMaxTokens(tokens)
+
+    val pdfTranslationTemperature = pdfTranslationSettings.temperature
+    fun setPdfTranslationTemperature(temp: Float) = pdfTranslationSettings.setTemperature(temp)
+
+    val pdfTranslationTimeoutMinutes = pdfTranslationSettings.timeoutMinutes
+    fun setPdfTranslationTimeoutMinutes(minutes: Int) = pdfTranslationSettings.setTimeoutMinutes(minutes)
+
+    val pdfTranslationTargetLanguage = pdfTranslationSettings.targetLanguage
+    fun setPdfTranslationTargetLanguage(value: String) = pdfTranslationSettings.setTargetLanguage(
+        value.trim().ifBlank { defaultPdfTranslationLanguage() }
+    )
+
+    val pdfTranslationPrompt = pdfTranslationSettings.summaryPrompt
+    fun setPdfTranslationPrompt(prompt: String?) = pdfTranslationSettings.setSummaryPrompt(prompt)
+
+    private val _pdfTranslationScreenshotContext = MutableStateFlow(
+        prefs.getBoolean("pdf_translation_screenshot_context", true)
+    )
+    val pdfTranslationScreenshotContext = _pdfTranslationScreenshotContext.asStateFlow()
+    fun setPdfTranslationScreenshotContext(enabled: Boolean) {
+        prefs.edit().putBoolean("pdf_translation_screenshot_context", enabled).apply()
+        _pdfTranslationScreenshotContext.value = enabled
+    }
+
+    private val _pdfTranslationScreenshotMaxSide = MutableStateFlow(
+        prefs.getInt("pdf_translation_screenshot_max_side", 1400).coerceIn(480, 2400)
+    )
+    val pdfTranslationScreenshotMaxSide = _pdfTranslationScreenshotMaxSide.asStateFlow()
+    fun setPdfTranslationScreenshotMaxSide(value: Int) {
+        val normalized = value.coerceIn(480, 2400)
+        prefs.edit().putInt("pdf_translation_screenshot_max_side", normalized).apply()
+        _pdfTranslationScreenshotMaxSide.value = normalized
+    }
+
+    private val _pdfTranslationScreenshotJpegQuality = MutableStateFlow(
+        prefs.getInt("pdf_translation_screenshot_jpeg_quality", 82).coerceIn(40, 95)
+    )
+    val pdfTranslationScreenshotJpegQuality = _pdfTranslationScreenshotJpegQuality.asStateFlow()
+    fun setPdfTranslationScreenshotJpegQuality(value: Int) {
+        val normalized = value.coerceIn(40, 95)
+        prefs.edit().putInt("pdf_translation_screenshot_jpeg_quality", normalized).apply()
+        _pdfTranslationScreenshotJpegQuality.value = normalized
+    }
+
+    private val _pdfTranslationTextFallback = MutableStateFlow(
+        prefs.getBoolean("pdf_translation_text_fallback", true)
+    )
+    val pdfTranslationTextFallback = _pdfTranslationTextFallback.asStateFlow()
+    fun setPdfTranslationTextFallback(enabled: Boolean) {
+        prefs.edit().putBoolean("pdf_translation_text_fallback", enabled).apply()
+        _pdfTranslationTextFallback.value = enabled
+    }
+
+    fun pdfTranslationOptionsSnapshot(): PdfTranslationOptionsSnapshot {
+        return PdfTranslationOptionsSnapshot(
+            usePageScreenshotContext = pdfTranslationScreenshotContext.value,
+            screenshotMaxSide = pdfTranslationScreenshotMaxSide.value,
+            screenshotJpegQuality = pdfTranslationScreenshotJpegQuality.value,
+            textOnlyFallbackEnabled = pdfTranslationTextFallback.value
+        )
+    }
     
     // PDF Summary system prompt (for summarizing each chunk)
     val pdfSummaryPrompt = pdfSummarySettings.summaryPrompt
@@ -898,6 +1255,9 @@ class SettingsRepository(private val context: Context) {
     fun setSelectedLanguage(lang: String) {
         prefs.edit().putString("selected_language", lang).apply()
         _selectedLanguage.value = lang
+        if (!prefs.contains("pdf_translation_target_language")) {
+            pdfTranslationSettings.setTargetLanguage(defaultPdfTranslationLanguage())
+        }
     }
     
     // External Model Storage URI (SAF)
@@ -999,6 +1359,22 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putFloat("draft_p_min", pMin).apply()
         _draftPMin.value = pMin
     }
+
+    // Enable embedded MTP decoding for llama.cpp models with MTP heads
+    private val _mtpDecodingEnabled = MutableStateFlow(prefs.getBoolean("mtp_decoding_enabled", false))
+    val mtpDecodingEnabled = _mtpDecodingEnabled.asStateFlow()
+    fun setMtpDecodingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("mtp_decoding_enabled", enabled).apply()
+        _mtpDecodingEnabled.value = enabled
+    }
+
+    private val _mtpDraftMaxTokens = MutableStateFlow(prefs.getInt("mtp_draft_max_tokens", 3).coerceIn(1, 16))
+    val mtpDraftMaxTokens = _mtpDraftMaxTokens.asStateFlow()
+    fun setMtpDraftMaxTokens(max: Int) {
+        val normalized = max.coerceIn(1, 16)
+        prefs.edit().putInt("mtp_draft_max_tokens", normalized).apply()
+        _mtpDraftMaxTokens.value = normalized
+    }
     
     // Flash Attention global flag
     private val _flashAttentionEnabled = MutableStateFlow(prefs.getBoolean("flash_attention_enabled", false))
@@ -1008,7 +1384,7 @@ class SettingsRepository(private val context: Context) {
         _flashAttentionEnabled.value = enabled
     }
     
-    // PDF AI (llama-cli) KV Cache settings
+    // PDF AI remote summary KV Cache settings
     private val _pdfKvCacheEnabled = MutableStateFlow(prefs.getBoolean("pdf_kv_cache_enabled", false))
     val pdfKvCacheEnabled = _pdfKvCacheEnabled.asStateFlow()
     fun setPdfKvCacheEnabled(enabled: Boolean) {
@@ -1030,7 +1406,7 @@ class SettingsRepository(private val context: Context) {
         _pdfKvCacheTypeV.value = type
     }
     
-    // Video Sumup (llama-cli) KV Cache settings
+    // Video Sumup remote summary KV Cache settings
     private val _videoKvCacheEnabled = MutableStateFlow(prefs.getBoolean("video_kv_cache_enabled", false))
     val videoKvCacheEnabled = _videoKvCacheEnabled.asStateFlow()
     fun setVideoKvCacheEnabled(enabled: Boolean) {
@@ -1192,8 +1568,14 @@ class SettingsRepository(private val context: Context) {
     val videoSummaryLlamaServerUrl = videoSummarySettings.llamaServerUrl
     fun setVideoSummaryLlamaServerUrl(url: String) = videoSummarySettings.setLlamaServerUrl(url)
 
+    val videoSummaryLlamaSwapUrl = videoSummarySettings.llamaSwapUrl
+    fun setVideoSummaryLlamaSwapUrl(url: String) = videoSummarySettings.setLlamaSwapUrl(url)
+
     val videoSummaryOllamaModel = videoSummarySettings.ollamaModel
     fun setVideoSummaryOllamaModel(model: String?) = videoSummarySettings.setOllamaModel(model)
+
+    val videoSummaryLlamaSwapModel = videoSummarySettings.llamaSwapModel
+    fun setVideoSummaryLlamaSwapModel(model: String?) = videoSummarySettings.setLlamaSwapModel(model)
 
     val videoSummaryThinkingEnabled = videoSummarySettings.thinkingEnabled
     fun setVideoSummaryThinkingEnabled(enabled: Boolean) = videoSummarySettings.setThinkingEnabled(enabled)
@@ -1313,8 +1695,14 @@ class SettingsRepository(private val context: Context) {
     val workflowSummaryLlamaServerUrl = workflowSummarySettings.llamaServerUrl
     fun setWorkflowSummaryLlamaServerUrl(url: String) = workflowSummarySettings.setLlamaServerUrl(url)
 
+    val workflowSummaryLlamaSwapUrl = workflowSummarySettings.llamaSwapUrl
+    fun setWorkflowSummaryLlamaSwapUrl(url: String) = workflowSummarySettings.setLlamaSwapUrl(url)
+
     val workflowSummaryOllamaModel = workflowSummarySettings.ollamaModel
     fun setWorkflowSummaryOllamaModel(model: String?) = workflowSummarySettings.setOllamaModel(model)
+
+    val workflowSummaryLlamaSwapModel = workflowSummarySettings.llamaSwapModel
+    fun setWorkflowSummaryLlamaSwapModel(model: String?) = workflowSummarySettings.setLlamaSwapModel(model)
 
     val workflowSummaryThinkingEnabled = workflowSummarySettings.thinkingEnabled
     fun setWorkflowSummaryThinkingEnabled(enabled: Boolean) = workflowSummarySettings.setThinkingEnabled(enabled)
@@ -2041,7 +2429,60 @@ class SettingsRepository(private val context: Context) {
     companion object {
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"
+        const val PDF_BACKEND_LLAMA_SWAP = "llama-swap"
+        const val KB_EMBED_BACKEND_LOCAL = "local-llama"
+        const val KB_EMBED_BACKEND_LLAMA_SERVER = "llama-server"
+        const val KB_EMBED_BACKEND_OLLAMA = "ollama"
+        const val KB_EMBED_BACKEND_LLAMA_SWAP = "llama-swap"
         const val PDF_LLAMA_SERVER_DEFAULT_URL = "http://localhost:8080"
+        const val PDF_LLAMA_SWAP_DEFAULT_URL = "http://localhost:9292"
+        const val KB_DEFAULT_CHUNK_SIZE = 1_000
+        val KB_CHUNK_SIZE_RANGE: IntRange = 400..3_200
+        const val KB_DEFAULT_EMBED_BATCH_SIZE = 1_024
+        val KB_EMBED_BATCH_SIZE_RANGE: IntRange = 512..4_096
+        const val KB_DEFAULT_EMBED_THREADS = 4
+        val KB_EMBED_THREADS_RANGE: IntRange = 1..16
+        const val ACCELERATION_AUTO = "auto"
+        const val ACCELERATION_CPU = "cpu"
+        const val ACCELERATION_GPU = "gpu"
+        const val ACCELERATION_NPU = "npu"
+
+        fun normalizeKnowledgeBaseChunkSize(size: Int): Int =
+            size.coerceIn(KB_CHUNK_SIZE_RANGE)
+
+        fun normalizeKnowledgeEmbeddingBatchSize(size: Int): Int =
+            size.coerceIn(KB_EMBED_BATCH_SIZE_RANGE)
+
+        fun normalizeKnowledgeEmbeddingThreads(count: Int): Int =
+            count.coerceIn(KB_EMBED_THREADS_RANGE)
+
+        fun knowledgeEmbeddingBatchSizeForChunkSize(chunkSize: Int): Int {
+            val normalized = normalizeKnowledgeBaseChunkSize(chunkSize)
+            val estimatedTokens = (normalized / 1.5f).toInt() + 64
+            val target = estimatedTokens.coerceAtLeast(KB_EMBED_BATCH_SIZE_RANGE.first)
+            return when {
+                target <= 512 -> 512
+                target <= 1_024 -> 1_024
+                target <= 2_048 -> 2_048
+                else -> KB_EMBED_BATCH_SIZE_RANGE.last
+            }
+        }
+
+        fun knowledgeEmbeddingContextSizeForChunkSize(chunkSize: Int): Int =
+            knowledgeEmbeddingBatchSizeForChunkSize(chunkSize)
+                .coerceAtLeast(2_048)
+                .coerceAtMost(4_096)
+
+        fun knowledgeEmbeddingTokenBudgetForChunkSize(chunkSize: Int): Int =
+            (knowledgeEmbeddingBatchSizeForChunkSize(chunkSize) - 32).coerceAtLeast(256)
+
+        fun knowledgeEmbeddingContextSizeForBatchSize(batchSize: Int): Int =
+            normalizeKnowledgeEmbeddingBatchSize(batchSize)
+                .coerceAtLeast(2_048)
+                .coerceAtMost(4_096)
+
+        fun knowledgeEmbeddingTokenBudgetForBatchSize(batchSize: Int): Int =
+            (normalizeKnowledgeEmbeddingBatchSize(batchSize) - 32).coerceAtLeast(256)
 
         fun normalizeOllamaOrLlamaBackend(backend: String?): String {
             val normalized = backend
@@ -2055,12 +2496,80 @@ class SettingsRepository(private val context: Context) {
                 "llama.cpp",
                 "llama-cpp",
                 "llamacpp" -> PDF_BACKEND_LLAMA_SERVER
+                PDF_BACKEND_LLAMA_SWAP,
+                "llamaswap" -> PDF_BACKEND_LLAMA_SWAP
                 else -> PDF_BACKEND_OLLAMA
             }
         }
 
+        fun normalizeKnowledgeEmbeddingBackend(backend: String?): String {
+            val normalized = backend
+                ?.trim()
+                ?.lowercase(Locale.US)
+                ?.replace('_', '-')
+                ?: return KB_EMBED_BACKEND_LOCAL
+
+            return when (normalized) {
+                KB_EMBED_BACKEND_LOCAL,
+                "local",
+                "managed-llama",
+                "local-llamacpp" -> KB_EMBED_BACKEND_LOCAL
+                KB_EMBED_BACKEND_LLAMA_SERVER,
+                "llama.cpp",
+                "llama-cpp",
+                "llamacpp",
+                "custom-llama-server" -> KB_EMBED_BACKEND_LLAMA_SERVER
+                KB_EMBED_BACKEND_OLLAMA -> KB_EMBED_BACKEND_OLLAMA
+                KB_EMBED_BACKEND_LLAMA_SWAP,
+                "llamaswap",
+                "openai" -> KB_EMBED_BACKEND_LLAMA_SWAP
+                else -> KB_EMBED_BACKEND_LOCAL
+            }
+        }
+
+        fun normalizeAccelerationMode(mode: String?): String {
+            val normalized = mode
+                ?.trim()
+                ?.lowercase(Locale.US)
+                ?.replace('_', '-')
+                ?: return ACCELERATION_AUTO
+
+            return when (normalized) {
+                ACCELERATION_CPU,
+                "cpu-only",
+                "cpu-only-mode" -> ACCELERATION_CPU
+                ACCELERATION_GPU,
+                "opencl",
+                "adreno",
+                "gpu-only" -> ACCELERATION_GPU
+                ACCELERATION_NPU,
+                "hexagon",
+                "htp",
+                "dsp",
+                "qnn",
+                "npu-only",
+                "vulkan" -> ACCELERATION_AUTO
+                else -> ACCELERATION_AUTO
+            }
+        }
+
+        fun normalizeStableDiffusionAccelerationMode(@Suppress("UNUSED_PARAMETER") mode: String?): String = ACCELERATION_CPU
+
         fun isLlamaServerBackend(backend: String?): Boolean =
             normalizeOllamaOrLlamaBackend(backend) == PDF_BACKEND_LLAMA_SERVER
+
+        fun isLlamaSwapBackend(backend: String?): Boolean =
+            normalizeOllamaOrLlamaBackend(backend) == PDF_BACKEND_LLAMA_SWAP
+
+        fun usesOpenAiChatBackend(backend: String?): Boolean =
+            normalizeOllamaOrLlamaBackend(backend).let {
+                it == PDF_BACKEND_LLAMA_SERVER || it == PDF_BACKEND_LLAMA_SWAP
+            }
+
+        fun requiresSelectedRemoteModel(backend: String?): Boolean =
+            normalizeOllamaOrLlamaBackend(backend).let {
+                it == PDF_BACKEND_OLLAMA || it == PDF_BACKEND_LLAMA_SWAP
+            }
 
         const val SUMMARY_CONTEXT_MIN = 1
         val SUMMARY_CONTEXT_RANGE: IntRange = 2048..32768
@@ -2232,6 +2741,15 @@ Keep it brief but capture essential details."""
     fun setTamaLlamaServerUrl(url: String) {
         prefs.edit().putString("tama_llama_server_url", url).apply()
         _tamaLlamaServerUrl.value = url
+    }
+
+    private val _tamaLlamaSwapUrl = MutableStateFlow(
+        prefs.getString("tama_llama_swap_url", PDF_LLAMA_SWAP_DEFAULT_URL) ?: PDF_LLAMA_SWAP_DEFAULT_URL
+    )
+    val tamaLlamaSwapUrl = _tamaLlamaSwapUrl.asStateFlow()
+    fun setTamaLlamaSwapUrl(url: String) {
+        prefs.edit().putString("tama_llama_swap_url", url).apply()
+        _tamaLlamaSwapUrl.value = url
     }
 
     private val _tamaLlamaServerModelLabel = MutableStateFlow(prefs.getString("tama_llama_server_model_label", null))
@@ -2409,6 +2927,15 @@ Keep it brief but capture essential details."""
     fun setAdventureLlamaServerUrl(url: String) {
         prefs.edit().putString("adventure_llama_server_url", url).apply()
         _adventureLlamaServerUrl.value = url
+    }
+
+    private val _adventureLlamaSwapUrl = MutableStateFlow(
+        prefs.getString("adventure_llama_swap_url", PDF_LLAMA_SWAP_DEFAULT_URL) ?: PDF_LLAMA_SWAP_DEFAULT_URL
+    )
+    val adventureLlamaSwapUrl = _adventureLlamaSwapUrl.asStateFlow()
+    fun setAdventureLlamaSwapUrl(url: String) {
+        prefs.edit().putString("adventure_llama_swap_url", url).apply()
+        _adventureLlamaSwapUrl.value = url
     }
 
     private val _adventureLlamaServerModelLabel = MutableStateFlow(

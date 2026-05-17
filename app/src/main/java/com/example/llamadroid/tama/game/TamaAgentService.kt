@@ -267,7 +267,7 @@ class TamaAgentService(
             historyContext +
             llmUserMessage
 
-        val backend = settingsRepo.tamaBackend.value
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
         val thinkingEnabled = settingsRepo.tamaThinkingEnabled.value
         var assistantContent = ""
         var thinkingContent = ""
@@ -285,11 +285,20 @@ class TamaAgentService(
         )
         _messages.value = mergeTamaMessages(_messages.value + placeholderMsg, activeAssistantMessage)
 
-        val response = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+        val response = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
             withTamaLlamaServerProtection {
                 llamaServerChatService.chatWithToolsStreaming(
-                    baseUrl = settingsRepo.tamaLlamaServerUrl.value,
+                    baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                        settingsRepo.tamaLlamaSwapUrl.value
+                    } else {
+                        settingsRepo.tamaLlamaServerUrl.value
+                    },
                     messages = fullMessages,
+                    modelLabel = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                        settingsRepo.tamaPetModel.value
+                    } else {
+                        settingsRepo.tamaLlamaServerModelLabel.value
+                    },
                     thinkingEnabled = thinkingEnabled,
                     numCtx = settingsRepo.tamaOllamaNumCtx.value,
                     onChunk = { chunk, thinking ->
@@ -394,13 +403,22 @@ class TamaAgentService(
         val thinkingEnabled = settingsRepo.tamaThinkingEnabled.value
         _isLoading.value = true
         var summaryContent = ""
-        val response = if (settingsRepo.tamaBackend.value == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
+        val response = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
             withTamaLlamaServerProtection {
                 val client = RemoteSummaryClientFactory.fromConfig(
                     RemoteSummaryBackendConfig(
-                        backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
-                        baseUrl = settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/'),
-                        model = settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null },
+                        backend = backend,
+                        baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                            settingsRepo.tamaLlamaSwapUrl.value.trim().trimEnd('/')
+                        } else {
+                            settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/')
+                        },
+                        model = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                            settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
+                        } else {
+                            settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
+                        },
                         timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED
                     )
                 )
@@ -416,7 +434,7 @@ class TamaAgentService(
                         )
                     )
                 }.map {
-                    summaryContent = sanitizeTamaModelOutput(it.rawOutput.ifBlank { it.output })
+                    summaryContent = sanitizeTamaModelOutput(it.output.ifBlank { it.rawOutput })
                     OllamaService.ChatResponse(
                         message = OllamaService.ChatMessage(role = "assistant", content = summaryContent),
                         done = true
@@ -547,11 +565,17 @@ class TamaAgentService(
         _isLoading.value = true
         scope.launch {
             try {
-                val connected = if (settingsRepo.tamaBackend.value == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+                val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
+                val connected = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
                     withTamaLlamaServerProtection {
-                        val llamaConnected = llamaServerChatService.checkConnection(settingsRepo.tamaLlamaServerUrl.value)
+                        val baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                            settingsRepo.tamaLlamaSwapUrl.value
+                        } else {
+                            settingsRepo.tamaLlamaServerUrl.value
+                        }
+                        val llamaConnected = llamaServerChatService.checkConnection(baseUrl)
                         if (llamaConnected) {
-                            refreshLlamaServerMetadata().isSuccess
+                            refreshRemoteBackendMetadata().isSuccess
                         } else {
                             false
                         }
@@ -568,19 +592,34 @@ class TamaAgentService(
     }
 
     suspend fun refreshLlamaServerMetadata(): Result<RemoteSummaryMetadata> {
+        return refreshRemoteBackendMetadata()
+    }
+
+    suspend fun refreshRemoteBackendMetadata(): Result<RemoteSummaryMetadata> {
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
         return withTamaLlamaServerProtection {
             val client = RemoteSummaryClientFactory.fromConfig(
                 RemoteSummaryBackendConfig(
-                    backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
-                    baseUrl = settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/'),
-                    model = settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null },
+                    backend = backend,
+                    baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                        settingsRepo.tamaLlamaSwapUrl.value.trim().trimEnd('/')
+                    } else {
+                        settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/')
+                    },
+                    model = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                        settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
+                    } else {
+                        settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
+                    },
                     timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED
                 )
             )
             client.fetchMetadata().onSuccess { metadata ->
-                settingsRepo.setTamaLlamaServerModelLabel(metadata.serverModelLabel)
-                settingsRepo.setTamaLlamaServerContextTokens(metadata.serverContextTokens)
-                settingsRepo.setTamaLlamaServerContextLabel(metadata.serverContextLabel)
+                if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+                    settingsRepo.setTamaLlamaServerModelLabel(metadata.serverModelLabel)
+                    settingsRepo.setTamaLlamaServerContextTokens(metadata.serverContextTokens)
+                    settingsRepo.setTamaLlamaServerContextLabel(metadata.serverContextLabel)
+                }
                 _isBackendConnected.value = true
             }.onFailure {
                 _isBackendConnected.value = false
@@ -727,7 +766,7 @@ class TamaAgentService(
     }
 
     private suspend fun <T> withTamaLlamaServerProtection(block: suspend () -> T): T {
-        if (settingsRepo.tamaBackend.value != SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+        if (!SettingsRepository.isLlamaServerBackend(settingsRepo.tamaBackend.value)) {
             return block()
         }
 

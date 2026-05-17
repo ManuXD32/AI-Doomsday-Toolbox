@@ -13,9 +13,13 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownload
 import com.example.llamadroid.data.model.PendingDownloadHolder
+import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
+import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_HF_TREE_BUNDLE
+import com.example.llamadroid.onnx.OnnxCatalog
 import com.example.llamadroid.onnx.OnnxBundleValidator
 import com.example.llamadroid.onnx.OnnxImportSupport
+import com.example.llamadroid.onnx.OnnxTtsBundleValidator
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
 import kotlinx.coroutines.*
@@ -114,8 +118,47 @@ class DownloadService : Service() {
             var lastProgress = 0
             var downloadSuccess = false
             var completionError: String? = null
+
+            if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_HF_TREE_BUNDLE) {
+                try {
+                    val db = AppDatabase.getDatabase(this@DownloadService)
+                    val entity = downloadPendingHfTreeBundle(
+                        pending = pending,
+                        onProgress = { progress, label ->
+                            val progressPercent = (progress * 100).toInt()
+                            DownloadProgressHolder.updateProgress(progressKey, progress)
+                            DownloadProgressHolder.updateStatus(progressKey, label)
+                            if (progressPercent >= lastProgress + 5 || progress >= 1f) {
+                                lastProgress = progressPercent
+                                updateNotification(label, progressPercent)
+                            }
+                        }
+                    )
+                    db.modelDao().insertModel(entity)
+                    DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
+                    DownloadProgressHolder.removeProgress(progressKey)
+                } catch (e: Exception) {
+                    DebugLog.log("DownloadService: Failed to download ONNX tree bundle - ${e.message}")
+                    completionError = e.message ?: "Failed to finalize download"
+                    DownloadProgressHolder.updateProgress(progressKey, -1f)
+                    DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_download_failed))
+                    DownloadProgressHolder.removeProgress(progressKey)
+                } finally {
+                    PendingDownloadHolder.removePending(filename)
+                    activeDownloads.remove(filename)
+                    if (activeDownloads.isEmpty()) {
+                        completionError?.let { error ->
+                            notificationTaskId?.let { UnifiedNotificationManager.failTask(it, error) }
+                        } ?: updateNotification("Downloads complete", 100)
+                        delay(2000)
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }
+                return@launch
+            }
             
-            Downloader.download(url, destFile, this@DownloadService)
+            Downloader.download(url, destFile, this@DownloadService, pending?.huggingFaceToken)
                 .catch { e ->
                     DebugLog.log("DownloadService: Download failed - ${e.message}")
                     DownloadProgressHolder.updateProgress(progressKey, -1f)
@@ -150,26 +193,36 @@ class DownloadService : Service() {
                         val db = AppDatabase.getDatabase(this@DownloadService)
                         var lastFinalizePercent = -1
                         var lastFinalizeLabel: String? = null
-                        val entity = finalizePendingDownload(
-                            pending = pending,
-                            downloadedFile = destFile,
-                            onProgress = { progress, label ->
-                                val progressPercent = (progress * 100).toInt()
-                                val shouldReport =
-                                    label != lastFinalizeLabel ||
-                                        progressPercent >= lastFinalizePercent + 2 ||
-                                        progress >= 1f
-                                if (shouldReport) {
-                                    lastFinalizePercent = progressPercent
-                                    lastFinalizeLabel = label
-                                    DownloadProgressHolder.updateProgress(progressKey, progress)
-                                    DownloadProgressHolder.updateStatus(progressKey, label)
-                                    updateNotification(label, progressPercent)
-                                }
+                        val progressReporter: (Float, String) -> Unit = { progress, label ->
+                            val progressPercent = (progress * 100).toInt()
+                            val shouldReport =
+                                label != lastFinalizeLabel ||
+                                    progressPercent >= lastFinalizePercent + 2 ||
+                                    progress >= 1f
+                            if (shouldReport) {
+                                lastFinalizePercent = progressPercent
+                                lastFinalizeLabel = label
+                                DownloadProgressHolder.updateProgress(progressKey, progress)
+                                DownloadProgressHolder.updateStatus(progressKey, label)
+                                updateNotification(label, progressPercent)
                             }
-                        )
-                        db.modelDao().insertModel(entity)
-                        DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
+                        }
+                        if (pending.liteRtDisplayName != null) {
+                            LiteRtModelRepository(this@DownloadService, db.liteRtModelDao()).finalizeServiceDownload(
+                                pending = pending,
+                                downloadedFile = destFile,
+                                onProgress = progressReporter
+                            )
+                            DebugLog.log("DownloadService: Saved $filename to LiteRT model DB")
+                        } else {
+                            val entity = finalizePendingDownload(
+                                pending = pending,
+                                downloadedFile = destFile,
+                                onProgress = progressReporter
+                            )
+                            db.modelDao().insertModel(entity)
+                            DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
+                        }
                         DownloadProgressHolder.removeProgress(progressKey)
                     } catch (e: Exception) {
                         DebugLog.log("DownloadService: Failed to save to DB - ${e.message}")
@@ -203,6 +256,7 @@ class DownloadService : Service() {
         val progressKey = pending?.progressKey ?: DownloadProgressHolder.findRepoIdByFilename(filename) ?: filename
         DownloadProgressHolder.updateProgress(progressKey, -1f)
         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_download_cancelled))
+        pending?.destPath?.let { runCatching { File(it).delete() } }
         PendingDownloadHolder.removePending(filename)
         DownloadProgressHolder.removeProgress(progressKey)
         
@@ -229,7 +283,10 @@ class DownloadService : Service() {
         downloadedFile: File,
         onProgress: (Float, String) -> Unit
     ): ModelEntity {
-        return if (pending.type == ModelType.ONNX_IMAGE_GEN && pending.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
+        return if (
+            (pending.type == ModelType.ONNX_IMAGE_GEN || pending.type == ModelType.ONNX_TTS) &&
+            pending.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
+        ) {
             val installDirPath = pending.onnxInstallDirPath
                 ?: error("Missing ONNX install directory for ${pending.filename}")
             val installDir = File(installDirPath)
@@ -255,7 +312,11 @@ class DownloadService : Service() {
                     }
                 )
                 onProgress(1f, getString(R.string.onnx_models_phase_completed))
-                val validation = OnnxBundleValidator.validateDirectory(installDir)
+                val validation = if (pending.type == ModelType.ONNX_TTS) {
+                    OnnxTtsBundleValidator.validateDirectory(installDir)
+                } else {
+                    OnnxBundleValidator.validateDirectory(installDir)
+                }
                 val resolvedOnnxCapabilities = ModelRepository.resolveOnnxCapabilities(
                     explicitCapabilities = pending.onnxCapabilities,
                     detectedCapabilities = validation.supportedCapabilities
@@ -311,6 +372,75 @@ class DownloadService : Service() {
                 onnxReferenceUri = pending.onnxReferenceUri,
                 onnxReferencePath = pending.onnxReferencePath
             )
+        }
+    }
+
+    private suspend fun downloadPendingHfTreeBundle(
+        pending: PendingDownload,
+        onProgress: (Float, String) -> Unit
+    ): ModelEntity {
+        require(pending.type == ModelType.ONNX_TTS) {
+            "Hugging Face tree bundles are only supported for ONNX TTS."
+        }
+        val installDirPath = pending.onnxInstallDirPath
+            ?: error("Missing ONNX install directory for ${pending.filename}")
+        val installDir = File(installDirPath)
+        OnnxImportSupport.deleteRecursively(installDir)
+        installDir.mkdirs()
+        val files = OnnxCatalog.supertonicRequiredFiles
+        val totalBytes = files.sumOf { it.sizeBytes }.coerceAtLeast(1L)
+        var completedBytes = 0L
+        try {
+            files.forEach { fileEntry ->
+                currentCoroutineContext().ensureActive()
+                val output = File(installDir, fileEntry.relativePath)
+                output.parentFile?.mkdirs()
+                val url = OnnxCatalog.supertonicResolveUrl(fileEntry.relativePath)
+                Downloader.download(url, output, this@DownloadService)
+                    .collect { fileProgress ->
+                        currentCoroutineContext().ensureActive()
+                        val weighted = (completedBytes + (fileEntry.sizeBytes * fileProgress).toLong())
+                            .toFloat() / totalBytes.toFloat()
+                        onProgress(weighted.coerceIn(0f, 0.96f), getString(R.string.onnx_models_phase_downloading))
+                    }
+                completedBytes += fileEntry.sizeBytes
+            }
+            onProgress(0.98f, getString(R.string.onnx_models_phase_validating))
+            val validation = OnnxTtsBundleValidator.validateDirectory(installDir)
+            require(validation.isValid) {
+                "Missing Supertonic bundle files: ${validation.missingPaths.joinToString(", ")}"
+            }
+            val resolvedOnnxCapabilities = ModelRepository.resolveOnnxCapabilities(
+                explicitCapabilities = pending.onnxCapabilities,
+                detectedCapabilities = validation.supportedCapabilities
+            )
+            val sizeBytes = installDir.walkTopDown()
+                .filter { it.isFile }
+                .sumOf { it.length() }
+            onProgress(1f, getString(R.string.onnx_models_phase_completed))
+            return ModelEntity(
+                filename = pending.filename,
+                path = installDir.absolutePath,
+                sizeBytes = sizeBytes,
+                type = pending.type,
+                repoId = pending.repoId,
+                isDownloaded = true,
+                isVision = pending.isVision,
+                sdCapabilities = pending.sdCapabilities,
+                sdFamily = pending.sdFamily,
+                sdVariant = pending.sdVariant,
+                sdCompatProfiles = pending.sdCompatProfiles,
+                onnxCapabilities = resolvedOnnxCapabilities,
+                onnxAssetKind = pending.onnxAssetKind,
+                onnxPipelineFamily = pending.onnxPipelineFamily,
+                onnxReferenceUri = pending.onnxReferenceUri,
+                onnxReferencePath = pending.onnxReferencePath
+            )
+        } catch (e: Exception) {
+            OnnxImportSupport.deleteRecursively(installDir)
+            throw e
+        } finally {
+            runCatching { File(pending.destPath).delete() }
         }
     }
 }

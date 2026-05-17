@@ -62,6 +62,19 @@
 # Keep ONNX Runtime Java bindings
 -keep class ai.onnxruntime.** { *; }
 
+# Keep PDFBox Android extraction internals used by document imports.
+-keep class com.tom_roush.pdfbox.** { *; }
+-keep class com.tom_roush.fontbox.** { *; }
+-keep class com.tom_roush.harmony.** { *; }
+-dontwarn com.tom_roush.**
+
+# LiteRT-LM is loaded through a reflection bridge because the current app Kotlin
+# toolchain cannot compile directly against its newer metadata yet.
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keep class com.google.ai.edge.litert.** { *; }
+-dontwarn com.google.ai.edge.litertlm.**
+-dontwarn com.google.ai.edge.litert.**
+
 # Parquet/Hadoop local dataset imports reference optional desktop/server JVM APIs.
 -dontwarn com.fasterxml.jackson.core.JsonFactory
 -dontwarn com.fasterxml.jackson.databind.ObjectMapper

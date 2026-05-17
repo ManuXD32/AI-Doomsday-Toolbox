@@ -2,12 +2,39 @@ package com.example.llamadroid.tama.data
 
 import kotlinx.serialization.Serializable
 
+const val FARMLAND_UPGRADE_ID = "farmland"
+const val FARM_BASE_TILE_COUNT = 9
+const val FARM_TILES_PER_PAGE = 9
+const val FARM_MAX_FARMLAND_LEVEL = 2
+const val FARM_MAX_FARM_PAGES = 3
+
+fun farmPageCountForFarmlandLevel(level: Int): Int =
+    (1 + level.coerceIn(0, FARM_MAX_FARMLAND_LEVEL)).coerceIn(1, FARM_MAX_FARM_PAGES)
+
+fun farmTileCountForFarmlandLevel(level: Int): Int =
+    farmPageCountForFarmlandLevel(level) * FARM_TILES_PER_PAGE
+
+fun farmlandUpgradeCostForLevel(level: Int): Int? = when (level.coerceIn(0, FARM_MAX_FARMLAND_LEVEL)) {
+    0 -> 15_000
+    1 -> 35_000
+    else -> null
+}
+
+fun farmPageForTileId(tileId: Int): Int =
+    (tileId / FARM_TILES_PER_PAGE).coerceIn(0, FARM_MAX_FARM_PAGES - 1)
+
+fun farmTileIdsForPage(pageIndex: Int): IntRange {
+    val safePage = pageIndex.coerceIn(0, FARM_MAX_FARM_PAGES - 1)
+    val start = safePage * FARM_TILES_PER_PAGE
+    return start until (start + FARM_TILES_PER_PAGE)
+}
+
 /**
- * Represents a single tile in the 3x3 farm grid.
+ * Represents a single tile in the farm grid.
  */
 @Serializable
 data class FarmTile(
-    val id: Int, // 0-8 for a 3x3 grid
+    val id: Int,
     val status: TileStatus = TileStatus.SOIL,
     val crop: PlantedCrop? = null,
     val lastWateredTime: Long? = null
@@ -116,6 +143,7 @@ enum class ItemType(val emoji: String) {
     ACCESSORY("💍"),
     QUEST_ITEM("📜"),
     TREASURE("💎"),
+    RECIPE("📜"),
     TOOL("🛠️"),
     MATERIAL("📦")
 }

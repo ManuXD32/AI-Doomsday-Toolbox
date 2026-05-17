@@ -102,6 +102,26 @@ fun SettingsHubScreen(navController: NavController) {
             route = "settings_prompts"
         ),
         SettingsItem(
+            emoji = "📄",
+            title = stringResource(R.string.settings_pdf),
+            description = stringResource(R.string.settings_pdf_desc),
+            gradientColors = listOf(
+                Color(0xFF3F51B5).copy(alpha = 0.15f),
+                Color(0xFF1976D2).copy(alpha = 0.3f)
+            ),
+            route = "settings_pdf"
+        ),
+        SettingsItem(
+            emoji = "🌐",
+            title = stringResource(R.string.settings_pdf_translation),
+            description = stringResource(R.string.settings_pdf_translation_desc),
+            gradientColors = listOf(
+                Color(0xFFE91E63).copy(alpha = 0.15f),
+                Color(0xFF5E35B1).copy(alpha = 0.3f)
+            ),
+            route = "settings_pdf_translation"
+        ),
+        SettingsItem(
             emoji = "🔧",
             title = stringResource(R.string.settings_debug),
             description = stringResource(R.string.settings_debug_desc),

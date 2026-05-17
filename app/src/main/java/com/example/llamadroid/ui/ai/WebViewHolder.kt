@@ -44,18 +44,22 @@ object WebViewHolder {
             return existingWebView
         }
         
-        // Create new WebView
-        val webView = WebView(context.applicationContext).apply {
+        // Use the current Activity context so popup-backed controls such as
+        // HTML select menus have a valid window token inside retained WebViews.
+        val webView = WebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
+            isFocusable = true
+            isFocusableInTouchMode = true
             applyKeyboardAwareInsetsFix()
             
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
                 javaScriptCanOpenWindowsAutomatically = true
+                setSupportMultipleWindows(true)
                 allowFileAccess = true
                 allowContentAccess = true
                 databaseEnabled = true

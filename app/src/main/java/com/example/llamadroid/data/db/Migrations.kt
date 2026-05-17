@@ -2,6 +2,7 @@ package com.example.llamadroid.data.db
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.llamadroid.quadtrix.QuadtrixOptionKeys
 import com.example.llamadroid.util.DebugLog
 
 /**
@@ -696,6 +697,499 @@ object Migrations {
         }
     }
 
+    val MIGRATION_56_57 = object : Migration(56, 57) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 56 -> 57")
+
+            if (!columnExists(db, "benchmark_results", "runStartedAt")) {
+                db.execSQL("ALTER TABLE `benchmark_results` ADD COLUMN `runStartedAt` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL(
+                    """
+                    UPDATE `benchmark_results`
+                    SET `runStartedAt` = (
+                        SELECT MIN(`legacy`.`timestamp`)
+                        FROM `benchmark_results` AS `legacy`
+                        WHERE `legacy`.`modelPath` = `benchmark_results`.`modelPath`
+                    )
+                    WHERE `runStartedAt` = 0
+                    """.trimIndent()
+                )
+            }
+
+            if (!columnExists(db, "benchmark_results", "runName")) {
+                db.execSQL("ALTER TABLE `benchmark_results` ADD COLUMN `runName` TEXT NOT NULL DEFAULT ''")
+            }
+
+            DebugLog.log("[DB] Migration 56 -> 57 complete")
+        }
+    }
+
+    val MIGRATION_57_58 = object : Migration(57, 58) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 57 -> 58")
+
+            db.execSQL("UPDATE `dataset_sources` SET `extractedText` = NULL WHERE `extractedText` IS NOT NULL")
+
+            DebugLog.log("[DB] Migration 57 -> 58 complete")
+        }
+    }
+
+    val MIGRATION_58_59 = object : Migration(58, 59) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 58 -> 59")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `quadtrix_profiles` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `datasetPath` TEXT NOT NULL DEFAULT '',
+                    `modelFilename` TEXT NOT NULL DEFAULT 'web_model.bin',
+                    `modelPath` TEXT NOT NULL DEFAULT '',
+                    `batchSize` INTEGER NOT NULL DEFAULT 1,
+                    `gradAccumSteps` INTEGER NOT NULL DEFAULT 20,
+                    `blockSize` INTEGER NOT NULL DEFAULT 256,
+                    `maxIters` INTEGER NOT NULL DEFAULT 5000,
+                    `evalInterval` INTEGER NOT NULL DEFAULT 250,
+                    `evalIters` INTEGER NOT NULL DEFAULT 20,
+                    `logInterval` INTEGER NOT NULL DEFAULT 1,
+                    `threads` INTEGER NOT NULL DEFAULT 4,
+                    `learningRate` TEXT NOT NULL DEFAULT '0.0002',
+                    `gradClip` TEXT NOT NULL DEFAULT '1.0',
+                    `optimizer` TEXT NOT NULL DEFAULT 'adamw8',
+                    `mathBackend` TEXT NOT NULL DEFAULT 'auto',
+                    `dropout` TEXT NOT NULL DEFAULT '0.1',
+                    `trainSplit` TEXT NOT NULL DEFAULT '0.9',
+                    `nEmbd` INTEGER NOT NULL DEFAULT 256,
+                    `nHead` INTEGER NOT NULL DEFAULT 4,
+                    `nLayer` INTEGER NOT NULL DEFAULT 8,
+                    `seed` INTEGER NOT NULL DEFAULT 1337,
+                    `checkpointEvery` INTEGER NOT NULL DEFAULT 500,
+                    `weightStorage` TEXT NOT NULL DEFAULT 'int8',
+                    `activationQuantBits` INTEGER NOT NULL DEFAULT 8,
+                    `optimizerStateBits` INTEGER NOT NULL DEFAULT 8,
+                    `strictQuantizedWeights` INTEGER NOT NULL DEFAULT 0,
+                    `skipInitialEval` INTEGER NOT NULL DEFAULT 0,
+                    `resume` INTEGER NOT NULL DEFAULT 0,
+                    `resumePath` TEXT NOT NULL DEFAULT '',
+                    `parquetTextColumn` TEXT NOT NULL DEFAULT '',
+                    `parquetInstructionColumn` TEXT NOT NULL DEFAULT 'instruction',
+                    `parquetInputColumn` TEXT NOT NULL DEFAULT 'input',
+                    `parquetOutputColumn` TEXT NOT NULL DEFAULT 'output',
+                    `distMode` TEXT NOT NULL DEFAULT 'none',
+                    `distRole` TEXT NOT NULL DEFAULT 'coordinator',
+                    `workerHost` TEXT NOT NULL DEFAULT '0.0.0.0',
+                    `workerPort` INTEGER NOT NULL DEFAULT 9091,
+                    `workerToken` TEXT NOT NULL DEFAULT '',
+                    `distWorkers` TEXT NOT NULL DEFAULT '',
+                    `distSyncInterval` INTEGER NOT NULL DEFAULT 1,
+                    `distGradientBits` INTEGER NOT NULL DEFAULT 32,
+                    `distShards` TEXT NOT NULL DEFAULT 'auto',
+                    `distRpcTimeoutSec` INTEGER NOT NULL DEFAULT 900,
+                    `distReprobeInterval` INTEGER NOT NULL DEFAULT 5,
+                    `distCoordinatorCompute` INTEGER NOT NULL DEFAULT 1,
+                    `webHost` TEXT NOT NULL DEFAULT '127.0.0.1',
+                    `webPort` INTEGER NOT NULL DEFAULT 8080,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_quadtrix_profiles_name` ON `quadtrix_profiles` (`name`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `quadtrix_runs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `profileId` INTEGER,
+                    `profileName` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `processMode` TEXT NOT NULL,
+                    `pid` INTEGER,
+                    `startedAt` INTEGER NOT NULL,
+                    `finishedAt` INTEGER,
+                    `latestEtaSeconds` INTEGER,
+                    `latestIter` INTEGER NOT NULL DEFAULT 0,
+                    `maxIter` INTEGER NOT NULL DEFAULT 0,
+                    `latestBatchLoss` REAL,
+                    `latestTrainLoss` REAL,
+                    `latestValLoss` REAL,
+                    `latestGradNorm` REAL,
+                    `logFilePath` TEXT NOT NULL DEFAULT '',
+                    `modelOutputDir` TEXT NOT NULL DEFAULT '',
+                    `errorMessage` TEXT
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_quadtrix_runs_profileId` ON `quadtrix_runs` (`profileId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_quadtrix_runs_status` ON `quadtrix_runs` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_quadtrix_runs_startedAt` ON `quadtrix_runs` (`startedAt`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `quadtrix_metrics` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `runId` INTEGER,
+                    `profileName` TEXT NOT NULL,
+                    `iter` INTEGER NOT NULL,
+                    `maxIter` INTEGER NOT NULL DEFAULT 0,
+                    `batchLoss` REAL,
+                    `trainLoss` REAL,
+                    `valLoss` REAL,
+                    `gradNorm` REAL,
+                    `elapsedSeconds` INTEGER,
+                    `etaSeconds` INTEGER,
+                    `createdAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_quadtrix_metrics_runId` ON `quadtrix_metrics` (`runId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_quadtrix_metrics_profileName` ON `quadtrix_metrics` (`profileName`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_quadtrix_metrics_iter` ON `quadtrix_metrics` (`iter`)")
+
+            DebugLog.log("[DB] Migration 58 -> 59 complete")
+        }
+    }
+
+    val MIGRATION_59_60 = object : Migration(59, 60) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 59 -> 60")
+
+            fun addColumn(name: String, sqlType: String, defaultSql: String) {
+                if (!columnExists(db, "quadtrix_profiles", name)) {
+                    db.execSQL("ALTER TABLE `quadtrix_profiles` ADD COLUMN `$name` $sqlType NOT NULL DEFAULT $defaultSql")
+                }
+            }
+
+            addColumn("arch", "TEXT", "'qwen3'")
+            addColumn("tokenizer", "TEXT", "'qwen3'")
+            addColumn("qwenTokenizerJsonPath", "TEXT", "''")
+            addColumn("nKvHead", "INTEGER", "0")
+            addColumn("headDim", "INTEGER", "0")
+            addColumn("intermediateSize", "INTEGER", "0")
+            addColumn("ropeTheta", "TEXT", "'1000000.0'")
+            addColumn("rmsNormEps", "TEXT", "'0.000001'")
+            addColumn("tieWordEmbeddings", "INTEGER", "1")
+            addColumn("exportGgufPath", "TEXT", "''")
+            addColumn("saveGgufAfterTrain", "INTEGER", "0")
+            addColumn("ggufOuttype", "TEXT", "'f16'")
+            addColumn("ggufName", "TEXT", "''")
+            addColumn("showGgufInModels", "INTEGER", "1")
+            addColumn("streamProgress", "INTEGER", "0")
+            addColumn("streamPort", "INTEGER", "9999")
+
+            DebugLog.log("[DB] Migration 59 -> 60 complete")
+        }
+    }
+
+    val MIGRATION_60_61 = object : Migration(60, 61) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 60 -> 61")
+
+            fun addColumn(name: String, sqlType: String, defaultSql: String) {
+                if (!columnExists(db, "quadtrix_profiles", name)) {
+                    db.execSQL("ALTER TABLE `quadtrix_profiles` ADD COLUMN `$name` $sqlType NOT NULL DEFAULT $defaultSql")
+                }
+            }
+
+            addColumn("streamHost", "TEXT", "'127.0.0.1'")
+            addColumn("streamLanEnabled", "INTEGER", "0")
+            addColumn("remoteStreamHost", "TEXT", "''")
+            addColumn("remoteStreamPort", "INTEGER", "9999")
+            addColumn("remoteStreamToken", "TEXT", "''")
+            addColumn("tokenCacheMode", "TEXT", "'auto'")
+            addColumn("tokenCacheDir", "TEXT", "''")
+            addColumn("tokenizationMode", "TEXT", "'records'")
+            addColumn("tokenizeLogIntervalSec", "INTEGER", "5")
+
+            DebugLog.log("[DB] Migration 60 -> 61 complete")
+        }
+    }
+
+    val MIGRATION_61_62 = object : Migration(61, 62) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 61 -> 62")
+
+            fun addColumn(name: String, sqlType: String, defaultSql: String) {
+                if (!columnExists(db, "quadtrix_profiles", name)) {
+                    db.execSQL("ALTER TABLE `quadtrix_profiles` ADD COLUMN `$name` $sqlType NOT NULL DEFAULT $defaultSql")
+                }
+            }
+
+            addColumn("distCoordinatorOnly", "INTEGER", "0")
+            addColumn("printSystemInfo", "INTEGER", "0")
+            addColumn("noGenerateAfterTrain", "INTEGER", "1")
+            addColumn("enabledOptions", "TEXT", "'${QuadtrixOptionKeys.defaultCsv}'")
+
+            DebugLog.log("[DB] Migration 61 -> 62 complete")
+        }
+    }
+
+    val MIGRATION_62_63 = object : Migration(62, 63) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 62 -> 63")
+
+            if (!tableExists(db, "knowledge_bases")) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `knowledge_bases` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, " +
+                        "`description` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_knowledge_bases_name` ON `knowledge_bases` (`name`)")
+            }
+
+            if (!tableExists(db, "knowledge_sources")) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `knowledge_sources` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`knowledgeBaseId` INTEGER NOT NULL, " +
+                        "`type` TEXT NOT NULL, " +
+                        "`sourceRef` TEXT NOT NULL, " +
+                        "`title` TEXT NOT NULL, " +
+                        "`contentHash` TEXT NOT NULL, " +
+                        "`enabled` INTEGER NOT NULL, " +
+                        "`status` TEXT NOT NULL, " +
+                        "`errorMessage` TEXT, " +
+                        "`embeddingModelPath` TEXT, " +
+                        "`embeddingDim` INTEGER NOT NULL, " +
+                        "`chunkCount` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, " +
+                        "`indexedAt` INTEGER, " +
+                        "FOREIGN KEY(`knowledgeBaseId`) REFERENCES `knowledge_bases`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_sources_knowledgeBaseId` ON `knowledge_sources` (`knowledgeBaseId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_sources_status` ON `knowledge_sources` (`status`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_knowledge_sources_knowledgeBaseId_sourceRef` ON `knowledge_sources` (`knowledgeBaseId`, `sourceRef`)")
+            }
+
+            if (!tableExists(db, "knowledge_chunks")) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `knowledge_chunks` (" +
+                        "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`knowledgeBaseId` INTEGER NOT NULL, " +
+                        "`sourceId` INTEGER NOT NULL, " +
+                        "`chunkIndex` INTEGER NOT NULL, " +
+                        "`text` TEXT NOT NULL, " +
+                        "`startOffset` INTEGER NOT NULL, " +
+                        "`endOffset` INTEGER NOT NULL, " +
+                        "`embedding` BLOB, " +
+                        "`embeddingNorm` REAL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "FOREIGN KEY(`knowledgeBaseId`) REFERENCES `knowledge_bases`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE, " +
+                        "FOREIGN KEY(`sourceId`) REFERENCES `knowledge_sources`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_knowledgeBaseId` ON `knowledge_chunks` (`knowledgeBaseId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_sourceId` ON `knowledge_chunks` (`sourceId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_knowledge_chunks_sourceId_chunkIndex` ON `knowledge_chunks` (`sourceId`, `chunkIndex`)")
+            }
+
+            if (!columnExists(db, "agent_conversations", "knowledgeBaseIds")) {
+                db.execSQL("ALTER TABLE `agent_conversations` ADD COLUMN `knowledgeBaseIds` TEXT NOT NULL DEFAULT ''")
+            }
+
+            DebugLog.log("[DB] Migration 62 -> 63 complete")
+        }
+    }
+
+    val MIGRATION_63_64 = object : Migration(63, 64) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 63 -> 64")
+
+            db.execSQL("ALTER TABLE `knowledge_sources` RENAME TO `knowledge_sources_old`")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `knowledge_sources` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `knowledgeBaseId` INTEGER NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `sourceRef` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `contentHash` TEXT NOT NULL,
+                    `enabled` INTEGER NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `errorMessage` TEXT,
+                    `embeddingModelPath` TEXT,
+                    `embeddingBackend` TEXT NOT NULL,
+                    `embeddingConfigHash` TEXT NOT NULL,
+                    `embeddingDim` INTEGER NOT NULL,
+                    `chunkCount` INTEGER NOT NULL,
+                    `embeddedChunkCount` INTEGER NOT NULL,
+                    `processingStage` TEXT NOT NULL,
+                    `progressTotal` INTEGER NOT NULL,
+                    `progressDone` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `indexedAt` INTEGER,
+                    `progressUpdatedAt` INTEGER,
+                    FOREIGN KEY(`knowledgeBaseId`) REFERENCES `knowledge_bases`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO `knowledge_sources` (
+                    `id`,
+                    `knowledgeBaseId`,
+                    `type`,
+                    `sourceRef`,
+                    `title`,
+                    `contentHash`,
+                    `enabled`,
+                    `status`,
+                    `errorMessage`,
+                    `embeddingModelPath`,
+                    `embeddingBackend`,
+                    `embeddingConfigHash`,
+                    `embeddingDim`,
+                    `chunkCount`,
+                    `embeddedChunkCount`,
+                    `processingStage`,
+                    `progressTotal`,
+                    `progressDone`,
+                    `createdAt`,
+                    `updatedAt`,
+                    `indexedAt`,
+                    `progressUpdatedAt`
+                )
+                SELECT
+                    `id`,
+                    `knowledgeBaseId`,
+                    `type`,
+                    `sourceRef`,
+                    `title`,
+                    `contentHash`,
+                    `enabled`,
+                    `status`,
+                    `errorMessage`,
+                    `embeddingModelPath`,
+                    '',
+                    '',
+                    `embeddingDim`,
+                    `chunkCount`,
+                    (
+                        SELECT COUNT(*)
+                        FROM `knowledge_chunks`
+                        WHERE `knowledge_chunks`.`sourceId` = `knowledge_sources_old`.`id`
+                        AND `knowledge_chunks`.`embedding` IS NOT NULL
+                    ),
+                    `status`,
+                    `chunkCount`,
+                    (
+                        SELECT COUNT(*)
+                        FROM `knowledge_chunks`
+                        WHERE `knowledge_chunks`.`sourceId` = `knowledge_sources_old`.`id`
+                        AND `knowledge_chunks`.`embedding` IS NOT NULL
+                    ),
+                    `createdAt`,
+                    `updatedAt`,
+                    `indexedAt`,
+                    NULL
+                FROM `knowledge_sources_old`
+                """.trimIndent()
+            )
+            db.execSQL("ALTER TABLE `knowledge_chunks` RENAME TO `knowledge_chunks_old`")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `knowledge_chunks` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `knowledgeBaseId` INTEGER NOT NULL,
+                    `sourceId` INTEGER NOT NULL,
+                    `chunkIndex` INTEGER NOT NULL,
+                    `text` TEXT NOT NULL,
+                    `startOffset` INTEGER NOT NULL,
+                    `endOffset` INTEGER NOT NULL,
+                    `embedding` BLOB,
+                    `embeddingNorm` REAL,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`knowledgeBaseId`) REFERENCES `knowledge_bases`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                    FOREIGN KEY(`sourceId`) REFERENCES `knowledge_sources`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                INSERT INTO `knowledge_chunks` (
+                    `id`,
+                    `knowledgeBaseId`,
+                    `sourceId`,
+                    `chunkIndex`,
+                    `text`,
+                    `startOffset`,
+                    `endOffset`,
+                    `embedding`,
+                    `embeddingNorm`,
+                    `createdAt`
+                )
+                SELECT
+                    `id`,
+                    `knowledgeBaseId`,
+                    `sourceId`,
+                    `chunkIndex`,
+                    `text`,
+                    `startOffset`,
+                    `endOffset`,
+                    `embedding`,
+                    `embeddingNorm`,
+                    `createdAt`
+                FROM `knowledge_chunks_old`
+                """.trimIndent()
+            )
+            db.execSQL("DROP TABLE `knowledge_chunks_old`")
+            db.execSQL("DROP TABLE `knowledge_sources_old`")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_sources_knowledgeBaseId` ON `knowledge_sources` (`knowledgeBaseId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_sources_status` ON `knowledge_sources` (`status`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_knowledge_sources_knowledgeBaseId_sourceRef` ON `knowledge_sources` (`knowledgeBaseId`, `sourceRef`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_knowledgeBaseId` ON `knowledge_chunks` (`knowledgeBaseId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_knowledge_chunks_sourceId` ON `knowledge_chunks` (`sourceId`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_knowledge_chunks_sourceId_chunkIndex` ON `knowledge_chunks` (`sourceId`, `chunkIndex`)")
+
+            DebugLog.log("[DB] Migration 63 -> 64 complete")
+        }
+    }
+
+    val MIGRATION_64_65 = object : Migration(64, 65) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 64 -> 65")
+
+            if (!tableExists(db, "litert_models")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `litert_models` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `path` TEXT NOT NULL,
+                        `sourceUri` TEXT,
+                        `repoId` TEXT,
+                        `filename` TEXT NOT NULL,
+                        `sizeBytes` INTEGER NOT NULL,
+                        `backendPreference` TEXT NOT NULL,
+                        `supportsCpu` INTEGER NOT NULL,
+                        `supportsGpu` INTEGER NOT NULL,
+                        `supportsNpu` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_litert_models_repoId` ON `litert_models` (`repoId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_litert_models_updatedAt` ON `litert_models` (`updatedAt`)")
+            }
+
+            if (!columnExists(db, "llama_servers", "liteRtModelId")) {
+                db.execSQL("ALTER TABLE `llama_servers` ADD COLUMN `liteRtModelId` INTEGER")
+            }
+            if (!columnExists(db, "llama_servers", "liteRtBackend")) {
+                db.execSQL("ALTER TABLE `llama_servers` ADD COLUMN `liteRtBackend` TEXT NOT NULL DEFAULT 'auto'")
+            }
+
+            DebugLog.log("[DB] Migration 64 -> 65 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -725,7 +1219,16 @@ object Migrations {
         MIGRATION_52_53,
         MIGRATION_53_54,
         MIGRATION_54_55,
-        MIGRATION_55_56
+        MIGRATION_55_56,
+        MIGRATION_56_57,
+        MIGRATION_57_58,
+        MIGRATION_58_59,
+        MIGRATION_59_60,
+        MIGRATION_60_61,
+        MIGRATION_61_62,
+        MIGRATION_62_63,
+        MIGRATION_63_64,
+        MIGRATION_64_65
     )
     /**
      * Check if a column exists in a table.

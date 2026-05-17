@@ -26,6 +26,7 @@ include(":app")
 // Asset Packs for native binary delivery
 include(":asset_upscaler")
 include(":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9")
+include(":feature_llm_snapdragon_opencl")
 include(":feature_kiwix_baseline", ":feature_kiwix_dotprod", ":feature_kiwix_armv9")
 include(":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9")
 include(":feature_upscaler")

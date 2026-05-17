@@ -31,16 +31,16 @@ interface DatasetDao {
     
     // ========== Sources ==========
     
-    @Query("SELECT * FROM dataset_sources WHERE projectId = :projectId ORDER BY addedAt DESC")
+    @Query("SELECT id, projectId, type, uri, name, NULL AS extractedText, addedAt FROM dataset_sources WHERE projectId = :projectId ORDER BY addedAt DESC")
     fun getSourcesForProject(projectId: Long): Flow<List<DatasetSourceEntity>>
 
-    @Query("SELECT * FROM dataset_sources WHERE projectId = :projectId ORDER BY addedAt DESC")
+    @Query("SELECT id, projectId, type, uri, name, NULL AS extractedText, addedAt FROM dataset_sources WHERE projectId = :projectId ORDER BY addedAt DESC")
     suspend fun getSourcesForProjectSync(projectId: Long): List<DatasetSourceEntity>
     
-    @Query("SELECT * FROM dataset_sources WHERE id = :id")
+    @Query("SELECT id, projectId, type, uri, name, NULL AS extractedText, addedAt FROM dataset_sources WHERE id = :id")
     suspend fun getSource(id: Long): DatasetSourceEntity?
 
-    @Query("SELECT * FROM dataset_sources WHERE projectId = :projectId AND uri = :uri LIMIT 1")
+    @Query("SELECT id, projectId, type, uri, name, NULL AS extractedText, addedAt FROM dataset_sources WHERE projectId = :projectId AND uri = :uri LIMIT 1")
     suspend fun getSourceByProjectAndUri(projectId: Long, uri: String): DatasetSourceEntity?
     
     @Insert

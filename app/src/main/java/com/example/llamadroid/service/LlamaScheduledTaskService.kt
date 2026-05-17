@@ -61,6 +61,7 @@ class LlamaScheduledTaskService : Service() {
             organizerChanged = { OrganizerCalendarWidgetProvider.refreshAll(applicationContext) },
             notesChanged = { NoteDisplayWidgetProvider.refreshAll(applicationContext) },
             imageGenerator = NativeChatOnnxImageGenerator(applicationContext, database),
+            knowledgeBaseRepository = com.example.llamadroid.data.repository.KnowledgeBaseRepository(applicationContext, database),
             pdfTextExtractor = { pdfBytes, maxChars ->
                 com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
                 extractNativePdfTextFromBytes(pdfBytes, maxChars)

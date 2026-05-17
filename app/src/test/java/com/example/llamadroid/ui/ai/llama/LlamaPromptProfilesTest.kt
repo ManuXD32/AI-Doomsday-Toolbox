@@ -11,6 +11,7 @@ class LlamaPromptProfilesTest {
 
         assertEquals(
             listOf(
+                LlamaBuiltInPromptProfiles.DEEP_RESEARCHER,
                 LlamaBuiltInPromptProfiles.RESEARCHER,
                 LlamaBuiltInPromptProfiles.EXPERT_CODER,
                 LlamaBuiltInPromptProfiles.STUDY_TUTOR,

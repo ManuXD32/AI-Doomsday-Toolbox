@@ -42,28 +42,67 @@ internal data class TamaStructuredMemory(
 internal fun sanitizeTamaModelOutput(raw: String): String {
     if (raw.isBlank()) return ""
     var cleaned = raw
-        .replace(Regex("(?is)<think>.*?</think>"), " ")
-        .replace(Regex("(?im)^\\s*\\[Start thinking]\\s*$"), " ")
+        .replace(Regex("(?is)<(think|thinking|reasoning)>.*?</\\1>"), " ")
+        .replaceReasoningBlock(
+            start = Regex("(?im)^\\s*\\[Start thinking]\\s*$"),
+            end = Regex("(?im)^\\s*\\[End thinking]\\s*$")
+        )
+        .replaceReasoningBlock(
+            start = Regex("(?im)^\\s*(Thinking Process|Reasoning|Thoughts|Analysis)\\s*:\\s*$"),
+            end = Regex("(?im)^\\s*(Final answer|Answer|Dream|Story|Content|Summary|Prompt|Closing|JSON)\\s*:\\s*")
+        )
         .replace(Regex("(?im)^\\s*\\[End thinking]\\s*$"), " ")
-        .replace(Regex("(?im)^\\s*Thinking Process:\\s*$"), " ")
         .trim()
 
     val reasoningPrefixes = listOf(
         "reasoning_content",
         "reasoning:",
         "thinking:",
-        "thoughts:"
+        "thoughts:",
+        "analysis:"
     )
     cleaned = cleaned
         .lineSequence()
-        .filterNot { line ->
+        .mapNotNull { line ->
             val normalized = line.trim().lowercase()
-            reasoningPrefixes.any { normalized.startsWith(it) }
+            if (reasoningPrefixes.any { normalized.startsWith(it) }) {
+                null
+            } else {
+                stripFinalAnswerPrefix(line)
+            }
         }
         .joinToString("\n")
         .trim()
 
     return PDFSummaryLogic.cleanLlamaOutput(cleaned).trim()
+}
+
+private fun String.replaceReasoningBlock(start: Regex, end: Regex): String {
+    val lines = lineSequence().toList()
+    val output = mutableListOf<String>()
+    var skipping = false
+    for (line in lines) {
+        when {
+            !skipping && start.containsMatchIn(line) -> {
+                skipping = true
+            }
+            skipping && end.containsMatchIn(line) -> {
+                skipping = false
+                val endMarker = end.find(line)?.groupValues?.getOrNull(1).orEmpty().lowercase()
+                val finalLine = if (endMarker == "prompt") line else end.replace(line, "")
+                output.add(finalLine.trim())
+            }
+            !skipping -> output.add(line)
+        }
+    }
+    return output.joinToString("\n")
+}
+
+private fun stripFinalAnswerPrefix(line: String): String {
+    return line.replace(
+        Regex("(?i)^\\s*(Final answer|Answer)\\s*:\\s*"),
+        ""
+    )
 }
 
 internal fun sanitizeTamaJsonPayload(raw: String): String {

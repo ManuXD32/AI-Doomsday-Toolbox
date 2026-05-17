@@ -214,6 +214,13 @@ class DatasetProcessor(
                 OllamaDatasetLlmBackend(project)
             }
 
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> {
+                if (project.ollamaModel.isNullOrBlank()) {
+                    throw IllegalStateException(context.getString(R.string.dataset_llama_swap_model_required))
+                }
+                LlamaSwapDatasetLlmBackend(project)
+            }
+
             else -> LlamaServerDatasetLlmBackend(createApi(project.serverUrl))
         }
     }
@@ -272,10 +279,26 @@ class DatasetProcessor(
     private fun pdfImportDiagnostics(
         fileName: String,
         extraction: PdfExtractionResult? = null,
+        progress: PdfExtractionProgress? = null,
         chunkCount: Int? = null
     ): String = buildString {
         append(importFileLabel(context.getString(R.string.file_type_pdf), fileName))
-        extraction?.let {
+        progress?.let {
+            append('\n')
+            append(
+                context.getString(
+                    R.string.dataset_import_pdf_pages_diag,
+                    it.totalPages,
+                    it.textLayerPages,
+                    it.ocrPages,
+                    it.emptyPages
+                )
+            )
+            append('\n')
+            append(context.getString(R.string.dataset_import_pdf_page_progress_diag, it.processedPages, it.totalPages))
+            append('\n')
+            append(context.getString(R.string.dataset_import_text_chars_diag, it.textCharacters))
+        } ?: extraction?.let {
             append('\n')
             append(
                 context.getString(
@@ -316,7 +339,6 @@ class DatasetProcessor(
         sourceType: SourceType,
         sourceUri: String,
         sourceName: String,
-        text: String,
         chunkTexts: List<String>
     ) {
         db.withTransaction {
@@ -334,7 +356,7 @@ class DatasetProcessor(
                     type = sourceType,
                     uri = sourceUri,
                     name = sourceName,
-                    extractedText = text
+                    extractedText = null
                 )
             )
             dao.insertChunks(
@@ -360,6 +382,7 @@ class DatasetProcessor(
             try {
                 val uri = Uri.parse(sourceUri)
                 val pdfService = PDFService(context)
+                var extractionProgressTotal = 4
 
                 updateProgress(
                     Progress(
@@ -381,14 +404,25 @@ class DatasetProcessor(
                         project.id
                     )
                 )
-                val extraction = pdfService.extractTextDetailed(uri).getOrThrow()
+                val extraction = pdfService.extractTextDetailed(uri) { pageProgress ->
+                    extractionProgressTotal = pageProgress.totalPages + 3
+                    updateProgress(
+                        Progress(
+                            context.getString(R.string.dataset_import_stage_extracting_pdf),
+                            current = 1 + pageProgress.processedPages,
+                            total = extractionProgressTotal,
+                            currentItem = pdfImportDiagnostics(fileName, progress = pageProgress),
+                            projectId = project.id
+                        )
+                    )
+                }.getOrThrow()
 
                 ensureActive()
                 updateProgress(
                     Progress(
                         context.getString(R.string.dataset_import_stage_chunking),
-                        3,
-                        4,
+                        extractionProgressTotal - 1,
+                        extractionProgressTotal,
                         pdfImportDiagnostics(fileName, extraction),
                         project.id
                     )
@@ -401,9 +435,9 @@ class DatasetProcessor(
                 updateProgress(
                     Progress(
                         context.getString(R.string.dataset_import_stage_saving),
-                        4,
-                        4,
-                        pdfImportDiagnostics(fileName, extraction, chunkTexts.size),
+                        extractionProgressTotal,
+                        extractionProgressTotal,
+                        pdfImportDiagnostics(fileName, extraction = extraction, chunkCount = chunkTexts.size),
                         project.id
                     )
                 )
@@ -412,7 +446,6 @@ class DatasetProcessor(
                     sourceType = SourceType.PDF,
                     sourceUri = sourceUri,
                     sourceName = fileName,
-                    text = extraction.text,
                     chunkTexts = chunkTexts
                 )
                 outcome = JobOutcome.SUCCESS
@@ -498,7 +531,6 @@ class DatasetProcessor(
                     sourceType = SourceType.TXT,
                     sourceUri = sourceUri,
                     sourceName = fileName,
-                    text = text,
                     chunkTexts = chunkTexts
                 )
                 outcome = JobOutcome.SUCCESS

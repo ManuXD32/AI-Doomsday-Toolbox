@@ -8,6 +8,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.onnx.OnnxImageGenConfig
 import com.example.llamadroid.onnx.OnnxImageGenMode
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
@@ -133,11 +134,13 @@ private data class HardCompactionState(
 )
 
 data class AgentLlamaServerRuntimeState(
+    val backend: String = com.example.llamadroid.data.SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
     val baseUrl: String = "",
     val isConnected: Boolean = false,
     val hasChecked: Boolean = false,
     val isRefreshing: Boolean = false,
     val modelLabel: String? = null,
+    val availableModels: List<String> = emptyList(),
     val contextTokens: Int? = null,
     val contextLabel: String? = null,
     val errorMessage: String? = null,
@@ -711,29 +714,38 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         settingsRepo: com.example.llamadroid.data.SettingsRepository,
         force: Boolean = false
     ): Result<AgentLlamaServerRuntimeState> = withContext(Dispatchers.IO) {
-        val baseUrl = settingsRepo.llamaServerUrl.value.trim().trimEnd('/')
+        val backend = com.example.llamadroid.data.SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+        val isLlamaSwap = com.example.llamadroid.data.SettingsRepository.isLlamaSwapBackend(backend)
+        val backendLabel = if (isLlamaSwap) "llama-swap" else "llama-server"
+        val baseUrl = if (isLlamaSwap) {
+            settingsRepo.agentLlamaSwapUrl.value
+        } else {
+            settingsRepo.llamaServerUrl.value
+        }.trim().trimEnd('/')
         if (baseUrl.isBlank()) {
             val state = AgentLlamaServerRuntimeState(
+                backend = backend,
                 baseUrl = baseUrl,
                 hasChecked = true,
-                errorMessage = "Missing llama-server URL",
+                errorMessage = "Missing $backendLabel URL",
                 updatedAt = System.currentTimeMillis()
             )
             _llamaServerRuntimeState.value = state
-            return@withContext Result.failure(IllegalArgumentException("Missing llama-server URL"))
+            return@withContext Result.failure(IllegalArgumentException("Missing $backendLabel URL"))
         }
 
-        cachedLlamaServerRuntimeState(baseUrl, force)?.let { cached ->
+        cachedLlamaServerRuntimeState(backend, baseUrl, force)?.let { cached ->
             return@withContext Result.success(cached)
         }
 
         llamaServerMetadataMutex.withLock {
-            cachedLlamaServerRuntimeState(baseUrl, force)?.let { cached ->
+            cachedLlamaServerRuntimeState(backend, baseUrl, force)?.let { cached ->
                 return@withLock Result.success(cached)
             }
 
-            val previous = _llamaServerRuntimeState.value.takeIf { it.baseUrl == baseUrl }
+            val previous = _llamaServerRuntimeState.value.takeIf { it.baseUrl == baseUrl && it.backend == backend }
             _llamaServerRuntimeState.value = (previous ?: AgentLlamaServerRuntimeState(baseUrl = baseUrl)).copy(
+                backend = backend,
                 baseUrl = baseUrl,
                 isRefreshing = true,
                 errorMessage = null
@@ -750,45 +762,55 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
             if (!isConnected) {
                 val state = AgentLlamaServerRuntimeState(
+                    backend = backend,
                     baseUrl = baseUrl,
                     isConnected = false,
                     hasChecked = true,
                     isRefreshing = false,
                     modelLabel = fallbackModelLabel,
+                    availableModels = previous?.availableModels.orEmpty(),
                     contextTokens = fallbackContextTokens,
                     contextLabel = fallbackContextLabel,
-                    errorMessage = "llama-server is offline",
+                    errorMessage = "$backendLabel is offline",
                     updatedAt = now
                 )
                 _llamaServerRuntimeState.value = state
-                return@withLock Result.failure(IllegalStateException("llama-server is offline"))
+                return@withLock Result.failure(IllegalStateException("$backendLabel is offline"))
             }
 
             val metadata = RemoteSummaryClientFactory.fromConfig(
                 RemoteSummaryBackendConfig(
-                    backend = com.example.llamadroid.data.SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
+                    backend = backend,
                     baseUrl = baseUrl,
-                    model = null,
+                    model = if (isLlamaSwap) settingsRepo.agentOrchestratorModel.value.trim().ifBlank { null } else null,
                     timeoutMinutes = 1
                 )
             ).fetchMetadata().getOrNull()
 
-            val contextTokens = metadata?.serverContextTokens ?: fallbackContextTokens
+            val contextTokens = if (isLlamaSwap) null else metadata?.serverContextTokens ?: fallbackContextTokens
             val contextLabel = metadata?.serverContextLabel
                 ?: contextTokens?.let { "$it tokens" }
                 ?: fallbackContextLabel
-            val modelLabel = metadata?.serverModelLabel ?: fallbackModelLabel
+            val modelLabel = if (isLlamaSwap) {
+                settingsRepo.agentOrchestratorModel.value.trim().ifBlank { metadata?.availableModels?.firstOrNull() }
+            } else {
+                metadata?.serverModelLabel ?: fallbackModelLabel
+            }
 
-            settingsRepo.setAgentLlamaServerModelLabel(modelLabel)
-            settingsRepo.setAgentLlamaServerContextTokens(contextTokens)
-            settingsRepo.setAgentLlamaServerContextLabel(contextLabel)
+            if (!isLlamaSwap) {
+                settingsRepo.setAgentLlamaServerModelLabel(modelLabel)
+                settingsRepo.setAgentLlamaServerContextTokens(contextTokens)
+                settingsRepo.setAgentLlamaServerContextLabel(contextLabel)
+            }
 
             val state = AgentLlamaServerRuntimeState(
+                backend = backend,
                 baseUrl = baseUrl,
                 isConnected = true,
                 hasChecked = true,
                 isRefreshing = false,
                 modelLabel = modelLabel,
+                availableModels = metadata?.availableModels.orEmpty(),
                 contextTokens = contextTokens,
                 contextLabel = contextLabel,
                 updatedAt = now
@@ -1794,6 +1816,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         val lastOrchestratorPromptSnapshot: StateFlow<PromptContextSnapshot?> = _lastOrchestratorPromptSnapshot.asStateFlow()
         private val _llamaServerRuntimeState = MutableStateFlow(AgentLlamaServerRuntimeState())
         val llamaServerRuntimeState: StateFlow<AgentLlamaServerRuntimeState> = _llamaServerRuntimeState.asStateFlow()
+        private val _selectedKnowledgeBaseIds = MutableStateFlow<List<Long>>(emptyList())
+        val selectedKnowledgeBaseIds: StateFlow<List<Long>> = _selectedKnowledgeBaseIds.asStateFlow()
         private val recentCompactionEvents = ArrayDeque<PromptCompactionEvent>(4)
         private val promptTokenCalibrationByBackendModel = java.util.concurrent.ConcurrentHashMap<String, Double>()
         private val llamaServerMetadataMutex = Mutex()
@@ -1819,6 +1843,14 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             } else {
                 appContext.getString(R.string.agent_status_idle)
             }
+        }
+
+        fun setSelectedKnowledgeBaseIds(ids: List<Long>) {
+            _selectedKnowledgeBaseIds.value = ids.distinct().filter { it > 0L }
+        }
+
+        fun setSelectedKnowledgeBaseIdsCsv(csv: String?) {
+            setSelectedKnowledgeBaseIds(KnowledgeBaseRepository.selectedKnowledgeBaseIdsFromCsv(csv))
         }
 
         fun setIsLoading(loading: Boolean, status: String? = null) {
@@ -1885,13 +1917,14 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         }
 
         private fun cachedLlamaServerRuntimeState(
+            backend: String,
             baseUrl: String,
             force: Boolean
         ): AgentLlamaServerRuntimeState? {
             if (force) return null
             val cached = _llamaServerRuntimeState.value
             val isFresh = (System.currentTimeMillis() - cached.updatedAt) < LLAMA_SERVER_METADATA_STALE_MS
-            return cached.takeIf { it.baseUrl == baseUrl && it.hasChecked && isFresh }
+            return cached.takeIf { it.backend == backend && it.baseUrl == baseUrl && it.hasChecked && isFresh }
         }
 
         private fun agentImageGenerationResolutionOptions(): Set<String> = setOf(
@@ -3568,9 +3601,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
          * examples, and parameter descriptions for all available tools.
          * Called at conversation start and when custom tools change.
          */
-        private fun buildToolsReferenceContent(): String {
-            val tools = getAgentTools()
+        private fun buildToolsReferenceContent(
+            tools: List<AgentTool> = getAgentTools()
+        ): String {
+            val availableToolNames = tools.mapTo(mutableSetOf()) { it.name }
             val customTools = _loadedCustomTools.value
+                .filter { it.isEnabled && it.name in availableToolNames }
 
             return buildString {
                 appendLine("# Tools Reference")
@@ -3689,9 +3725,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             }.trim()
         }
 
-        fun writeToolsReference() {
+        fun writeToolsReference(tools: List<AgentTool>? = null) {
             val svc = activeInstance ?: return // No instance available yet
-            val content = buildToolsReferenceContent()
+            val content = buildToolsReferenceContent(tools ?: getAgentTools())
 
             // Write asynchronously via SSH (overwrites each time)
             agentScope.launch(Dispatchers.IO) {
@@ -3779,6 +3815,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     ensureAgentRunActive(runEpoch)
                     val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
                     val useLlamaServer = SettingsRepository.isLlamaServerBackend(backend)
+                    val useLlamaSwap = SettingsRepository.isLlamaSwapBackend(backend)
+                    val useOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(backend)
                     val model = if (useLlamaServer) {
                         agentService.refreshLlamaServerRuntimeState(settingsRepo).getOrNull()?.modelLabel
                             ?: settingsRepo.agentLlamaServerModelLabel.value
@@ -3838,9 +3876,10 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         agentService.buildMemoryInterruptPrompt().getOrNull()
                     }
 
-                    // Ensure tools_reference.md is up to date at start of each message
-                    writeToolsReference()
-                    val recoveryToolRefresh = if (recoveryMode) buildRecoveryToolRefreshPrompt() else null
+                    // Ensure tools_reference.md matches the exact enabled tools for this turn.
+                    writeToolsReference(availableTools)
+                    val canReadToolsReference = availableTools.any { it.name == "read_file" }
+                    val recoveryToolRefresh = if (recoveryMode && canReadToolsReference) buildRecoveryToolRefreshPrompt() else null
 
                     // Build system prompt with specialized info
                     val standardToolNames = availableTools
@@ -3860,7 +3899,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         append("Structured brain files: brain/initial_order.md, brain/plan.md, brain/context_compaction.md, brain/summary.md, brain/current_task.md, brain/todo.md, brain/decisions.md, brain/changed_files.md, brain/timeline.md\n")
                         append("Available standard tools: $standardToolNames\n")
                         append("Available custom tools: $customToolNames\n")
-                        append("Your complete tools reference with examples is at: brain/tools_reference.md (use read_file to refresh exact tool syntax)\n")
+                        if (canReadToolsReference) {
+                            append("Your complete tools reference with examples is at: brain/tools_reference.md (use read_file to refresh exact tool syntax)\n")
+                        } else {
+                            append("The available tool list above is authoritative. Do not call tools outside that list.\n")
+                        }
                         append("Command tools default to the last 10 lines. Increase the optional lines argument only when you need more context.\n")
                         append("When you need a tool, emit a real tool call. Do NOT place tool JSON inside <think>, markdown fences, or plain assistant text.\n")
                         append("Before writing or editing a file, read the current file state first. After you change a file, reread it or check brain/changed_files.md before editing it again.\n")
@@ -3880,7 +3923,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
                     // Inject compact reminders periodically to prevent model drift without resending large tool text
                     val userMsgCount = promptHistoryMessages.count { it.role == "user" }
-                    val toolsRefReminder = if (!hardCompactionMode && !recoveryMode && userMsgCount > 0 && userMsgCount % promptProfile.refreshReminderEvery == 0) {
+                    val toolsRefReminder = if (canReadToolsReference && !hardCompactionMode && !recoveryMode && userMsgCount > 0 && userMsgCount % promptProfile.refreshReminderEvery == 0) {
                         ChatMessage(role = "system", content = "REMINDER: Refresh tool syntax from brain/tools_reference.md and state from brain/summary.md plus brain/current_task.md when context feels stale. Use wait_command/check_command/command_list instead of rerunning active commands.")
                     } else null
 
@@ -4016,9 +4059,13 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     _streamingContent.value = ""
                     _streamingThinking.value = ""
 
-                    val response = if (useLlamaServer) {
-                        // Use llama-server (OpenAI-compatible API)
-                        val llamaUrl = settingsRepo.llamaServerUrl.value
+                    val response = if (useOpenAiBackend) {
+                        // Use OpenAI-compatible API (llama-server or llama-swap)
+                        val llamaUrl = if (useLlamaSwap) {
+                            settingsRepo.agentLlamaSwapUrl.value
+                        } else {
+                            settingsRepo.llamaServerUrl.value
+                        }
                         llamaServerChatService.chatWithToolsStreaming(
                             baseUrl = llamaUrl,
                             messages = packedContext.messages.map { it.toOllamaMessage(includeThinking = false) },
@@ -4897,6 +4944,43 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 val query = toolCall.arguments["query"] ?: ""
                                 agentService.kiwixSearch(query, ollamaService, settingsRepo).getOrThrow()
                             }
+                            "kb_search" -> {
+                                val selectedIds = _selectedKnowledgeBaseIds.value
+                                if (selectedIds.isEmpty()) {
+                                    throw IllegalStateException("Select at least one knowledge base for this agent project before using kb_search.")
+                                }
+                                val query = effectiveToolCall.arguments["query"] ?: ""
+                                val maxResults = effectiveToolCall.arguments["max_results"]?.toIntOrNull()
+                                    ?: KnowledgeBaseRepository.DEFAULT_SEARCH_RESULTS
+                                val repo = KnowledgeBaseRepository(context, AppDatabase.getDatabase(context))
+                                repo.search(query, selectedIds, maxResults).joinToString("\n\n") { result ->
+                                    buildString {
+                                        appendLine("[chunk_id=${result.chunkId}] ${result.knowledgeBaseName} / ${result.sourceTitle}")
+                                        appendLine("citation=${result.citationMarkdown}")
+                                        appendLine("score=${"%.3f".format(java.util.Locale.US, result.score)}")
+                                        append(result.text.take(1_600))
+                                    }
+                                }.ifBlank { "No matching knowledge-base chunks found." }
+                            }
+                            "kb_read_chunk" -> {
+                                val selectedIds = _selectedKnowledgeBaseIds.value
+                                if (selectedIds.isEmpty()) {
+                                    throw IllegalStateException("Select at least one knowledge base for this agent project before using kb_read_chunk.")
+                                }
+                                val chunkId = effectiveToolCall.arguments["chunk_id"]?.toLongOrNull()
+                                    ?: throw IllegalArgumentException("chunk_id is required.")
+                                val includeNeighbors = effectiveToolCall.arguments["include_neighbors"]
+                                    ?.equals("true", ignoreCase = true) == true
+                                KnowledgeBaseRepository(context, AppDatabase.getDatabase(context))
+                                    .readChunk(chunkId, includeNeighbors, selectedIds)
+                            }
+                            "kb_list_sources" -> {
+                                val selectedIds = _selectedKnowledgeBaseIds.value
+                                if (selectedIds.isEmpty()) {
+                                    throw IllegalStateException("Select at least one knowledge base for this agent project before using kb_list_sources.")
+                                }
+                                KnowledgeBaseRepository(context, AppDatabase.getDatabase(context)).listSources(selectedIds)
+                            }
                             "read_memory" -> {
                                 agentService.readMemory(toolCall.arguments["filename"] ?: "").getOrThrow()
                             }
@@ -4984,6 +5068,44 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                                 }
                                                 "web_search" -> agentService.webSearch(nestedArgs["query"] ?: "", ollamaService, settingsRepo).getOrThrow()
                                                 "kiwix_search" -> agentService.kiwixSearch(nestedArgs["query"] ?: "", ollamaService, settingsRepo).getOrThrow()
+                                                "kb_search" -> {
+                                                    val selectedIds = _selectedKnowledgeBaseIds.value
+                                                    if (selectedIds.isEmpty()) {
+                                                        "ERROR: Select at least one knowledge base for this agent project before using kb_search."
+                                                    } else {
+                                                        val maxResults = nestedArgs["max_results"]?.toIntOrNull()
+                                                            ?: KnowledgeBaseRepository.DEFAULT_SEARCH_RESULTS
+                                                        KnowledgeBaseRepository(context, AppDatabase.getDatabase(context))
+                                                            .search(nestedArgs["query"] ?: "", selectedIds, maxResults)
+                                                            .joinToString("\n\n") { result ->
+                                                                "[chunk_id=${result.chunkId}] ${result.knowledgeBaseName} / ${result.sourceTitle}\n" +
+                                                                    "citation=${result.citationMarkdown}\n" +
+                                                                    result.text.take(1_200)
+                                                            }
+                                                            .ifBlank { "No matching knowledge-base chunks found." }
+                                                    }
+                                                }
+                                                "kb_read_chunk" -> {
+                                                    val selectedIds = _selectedKnowledgeBaseIds.value
+                                                    if (selectedIds.isEmpty()) {
+                                                        "ERROR: Select at least one knowledge base for this agent project before using kb_read_chunk."
+                                                    } else {
+                                                        val chunkId = nestedArgs["chunk_id"]?.toLongOrNull()
+                                                            ?: throw IllegalArgumentException("chunk_id is required.")
+                                                        val includeNeighbors = nestedArgs["include_neighbors"]
+                                                            ?.equals("true", ignoreCase = true) == true
+                                                        KnowledgeBaseRepository(context, AppDatabase.getDatabase(context))
+                                                            .readChunk(chunkId, includeNeighbors, selectedIds)
+                                                    }
+                                                }
+                                                "kb_list_sources" -> {
+                                                    val selectedIds = _selectedKnowledgeBaseIds.value
+                                                    if (selectedIds.isEmpty()) {
+                                                        "ERROR: Select at least one knowledge base for this agent project before using kb_list_sources."
+                                                    } else {
+                                                        KnowledgeBaseRepository(context, AppDatabase.getDatabase(context)).listSources(selectedIds)
+                                                    }
+                                                }
                                                 "fetch_url" -> agentService.fetchUrl(nestedArgs["url"] ?: "").getOrThrow()
                                                 "read_memory" -> agentService.readMemory(nestedArgs["filename"] ?: "").getOrThrow()
                                                 "list_memory" -> agentService.listMemory().getOrThrow()
@@ -6822,7 +6944,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             }
 
-            val integerParams = setOf("start_line", "end_line", "max_lines", "lines", "wait_seconds")
+            val integerParams = setOf("start_line", "end_line", "max_lines", "lines", "wait_seconds", "chunk_id", "max_results")
             integerParams.forEach { key ->
                 normalizedArgs[key]?.takeIf { it.isNotBlank() }?.let { value ->
                     if (value.toIntOrNull() == null) {
@@ -6837,6 +6959,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             }
             normalizedArgs["append_newline"]?.takeIf { it !in setOf("true", "false") }?.let {
                 return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` argument `append_newline` must be `true` or `false`."))
+            }
+            normalizedArgs["include_neighbors"]?.takeIf { it !in setOf("true", "false") }?.let {
+                return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` argument `include_neighbors` must be `true` or `false`."))
             }
             normalizedArgs["status"]?.takeIf { it.isNotBlank() && it !in setOf("SUCCESS", "FAILED") }?.let {
                 return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` argument `status` must be `SUCCESS` or `FAILED`."))
@@ -6995,7 +7120,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     lines.firstOrNull { it.startsWith("Lines ") }
                         ?: lines.firstOrNull { it.startsWith("File: ") }
                         ?: "Requested file content was read successfully."
-                "read_file_lines", "read_memory", "search_code", "list_directory" -> "Requested data was read successfully."
+                "read_file_lines", "read_memory", "search_code", "list_directory",
+                "kb_search", "kb_read_chunk", "kb_list_sources" -> "Requested data was read successfully."
                 else -> lines.firstOrNull() ?: "$toolName completed successfully."
             }
         }
@@ -7025,6 +7151,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         "Use the observed context to decide the next edit, review, or command."
                     }
                 "read_file_lines", "search_code", "list_directory" -> "Use the observed context to decide the next edit, review, or command."
+                "kb_search" -> "Use kb_read_chunk with a returned chunk_id if surrounding context is needed; cite KB-derived claims with the returned Markdown citation link."
+                "kb_read_chunk", "kb_list_sources" -> "Use the selected knowledge-base context only when it is relevant to the project."
+                "web_search", "kiwix_search", "fetch_url" -> "Cite web/Kiwix/fetched claims with the returned source_citations Markdown links; do not leave bare [1] references in the final answer."
                 else -> null
             }
             val orchestrationHint = if (_currentAgent.value == AgentRole.ORCHESTRATOR &&
@@ -7048,6 +7177,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val repo = settingsRepo ?: AgentForegroundService.getSettingsRepository(com.example.llamadroid.LlamaApplication.instance)
             val kiwixEnabled = repo.agentKiwixEnabled.value
             val imageGenerationToolEnabled = repo.agentImageGenerationToolEnabled.value
+            val webSearchEnabled = repo.agentWebSearchEnabled.value
+            val visionEnabled = isVisionEnabledForAgent(role, activeCustom, repo)
             val capabilityPolicy = resolveCapabilityPolicy(role, activeCustom)
 
             val tools = mutableListOf(
@@ -7212,22 +7343,6 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     requiredParams = emptyList()
                 ),
                 AgentTool(
-                    name = "fetch_url",
-                    description = "Fetch content from a URL. Useful for reading documentation or external APIs.",
-                    parameters = mapOf(
-                        "url" to "The URL to fetch"
-                    ),
-                    requiredParams = listOf("url")
-                ),
-                AgentTool(
-                    name = "view_image",
-                    description = "Inspect an image from the current project workspace on the next model turn. Requires vision to be enabled for the current agent.",
-                    parameters = mapOf(
-                        "path" to "Image path relative to project root, e.g., 'art/concepts/forest.png'"
-                    ),
-                    requiredParams = listOf("path")
-                ),
-                AgentTool(
                     name = "reflection",
                     description = "Critically compare the completed work against the approved implementation plan, identify missing work or quality risks, and decide whether finalization is safe. Use near completion or after a major milestone. Limited to 2 calls in any rolling 6-turn window.",
                     parameters = mapOf(
@@ -7262,16 +7377,32 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     requiredParams = listOf("path", "start_line", "end_line")
                 ),
                 AgentTool(
-                    name = "web_search",
-                    description = "Search the web for information. Returns a list of result titles, URLs, and snippets. Use this when you need up-to-date information, documentation, or answers that may not be in the project files.",
+                    name = "kb_search",
+                    description = "Search only the knowledge bases selected for this agent project. Returns cited chunks with chunk_id values and Markdown citation links. If no knowledge base is selected, ask the user to select one. Cite KB-derived claims with those links.",
                     parameters = mapOf(
-                        "query" to "Search query string"
+                        "query" to "Question or search text",
+                        "max_results" to "Optional maximum matching chunks to return"
                     ),
                     requiredParams = listOf("query")
                 ),
                 AgentTool(
+                    name = "kb_read_chunk",
+                    description = "Read a selected knowledge-base chunk by chunk_id. Set include_neighbors=true when the answer needs surrounding context.",
+                    parameters = mapOf(
+                        "chunk_id" to "Numeric chunk id returned by kb_search",
+                        "include_neighbors" to "Optional true to include adjacent chunks from the same source"
+                    ),
+                    requiredParams = listOf("chunk_id")
+                ),
+                AgentTool(
+                    name = "kb_list_sources",
+                    description = "List the sources available in the knowledge bases selected for this agent project.",
+                    parameters = emptyMap(),
+                    requiredParams = emptyList()
+                ),
+                AgentTool(
                     name = "run_tools_sequential",
-                    description = "Execute multiple tools sequentially in a single call. Useful for batching read-only operations like reading multiple files or searching. Tools that require approval or mutate execution state (write_file, run_command, edit_lines, apply_patch, create_folder, generate_image, view_image, cancel_command, send_command_input, call_agent, propose_plan, finish_task, reflection, write_memory, rewrite_memory, delete_memory) are NOT allowed here — call them individually. Provide a JSON array of tool calls.",
+                    description = "Execute multiple read-only tools sequentially in a single call, such as reading multiple files or searching. Do not include tools that require approval, mutate files or memory, control running commands, delegate/finish tasks, request reflection, or inspect images; call those individually when they are available. Provide a JSON array of tool calls.",
                     parameters = mapOf(
                         "tools_json" to "JSON array of tool calls. Each element: {\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}. Example: [{\"name\": \"read_file\", \"arguments\": {\"path\": \"a.py\"}}, {\"name\": \"read_file\", \"arguments\": {\"path\": \"b.py\"}}]"
                     ),
@@ -7279,11 +7410,47 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             )
 
+            if (visionEnabled) {
+                tools.add(
+                    AgentTool(
+                        name = "view_image",
+                        description = "Inspect an image from the current project workspace on the next model turn.",
+                        parameters = mapOf(
+                            "path" to "Image path relative to project root, e.g., 'art/concepts/forest.png'"
+                        ),
+                        requiredParams = listOf("path")
+                    )
+                )
+            }
+
+            if (webSearchEnabled) {
+                tools.add(
+                    AgentTool(
+                        name = "web_search",
+                        description = "Search the web for information. Returns result titles, URLs, snippets, and Markdown citation links. Cite claims from web results with the returned citation links. Use this when you need up-to-date information, documentation, or answers that may not be in the project files.",
+                        parameters = mapOf(
+                            "query" to "Search query string"
+                        ),
+                        requiredParams = listOf("query")
+                    )
+                )
+                tools.add(
+                    AgentTool(
+                        name = "fetch_url",
+                        description = "Fetch content from a URL and return a Markdown citation link for that source. Useful for reading documentation or external APIs after web_search finds a promising source.",
+                        parameters = mapOf(
+                            "url" to "The URL to fetch"
+                        ),
+                        requiredParams = listOf("url")
+                    )
+                )
+            }
+
             if (kiwixEnabled) {
                 tools.add(
                     AgentTool(
                         name = "kiwix_search",
-                        description = "Search the local offline Kiwix library (Wikipedia, StackOverflow, etc.). Use this as an alternative to web_search for offline knowledge access.",
+                        description = "Search the local offline Kiwix library (Wikipedia, StackOverflow, etc.). Returns Markdown citation links; cite claims from Kiwix results with those links. Use this as an alternative to web_search for offline knowledge access.",
                         parameters = mapOf(
                             "query" to "Search query string"
                         ),
@@ -7760,10 +7927,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
                         contentResult = Result.success(
                             buildString {
+                                val citation = NativeChatToolRuntime.sourceCitationMarkdown(finalUrl, finalUrl)
                                 appendLine("trust: untrusted_external_content")
                                 appendLine("source_url: $finalUrl")
+                                appendLine("citation_token: [1]")
+                                appendLine("citation: $citation")
+                                appendLine("source_citation: $citation")
                                 appendLine("content_type: ${contentType.ifBlank { "unknown" }}")
                                 appendLine("redirects_followed: $redirectCount")
+                                appendLine(NativeChatToolRuntime.sourceCitationBlock(listOf("1. $citation")))
+                                appendLine()
                                 append(body)
                             }.trimEnd()
                         )
@@ -9311,16 +9484,26 @@ sys.exit(proc.returncode)
             )
         )
 
-        val result = if (SettingsRepository.isLlamaServerBackend(settingsRepo.agentBackend.value)) {
-            val baseUrl = settingsRepo.llamaServerUrl.value.trim()
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+        val result = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
+            val baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                settingsRepo.agentLlamaSwapUrl.value.trim()
+            } else {
+                settingsRepo.llamaServerUrl.value.trim()
+            }
             if (baseUrl.isBlank()) {
-                return Result.failure(IllegalStateException("Missing llama-server URL"))
+                val label = if (SettingsRepository.isLlamaSwapBackend(backend)) "llama-swap" else "llama-server"
+                return Result.failure(IllegalStateException("Missing $label URL"))
             }
             llamaServerChatService.chatWithToolsStreaming(
                 baseUrl = baseUrl,
                 messages = summaryMessages,
                 tools = emptyList(),
-                modelLabel = settingsRepo.agentLlamaServerModelLabel.value,
+                modelLabel = if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                    summarizerModel
+                } else {
+                    settingsRepo.agentLlamaServerModelLabel.value
+                },
                 thinkingEnabled = false,
                 numCtx = summarizerCtx
             ) { _, _ -> }
@@ -9384,6 +9567,7 @@ sys.exit(proc.returncode)
 
             val output = StringBuilder()
             output.append("Web search results for: $query ($resultCount results summarized)\n\n")
+            val sourceCitations = mutableListOf<String>()
 
             for (i in 0 until resultCount) {
                 val link = links[i]
@@ -9449,11 +9633,18 @@ sys.exit(proc.returncode)
                 }
 
                 output.append("${i + 1}. $title\n   URL: $actualUrl\n")
+                val citation = NativeChatToolRuntime.sourceCitationMarkdown(title, actualUrl)
+                sourceCitations += "${i + 1}. $citation"
+                output.append("   Citation token: [${i + 1}]\n")
+                output.append("   Citation: $citation\n")
+                output.append("   Source citation: $citation\n")
                 if (summary.isNotBlank()) output.append("   Summary: $summary\n")
                 output.append("\n")
             }
 
-            output.append("TIP: Use the fetch_url tool with any URL above to get the full page content if you need more details.")
+            output.append(NativeChatToolRuntime.sourceCitationBlock(sourceCitations))
+            output.append("\n\n")
+            output.append("TIP: Cite web-derived claims with the source_citations Markdown links above. Use the fetch_url tool with any URL above to get the full page content if you need more details.")
 
             Companion.refreshIdleStatusIfNeeded()
             Result.success(output.toString().trimEnd())
@@ -9507,6 +9698,7 @@ sys.exit(proc.returncode)
 
             val output = StringBuilder()
             output.append("Kiwix search results for: $query ($resultCount summarized)\n\n")
+            val sourceCitations = mutableListOf<String>()
 
             for (i in 0 until resultCount) {
                 val link = links[i]
@@ -9561,9 +9753,16 @@ sys.exit(proc.returncode)
                 }
 
                 output.append("${i + 1}. $title\n   URL: $fullResultUrl\n")
+                val citation = NativeChatToolRuntime.sourceCitationMarkdown(title, fullResultUrl)
+                sourceCitations += "${i + 1}. $citation"
+                output.append("   Citation token: [${i + 1}]\n")
+                output.append("   Citation: $citation\n")
+                output.append("   Source citation: $citation\n")
                 if (summary.isNotBlank()) output.append("   Summary: $summary\n")
                 output.append("\n")
             }
+
+            output.append(NativeChatToolRuntime.sourceCitationBlock(sourceCitations))
 
             Companion.refreshIdleStatusIfNeeded()
             Result.success(output.toString().trimEnd())

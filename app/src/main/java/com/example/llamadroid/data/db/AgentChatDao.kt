@@ -39,6 +39,9 @@ interface AgentChatDao {
     
     @Query("UPDATE agent_conversations SET lastAgentRole = :role, lastTask = :task, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateConversationState(id: Long, role: String, task: String?, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE agent_conversations SET knowledgeBaseIds = :knowledgeBaseIds, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateKnowledgeBaseIds(id: Long, knowledgeBaseIds: String, updatedAt: Long = System.currentTimeMillis())
     
     // ========== Messages ==========
     

@@ -144,6 +144,11 @@ class LlamaRepository(
     ) = messageDao.updateMessageThinkingAndContent(id, content, thinking, promptTokens, completionTokens, tps, generationTimeMs)
     
     suspend fun deleteMessage(message: LlamaMessageEntity) = messageDao.deleteMessage(message)
+
+    suspend fun clearChatMessages(chatId: Long) {
+        messageDao.deleteAllMessagesForChat(chatId)
+        chatDao.updateLastModified(chatId)
+    }
     
     // For "Edit and Regenerate": Delete all messages after the edited one
     suspend fun deleteMessagesAfter(chatId: Long, timestamp: Long, messageId: Long) =

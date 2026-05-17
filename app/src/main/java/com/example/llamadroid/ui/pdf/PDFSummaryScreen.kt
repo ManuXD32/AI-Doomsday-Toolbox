@@ -81,7 +81,9 @@ fun PDFSummaryScreen(navController: NavController) {
     val backend by settingsRepo.pdfSummaryBackend.collectAsState()
     val ollamaUrl by settingsRepo.pdfSummaryOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.pdfSummaryLlamaServerUrl.collectAsState()
+    val llamaSwapUrl by settingsRepo.pdfSummaryLlamaSwapUrl.collectAsState()
     val ollamaModel by settingsRepo.pdfSummaryOllamaModel.collectAsState()
+    val llamaSwapModel by settingsRepo.pdfSummaryLlamaSwapModel.collectAsState()
     val thinkingEnabled by settingsRepo.pdfSummaryThinkingEnabled.collectAsState()
     val contextSize by settingsRepo.pdfContextSize.collectAsState()
     val maxTokens by settingsRepo.pdfMaxTokens.collectAsState()
@@ -113,17 +115,24 @@ fun PDFSummaryScreen(navController: NavController) {
         }
     }
 
-    val backendReady = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-        llamaServerUrl.isNotBlank()
-    } else {
-        ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
+    val normalizedBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
+    val backendReady = when (normalizedBackend) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
+        else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
     }
 
     val warningMessage = when {
-        !backendReady && backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
+        !backendReady && normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
             stringResource(R.string.pdf_missing_llama_server_url)
+        !backendReady && normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP ->
+            if (llamaSwapUrl.isBlank()) {
+                stringResource(R.string.pdf_missing_llama_swap_url)
+            } else {
+                stringResource(R.string.pdf_error_missing_llama_swap_model)
+            }
         !backendReady -> stringResource(R.string.pdf_error_missing_ollama_model)
-        backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER && serverContextTokens > 0 && mergeContext > serverContextTokens ->
+        normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER && serverContextTokens > 0 && mergeContext > serverContextTokens ->
             stringResource(R.string.pdf_context_warning, mergeContext, serverContextTokens)
         else -> null
     }
@@ -164,15 +173,15 @@ fun PDFSummaryScreen(navController: NavController) {
                 title = stringResource(R.string.pdf_active_settings_title),
                 supportingText = metadataMessage,
                 chips = listOf(
-                    if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                        stringResource(R.string.pdf_backend_llama_server)
-                    } else {
-                        stringResource(R.string.pdf_backend_ollama)
+                    when (normalizedBackend) {
+                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_backend_llama_server)
+                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_backend_llama_swap)
+                        else -> stringResource(R.string.pdf_backend_ollama)
                     },
-                    if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                        serverModelLabel ?: stringResource(R.string.pdf_server_value_unavailable)
-                    } else {
-                        ollamaModel ?: stringResource(R.string.pdf_select_ollama_model)
+                    when (normalizedBackend) {
+                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> serverModelLabel ?: stringResource(R.string.pdf_server_value_unavailable)
+                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapModel ?: stringResource(R.string.pdf_select_llama_swap_model)
+                        else -> ollamaModel ?: stringResource(R.string.pdf_select_ollama_model)
                     },
                     stringResource(R.string.pdf_target_language_chip, targetLanguage),
                     stringResource(R.string.pdf_chunk_context_chip, contextSize),

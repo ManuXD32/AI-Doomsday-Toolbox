@@ -61,6 +61,26 @@ class FarmRepository(
         return farmDao.getTiles(petId).map { entityToTile(it) }
     }
 
+    suspend fun getUnlockedFarmTileCount(petId: String): Int {
+        val farmland = farmDao.getUpgrade(petId, FARMLAND_UPGRADE_ID)
+        val level = farmland?.takeIf { it.isPurchased }?.level ?: 0
+        return farmTileCountForFarmlandLevel(level)
+    }
+
+    suspend fun ensureUnlockedFarmTiles(petId: String): List<FarmTile> {
+        val unlockedCount = getUnlockedFarmTileCount(petId)
+        val existing = getTiles(petId).associateBy { it.id }
+        val missing = (0 until unlockedCount)
+            .filterNot { id -> existing.containsKey(id) }
+            .map { id -> FarmTile(id = id) }
+        if (missing.isNotEmpty()) {
+            farmDao.saveTiles(missing.map { tileToEntity(petId, it) })
+        }
+        return (0 until unlockedCount)
+            .map { id -> existing[id] ?: FarmTile(id = id) }
+            .sortedBy { it.id }
+    }
+
     fun observeUpgrades(petId: String): Flow<List<FarmUpgradeEntity>> {
         return farmDao.observeUpgrades(petId)
     }
@@ -69,8 +89,16 @@ class FarmRepository(
         return farmDao.observeLivestock(petId)
     }
 
-    suspend fun saveTile(petId: String, tile: FarmTile, rescheduleNotifications: Boolean = true) {
+    suspend fun saveTile(
+        petId: String,
+        tile: FarmTile,
+        rescheduleNotifications: Boolean = true,
+        syncDroneWatchers: Boolean = true
+    ) {
         farmDao.saveTile(tileToEntity(petId, tile))
+        if (syncDroneWatchers) {
+            syncPlantingDroneEmptyWatcher(petId, tile)
+        }
         if (rescheduleNotifications) {
             TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
         }
@@ -126,6 +154,8 @@ class FarmRepository(
                     extraDataJson = when (type) {
                         "composter" -> Json.encodeToString(List(composterSlotCapacityForLevel(1)) { ComposterSlot() })
                         "well" -> Json.encodeToString(initialWellState(purchasedAt))
+                        FARM_PLANTING_DRONE_ID -> Json.encodeToString(PlantingDroneState(lastUpdatedAt = purchasedAt))
+                        FARM_HARVESTING_DRONE_ID -> Json.encodeToString(HarvesterDroneState(lastUpdatedAt = purchasedAt))
                         else -> null
                     }
                 )
@@ -140,6 +170,12 @@ class FarmRepository(
                         }
                         type == "well" && existing.extraDataJson.isNullOrBlank() -> {
                             Json.encodeToString(decodeWellState(existing, purchasedAt))
+                        }
+                        type == FARM_PLANTING_DRONE_ID && existing.extraDataJson.isNullOrBlank() -> {
+                            Json.encodeToString(PlantingDroneState(lastUpdatedAt = purchasedAt))
+                        }
+                        type == FARM_HARVESTING_DRONE_ID && existing.extraDataJson.isNullOrBlank() -> {
+                            Json.encodeToString(HarvesterDroneState(lastUpdatedAt = purchasedAt))
                         }
                         else -> {
                             existing.extraDataJson
@@ -398,6 +434,30 @@ class FarmRepository(
         return true
     }
 
+    suspend fun upgradeFarmland(petId: String, rescheduleNotifications: Boolean = true): Boolean {
+        val existing = farmDao.getUpgrade(petId, FARMLAND_UPGRADE_ID)
+        val currentLevel = existing?.takeIf { it.isPurchased }?.level ?: 0
+        if (currentLevel >= FARM_MAX_FARMLAND_LEVEL) return false
+        val now = System.currentTimeMillis()
+        val updated = (existing ?: FarmUpgradeEntity(
+            type = FARMLAND_UPGRADE_ID,
+            petId = petId,
+            isPurchased = true,
+            level = 0,
+            lastProductionTime = now
+        )).copy(
+            isPurchased = true,
+            level = currentLevel + 1,
+            lastProductionTime = existing?.lastProductionTime ?: now
+        )
+        farmDao.saveUpgrade(updated)
+        ensureUnlockedFarmTiles(petId)
+        if (rescheduleNotifications) {
+            TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
+        }
+        return true
+    }
+
     fun decodeComposterSlots(composter: FarmUpgradeEntity?): List<ComposterSlot> {
         if (composter == null) return List(composterSlotCapacityForLevel(1)) { ComposterSlot() }
         val capacity = composterSlotCapacityForLevel(composter.level)
@@ -469,6 +529,83 @@ class FarmRepository(
         return runCatching {
             Json.decodeFromString<List<FarmLivestockSlot>>(livestock.slotsJson)
         }.getOrDefault(emptyList()).let { normalizeLivestockSlots(livestockType, it) }
+    }
+
+    fun decodePlantingDroneState(
+        upgrade: FarmUpgradeEntity?,
+        now: Long = System.currentTimeMillis()
+    ): PlantingDroneState {
+        if (upgrade == null || !upgrade.isPurchased) return PlantingDroneState(lastUpdatedAt = now)
+        return runCatching {
+            Json.decodeFromString<PlantingDroneState>(upgrade.extraDataJson ?: "")
+        }.getOrDefault(PlantingDroneState()).let { state ->
+            state.copy(
+                fuelUpgradeLevel = state.fuelUpgradeLevel.coerceIn(0, FARM_DRONE_MAX_FUEL_UPGRADE_LEVEL),
+                fuel = state.fuel.coerceIn(0, farmDroneFuelCapacityForUpgradeLevel(state.fuelUpgradeLevel)),
+                water = state.water.coerceAtLeast(0),
+                fertilizer = state.fertilizer.coerceAtLeast(0),
+                seeds = state.seeds.filter { it.quantity > 0 && CropDefinitions.CROPS.containsKey(it.cropId) },
+                lastUpdatedAt = state.lastUpdatedAt.takeIf { it > 0L } ?: now
+            )
+        }
+    }
+
+    fun decodeHarvesterDroneState(
+        upgrade: FarmUpgradeEntity?,
+        now: Long = System.currentTimeMillis()
+    ): HarvesterDroneState {
+        if (upgrade == null || !upgrade.isPurchased) return HarvesterDroneState(lastUpdatedAt = now)
+        return runCatching {
+            Json.decodeFromString<HarvesterDroneState>(upgrade.extraDataJson ?: "")
+        }.getOrDefault(HarvesterDroneState()).let { state ->
+            state.copy(
+                fuelUpgradeLevel = state.fuelUpgradeLevel.coerceIn(0, FARM_DRONE_MAX_FUEL_UPGRADE_LEVEL),
+                fuel = state.fuel.coerceIn(0, farmDroneFuelCapacityForUpgradeLevel(state.fuelUpgradeLevel)),
+                cropFilter = state.cropFilter.filter { CropDefinitions.CROPS.containsKey(it) }.toSet(),
+                storage = state.storage.filter { it.quantity > 0 },
+                lastUpdatedAt = state.lastUpdatedAt.takeIf { it > 0L } ?: now
+            )
+        }
+    }
+
+    suspend fun savePlantingDroneState(
+        petId: String,
+        state: PlantingDroneState,
+        rescheduleNotifications: Boolean = true
+    ) {
+        val existing = farmDao.getUpgrade(petId, FARM_PLANTING_DRONE_ID) ?: FarmUpgradeEntity(
+            type = FARM_PLANTING_DRONE_ID,
+            petId = petId,
+            isPurchased = true
+        )
+        saveUpgrade(
+            existing.copy(
+                isPurchased = true,
+                storedOutput = state.fuel,
+                extraDataJson = Json.encodeToString(state)
+            ),
+            rescheduleNotifications
+        )
+    }
+
+    suspend fun saveHarvesterDroneState(
+        petId: String,
+        state: HarvesterDroneState,
+        rescheduleNotifications: Boolean = true
+    ) {
+        val existing = farmDao.getUpgrade(petId, FARM_HARVESTING_DRONE_ID) ?: FarmUpgradeEntity(
+            type = FARM_HARVESTING_DRONE_ID,
+            petId = petId,
+            isPurchased = true
+        )
+        saveUpgrade(
+            existing.copy(
+                isPurchased = true,
+                storedOutput = state.fuel,
+                extraDataJson = Json.encodeToString(state)
+            ),
+            rescheduleNotifications
+        )
     }
 
     private fun normalizeComposterSlots(
@@ -581,6 +718,29 @@ class FarmRepository(
             }
         }
         return normalized + List((type.maxAnimals - normalized.size).coerceAtLeast(0)) { FarmLivestockSlot() }
+    }
+
+    private suspend fun syncPlantingDroneEmptyWatcher(petId: String, tile: FarmTile) {
+        val upgrade = farmDao.getUpgrade(petId, FARM_PLANTING_DRONE_ID) ?: return
+        if (!upgrade.isPurchased) return
+        val now = System.currentTimeMillis()
+        val state = decodePlantingDroneState(upgrade, now)
+        val watchers = state.emptySinceByTile.toMutableMap()
+        val changed = if (tile.crop == null) {
+            watchers.putIfAbsent(tile.id, now) == null
+        } else {
+            watchers.remove(tile.id) != null
+        }
+        if (changed) {
+            farmDao.saveUpgrade(
+                upgrade.copy(
+                    storedOutput = state.fuel,
+                    extraDataJson = Json.encodeToString(
+                        state.copy(emptySinceByTile = watchers, lastUpdatedAt = now)
+                    )
+                )
+            )
+        }
     }
 
     private fun entityToTile(entity: FarmTileEntity): FarmTile {

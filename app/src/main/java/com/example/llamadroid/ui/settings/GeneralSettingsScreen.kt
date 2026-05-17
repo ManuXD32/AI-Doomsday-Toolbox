@@ -9,12 +9,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
@@ -23,8 +25,11 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.backup.NativeChatNotesBackupManager
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.DatabaseBackupManager
+import com.example.llamadroid.quadtrix.QuadtrixWorkspaceManager
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * General Settings - Output folder, Theme, Language
@@ -33,9 +38,12 @@ import kotlinx.coroutines.launch
 @Composable
 fun GeneralSettingsScreen(navController: NavController) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     
     val outputFolderUri by settingsRepo.outputFolderUri.collectAsState()
+    val quadtrixWorkspaceUri by settingsRepo.quadtrixWorkspaceUri.collectAsState()
+    val quadtrixWorkspacePath by settingsRepo.quadtrixWorkspacePath.collectAsState()
     
     // Folder picker
     val folderPicker = rememberLauncherForActivityResult(
@@ -46,6 +54,30 @@ fun GeneralSettingsScreen(navController: NavController) {
                 it, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             settingsRepo.setOutputFolderUri(it.toString())
+        }
+    }
+
+    val quadtrixWorkspacePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                QuadtrixWorkspaceManager.configureWorkspace(context, uri)
+            }
+            result.onSuccess { selection ->
+                settingsRepo.setQuadtrixWorkspace(selection.uri, selection.directPath)
+                Toast.makeText(context, context.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
+                if (selection.directPath.isNullOrBlank()) {
+                    Toast.makeText(context, context.getString(R.string.quadtrix_workspace_direct_required), Toast.LENGTH_LONG).show()
+                }
+            }.onFailure { error ->
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: context.getString(R.string.error_generic)),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
     
@@ -96,6 +128,55 @@ fun GeneralSettingsScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             stringResource(R.string.general_output_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("🧠", style = MaterialTheme.typography.headlineSmall)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.general_quadtrix_workspace_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    stringResource(R.string.general_quadtrix_workspace_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            quadtrixWorkspacePath ?: quadtrixWorkspaceUri ?: stringResource(R.string.quadtrix_workspace_not_set),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { quadtrixWorkspacePicker.launch(null) }) {
+                                Text(stringResource(if (quadtrixWorkspaceUri == null) R.string.quadtrix_workspace_choose else R.string.quadtrix_workspace_change))
+                            }
+                            if (quadtrixWorkspaceUri != null || quadtrixWorkspacePath != null) {
+                                TextButton(onClick = { settingsRepo.setQuadtrixWorkspace(null, null) }) {
+                                    Text(stringResource(R.string.action_reset))
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.general_quadtrix_workspace_hint),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
@@ -209,6 +290,54 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
             
+            item {
+                val llmAccelerationMode by settingsRepo.llmAccelerationMode.collectAsState()
+                val llmOptions = listOf(
+                    SettingsRepository.ACCELERATION_AUTO to stringResource(R.string.general_acceleration_mode_auto),
+                    SettingsRepository.ACCELERATION_CPU to stringResource(R.string.general_acceleration_mode_cpu),
+                    SettingsRepository.ACCELERATION_GPU to stringResource(R.string.general_acceleration_mode_gpu_opencl)
+                )
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("⚙", style = MaterialTheme.typography.headlineSmall)
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.general_acceleration_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    stringResource(R.string.general_acceleration_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        AccelerationModeSelector(
+                            label = stringResource(R.string.general_acceleration_llm),
+                            selected = llmAccelerationMode,
+                            options = llmOptions,
+                            onSelected = settingsRepo::setLlmAccelerationMode
+                        )
+                        Text(
+                            stringResource(R.string.general_acceleration_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                        )
+                    }
+                }
+            }
+
             // Battery Optimization
             item {
                 val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
@@ -715,6 +844,56 @@ fun GeneralSettingsScreen(navController: NavController) {
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AccelerationModeSelector(
+    label: String,
+    selected: String,
+    options: List<Pair<String, String>>,
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: options.first().second
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Box {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = selectedLabel,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowDropDown,
+                    contentDescription = null
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                options.forEach { (value, text) ->
+                    DropdownMenuItem(
+                        text = { Text(text) },
+                        onClick = {
+                            onSelected(value)
+                            expanded = false
+                        }
+                    )
                 }
             }
         }

@@ -47,8 +47,12 @@ fun RemoteSummaryBackendEditor(
     onOllamaUrlChange: (String) -> Unit,
     llamaServerUrl: String,
     onLlamaServerUrlChange: (String) -> Unit,
+    llamaSwapUrl: String,
+    onLlamaSwapUrlChange: (String) -> Unit,
     ollamaModel: String?,
     onOllamaModelSelected: (String) -> Unit,
+    llamaSwapModel: String?,
+    onLlamaSwapModelSelected: (String) -> Unit,
     llamaServerModelLabel: String?,
     llamaServerContextLabel: String?,
     llamaServerContextTokens: Int,
@@ -59,32 +63,56 @@ fun RemoteSummaryBackendEditor(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val currentUrl = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) llamaServerUrl else ollamaUrl
+    val normalizedBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
+    val currentUrl = when (normalizedBackend) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl
+        else -> ollamaUrl
+    }
+    val selectedRemoteModel = if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
+        llamaSwapModel
+    } else {
+        ollamaModel
+    }
+    val requiresSelectableModel = SettingsRepository.requiresSelectedRemoteModel(normalizedBackend)
 
-    var availableOllamaModels by remember(ollamaModel) {
-        mutableStateOf(ollamaModel?.let(::listOf) ?: emptyList())
+    var availableRemoteModels by remember(ollamaModel, llamaSwapModel, normalizedBackend) {
+        mutableStateOf(selectedRemoteModel?.let(::listOf) ?: emptyList())
     }
     var showModelMenu by rememberSaveable { mutableStateOf(false) }
     var isRefreshingMetadata by rememberSaveable { mutableStateOf(false) }
     var metadataMessage by rememberSaveable { mutableStateOf<String?>(null) }
     fun mergeSelectedModel(models: List<String>): List<String> {
-        if (ollamaModel.isNullOrBlank() || models.contains(ollamaModel)) return models
-        return listOf(ollamaModel) + models
+        val selected = selectedRemoteModel?.takeIf { it.isNotBlank() }
+        if (selected == null || models.contains(selected)) return models
+        return listOf(selected) + models
     }
 
     fun applyMetadata(metadata: RemoteSummaryMetadata) {
-        if (metadata.backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
-            availableOllamaModels = mergeSelectedModel(metadata.availableModels)
-            metadataMessage = context.getString(
-                R.string.pdf_metadata_ollama_loaded,
-                metadata.availableModels.size
-            )
-        } else {
-            metadataMessage = context.getString(
-                R.string.pdf_metadata_llama_loaded,
-                metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable),
-                metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
-            )
+        when (SettingsRepository.normalizeOllamaOrLlamaBackend(metadata.backend)) {
+            SettingsRepository.PDF_BACKEND_OLLAMA -> {
+                availableRemoteModels = mergeSelectedModel(metadata.availableModels)
+                metadataMessage = context.getString(
+                    R.string.pdf_metadata_ollama_loaded,
+                    metadata.availableModels.size
+                )
+            }
+
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> {
+                availableRemoteModels = mergeSelectedModel(metadata.availableModels)
+                metadataMessage = context.getString(
+                    R.string.pdf_metadata_llama_swap_loaded,
+                    metadata.availableModels.size
+                )
+            }
+
+            else -> {
+                metadataMessage = context.getString(
+                    R.string.pdf_metadata_llama_loaded,
+                    metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable),
+                    metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                )
+            }
         }
         onMetadataLoaded(metadata)
     }
@@ -136,6 +164,12 @@ fun RemoteSummaryBackendEditor(
                 ) {
                     Text(stringResource(R.string.pdf_backend_llama_server))
                 }
+                OutlinedButton(
+                    onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_LLAMA_SWAP) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.pdf_backend_llama_swap))
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -143,18 +177,18 @@ fun RemoteSummaryBackendEditor(
                 OutlinedTextField(
                     value = currentUrl,
                     onValueChange = {
-                        if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                            onLlamaServerUrlChange(it)
-                    } else {
-                        onOllamaUrlChange(it)
-                    }
+                        when (normalizedBackend) {
+                            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> onLlamaServerUrlChange(it)
+                            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> onLlamaSwapUrlChange(it)
+                            else -> onOllamaUrlChange(it)
+                        }
                 },
                     label = {
                         Text(
-                            if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                                stringResource(R.string.pdf_llama_server_url_label)
-                            } else {
-                                stringResource(R.string.pdf_ollama_url_label)
+                            when (normalizedBackend) {
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_llama_server_url_label)
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_llama_swap_url_label)
+                                else -> stringResource(R.string.pdf_ollama_url_label)
                             }
                         )
                     },
@@ -191,9 +225,15 @@ fun RemoteSummaryBackendEditor(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
+            if (requiresSelectableModel) {
                 Text(
-                    stringResource(R.string.pdf_ollama_model_label),
+                    stringResource(
+                        if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
+                            R.string.pdf_llama_swap_model_label
+                        } else {
+                            R.string.pdf_ollama_model_label
+                        }
+                    ),
                     style = MaterialTheme.typography.labelLarge
                 )
                 Spacer(modifier = Modifier.height(6.dp))
@@ -201,9 +241,17 @@ fun RemoteSummaryBackendEditor(
                     OutlinedButton(
                         onClick = { showModelMenu = true },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = availableOllamaModels.isNotEmpty()
+                        enabled = availableRemoteModels.isNotEmpty()
                     ) {
-                        Text(ollamaModel ?: stringResource(R.string.pdf_select_ollama_model))
+                        Text(
+                            selectedRemoteModel ?: stringResource(
+                                if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
+                                    R.string.pdf_select_llama_swap_model
+                                } else {
+                                    R.string.pdf_select_ollama_model
+                                }
+                            )
+                        )
                         Spacer(modifier = Modifier.width(8.dp))
                         Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                     }
@@ -211,17 +259,21 @@ fun RemoteSummaryBackendEditor(
                         expanded = showModelMenu,
                         onDismissRequest = { showModelMenu = false }
                     ) {
-                        if (availableOllamaModels.isEmpty()) {
+                        if (availableRemoteModels.isEmpty()) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.pdf_no_remote_models_loaded)) },
                                 onClick = { showModelMenu = false }
                             )
                         } else {
-                            availableOllamaModels.forEach { model ->
+                            availableRemoteModels.forEach { model ->
                                 DropdownMenuItem(
                                     text = { Text(model) },
                                     onClick = {
-                                        onOllamaModelSelected(model)
+                                        if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
+                                            onLlamaSwapModelSelected(model)
+                                        } else {
+                                            onOllamaModelSelected(model)
+                                        }
                                         showModelMenu = false
                                     }
                                 )
