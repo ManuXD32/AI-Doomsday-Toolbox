@@ -84,6 +84,7 @@ build_log*.txt
 .codex/
 .vscode/
 .gradle-home/
+tmp/
 Delete/
 
 # Local docs not intended for GitHub
