@@ -25,6 +25,7 @@ import com.example.llamadroid.ui.ai.AIHubScreen
 import com.example.llamadroid.ui.ai.ImageGenScreen
 import com.example.llamadroid.ui.ai.LegacyUpscaleScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
+import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
 import com.example.llamadroid.ui.ai.OnnxTtsScreen
 import com.example.llamadroid.ui.ai.SDModelsScreen
 import com.example.llamadroid.ui.ai.VideoGenScreen
@@ -303,7 +304,7 @@ fun LlamaApp(
                         currentRoute in listOf(
                             Screen.AIHub.route, Screen.Chat.route, Screen.ImageGen.route,
                             Screen.ImageGenUpscale.route,
-                            Screen.OnnxImageGen.route, Screen.VideoGen.route,
+                            Screen.OnnxImageGen.route, Screen.OnnxBackgroundRemoval.route, Screen.VideoGen.route,
                             Screen.AudioTranscription.route, Screen.VideoUpscaler.route,
                             Screen.SubtitleBurn.route
                         )
@@ -403,6 +404,7 @@ fun LlamaApp(
             }
             composable(Screen.ImageGenUpscale.route) { LegacyUpscaleScreen(navController) }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
+            composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
             composable(Screen.VideoGen.route) { VideoGenScreen(navController) }
             composable(Screen.AudioTranscription.route) { AudioTranscriptionScreen(navController) }

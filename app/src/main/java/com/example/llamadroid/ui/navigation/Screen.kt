@@ -11,6 +11,7 @@ sealed class Screen(val route: String) {
     object ImageGen : Screen("image_gen")        // Stable Diffusion image generation
     object ImageGenUpscale : Screen("image_gen_upscale") // Isolated legacy-style SD upscale screen
     object OnnxImageGen : Screen("onnx_image_gen") // ONNX Runtime image generation
+    object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech
     object VideoGen : Screen("video_gen")        // Stable Diffusion video generation
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP

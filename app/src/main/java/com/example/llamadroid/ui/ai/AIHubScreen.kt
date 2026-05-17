@@ -77,6 +77,16 @@ fun AIHubScreen(navController: NavController) {
             route = Screen.OnnxTts.route
         ),
         AIToolItem(
+            emoji = "✂️",
+            title = stringResource(R.string.ai_onnx_bgr),
+            description = stringResource(R.string.ai_onnx_bgr_desc),
+            gradientColors = listOf(
+                Color(0xFF26A69A).copy(alpha = 0.15f),
+                Color(0xFF00897B).copy(alpha = 0.3f)
+            ),
+            route = Screen.OnnxBackgroundRemoval.route
+        ),
+        AIToolItem(
             emoji = "🎥",
             title = stringResource(R.string.ai_video_gen),
             description = stringResource(R.string.ai_video_gen_desc),
