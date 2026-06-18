@@ -136,23 +136,62 @@ object OrganizerAlarmScheduler {
         context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 }
 
+class OrganizerAlarmBootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val appContext = context.applicationContext
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (resolveOrganizerAlarmBootRoute(intent?.action) == OrganizerAlarmBroadcastRoute.RESCHEDULE_ALL) {
+                    OrganizerAlarmScheduler.rescheduleAll(appContext)
+                }
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+}
+
 class OrganizerAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val appContext = context.applicationContext
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                when (intent?.action) {
-                    Intent.ACTION_BOOT_COMPLETED,
-                    Intent.ACTION_MY_PACKAGE_REPLACED -> OrganizerAlarmScheduler.rescheduleAll(appContext)
-                    else -> {
-                        val alarmId = intent?.let { OrganizerAlarmScheduler.alarmIdFromIntent(it) } ?: -1L
-                        if (alarmId > 0L) OrganizerAlarmScheduler.deliverAlarm(appContext, alarmId)
-                    }
+                val alarmId = intent?.let { OrganizerAlarmScheduler.alarmIdFromIntent(it) } ?: -1L
+                when (resolveOrganizerAlarmRuntimeRoute(intent?.action, alarmId)) {
+                    OrganizerAlarmBroadcastRoute.DELIVER_ALARM -> OrganizerAlarmScheduler.deliverAlarm(appContext, alarmId)
+                    OrganizerAlarmBroadcastRoute.RESCHEDULE_ALL,
+                    OrganizerAlarmBroadcastRoute.IGNORE -> Unit
                 }
             } finally {
                 pendingResult.finish()
             }
         }
+    }
+}
+
+internal enum class OrganizerAlarmBroadcastRoute {
+    RESCHEDULE_ALL,
+    DELIVER_ALARM,
+    IGNORE
+}
+
+internal fun resolveOrganizerAlarmBootRoute(action: String?): OrganizerAlarmBroadcastRoute {
+    return when (action) {
+        Intent.ACTION_BOOT_COMPLETED,
+        Intent.ACTION_MY_PACKAGE_REPLACED -> OrganizerAlarmBroadcastRoute.RESCHEDULE_ALL
+        else -> OrganizerAlarmBroadcastRoute.IGNORE
+    }
+}
+
+internal fun resolveOrganizerAlarmRuntimeRoute(
+    action: String?,
+    alarmId: Long
+): OrganizerAlarmBroadcastRoute {
+    return when (action) {
+        Intent.ACTION_BOOT_COMPLETED,
+        Intent.ACTION_MY_PACKAGE_REPLACED -> OrganizerAlarmBroadcastRoute.IGNORE
+        else -> if (alarmId > 0L) OrganizerAlarmBroadcastRoute.DELIVER_ALARM else OrganizerAlarmBroadcastRoute.IGNORE
     }
 }

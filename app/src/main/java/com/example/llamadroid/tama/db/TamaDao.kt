@@ -38,6 +38,8 @@ data class TamaPetEntity(
 
     val ownerBondLevel: Float,
     val educationLevel: Float,
+    val exerciseLevel: Float = 0f,
+    val introspectionLevel: Float = 0f,
     val currentLocationId: String,
     val homeRoomId: String = "principal_room",
     val leftDecorationId: String? = null,
@@ -207,6 +209,20 @@ data class TamaStudySessionEntity(
     val lastUpdatedAt: Long
 )
 
+@Entity(
+    tableName = "tama_market_quotes",
+    primaryKeys = ["petId", "itemId"],
+    indices = [Index(value = ["petId", "quoteWeekKey"])]
+)
+data class TamaMarketQuoteEntity(
+    val petId: String,
+    val itemId: String,
+    val quoteWeekKey: String,
+    val currentPrice: Int,
+    val unitsSoldSinceRefresh: Int,
+    val updatedAt: Long
+)
+
 /**
  * Room entity for locations.
  */
@@ -306,6 +322,71 @@ data class DungeonProgressEntity(
     val lastCompletedDungeonType: String? = null
 )
 
+@Entity(tableName = "adventure_gate_profiles")
+data class AdventureGateProfileEntity(
+    @PrimaryKey val petId: String,
+    val level: Int = 1,
+    val xp: Int = 0,
+    val maxHp: Int = 120,
+    val maxMana: Int = 40,
+    val attack: Int = 18,
+    val magic: Int = 14,
+    val defense: Int = 10,
+    val speed: Int = 10,
+    val accuracy: Int = 100,
+    val evasion: Int = 5,
+    val currentHp: Int = 120,
+    val currentMana: Int = 40,
+    val skillPoints: Int = 0,
+    val purchasedSkillIdsJson: String = """["paw_strike","spark","guard"]""",
+    val learnedAttackIdsJson: String = """["paw_strike"]""",
+    val equippedAttackIdsJson: String = """["paw_strike"]""",
+    val learnedMagicIdsJson: String = """["spark","guard"]""",
+    val equippedMagicIdsJson: String = """["spark","guard"]""",
+    val equippedWeaponId: String? = null,
+    val equippedShieldId: String? = null,
+    val equippedRingId: String? = null,
+    val equippedRelicId: String? = null,
+    val lastRecoveryAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "adventure_gate_world_progress",
+    primaryKeys = ["petId", "worldId"],
+    indices = [Index(value = ["petId"])]
+)
+data class AdventureGateWorldProgressEntity(
+    val petId: String,
+    val worldId: String,
+    val highestClearedPhase: Int = 0,
+    val midBossCleared: Boolean = false,
+    val finalBossCleared: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "adventure_gate_battle_state",
+    indices = [Index(value = ["petId", "worldId", "phaseNumber"])]
+)
+data class AdventureGateBattleStateEntity(
+    @PrimaryKey val petId: String,
+    val worldId: String,
+    val phaseNumber: Int,
+    val stateJson: String,
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "adventure_gate_night_arena_runs")
+data class AdventureGateNightArenaRunEntity(
+    @PrimaryKey val petId: String,
+    val nightKey: String,
+    val levelsJson: String,
+    val clearedLevelIdsJson: String,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
 @Entity(tableName = "tama_artworks")
 data class TamaArtworkEntity(
     @PrimaryKey val id: String,
@@ -342,6 +423,9 @@ interface TamaDao {
     // Pet operations
     @Query("SELECT * FROM tama_pets WHERE id = :id")
     suspend fun getPet(id: String): TamaPetEntity?
+
+    @Query("SELECT * FROM tama_pets WHERE id = :id")
+    fun observePet(id: String): Flow<TamaPetEntity?>
 
     @Query(
         """
@@ -626,6 +710,21 @@ interface TamaDao {
     @Query("DELETE FROM tama_study_labels WHERE petId = :petId")
     suspend fun deleteStudyLabelsForPet(petId: String)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveMarketQuote(quote: TamaMarketQuoteEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveMarketQuotes(quotes: List<TamaMarketQuoteEntity>)
+
+    @Query("SELECT * FROM tama_market_quotes WHERE petId = :petId ORDER BY itemId ASC")
+    suspend fun getMarketQuotesForPet(petId: String): List<TamaMarketQuoteEntity>
+
+    @Query("SELECT * FROM tama_market_quotes WHERE petId = :petId AND itemId = :itemId LIMIT 1")
+    suspend fun getMarketQuote(petId: String, itemId: String): TamaMarketQuoteEntity?
+
+    @Query("DELETE FROM tama_market_quotes WHERE petId = :petId")
+    suspend fun deleteMarketQuotesForPet(petId: String)
+
     // Chat operations
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveChatMessage(message: TamaChatMessageEntity)
@@ -703,6 +802,58 @@ interface TamaDao {
 
     @Query("DELETE FROM dungeon_progress WHERE petId = :petId")
     suspend fun deleteDungeonProgress(petId: String)
+
+    // Adventure Gate RPG operations
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAdventureGateProfile(profile: AdventureGateProfileEntity)
+
+    @Query("SELECT * FROM adventure_gate_profiles WHERE petId = :petId")
+    suspend fun getAdventureGateProfile(petId: String): AdventureGateProfileEntity?
+
+    @Query("SELECT * FROM adventure_gate_profiles WHERE petId = :petId")
+    fun observeAdventureGateProfile(petId: String): Flow<AdventureGateProfileEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAdventureGateWorldProgress(progress: AdventureGateWorldProgressEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAdventureGateWorldProgress(progress: List<AdventureGateWorldProgressEntity>)
+
+    @Query("SELECT * FROM adventure_gate_world_progress WHERE petId = :petId ORDER BY worldId ASC")
+    suspend fun getAdventureGateWorldProgress(petId: String): List<AdventureGateWorldProgressEntity>
+
+    @Query("SELECT * FROM adventure_gate_world_progress WHERE petId = :petId ORDER BY worldId ASC")
+    fun observeAdventureGateWorldProgress(petId: String): Flow<List<AdventureGateWorldProgressEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAdventureGateBattleState(state: AdventureGateBattleStateEntity)
+
+    @Query("SELECT * FROM adventure_gate_battle_state WHERE petId = :petId")
+    suspend fun getAdventureGateBattleState(petId: String): AdventureGateBattleStateEntity?
+
+    @Query("SELECT * FROM adventure_gate_battle_state WHERE petId = :petId")
+    fun observeAdventureGateBattleState(petId: String): Flow<AdventureGateBattleStateEntity?>
+
+    @Query("DELETE FROM adventure_gate_battle_state WHERE petId = :petId")
+    suspend fun deleteAdventureGateBattleState(petId: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveAdventureGateNightArenaRun(run: AdventureGateNightArenaRunEntity)
+
+    @Query("SELECT * FROM adventure_gate_night_arena_runs WHERE petId = :petId")
+    suspend fun getAdventureGateNightArenaRun(petId: String): AdventureGateNightArenaRunEntity?
+
+    @Query("SELECT * FROM adventure_gate_night_arena_runs WHERE petId = :petId")
+    fun observeAdventureGateNightArenaRun(petId: String): Flow<AdventureGateNightArenaRunEntity?>
+
+    @Query("DELETE FROM adventure_gate_night_arena_runs WHERE petId = :petId")
+    suspend fun deleteAdventureGateNightArenaRun(petId: String)
+
+    @Query("DELETE FROM adventure_gate_profiles WHERE petId = :petId")
+    suspend fun deleteAdventureGateProfile(petId: String)
+
+    @Query("DELETE FROM adventure_gate_world_progress WHERE petId = :petId")
+    suspend fun deleteAdventureGateWorldProgress(petId: String)
 
     @Query("DELETE FROM tama_pets WHERE id = :petId")
     suspend fun deletePetById(petId: String)

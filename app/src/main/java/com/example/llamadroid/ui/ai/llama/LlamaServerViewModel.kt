@@ -81,7 +81,9 @@ class LlamaServerViewModel(
     fun refreshServerMetadata(server: LlamaServerEntity) {
         viewModelScope.launch {
             when {
+                server.isLiteRtEngine() -> refreshLiteRtMetadata(server)
                 server.isOllamaEngine() -> refreshOllamaMetadata(server)
+                server.isLlamaSwapEngine() -> refreshLlamaSwapMetadata(server)
                 else -> refreshLlamaServerMetadata(server)
             }
         }
@@ -124,6 +126,22 @@ class LlamaServerViewModel(
         }
     }
 
+    fun loadLlamaSwapModels(
+        host: String,
+        port: Int,
+        onResult: (Result<List<String>>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    fetchOpenAiModelIds(buildLlamaServerBaseUrl(host, port))
+                        .sortedBy { it.lowercase() }
+                }
+            }
+            onResult(result)
+        }
+    }
+
     private suspend fun refreshLlamaServerMetadata(server: LlamaServerEntity) {
         try {
             val modelName = withContext(Dispatchers.IO) {
@@ -137,6 +155,16 @@ class LlamaServerViewModel(
             DebugLog.log("Error fetching llama-server model name: ${e.message}")
             repository.updateServerModelName(server.id, null)
         }
+    }
+
+    private suspend fun refreshLiteRtMetadata(server: LlamaServerEntity) {
+        repository.updateServerModelMetadata(
+            id = server.id,
+            modelName = server.modelName?.ifBlank { server.name } ?: server.name,
+            supportsVision = server.supportsVision,
+            supportsAudio = server.supportsAudio
+        )
+        DebugLog.log("LiteRT server metadata uses local model '${server.modelName ?: server.name}'")
     }
 
     private suspend fun refreshOllamaMetadata(server: LlamaServerEntity) {
@@ -176,6 +204,24 @@ class LlamaServerViewModel(
         }
     }
 
+    private suspend fun refreshLlamaSwapMetadata(server: LlamaServerEntity) {
+        try {
+            val models = withContext(Dispatchers.IO) {
+                fetchOpenAiModelIds(server.baseUrl())
+            }
+            val currentModel = server.modelName?.trim().orEmpty()
+            val selectedModel = when {
+                currentModel.isNotBlank() && models.contains(currentModel) -> currentModel
+                currentModel.isNotBlank() -> currentModel
+                else -> models.firstOrNull()
+            }
+            repository.updateServerModelName(server.id, selectedModel)
+            DebugLog.log("Fetched llama-swap models for ${server.name}: ${models.size}")
+        } catch (e: Exception) {
+            DebugLog.log("Error fetching llama-swap models: ${e.message}")
+        }
+    }
+
     private fun buildLlamaApi(baseUrl: String): LlamaApi {
         val client = OkHttpClient.Builder()
             .connectTimeout(5, TimeUnit.SECONDS)
@@ -210,6 +256,15 @@ class LlamaServerViewModel(
             throw IllegalStateException("HTTP ${response.code()}")
         }
         return response.body()?.data?.firstOrNull()?.id
+    }
+
+    private fun fetchOpenAiModelIds(baseUrl: String): List<String> {
+        val response = buildLlamaApi(baseUrl).getModels().execute()
+        if (!response.isSuccessful) {
+            throw IllegalStateException("HTTP ${response.code()}")
+        }
+        return response.body()?.data.orEmpty()
+            .mapNotNull { it.id.takeIf { id -> id.isNotBlank() } }
     }
 
     private suspend fun fetchOllamaModels(baseUrl: String): List<OllamaModel> =

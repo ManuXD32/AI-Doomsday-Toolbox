@@ -22,7 +22,8 @@ interface HuggingFaceService {
     
     @GET("models/{repoId}/tree/main")
     suspend fun getRepoTree(
-        @Path("repoId", encoded = true) repoId: String
+        @Path("repoId", encoded = true) repoId: String,
+        @Query("recursive") recursive: Boolean = false
     ): List<HfTreeItemDto>
 }
 

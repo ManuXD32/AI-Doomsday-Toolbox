@@ -131,6 +131,7 @@ data class MemoryGameResult(
     val turnsUsed: Int,
     val score: Int,
     val coins: Int,
+    val happiness: Int,
     val perfectClear: Boolean
 )
 
@@ -250,6 +251,7 @@ fun buildMemoryGameResult(state: MemoryGameState): MemoryGameResult? {
         turnsUsed = state.turnsUsed,
         score = state.score,
         coins = memoryGameCoins(state.pairsMatched, state.turnsUsed, state.maxTurns),
+        happiness = memoryGameHappiness(state.pairsMatched, perfectClear),
         perfectClear = perfectClear
     )
 }
@@ -258,6 +260,12 @@ fun memoryGameCoins(pairsMatched: Int, turnsUsed: Int, maxTurns: Int = MEMORY_TO
     pairsMatched <= 0 -> 0
     pairsMatched >= 8 && turnsUsed < maxTurns -> 50
     else -> (pairsMatched.coerceAtMost(8) * 5).coerceAtMost(40)
+}
+
+fun memoryGameHappiness(pairsMatched: Int, perfectClear: Boolean): Int = when {
+    perfectClear -> 12
+    pairsMatched > 0 -> 10
+    else -> 8
 }
 
 private fun MemoryGameState.canAcceptInput(nowMs: Long): Boolean =
@@ -717,6 +725,10 @@ fun MemoryResultDialog(
                 )
                 Text(
                     stringResource(R.string.tama_arcade_memory_result_reward, summary.coins),
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
                     fontFamily = FontFamily.Monospace
                 )
                 if (summary.perfectClear) {

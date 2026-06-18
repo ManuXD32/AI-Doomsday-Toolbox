@@ -80,7 +80,9 @@ fun VideoSumupScreen(navController: NavController) {
     val backend by settingsRepo.videoSummaryBackend.collectAsState()
     val ollamaUrl by settingsRepo.videoSummaryOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.videoSummaryLlamaServerUrl.collectAsState()
+    val llamaSwapUrl by settingsRepo.videoSummaryLlamaSwapUrl.collectAsState()
     val ollamaModel by settingsRepo.videoSummaryOllamaModel.collectAsState()
+    val llamaSwapModel by settingsRepo.videoSummaryLlamaSwapModel.collectAsState()
     val thinkingEnabled by settingsRepo.videoSummaryThinkingEnabled.collectAsState()
     val videoSummaryPrompt by settingsRepo.videoSummaryPrompt.collectAsState()
     val targetLanguage by settingsRepo.videoSummaryTargetLanguage.collectAsState()
@@ -93,6 +95,9 @@ fun VideoSumupScreen(navController: NavController) {
     val serverModelLabel by settingsRepo.videoSummaryLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.videoSummaryLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.videoSummaryLlamaServerContextTokens.collectAsState()
+    val liteRtModelId by settingsRepo.videoSummaryLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepo.videoSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.videoSummaryLiteRtMtpEnabled.collectAsState()
 
     LaunchedEffect(whisperModels) {
         if (selectedWhisperPath == null && whisperModels.isNotEmpty()) {
@@ -113,16 +118,18 @@ fun VideoSumupScreen(navController: NavController) {
         }
     }
 
-    val backendReady = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-        llamaServerUrl.isNotBlank()
-    } else {
-        ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
+    val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
+        else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
     }
 
     fun persistMetadata(metadata: com.example.llamadroid.service.RemoteSummaryMetadata) {
-        settingsRepo.setVideoSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-        settingsRepo.setVideoSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-        settingsRepo.setVideoSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+            settingsRepo.setVideoSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+            settingsRepo.setVideoSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+            settingsRepo.setVideoSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+        }
     }
 
     Scaffold(
@@ -226,14 +233,26 @@ fun VideoSumupScreen(navController: NavController) {
                 onOllamaUrlChange = settingsRepo::setVideoSummaryOllamaUrl,
                 llamaServerUrl = llamaServerUrl,
                 onLlamaServerUrlChange = settingsRepo::setVideoSummaryLlamaServerUrl,
+                llamaSwapUrl = llamaSwapUrl,
+                onLlamaSwapUrlChange = settingsRepo::setVideoSummaryLlamaSwapUrl,
                 ollamaModel = ollamaModel,
                 onOllamaModelSelected = settingsRepo::setVideoSummaryOllamaModel,
+                llamaSwapModel = llamaSwapModel,
+                onLlamaSwapModelSelected = settingsRepo::setVideoSummaryLlamaSwapModel,
                 llamaServerModelLabel = serverModelLabel,
                 llamaServerContextLabel = serverContextLabel,
                 llamaServerContextTokens = serverContextTokens,
                 requestedContextForWarning = mergeContext,
+                liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                onLiteRtModelSelected = settingsRepo::setVideoSummaryLiteRtModelId,
+                liteRtBackend = liteRtBackend,
+                onLiteRtBackendChange = settingsRepo::setVideoSummaryLiteRtBackend,
+                liteRtMtpEnabled = liteRtMtpEnabled,
+                onLiteRtMtpEnabledChange = settingsRepo::setVideoSummaryLiteRtMtpEnabled,
+                liteRtThinkingEnabled = thinkingEnabled,
+                onLiteRtThinkingEnabledChange = settingsRepo::setVideoSummaryThinkingEnabled,
                 fetchMetadata = {
-                    RemoteSummaryClientFactory.fromSnapshot(settingsRepo.videoSummarySettings.snapshot())
+                    RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.videoSummarySettings.snapshot())
                         .fetchMetadata()
                 },
                 onMetadataLoaded = ::persistMetadata

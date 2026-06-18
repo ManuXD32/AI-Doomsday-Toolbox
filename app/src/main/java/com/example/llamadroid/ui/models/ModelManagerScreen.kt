@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.models
 
+import android.os.Environment
+import android.os.StatFs
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -20,6 +22,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import com.example.llamadroid.R
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,6 +31,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.ui.components.AppContentColumn
@@ -36,8 +41,28 @@ import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.util.Downloader
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+
+private const val MODEL_STORAGE_REFRESH_MILLIS = 15_000L
+
+private fun editableModelTypeOptions(): List<ModelType> = listOf(
+    ModelType.LLM,
+    ModelType.EMBEDDING,
+    ModelType.VISION_PROJECTOR,
+    ModelType.QUADTRIX
+)
+
+@Composable
+private fun modelTypeLabel(type: ModelType): String = when (type) {
+    ModelType.LLM -> stringResource(R.string.models_type_llm)
+    ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
+    ModelType.VISION_PROJECTOR -> stringResource(R.string.models_type_vision_projector)
+    ModelType.QUADTRIX -> stringResource(R.string.models_type_quadtrix)
+    else -> type.name
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -114,6 +139,18 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val models by viewModel.installedModels.collectAsState()
+    var storageSnapshot by remember(models) {
+        mutableStateOf(readModelStorageSnapshot(models))
+    }
+
+    LaunchedEffect(models) {
+        while (true) {
+            storageSnapshot = withContext(Dispatchers.IO) {
+                readModelStorageSnapshot(models)
+            }
+            delay(MODEL_STORAGE_REFRESH_MILLIS)
+        }
+    }
     
     // Import state - FILE FIRST approach (FAB launches picker, then show dialog)
     var showImportDialog by remember { mutableStateOf(false) }
@@ -129,12 +166,14 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     var importFileName by remember { mutableStateOf("") }
     
     // Export state
-    var pendingExportModel by remember { mutableStateOf<com.example.llamadroid.data.db.ModelEntity?>(null) }
+    var pendingExportModel by remember { mutableStateOf<ModelEntity?>(null) }
     
-    // Rename state
+    // Edit state
     var showRenameDialog by remember { mutableStateOf(false) }
-    var modelToRename by remember { mutableStateOf<com.example.llamadroid.data.db.ModelEntity?>(null) }
+    var modelToRename by remember { mutableStateOf<ModelEntity?>(null) }
     var newModelName by remember { mutableStateOf("") }
+    var editedModelType by remember { mutableStateOf(ModelType.LLM) }
+    var useForKnowledgeEmbedding by remember { mutableStateOf(false) }
     
     // Export picker launcher
     val exportPicker = rememberLauncherForActivityResult(
@@ -178,7 +217,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     }
     
     // Export function
-    val exportModel: (com.example.llamadroid.data.db.ModelEntity) -> Unit = { model ->
+    val exportModel: (ModelEntity) -> Unit = { model ->
         pendingExportModel = model
         exportPicker.launch(null)
     }
@@ -228,7 +267,8 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     val modelTypes = listOf(
                         ModelType.LLM to stringResource(R.string.models_type_llm),
                         ModelType.EMBEDDING to stringResource(R.string.models_type_embedding),
-                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector)
+                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector),
+                        ModelType.QUADTRIX to stringResource(R.string.models_type_quadtrix)
                     )
                     
                     modelTypes.forEach { (type, label) ->
@@ -370,36 +410,44 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     }
     
     Box(modifier = Modifier.fillMaxSize()) {
-        if (models.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Star,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        stringResource(R.string.models_no_models),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        stringResource(R.string.models_empty_installed_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
+        LazyColumn(
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                ModelStorageOverviewCard(storageSnapshot)
             }
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+
+            if (models.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(320.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Default.Star,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                stringResource(R.string.models_no_models),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(R.string.models_empty_installed_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
+            } else {
                 items(models) { model ->
                     ModelCard(
                         title = model.filename,
@@ -412,6 +460,8 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                         onRename = {
                             modelToRename = model
                             newModelName = model.filename.substringBeforeLast(".")
+                            editedModelType = model.type
+                            useForKnowledgeEmbedding = model.type == ModelType.EMBEDDING
                             showRenameDialog = true
                         }
                     )
@@ -419,14 +469,16 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
             }
         }
         
-        // Rename Dialog
+        // Edit Dialog
         if (showRenameDialog && modelToRename != null) {
             val db = remember { com.example.llamadroid.data.db.AppDatabase.getDatabase(context) }
+            val settingsRepository = remember { com.example.llamadroid.data.SettingsRepository(context) }
+            val selectedEmbeddingModelPath by settingsRepository.selectedEmbeddingModelPath.collectAsState()
             AlertDialog(
                 onDismissRequest = { showRenameDialog = false },
-                title = { Text(stringResource(R.string.models_rename_title)) },
+                title = { Text(stringResource(R.string.models_edit_title)) },
                 text = {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         OutlinedTextField(
                             value = newModelName,
                             onValueChange = { newModelName = it },
@@ -443,6 +495,42 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                 modifier = Modifier.padding(top = 4.dp)
                             )
                         }
+                        Text(stringResource(R.string.models_import_type_label), style = MaterialTheme.typography.labelMedium)
+                        editableModelTypeOptions().forEach { type ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .selectable(
+                                        selected = editedModelType == type,
+                                        onClick = {
+                                            editedModelType = type
+                                            useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
+                                        }
+                                    )
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = editedModelType == type,
+                                    onClick = {
+                                        editedModelType = type
+                                        useForKnowledgeEmbedding = type == ModelType.EMBEDDING && useForKnowledgeEmbedding
+                                    }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(modelTypeLabel(type))
+                            }
+                        }
+                        if (editedModelType == ModelType.EMBEDDING) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = useForKnowledgeEmbedding,
+                                    onCheckedChange = { useForKnowledgeEmbedding = it }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.models_use_for_kb_embedding))
+                            }
+                        }
                     }
                 },
                 confirmButton = {
@@ -451,35 +539,78 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                             val model = modelToRename!!
                             val extension = model.filename.substringAfterLast(".", "")
                             val fullNewName = if (extension.isNotEmpty()) "$newModelName.$extension" else newModelName
+                            val cleanNewName = fullNewName.trim()
+                            val typeChanged = editedModelType != model.type
                             
-                            if (fullNewName.isNotBlank() && fullNewName != model.filename) {
-                                scope.launch {
+                            if (cleanNewName.isNotBlank()) {
+                                scope.launch(Dispatchers.IO) {
                                     try {
-                                        // Rename the file on disk
                                         val oldFile = java.io.File(model.path)
-                                        if (oldFile.exists()) {
-                                            val newFile = java.io.File(oldFile.parent, fullNewName)
-                                            if (oldFile.renameTo(newFile)) {
-                                                // Update database with new filename and path
-                                                db.modelDao().updateFilename(
-                                                    oldFilename = model.filename,
-                                                    newFilename = fullNewName,
-                                                    newPath = newFile.absolutePath
-                                                )
-                                                android.widget.Toast.makeText(context, context.getString(R.string.models_rename_success, fullNewName), android.widget.Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                android.widget.Toast.makeText(context, context.getString(R.string.models_rename_failed), android.widget.Toast.LENGTH_SHORT).show()
+                                        val renamed = cleanNewName != model.filename
+                                        val finalPath = if (renamed) {
+                                            if (!oldFile.exists()) {
+                                                throw IllegalStateException(context.getString(R.string.models_rename_failed))
+                                            }
+                                            val newFile = java.io.File(oldFile.parent, cleanNewName)
+                                            if (!oldFile.renameTo(newFile)) {
+                                                throw IllegalStateException(context.getString(R.string.models_rename_failed))
+                                            }
+                                            newFile.absolutePath
+                                        } else {
+                                            model.path
+                                        }
+
+                                        if (renamed || typeChanged) {
+                                            db.modelDao().updateMetadata(
+                                                oldFilename = model.filename,
+                                                newFilename = cleanNewName,
+                                                newPath = finalPath,
+                                                newType = editedModelType,
+                                                isVision = editedModelType == ModelType.LLM && model.isVision
+                                            )
+                                        }
+
+                                        if (
+                                            editedModelType == ModelType.EMBEDDING &&
+                                            (useForKnowledgeEmbedding || selectedEmbeddingModelPath == model.path)
+                                        ) {
+                                            settingsRepository.setSelectedEmbeddingModelPath(finalPath)
+                                            com.example.llamadroid.data.repository.KnowledgeBaseRepository(context, db)
+                                                .markIndexedSourcesStaleForCurrentConfig()
+                                        } else if (
+                                            editedModelType != ModelType.EMBEDDING &&
+                                            selectedEmbeddingModelPath in listOf(model.path, finalPath)
+                                        ) {
+                                            settingsRepository.setSelectedEmbeddingModelPath(null)
+                                            com.example.llamadroid.data.repository.KnowledgeBaseRepository(context, db)
+                                                .markIndexedSourcesStaleForCurrentConfig()
+                                            withContext(Dispatchers.Main) {
+                                                android.widget.Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.models_kb_embedding_cleared),
+                                                    android.widget.Toast.LENGTH_SHORT
+                                                ).show()
                                             }
                                         }
+
+                                        withContext(Dispatchers.Main) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                context.getString(R.string.models_edit_success, cleanNewName),
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     } catch (e: Exception) {
-                                        android.widget.Toast.makeText(context, context.getString(R.string.models_error_toast, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
+                                        withContext(Dispatchers.Main) {
+                                            android.widget.Toast.makeText(context, context.getString(R.string.models_error_toast, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
                             }
                             showRenameDialog = false
                             modelToRename = null
                         }
-                    ) { Text(stringResource(R.string.models_rename_title)) }
+                    ) { Text(stringResource(R.string.action_save)) }
                 },
                 dismissButton = {
                     TextButton(onClick = { showRenameDialog = false }) { Text(stringResource(R.string.action_cancel)) }
@@ -500,6 +631,262 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     }
 }
 
+@Composable
+private fun ModelStorageOverviewCard(snapshot: ModelStorageSnapshot) {
+    val context = LocalContext.current
+    val totalText = FormatUtils.Display.formatBytes(context, snapshot.totalBytes)
+    val freeText = FormatUtils.Display.formatBytes(context, snapshot.freeBytes)
+    val modelsText = FormatUtils.Display.formatBytes(context, snapshot.modelsBytes)
+    val otherUsedText = FormatUtils.Display.formatBytes(context, snapshot.otherUsedBytes)
+    val barDescription = stringResource(
+        R.string.models_storage_bar_desc,
+        totalText,
+        freeText,
+        modelsText
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
+                            MaterialTheme.colorScheme.surface,
+                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.24f)
+                        )
+                    )
+                )
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                ) {
+                    Icon(
+                        Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(10.dp)
+                            .size(24.dp)
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.models_storage_title),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        stringResource(R.string.models_storage_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StorageValuePill(
+                    label = stringResource(R.string.models_storage_total),
+                    value = totalText,
+                    modifier = Modifier.weight(1f)
+                )
+                StorageValuePill(
+                    label = stringResource(R.string.models_storage_free),
+                    value = freeText,
+                    modifier = Modifier.weight(1f)
+                )
+                StorageValuePill(
+                    label = stringResource(R.string.models_storage_models),
+                    value = modelsText,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            SegmentedStorageBar(
+                snapshot = snapshot,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = barDescription }
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                StorageLegendItem(
+                    label = stringResource(R.string.models_storage_models),
+                    value = modelsText,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                StorageLegendItem(
+                    label = stringResource(R.string.models_storage_other),
+                    value = otherUsedText,
+                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StorageValuePill(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.76f),
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                value,
+                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun SegmentedStorageBar(
+    snapshot: ModelStorageSnapshot,
+    modifier: Modifier = Modifier
+) {
+    val otherUsedFraction = snapshot.otherUsedFraction
+    val modelsFraction = snapshot.modelsFraction
+
+    Box(
+        modifier = modifier
+            .height(14.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f))
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            if (otherUsedFraction > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(otherUsedFraction)
+                        .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f))
+                )
+            }
+            if (modelsFraction > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .weight(modelsFraction)
+                        .background(
+                            Brush.horizontalGradient(
+                                colors = listOf(
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.tertiary
+                                )
+                            )
+                        )
+                )
+            }
+            val freeFraction = (1f - otherUsedFraction - modelsFraction).coerceIn(0f, 1f)
+            if (freeFraction > 0f) {
+                Spacer(modifier = Modifier.weight(freeFraction))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StorageLegendItem(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(color)
+        )
+        Text(
+            stringResource(R.string.models_storage_legend_value, label, value),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+private data class ModelStorageSnapshot(
+    val totalBytes: Long,
+    val freeBytes: Long,
+    val modelsBytes: Long
+) {
+    private val usedBytes: Long = (totalBytes - freeBytes).coerceIn(0L, totalBytes.coerceAtLeast(0L))
+    val otherUsedBytes: Long = (usedBytes - modelsBytes).coerceAtLeast(0L)
+    val modelsFraction: Float = fractionOfTotal(modelsBytes)
+    val otherUsedFraction: Float = fractionOfTotal(otherUsedBytes)
+
+    private fun fractionOfTotal(bytes: Long): Float =
+        if (totalBytes > 0L) {
+            (bytes.toDouble() / totalBytes.toDouble()).toFloat().coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+}
+
+private fun readModelStorageSnapshot(models: List<ModelEntity>): ModelStorageSnapshot {
+    val stats = StatFs(Environment.getDataDirectory().absolutePath)
+    val totalBytes = stats.totalBytes.coerceAtLeast(0L)
+    val freeBytes = stats.availableBytes.coerceIn(0L, totalBytes.coerceAtLeast(0L))
+    val modelsBytes = models.sumOf { it.sizeBytes.coerceAtLeast(0L) }
+    return ModelStorageSnapshot(
+        totalBytes = totalBytes,
+        freeBytes = freeBytes,
+        modelsBytes = modelsBytes
+    )
+}
+
 // Helper function to import model
 private suspend fun importModel(
     context: android.content.Context,
@@ -518,6 +905,7 @@ private suspend fun importModel(
         // Determine subfolder based on type
         val subfolder = when (type) {
             ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.VISION, ModelType.MMPROJ -> "llm"
+            ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
             ModelType.SD_DIFFUSION -> "sd/flux"
             ModelType.SD_CLIP_L -> "sd/clip_l"
@@ -529,6 +917,7 @@ private suspend fun importModel(
             ModelType.SD_CONTROLNET -> "sd/controlnet"
             ModelType.SD_PHOTOMAKER -> "sd/photomaker"
             ModelType.ONNX_IMAGE_GEN,
+            ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
             ModelType.ONNX_IMAGE_UPSCALER -> "legacy/unsupported_media"
             ModelType.WHISPER -> "whisper"
@@ -594,6 +983,7 @@ private suspend fun importModelWithProgress(
         // Determine subfolder based on type
         val subfolder = when (type) {
             ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.VISION, ModelType.MMPROJ -> "llm"
+            ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
             ModelType.SD_DIFFUSION -> "sd/flux"
             ModelType.SD_CLIP_L -> "sd/clip_l"
@@ -605,6 +995,7 @@ private suspend fun importModelWithProgress(
             ModelType.SD_CONTROLNET -> "sd/controlnet"
             ModelType.SD_PHOTOMAKER -> "sd/photomaker"
             ModelType.ONNX_IMAGE_GEN,
+            ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
             ModelType.ONNX_IMAGE_UPSCALER -> "legacy/unsupported_media"
             ModelType.WHISPER -> "whisper"

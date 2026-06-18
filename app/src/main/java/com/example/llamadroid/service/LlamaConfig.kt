@@ -6,6 +6,7 @@ data class LlamaConfig(
     val contextSize: Int = 8192,
     val threads: Int = 4,
     val batchSize: Int = 512,
+    val physicalBatchSize: Int? = null,
     val port: Int = 8080,
     val temperature: Float = 0.8f,
     val host: String = "0.0.0.0",
@@ -25,10 +26,14 @@ data class LlamaConfig(
     // Disable memory mapping - loads entire model into RAM
     val noMmap: Boolean = false,
     // Speculative decoding (draft model) - runs draft locally on master
+    val speculativeMode: LlamaSpeculativeMode? = null,
     val draftModelPath: String? = null,   // Path to draft GGUF model
-    val draftMax: Int = 16,               // Max tokens to draft per step
+    val draftMax: Int = 3,                // Max tokens to draft per step
     val draftMin: Int = 0,                // Min tokens to draft
-    val draftPMin: Float = 0.75f,         // Min probability threshold for acceptance
+    val draftPMin: Float = 0.0f,          // Min probability threshold for acceptance
+    val mtpDraftMax: Int = 3,
+    val mtpDraftMin: Int = 0,
+    val mtpDraftPMin: Float = 0.0f,
     // Advanced overrides
     val parallel: Int? = null,
     val cacheRam: Int? = null,

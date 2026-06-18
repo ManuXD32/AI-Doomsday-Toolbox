@@ -34,6 +34,108 @@ class NativeChatToolsTest {
     }
 
     @Test
+    fun `effective config requires chat and server tool switches`() {
+        val chatConfig = NativeChatToolConfig(
+            toolsEnabled = true,
+            webSearchEnabled = true,
+            fetchUrlEnabled = true,
+            deepResearchEnabled = true,
+            deepResearchSourceLimit = 500,
+            dateTimeEnabled = true,
+            calculatorEnabled = false,
+            noteToolsEnabled = false,
+            todoToolsEnabled = true,
+            knowledgeBaseEnabled = true,
+            knowledgeBaseAutoContextEnabled = true,
+            imageGenerationEnabled = true,
+            imageIterationEnabled = true
+        )
+        val serverDefaults = NativeChatToolConfig(
+            toolsEnabled = true,
+            webSearchEnabled = false,
+            fetchUrlEnabled = true,
+            deepResearchEnabled = false,
+            dateTimeEnabled = false,
+            calculatorEnabled = true,
+            noteToolsEnabled = true,
+            todoToolsEnabled = true,
+            knowledgeBaseEnabled = true,
+            knowledgeBaseAutoContextEnabled = false,
+            imageGenerationEnabled = true,
+            imageIterationEnabled = false
+        )
+
+        val effective = chatConfig.effectiveWithServerDefaults(serverDefaults)
+
+        assertTrue(effective.toolsEnabled)
+        assertFalse(effective.webSearchEnabled)
+        assertTrue(effective.fetchUrlEnabled)
+        assertFalse(effective.deepResearchEnabled)
+        assertEquals(500, effective.deepResearchSourceLimit)
+        assertFalse(effective.dateTimeEnabled)
+        assertFalse(effective.calculatorEnabled)
+        assertFalse(effective.noteToolsEnabled)
+        assertTrue(effective.todoToolsEnabled)
+        assertTrue(effective.knowledgeBaseEnabled)
+        assertFalse(effective.knowledgeBaseAutoContextEnabled)
+        assertTrue(effective.imageGenerationEnabled)
+        assertFalse(effective.imageIterationEnabled)
+    }
+
+    @Test
+    fun `server master switch hard disables chat tools`() {
+        val effective = NativeChatToolConfig(
+            toolsEnabled = true,
+            webSearchEnabled = true,
+            fetchUrlEnabled = true,
+            deepResearchEnabled = true,
+            dateTimeEnabled = true,
+            calculatorEnabled = true,
+            noteToolsEnabled = true,
+            todoToolsEnabled = true,
+            calendarToolsEnabled = true,
+            alarmToolsEnabled = true,
+            knowledgeBaseEnabled = true,
+            knowledgeBaseAutoContextEnabled = true,
+            imageGenerationEnabled = true,
+            imageIterationEnabled = true
+        ).effectiveWithServerDefaults(
+            NativeChatToolConfig(
+                toolsEnabled = false,
+                webSearchEnabled = true,
+                fetchUrlEnabled = true,
+                deepResearchEnabled = true,
+                dateTimeEnabled = true,
+                calculatorEnabled = true,
+                noteToolsEnabled = true,
+                todoToolsEnabled = true,
+                calendarToolsEnabled = true,
+                alarmToolsEnabled = true,
+                knowledgeBaseEnabled = true,
+                knowledgeBaseAutoContextEnabled = true,
+                imageGenerationEnabled = true,
+                imageIterationEnabled = true
+            )
+        )
+
+        assertFalse(effective.toolsEnabled)
+        assertFalse(effective.hasEnabledTools())
+        assertFalse(effective.webSearchEnabled)
+        assertFalse(effective.fetchUrlEnabled)
+        assertFalse(effective.deepResearchEnabled)
+        assertFalse(effective.dateTimeEnabled)
+        assertFalse(effective.calculatorEnabled)
+        assertFalse(effective.noteToolsEnabled)
+        assertFalse(effective.todoToolsEnabled)
+        assertFalse(effective.calendarToolsEnabled)
+        assertFalse(effective.alarmToolsEnabled)
+        assertFalse(effective.knowledgeBaseEnabled)
+        assertFalse(effective.knowledgeBaseAutoContextEnabled)
+        assertFalse(effective.imageGenerationEnabled)
+        assertFalse(effective.imageIterationEnabled)
+    }
+
+    @Test
     fun `config round trip preserves enabled tools and coerces limits`() {
         val original = NativeChatToolConfig(
             toolsEnabled = true,
@@ -43,13 +145,19 @@ class NativeChatToolsTest {
             kiwixSearchEnabled = true,
             kiwixServerUrl = "http://127.0.0.1:8888/",
             fetchUrlEnabled = true,
+            deepResearchEnabled = true,
+            deepResearchImportIntoSelectedKbEnabled = true,
+            deepResearchSourceLimit = 2_500,
             noteToolsEnabled = true,
             todoToolsEnabled = true,
             calendarToolsEnabled = true,
             alarmToolsEnabled = true,
+            selectedKnowledgeBaseIds = listOf(1L, 2L),
+            chatDocumentKnowledgeBaseId = 7L,
             imageGenerationEnabled = true,
             imageIterationEnabled = true,
             imageParams = NativeChatImageToolParams(
+                engine = NativeChatImageGenerationEngine.SD,
                 model = "sd15.onnx",
                 width = 768,
                 height = 512,
@@ -69,7 +177,25 @@ class NativeChatToolsTest {
                 memoryPatternOptimization = false,
                 cpuArenaAllocator = false,
                 nnapiCpuDisabled = false,
-                nnapiUseFp16 = true
+                nnapiUseFp16 = true,
+                sdParams = NativeChatSdImageToolParams(
+                    model = "flux1.gguf",
+                    vaePath = "ae.safetensors",
+                    clipLPath = "clip_l.safetensors",
+                    t5xxlPath = "t5xxl.gguf",
+                    width = 640,
+                    height = 768,
+                    steps = 18,
+                    cfgScale = 4.5f,
+                    sampler = SamplingMethod.DPM_PP_2M,
+                    seed = "1234",
+                    negativePrompt = "low quality",
+                    threads = 4,
+                    flowShift = "3.0",
+                    diffusionFa = true,
+                    mmap = true,
+                    vaeConvDirect = true
+                )
             ),
             maxToolRounds = 99
         )
@@ -80,16 +206,21 @@ class NativeChatToolsTest {
         assertTrue(restored.webSearchEnabled)
         assertTrue(restored.kiwixSearchEnabled)
         assertTrue(restored.fetchUrlEnabled)
+        assertTrue(restored.deepResearchEnabled)
+        assertTrue(restored.deepResearchImportIntoSelectedKbEnabled)
+        assertEquals(2_500, restored.deepResearchSourceLimit)
         assertTrue(restored.noteToolsEnabled)
         assertTrue(restored.todoToolsEnabled)
         assertTrue(restored.calendarToolsEnabled)
         assertTrue(restored.alarmToolsEnabled)
+        assertEquals(listOf(7L), restored.knowledgeBaseScopeIds())
         assertTrue(restored.imageGenerationEnabled)
         assertTrue(restored.imageIterationEnabled)
         assertEquals(NativeChatToolConfig.MAX_SEARCH_PAGES, restored.webSearchMaxPages)
         assertEquals(NativeChatToolConfig.MIN_PAGE_CHARS, restored.webSearchMaxChars)
         assertEquals(NativeChatToolConfig.MAX_TOOL_ROUNDS, restored.maxToolRounds)
         assertEquals("http://127.0.0.1:8888", restored.kiwixServerUrl)
+        assertEquals(NativeChatImageGenerationEngine.SD, restored.imageParams.engine)
         assertEquals("sd15.onnx", restored.imageParams.model)
         assertEquals(768, restored.imageParams.width)
         assertEquals(512, restored.imageParams.height)
@@ -110,12 +241,222 @@ class NativeChatToolsTest {
         assertFalse(restored.imageParams.cpuArenaAllocator)
         assertFalse(restored.imageParams.nnapiCpuDisabled)
         assertTrue(restored.imageParams.nnapiUseFp16)
+        assertEquals("flux1.gguf", restored.imageParams.sdParams.model)
+        assertEquals("ae.safetensors", restored.imageParams.sdParams.vaePath)
+        assertEquals("clip_l.safetensors", restored.imageParams.sdParams.clipLPath)
+        assertEquals("t5xxl.gguf", restored.imageParams.sdParams.t5xxlPath)
+        assertEquals(640, restored.imageParams.sdParams.width)
+        assertEquals(768, restored.imageParams.sdParams.height)
+        assertEquals(18, restored.imageParams.sdParams.steps)
+        assertEquals(4.5f, restored.imageParams.sdParams.cfgScale, 0.0001f)
+        assertEquals(SamplingMethod.DPM_PP_2M, restored.imageParams.sdParams.sampler)
+        assertEquals("1234", restored.imageParams.sdParams.seed)
+        assertEquals("low quality", restored.imageParams.sdParams.negativePrompt)
+        assertEquals(4, restored.imageParams.sdParams.threads)
+        assertEquals("3.0", restored.imageParams.sdParams.flowShift)
+        assertTrue(restored.imageParams.sdParams.diffusionFa)
+        assertTrue(restored.imageParams.sdParams.mmap)
+        assertTrue(restored.imageParams.sdParams.vaeConvDirect)
     }
+
+    @Test
+    fun `chat document knowledge base narrows kb scope to uploaded documents`() {
+        val config = NativeChatToolConfig(
+            selectedKnowledgeBaseIds = listOf(1L, 2L),
+            chatDocumentKnowledgeBaseId = 7L
+        )
+
+        assertEquals(listOf(7L), config.knowledgeBaseScopeIds())
+    }
+
+    @Test
+    fun `deep research default and source limit clamp have no upper cap`() {
+        val defaults = NativeChatToolConfig.fromApiParams("{}")
+        assertEquals(20, defaults.deepResearchSourceLimit)
+
+        val low = NativeChatToolConfig.fromParams(
+            mapOf(
+                NativeChatToolConfig.KEY_DEEP_RESEARCH_ENABLED to true,
+                NativeChatToolConfig.KEY_DEEP_RESEARCH_SOURCE_LIMIT to 0
+            )
+        )
+        assertTrue(low.deepResearchEnabled)
+        assertEquals(1, low.deepResearchSourceLimit)
+
+        val high = NativeChatToolConfig.fromParams(
+            mapOf(NativeChatToolConfig.KEY_DEEP_RESEARCH_SOURCE_LIMIT to 25_000)
+        )
+        assertEquals(25_000, high.deepResearchSourceLimit)
+    }
+
+    @Test
+    fun `deep research respects server hard disable`() {
+        val effective = NativeChatToolConfig(
+            toolsEnabled = true,
+            deepResearchEnabled = true,
+            deepResearchImportIntoSelectedKbEnabled = true
+        ).effectiveWithServerDefaults(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                deepResearchEnabled = false,
+                deepResearchImportIntoSelectedKbEnabled = true
+            )
+        )
+
+        assertFalse(effective.deepResearchEnabled)
+        assertFalse(effective.deepResearchImportIntoSelectedKbEnabled)
+    }
+
+    @Test
+    fun `selected kb deep research import requires chat and server toggle`() {
+        val chatAllowed = NativeChatToolConfig(
+            toolsEnabled = true,
+            deepResearchEnabled = true,
+            deepResearchImportIntoSelectedKbEnabled = true
+        )
+        val serverBlocked = NativeChatToolConfig(
+            toolsEnabled = true,
+            deepResearchEnabled = true,
+            deepResearchImportIntoSelectedKbEnabled = false
+        )
+        val serverAllowed = serverBlocked.copy(deepResearchImportIntoSelectedKbEnabled = true)
+
+        assertFalse(chatAllowed.effectiveWithServerDefaults(serverBlocked).deepResearchImportIntoSelectedKbEnabled)
+        assertTrue(chatAllowed.effectiveWithServerDefaults(serverAllowed).deepResearchImportIntoSelectedKbEnabled)
+        assertFalse(
+            chatAllowed.copy(deepResearchEnabled = false)
+                .effectiveWithServerDefaults(serverAllowed)
+                .deepResearchImportIntoSelectedKbEnabled
+        )
+    }
+
+    @Test
+    fun `chat document only config exposes only kb tools`() {
+        val tools = NativeChatToolRuntime().availableTools(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                dateTimeEnabled = false,
+                calculatorEnabled = false,
+                knowledgeBaseEnabled = true,
+                knowledgeBaseAutoContextEnabled = true,
+                selectedKnowledgeBaseIds = listOf(1L, 2L),
+                chatDocumentKnowledgeBaseId = 7L
+            )
+        ).map { it.name }.toSet()
+
+        assertEquals(
+            setOf(
+                NativeChatToolRuntime.TOOL_KB_SEARCH,
+                NativeChatToolRuntime.TOOL_KB_READ_CHUNK,
+                NativeChatToolRuntime.TOOL_KB_READ_SOURCE,
+                NativeChatToolRuntime.TOOL_KB_LIST_SOURCES
+            ),
+            tools
+        )
+    }
+
+    @Test
+    fun `chat document forces kb tools when chat tools are disabled`() {
+        val effective = NativeChatToolConfig(
+            toolsEnabled = false,
+            webSearchEnabled = true,
+            dateTimeEnabled = true,
+            calculatorEnabled = true,
+            knowledgeBaseEnabled = false,
+            knowledgeBaseAutoContextEnabled = false,
+            chatDocumentKnowledgeBaseId = 7L
+        ).effectiveWithServerDefaults(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                webSearchEnabled = true,
+                dateTimeEnabled = true,
+                calculatorEnabled = true,
+                knowledgeBaseEnabled = true,
+                knowledgeBaseAutoContextEnabled = true
+            )
+        )
+
+        assertTrue(effective.toolsEnabled)
+        assertTrue(effective.knowledgeBaseEnabled)
+        assertTrue(effective.knowledgeBaseAutoContextEnabled)
+        assertFalse(effective.webSearchEnabled)
+        assertFalse(effective.dateTimeEnabled)
+        assertFalse(effective.calculatorEnabled)
+        val tools = NativeChatToolRuntime().availableTools(effective).map { it.name }.toSet()
+        assertEquals(
+            setOf(
+                NativeChatToolRuntime.TOOL_KB_SEARCH,
+                NativeChatToolRuntime.TOOL_KB_READ_CHUNK,
+                NativeChatToolRuntime.TOOL_KB_READ_SOURCE,
+                NativeChatToolRuntime.TOOL_KB_LIST_SOURCES
+            ),
+            tools
+        )
+    }
+
+    @Test
+    fun `chat master switch hard disables server enabled tools`() {
+        val effective = NativeChatToolConfig(
+            toolsEnabled = false,
+            webSearchEnabled = true,
+            fetchUrlEnabled = true,
+            dateTimeEnabled = true,
+            calculatorEnabled = true,
+            noteToolsEnabled = true,
+            todoToolsEnabled = true,
+            calendarToolsEnabled = true,
+            alarmToolsEnabled = true,
+            knowledgeBaseEnabled = true,
+            knowledgeBaseAutoContextEnabled = true,
+            imageGenerationEnabled = true,
+            imageIterationEnabled = true
+        ).effectiveWithServerDefaults(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                webSearchEnabled = true,
+                fetchUrlEnabled = true,
+                dateTimeEnabled = true,
+                calculatorEnabled = true,
+                noteToolsEnabled = true,
+                todoToolsEnabled = true,
+                calendarToolsEnabled = true,
+                alarmToolsEnabled = true,
+                knowledgeBaseEnabled = true,
+                knowledgeBaseAutoContextEnabled = true,
+                imageGenerationEnabled = true,
+                imageIterationEnabled = true
+            )
+        )
+
+        assertFalse(effective.toolsEnabled)
+        assertFalse(effective.hasEnabledTools())
+        assertTrue(NativeChatToolRuntime().availableTools(effective).isEmpty())
+    }
+
+    @Test
+    fun `server master switch hard disables chat document kb tools`() {
+        val effective = NativeChatToolConfig(
+            toolsEnabled = false,
+            knowledgeBaseEnabled = false,
+            chatDocumentKnowledgeBaseId = 7L
+        ).effectiveWithServerDefaults(
+            NativeChatToolConfig(
+                toolsEnabled = false,
+                knowledgeBaseEnabled = true,
+                knowledgeBaseAutoContextEnabled = true
+            )
+        )
+
+        assertFalse(effective.toolsEnabled)
+        assertFalse(effective.knowledgeBaseEnabled)
+        assertTrue(NativeChatToolRuntime().availableTools(effective).isEmpty())
+    }
+
 
     @Test
     fun `available tools respect enabled config`() {
         val runtime = NativeChatToolRuntime()
-        val tools = runtime.availableTools(
+        val availableTools = runtime.availableTools(
             NativeChatToolConfig(
                 toolsEnabled = true,
                 webSearchEnabled = true,
@@ -126,7 +467,8 @@ class NativeChatToolsTest {
                 alarmToolsEnabled = true,
                 imageGenerationEnabled = true
             )
-        ).map { it.name }.toSet()
+        )
+        val tools = availableTools.map { it.name }.toSet()
 
         assertTrue(NativeChatToolRuntime.TOOL_WEB_SEARCH in tools)
         assertTrue(NativeChatToolRuntime.TOOL_SEARCH_PAGE in tools)
@@ -142,7 +484,33 @@ class NativeChatToolsTest {
         assertTrue(NativeChatToolRuntime.TOOL_LIST_ALARMS in tools)
         assertTrue(NativeChatToolRuntime.TOOL_CREATE_ALARM in tools)
         assertTrue(NativeChatToolRuntime.TOOL_GENERATE_IMAGE in tools)
+        assertEquals(1, availableTools.count { it.name == NativeChatToolRuntime.TOOL_GENERATE_IMAGE })
         assertFalse(NativeChatToolRuntime.TOOL_KIWIX_SEARCH in tools)
+    }
+
+    @Test
+    fun `generate image stays one advertised tool and hides when disabled`() {
+        val runtime = NativeChatToolRuntime()
+        val enabledTools = runtime.availableTools(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                imageGenerationEnabled = true
+            )
+        )
+        val imageTools = enabledTools.filter { it.name == NativeChatToolRuntime.TOOL_GENERATE_IMAGE }
+
+        assertEquals(1, imageTools.size)
+        assertEquals(setOf("prompt", "negative_prompt"), imageTools.single().parameters.keys)
+        assertEquals(listOf("prompt"), imageTools.single().requiredParams)
+
+        val disabledTools = runtime.availableTools(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                imageGenerationEnabled = false
+            )
+        ).map { it.name }
+
+        assertFalse(NativeChatToolRuntime.TOOL_GENERATE_IMAGE in disabledTools)
     }
 
     @Test
@@ -220,6 +588,29 @@ class NativeChatToolsTest {
     }
 
     @Test
+    fun `source citation markdown escapes labels and keeps source url`() {
+        assertEquals(
+            "[Example \\[Docs\\]](https://example.com/docs)",
+            NativeChatToolRuntime.sourceCitationMarkdown("Example [Docs]", "https://example.com/docs")
+        )
+    }
+
+    @Test
+    fun `source citation block instructs models to use markdown links`() {
+        val block = NativeChatToolRuntime.sourceCitationBlock(
+            listOf(
+                "1. [Example](https://example.com)",
+                "2. [Docs](https://example.com/docs)"
+            )
+        )
+
+        assertTrue(block.contains("source_citations:"))
+        assertTrue(block.contains("1. [Example](https://example.com)"))
+        assertTrue(block.contains("final_answer_requirement"))
+        assertTrue(block.contains("Do not use bare [1]"))
+    }
+
+    @Test
     fun `fetch url skips oversized pdf before parsing`() = runBlocking {
         val oversizedPdf = ByteArray(4 * 1024 * 1024) { '%'.code.toByte() }
         val client = OkHttpClient.Builder()
@@ -293,6 +684,9 @@ class NativeChatToolsTest {
         assertTrue(result.contains("tool: search_page"))
         assertTrue(result.contains("https://github.com/ggerganov/llama.cpp/commits/master"))
         assertTrue(result.contains("latest commits page"))
+        assertTrue(result.contains("source_citations:"))
+        assertTrue(result.contains("final_answer_requirement"))
+        assertTrue(result.contains("[Commits](https://github.com/ggerganov/llama.cpp/commits/master)"))
         assertFalse(result.contains("https://github.com/ggerganov/llama.cpp/releases\n"))
     }
 

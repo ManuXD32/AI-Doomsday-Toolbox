@@ -37,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -62,6 +63,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
@@ -73,7 +75,10 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_IMG2IMG
+import com.example.llamadroid.data.db.ONNX_CAPABILITY_TTS
+import com.example.llamadroid.data.db.buildOnnxCapabilities
 import com.example.llamadroid.data.db.onnxCapabilityTokens
 import com.example.llamadroid.onnx.OnnxBundleValidationResult
 import com.example.llamadroid.onnx.OnnxCatalog
@@ -83,7 +88,11 @@ import com.example.llamadroid.onnx.OnnxImportStrategy
 import com.example.llamadroid.onnx.OnnxImportSupport
 import com.example.llamadroid.onnx.OnnxInstallSource
 import com.example.llamadroid.onnx.OnnxStorage
+import com.example.llamadroid.onnx.OnnxTtsBundleValidator
+import com.example.llamadroid.onnx.ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE
+import com.example.llamadroid.onnx.ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS
 import com.example.llamadroid.onnx.buildOnnxImageGenModelEntity
+import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
 import com.example.llamadroid.onnx.parseOnnxCatalogProvider
 import com.example.llamadroid.onnx.resolveOnnxCatalogEntry
@@ -104,8 +113,12 @@ fun OnnxModelsScreen(navController: NavController) {
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
     val settingsRepo = remember { SettingsRepository(context) }
-    val installedModels by db.modelDao().getModelsByType(ModelType.ONNX_IMAGE_GEN).collectAsState(initial = emptyList())
-    val onnxModels = remember(installedModels) { installedModels.filter { it.isOnnxTxt2ImgBundle() } }
+    val installedModels by db.modelDao().getModelsByTypes(
+        listOf(ModelType.ONNX_IMAGE_GEN, ModelType.ONNX_TTS, ModelType.ONNX_BACKGROUND_REMOVAL)
+    ).collectAsState(initial = emptyList())
+    val onnxModels = remember(installedModels) {
+        installedModels.filter { it.type == ModelType.ONNX_TTS || it.isOnnxTxt2ImgBundle() || it.isOnnxBackgroundRemovalModel() }
+    }
     val downloadProgress by DownloadProgressHolder.progress.collectAsState()
     val downloadStatus by DownloadProgressHolder.status.collectAsState()
     val onnxDownloads = remember(downloadProgress) { downloadProgress.filterKeys { it.startsWith("onnx:") } }
@@ -126,12 +139,21 @@ fun OnnxModelsScreen(navController: NavController) {
     var importProgress by remember { mutableFloatStateOf(0f) }
     var importLabel by remember { mutableStateOf("") }
     var pendingDeleteModel by remember { mutableStateOf<ModelEntity?>(null) }
+    var huggingFaceToken by remember { mutableStateOf(repository.huggingFaceToken()) }
 
     LaunchedEffect(onnxModels) {
         withContext(Dispatchers.IO) {
             onnxModels.forEach { model ->
-                validationMap[model.filename] =
-                    com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(File(model.path))
+                validationMap[model.filename] = when {
+                    model.type == ModelType.ONNX_TTS -> OnnxTtsBundleValidator.validateDirectory(File(model.path))
+                    model.isOnnxTxt2ImgBundle() -> com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(File(model.path))
+                    else -> OnnxBundleValidationResult(
+                        isValid = File(model.path).isFile,
+                        missingPaths = if (File(model.path).isFile) emptyList() else listOf(File(model.path).name),
+                        bundleRoot = File(model.path).parentFile ?: File(model.path),
+                        supportedCapabilities = model.onnxCapabilityTokens()
+                    )
+                }
             }
         }
     }
@@ -291,6 +313,11 @@ fun OnnxModelsScreen(navController: NavController) {
                     entries = catalogEntries,
                     installedIds = installedCatalogIds,
                     activeDownloadIds = activeOnnxDownloads.keys.map { it.removePrefix("onnx:") }.toSet(),
+                    huggingFaceToken = huggingFaceToken,
+                    onHuggingFaceTokenChange = {
+                        huggingFaceToken = it
+                        repository.saveHuggingFaceToken(it)
+                    },
                     onDownload = { entry ->
                         repository.startOnnxCatalogDownload(entry)
                         Toast.makeText(
@@ -421,7 +448,11 @@ private fun InstalledOnnxModelsTab(
                             }
                             add(
                                 OnnxBadgeModel(
-                                    label = stringResource(R.string.onnx_models_capability_badge_txt2img),
+                                    label = when (model.type) {
+                                        ModelType.ONNX_TTS -> stringResource(R.string.onnx_models_capability_badge_tts)
+                                        ModelType.ONNX_BACKGROUND_REMOVAL -> stringResource(R.string.onnx_models_capability_badge_bgr)
+                                        else -> stringResource(R.string.onnx_models_capability_badge_txt2img)
+                                    },
                                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
@@ -549,7 +580,11 @@ private fun DownloadingOnnxModelsTab(
                             }
                             add(
                                 OnnxBadgeModel(
-                                    label = stringResource(R.string.onnx_models_capability_badge_txt2img),
+                                    label = when (catalogEntry?.modelType) {
+                                        ModelType.ONNX_TTS -> stringResource(R.string.onnx_models_capability_badge_tts)
+                                        ModelType.ONNX_BACKGROUND_REMOVAL -> stringResource(R.string.onnx_models_capability_badge_bgr)
+                                        else -> stringResource(R.string.onnx_models_capability_badge_txt2img)
+                                    },
                                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
@@ -601,6 +636,8 @@ private fun CatalogOnnxModelsTab(
     entries: List<OnnxCatalogEntry>,
     installedIds: Set<String>,
     activeDownloadIds: Set<String>,
+    huggingFaceToken: String,
+    onHuggingFaceTokenChange: (String) -> Unit,
     onDownload: (OnnxCatalogEntry) -> Unit
 ) {
     LazyColumn(
@@ -637,6 +674,24 @@ private fun CatalogOnnxModelsTab(
                             }
                         }
                     }
+                    if (selectedProvider == OnnxCatalogProvider.BACKGROUND_REMOVAL) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = huggingFaceToken,
+                            onValueChange = onHuggingFaceTokenChange,
+                            label = { Text(stringResource(R.string.onnx_models_hf_token_label)) },
+                            placeholder = { Text(stringResource(R.string.onnx_models_hf_token_placeholder)) },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            stringResource(R.string.onnx_models_hf_token_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -646,7 +701,11 @@ private fun CatalogOnnxModelsTab(
             val capabilityBadges = buildList {
                 add(
                     OnnxBadgeModel(
-                        label = stringResource(R.string.onnx_models_capability_badge_txt2img),
+                        label = when (entry.modelType) {
+                            ModelType.ONNX_TTS -> stringResource(R.string.onnx_models_capability_badge_tts)
+                            ModelType.ONNX_BACKGROUND_REMOVAL -> stringResource(R.string.onnx_models_capability_badge_bgr)
+                            else -> stringResource(R.string.onnx_models_capability_badge_txt2img)
+                        },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )
@@ -660,9 +719,18 @@ private fun CatalogOnnxModelsTab(
                         )
                     )
                 }
+                if (entry.gated) {
+                    add(
+                        OnnxBadgeModel(
+                            label = stringResource(R.string.onnx_models_badge_gated),
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    )
+                }
             }
             OnnxManagerCard(
-                accentColor = if (entry.provider == OnnxCatalogProvider.MANUXD32) {
+                accentColor = if (entry.provider == OnnxCatalogProvider.MANUXD32 || entry.modelType == ModelType.ONNX_TTS) {
                     MaterialTheme.colorScheme.tertiary
                 } else {
                     MaterialTheme.colorScheme.primary
@@ -688,7 +756,7 @@ private fun CatalogOnnxModelsTab(
                         }
                         Button(
                             onClick = { onDownload(entry) },
-                            enabled = !isInstalled && !isDownloading
+                            enabled = !isInstalled && !isDownloading && (!entry.gated || huggingFaceToken.isNotBlank())
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
@@ -826,6 +894,8 @@ private fun onnxProviderLabel(provider: OnnxCatalogProvider): String {
     return when (provider) {
         OnnxCatalogProvider.SDAI -> stringResource(R.string.onnx_models_provider_sdai)
         OnnxCatalogProvider.MANUXD32 -> stringResource(R.string.onnx_models_provider_manuxd32)
+        OnnxCatalogProvider.SUPERTONIC -> stringResource(R.string.onnx_models_provider_supertonic)
+        OnnxCatalogProvider.BACKGROUND_REMOVAL -> stringResource(R.string.onnx_models_provider_bgr)
     }
 }
 
@@ -855,7 +925,7 @@ private suspend fun importOnnxBundleFromTree(
     val finalPath = when (strategy) {
         OnnxImportStrategy.LINK_IN_PLACE -> {
             val directRoot = File(resolvedPath ?: error("Missing resolved path"))
-            val validation = com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(directRoot)
+            val validation = validateAnyOnnxBundle(directRoot)
             require(validation.isValid) {
                 context.getString(
                     R.string.onnx_models_import_error_missing_files,
@@ -880,7 +950,7 @@ private suspend fun importOnnxBundleFromTree(
                     onProgress(progress, context.getString(R.string.onnx_models_import_copying))
                 }
             }
-            val validation = com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(targetDir)
+            val validation = validateAnyOnnxBundle(targetDir)
             require(validation.isValid) {
                 context.getString(
                     R.string.onnx_models_import_error_missing_files,
@@ -892,23 +962,52 @@ private suspend fun importOnnxBundleFromTree(
     }
 
     val sizeBytes = OnnxImportSupport.recursiveSize(File(finalPath))
+    val finalRoot = File(finalPath)
+    val ttsValidation = OnnxTtsBundleValidator.validateDirectory(finalRoot)
     repository.insertModel(
-        buildOnnxImageGenModelEntity(
-            filename = bundleId,
-            path = finalPath,
-            sizeBytes = sizeBytes,
-            repoId = "custom-import/$bundleId",
-            installSource = OnnxInstallSource.CUSTOM_IMPORT,
-            supportedCapabilities = com.example.llamadroid.onnx.OnnxBundleValidator
-                .validateDirectory(File(finalPath))
-                .supportedCapabilities,
-            referenceUri = treeUri.toString(),
-            referencePath = resolvedPath
-        )
+        if (ttsValidation.isValid) {
+            ModelEntity(
+                filename = bundleId,
+                path = finalPath,
+                sizeBytes = sizeBytes,
+                type = ModelType.ONNX_TTS,
+                repoId = "custom-import/$bundleId",
+                isDownloaded = false,
+                onnxCapabilities = buildOnnxCapabilities(ONNX_CAPABILITY_TTS),
+                onnxAssetKind = ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE,
+                onnxPipelineFamily = ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS,
+                onnxReferenceUri = treeUri.toString(),
+                onnxReferencePath = resolvedPath
+            )
+        } else {
+            buildOnnxImageGenModelEntity(
+                filename = bundleId,
+                path = finalPath,
+                sizeBytes = sizeBytes,
+                repoId = "custom-import/$bundleId",
+                installSource = OnnxInstallSource.CUSTOM_IMPORT,
+                supportedCapabilities = com.example.llamadroid.onnx.OnnxBundleValidator
+                    .validateDirectory(finalRoot)
+                    .supportedCapabilities,
+                referenceUri = treeUri.toString(),
+                referencePath = resolvedPath
+            )
+        }
     )
 
     when (strategy) {
         OnnxImportStrategy.LINK_IN_PLACE -> context.getString(R.string.onnx_models_import_success_linked, bundleId)
         OnnxImportStrategy.COPY_TO_MANAGED -> context.getString(R.string.onnx_models_import_success_copied, bundleId)
+    }
+}
+
+private fun validateAnyOnnxBundle(root: File): OnnxBundleValidationResult {
+    val imageValidation = com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(root)
+    if (imageValidation.isValid) return imageValidation
+    val ttsValidation = OnnxTtsBundleValidator.validateDirectory(root)
+    return if (ttsValidation.isValid || ttsValidation.missingPaths.size < imageValidation.missingPaths.size) {
+        ttsValidation
+    } else {
+        imageValidation
     }
 }

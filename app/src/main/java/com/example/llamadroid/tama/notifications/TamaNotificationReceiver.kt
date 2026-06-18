@@ -23,6 +23,7 @@ import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.PetMapper
 import com.example.llamadroid.tama.game.TamaDeepDreamRunCoordinator
 import com.example.llamadroid.tama.game.TamaStudySessionSupport
+import com.example.llamadroid.widget.TamaPetWidgetProvider
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -122,6 +123,7 @@ class TamaNotificationReceiver : BroadcastReceiver() {
                     lastPoopMiscareAt = if (currentPet.poopCount == 0) null else currentPet.lastPoopMiscareAt
                 )
                 database.tamaDao().savePet(PetMapper.toEntity(updatedPet))
+                TamaPetWidgetProvider.refreshAll(context.applicationContext)
                 database.tamaDao().saveEvent(
                     TamaEventEntity(
                         id = java.util.UUID.randomUUID().toString(),
@@ -162,6 +164,7 @@ class TamaNotificationReceiver : BroadcastReceiver() {
                         mood = Mood.ANGRY
                     )
                 database.tamaDao().savePet(PetMapper.toEntity(updatedPet))
+                TamaPetWidgetProvider.refreshAll(context.applicationContext)
                 database.tamaDao().saveEvent(
                     TamaEventEntity(
                         id = java.util.UUID.randomUUID().toString(),

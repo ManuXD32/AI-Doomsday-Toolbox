@@ -77,6 +77,19 @@ interface FarmDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun saveLivestock(entities: List<FarmLivestockEntity>)
 
+    @Transaction
+    suspend fun saveTilesAndUpgrades(
+        tiles: List<FarmTileEntity>,
+        upgrades: List<FarmUpgradeEntity>
+    ) {
+        if (tiles.isNotEmpty()) {
+            saveTiles(tiles)
+        }
+        if (upgrades.isNotEmpty()) {
+            saveUpgrades(upgrades)
+        }
+    }
+
     @Query("DELETE FROM tama_farm_tiles WHERE petId = :petId")
     suspend fun clearTilesForPet(petId: String)
 

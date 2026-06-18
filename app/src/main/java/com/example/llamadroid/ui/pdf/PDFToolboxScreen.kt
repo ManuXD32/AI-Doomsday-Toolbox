@@ -33,10 +33,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
-import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.PDFService
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.service.PdfTranslationJobKind
+import com.example.llamadroid.service.PDFTranslationJobService
+import com.example.llamadroid.ui.settings.PDFTranslationEmbeddedSettings
 import kotlinx.coroutines.launch
 
 /**
@@ -48,16 +51,28 @@ import kotlinx.coroutines.launch
 fun PDFToolboxScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val settingsRepo = remember { SettingsRepository(context) }
     val pdfService = remember { PDFService(context) }
+    val settingsRepo = remember { SettingsRepository(context) }
+    val pdfTranslationJobState by PDFTranslationJobService.state.collectAsState()
+
+    LaunchedEffect(pdfTranslationJobState.successMessage, pdfTranslationJobState.errorMessage) {
+        pdfTranslationJobState.successMessage?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            PDFTranslationJobService.clearTerminalMessages()
+        }
+        pdfTranslationJobState.errorMessage?.let { message ->
+            Toast.makeText(context, context.getString(R.string.error_param, message), Toast.LENGTH_LONG).show()
+            PDFTranslationJobService.clearTerminalMessages()
+        }
+    }
     
     // State - using rememberSaveable for persistence across tab changes
     var selectedTool by rememberSaveable { mutableStateOf<String?>(null) }
     var isProcessing by remember { mutableStateOf(false) } // Not saveable - reset on return
     var currentJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var splitPageRange by rememberSaveable { mutableStateOf("") }
-    var extractPages by rememberSaveable { mutableStateOf("") }
     var ocrResult by rememberSaveable { mutableStateOf("") }
+    var ocrProgressMessage by rememberSaveable { mutableStateOf("") }
     
     // Uri lists cannot be saved directly - store as strings
     var selectedPdfStrings by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
@@ -66,7 +81,16 @@ fun PDFToolboxScreen(navController: NavController) {
     // Convert strings back to Uris
     val selectedPdfs = selectedPdfStrings.map { android.net.Uri.parse(it) }
     val selectedImages = selectedImageStrings.map { android.net.Uri.parse(it) }
-    
+    val visibleOcrProgressMessage = if (
+        pdfTranslationJobState.isRunning &&
+        pdfTranslationJobState.kind != PdfTranslationJobKind.MANGA_BATCH &&
+        pdfTranslationJobState.progressMessage.isNotBlank()
+    ) {
+        pdfTranslationJobState.progressMessage
+    } else {
+        ocrProgressMessage
+    }
+
     // PDF picker
     val pdfPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -141,6 +165,9 @@ fun PDFToolboxScreen(navController: NavController) {
                         if (selectedTool != null) {
                             selectedTool = null
                             selectedPdfStrings = emptyList()
+                            selectedImageStrings = emptyList()
+                            ocrResult = ""
+                            ocrProgressMessage = ""
                         } else {
                             navController.popBackStack() 
                         }
@@ -233,6 +260,19 @@ fun PDFToolboxScreen(navController: NavController) {
                         onClick = { selectedTool = "ocr" }
                     )
                 }
+
+                item {
+                    PDFToolCard(
+                        icon = "🌐",
+                        title = stringResource(R.string.pdf_translate_ocr_pdf),
+                        description = stringResource(R.string.pdf_translate_ocr_pdf_desc),
+                        gradientColors = listOf(
+                            Color(0xFF3F51B5).copy(alpha = 0.15f),
+                            Color(0xFF303F9F).copy(alpha = 0.3f)
+                        ),
+                        onClick = { selectedTool = "translate_ocr_pdf" }
+                    )
+                }
                 
                 item {
                     PDFToolCard(
@@ -275,11 +315,19 @@ fun PDFToolboxScreen(navController: NavController) {
             }
         } else {
             // Tool interface
+            val toolScrollState = rememberScrollState()
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .padding(16.dp)
+                    .then(
+                        if (selectedTool == "translate_ocr_pdf") {
+                            Modifier.verticalScroll(toolScrollState)
+                        } else {
+                            Modifier
+                        }
+                    )
             ) {
                 when (selectedTool) {
                     "merge" -> {
@@ -326,7 +374,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                             Text("📄", style = MaterialTheme.typography.titleMedium)
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                "${index + 1}. ${uri.lastPathSegment ?: "PDF"}",
+                                                "${index + 1}. ${uri.lastPathSegment ?: stringResource(R.string.pdf_selected_file)}",
                                                 modifier = Modifier.weight(1f),
                                                 maxLines = 1
                                             )
@@ -336,7 +384,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                 },
                                                 modifier = Modifier.size(32.dp)
                                             ) {
-                                                Icon(Icons.Default.Close, "Remove", modifier = Modifier.size(18.dp))
+                                                Icon(Icons.Default.Close, stringResource(R.string.action_remove), modifier = Modifier.size(18.dp))
                                             }
                                         }
                                     }
@@ -372,7 +420,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                                     Spacer(modifier = Modifier.width(8.dp))
                                 }
-                                Text("Merge PDFs")
+                                Text(stringResource(R.string.pdf_merge))
                             }
                         }
                     }
@@ -398,7 +446,7 @@ fun PDFToolboxScreen(navController: NavController) {
                             ) {
                                 Icon(Icons.Default.Add, null)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Select PDF")
+                                Text(stringResource(R.string.pdf_select))
                             }
                         } else {
                             Card(
@@ -531,7 +579,10 @@ fun PDFToolboxScreen(navController: NavController) {
                                                     val db = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
                                                     db.noteDao().insert(
                                                         com.example.llamadroid.data.db.NoteEntity(
-                                                            title = context.getString(R.string.pdf_extract_note_title, selectedPdfs.first().lastPathSegment ?: "Extracted"),
+                                                            title = context.getString(
+                                                                R.string.pdf_extract_note_title,
+                                                                selectedPdfs.first().lastPathSegment ?: context.getString(R.string.pdf_extract_default_source_name)
+                                                            ),
                                                             content = text,
                                                             type = com.example.llamadroid.data.db.NoteType.PDF_SUMMARY,
                                                             sourceFile = selectedPdfs.first().toString()
@@ -570,6 +621,16 @@ fun PDFToolboxScreen(navController: NavController) {
                     }
                     
                     "ocr" -> {
+                        val selectedOcrPdf = selectedPdfs.firstOrNull()
+                        val selectedOcrImage = selectedImages.firstOrNull()
+                        val hasOcrPdf = selectedOcrPdf != null
+                        val hasOcrImage = selectedOcrImage != null
+                        val sourceLabel = when {
+                            hasOcrPdf -> selectedOcrPdf?.lastPathSegment ?: stringResource(R.string.pdf_selected_file)
+                            hasOcrImage -> selectedOcrImage?.lastPathSegment ?: stringResource(R.string.pdf_selected_image)
+                            else -> ""
+                        }
+
                         Text(
                             stringResource(R.string.pdf_ocr_header),
                             style = MaterialTheme.typography.titleLarge,
@@ -582,13 +643,24 @@ fun PDFToolboxScreen(navController: NavController) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        
-                        if (selectedImages.isEmpty()) {
+
+                        if (!hasOcrPdf && !hasOcrImage) {
+                            OutlinedButton(
+                                onClick = { singlePdfPicker.launch(arrayOf("application/pdf")) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.PictureAsPdf, null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.pdf_select_pdf_for_ocr))
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
                             OutlinedButton(
                                 onClick = { singleImagePicker.launch(arrayOf("image/*")) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Icon(Icons.Default.Add, null)
+                                Icon(Icons.Default.Image, null)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(stringResource(R.string.pdf_select_image))
                             }
@@ -601,49 +673,140 @@ fun PDFToolboxScreen(navController: NavController) {
                                     modifier = Modifier.padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("🖼️", style = MaterialTheme.typography.headlineSmall)
+                                    Text(if (hasOcrPdf) "📄" else "🖼️", style = MaterialTheme.typography.headlineSmall)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
-                                        selectedImages.first().lastPathSegment ?: "Selected Image",
-                                        modifier = Modifier.weight(1f)
+                                        sourceLabel,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1
                                     )
-                                    IconButton(onClick = { selectedImageStrings = emptyList(); ocrResult = "" }) {
-                                        Icon(Icons.Default.Close, "Remove")
+                                    IconButton(
+                                        onClick = {
+                                            selectedPdfStrings = emptyList()
+                                            selectedImageStrings = emptyList()
+                                            ocrResult = ""
+                                            ocrProgressMessage = ""
+                                        }
+                                    ) {
+                                        Icon(Icons.Default.Close, stringResource(R.string.action_remove))
                                     }
                                 }
                             }
                             
                             Spacer(modifier = Modifier.height(16.dp))
-                            
-                            if (ocrResult.isEmpty()) {
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            isProcessing = true
-                                            try {
-                                                val result = pdfService.performOCR(selectedImages.first())
-                                                result.fold(
-                                                    onSuccess = { text ->
-                                                        ocrResult = text
-                                                        Toast.makeText(context, context.getString(R.string.pdf_ocr_success), Toast.LENGTH_SHORT).show()
-                                                    },
-                                                    onFailure = {
-                                                        Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
-                                                    }
-                                                )
-                                            } finally {
-                                                isProcessing = false
-                                            }
-                                        }
-                                    },
+
+                            if (visibleOcrProgressMessage.isNotBlank()) {
+                                Text(
+                                    visibleOcrProgressMessage,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+
+                            if (ocrResult.isBlank()) {
+                                Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    enabled = !isProcessing
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    if (isProcessing) {
-                                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                isProcessing = true
+                                                ocrProgressMessage = ""
+                                                try {
+                                                    val result = if (hasOcrPdf && selectedOcrPdf != null) {
+                                                        pdfService.performOcrOnPdf(selectedOcrPdf) { progress ->
+                                                            ocrProgressMessage = context.getString(
+                                                                R.string.pdf_ocr_progress_pages,
+                                                                progress.processedPages,
+                                                                progress.totalPages,
+                                                                progress.ocrPages,
+                                                                progress.emptyPages
+                                                            )
+                                                        }.map { it.text }
+                                                    } else if (selectedOcrImage != null) {
+                                                        pdfService.performOCR(selectedOcrImage)
+                                                    } else {
+                                                        Result.failure(Exception(context.getString(R.string.pdf_ocr_select_source_first)))
+                                                    }
+                                                    result.fold(
+                                                        onSuccess = { text ->
+                                                            ocrResult = text
+                                                            ocrProgressMessage = ""
+                                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_extract_success), Toast.LENGTH_SHORT).show()
+                                                        },
+                                                        onFailure = {
+                                                            Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                        }
+                                                    )
+                                                } finally {
+                                                    isProcessing = false
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !isProcessing
+                                    ) {
+                                        if (isProcessing) {
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text(stringResource(R.string.pdf_ocr_extract_text))
                                     }
-                                    Text(stringResource(R.string.pdf_ocr_extract_text))
+
+                                    if (hasOcrPdf && selectedOcrPdf != null) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    isProcessing = true
+                                                    ocrProgressMessage = ""
+                                                    try {
+                                                        pdfService.exportSearchableOcrPdf(selectedOcrPdf) { progress ->
+                                                            ocrProgressMessage = context.getString(
+                                                                R.string.pdf_ocr_progress_pages,
+                                                                progress.processedPages,
+                                                                progress.totalPages,
+                                                                progress.ocrPages,
+                                                                progress.emptyPages
+                                                            )
+                                                        }.fold(
+                                                            onSuccess = {
+                                                                ocrProgressMessage = ""
+                                                                Toast.makeText(context, context.getString(R.string.pdf_ocr_pdf_export_success), Toast.LENGTH_LONG).show()
+                                                            },
+                                                            onFailure = {
+                                                                Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                            }
+                                                        )
+                                                    } finally {
+                                                        isProcessing = false
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !isProcessing
+                                        ) {
+                                            Icon(Icons.Default.PictureAsPdf, null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(stringResource(R.string.pdf_ocr_export_pdf))
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
+                                                if (!PDFTranslationJobService.startOcrPdfTranslation(context, selectedOcrPdf)) {
+                                                    Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
+                                                }
+                                            },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            enabled = !isProcessing && !pdfTranslationJobState.isRunning
+                                        ) {
+                                            Icon(Icons.Default.Translate, null, modifier = Modifier.size(18.dp))
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(stringResource(R.string.pdf_ocr_export_translated_pdf))
+                                        }
+                                    }
                                 }
                             } else {
                                 Text(
@@ -651,38 +814,47 @@ fun PDFToolboxScreen(navController: NavController) {
                                     fontWeight = FontWeight.Bold
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
-                                
+
                                 Card(
-                                    modifier = Modifier.fillMaxWidth().weight(1f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f),
                                     shape = RoundedCornerShape(12.dp)
                                 ) {
                                     Column(
-                                        modifier = Modifier.padding(16.dp)
+                                        modifier = Modifier
+                                            .padding(16.dp)
                                             .fillMaxWidth()
-                                            .heightIn(min = 100.dp, max = 200.dp)
+                                            .heightIn(min = 100.dp, max = 240.dp)
                                             .verticalScroll(rememberScrollState())
                                     ) {
                                         Text(ocrResult)
                                     }
                                 }
-                                
+
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Button(
                                     onClick = {
                                         scope.launch {
+                                            val sourceUri = selectedOcrPdf ?: selectedOcrImage
                                             val db = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
                                             db.noteDao().insert(
                                                 com.example.llamadroid.data.db.NoteEntity(
-                                                    title = context.getString(R.string.pdf_ocr_note_title, selectedImages.first().lastPathSegment ?: "OCR"),
+                                                    title = context.getString(
+                                                        R.string.pdf_ocr_note_title,
+                                                        sourceLabel.ifBlank { context.getString(R.string.pdf_ocr_default_source_name) }
+                                                    ),
                                                     content = ocrResult,
                                                     type = com.example.llamadroid.data.db.NoteType.PDF_SUMMARY,
-                                                    sourceFile = selectedImages.first().toString()
+                                                    sourceFile = sourceUri?.toString()
                                                 )
                                             )
-                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_success), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_note_success), Toast.LENGTH_SHORT).show()
                                             selectedTool = null
+                                            selectedPdfStrings = emptyList()
                                             selectedImageStrings = emptyList()
                                             ocrResult = ""
+                                            ocrProgressMessage = ""
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth()
@@ -691,10 +863,158 @@ fun PDFToolboxScreen(navController: NavController) {
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text(stringResource(R.string.pdf_ocr_save_btn))
                                 }
+
+                                if (hasOcrPdf && selectedOcrPdf != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                isProcessing = true
+                                                ocrProgressMessage = ""
+                                                try {
+                                                    pdfService.exportSearchableOcrPdf(selectedOcrPdf) { progress ->
+                                                        ocrProgressMessage = context.getString(
+                                                            R.string.pdf_ocr_progress_pages,
+                                                            progress.processedPages,
+                                                            progress.totalPages,
+                                                            progress.ocrPages,
+                                                            progress.emptyPages
+                                                        )
+                                                    }.fold(
+                                                        onSuccess = {
+                                                            ocrProgressMessage = ""
+                                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_pdf_export_success), Toast.LENGTH_LONG).show()
+                                                        },
+                                                        onFailure = {
+                                                            Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                        }
+                                                    )
+                                                } finally {
+                                                    isProcessing = false
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !isProcessing
+                                    ) {
+                                        Icon(Icons.Default.PictureAsPdf, null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(stringResource(R.string.pdf_ocr_export_pdf))
+                                    }
+
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
+                                            if (!PDFTranslationJobService.startOcrPdfTranslation(context, selectedOcrPdf)) {
+                                                Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !isProcessing && !pdfTranslationJobState.isRunning
+                                    ) {
+                                        Icon(Icons.Default.Translate, null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(stringResource(R.string.pdf_ocr_export_translated_pdf))
+                                    }
+                                }
                             }
                         }
                     }
                     
+                    "translate_ocr_pdf" -> {
+                        Text(
+                            stringResource(R.string.pdf_translate_ocr_header),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.pdf_translate_ocr_help),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        PDFTranslationEmbeddedSettings(settingsRepo = settingsRepo)
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        OutlinedButton(
+                            onClick = { pdfPicker.launch(arrayOf("application/pdf")) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.PictureAsPdf, null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.pdf_select_multiple))
+                        }
+
+                        if (selectedPdfs.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(stringResource(R.string.pdf_selected_count, selectedPdfs.size), fontWeight = FontWeight.Medium)
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            selectedPdfs.forEachIndexed { index, uri ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("📄", style = MaterialTheme.typography.titleMedium)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "${index + 1}. ${uri.lastPathSegment ?: stringResource(R.string.pdf_selected_file)}",
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                selectedPdfStrings = selectedPdfStrings.toMutableList().apply { removeAt(index) }
+                                                if (selectedPdfStrings.isEmpty()) ocrProgressMessage = ""
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, stringResource(R.string.action_remove), modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            if (visibleOcrProgressMessage.isNotBlank()) {
+                                Text(
+                                    visibleOcrProgressMessage,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+
+                            Button(
+                                onClick = {
+                                    ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
+                                    if (!PDFTranslationJobService.startTextLayerPdfTranslationBatch(context, selectedPdfs)) {
+                                        Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = selectedPdfs.isNotEmpty() && !isProcessing && !pdfTranslationJobState.isRunning
+                            ) {
+                                if (pdfTranslationJobState.isRunning) {
+                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Icon(Icons.Default.Translate, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.pdf_translate_ocr_export))
+                            }
+                        }
+                    }
+
                     "images_to_pdf" -> {
                         Text(
                             stringResource(R.string.pdf_images_to_pdf_header),

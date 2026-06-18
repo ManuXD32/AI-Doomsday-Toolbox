@@ -15,8 +15,11 @@ data class LlamaServerEntity(
     val supportsVision: Boolean = false,
     val supportsAudio: Boolean = false,
     val modelName: String? = null,
+    val liteRtModelId: Long? = null,
+    val liteRtBackend: String = LITERT_BACKEND_AUTO,
     val whisperModelPath: String? = null,
     val whisperLanguage: String = DEFAULT_WHISPER_LANGUAGE,
+    val preferWhisperAudioTranscription: Boolean = false,
     val defaultApiParams: String? = null,
     val lastUsed: Long = System.currentTimeMillis()
 ) {
@@ -26,7 +29,17 @@ data class LlamaServerEntity(
 
     fun isLlamaServerEngine(): Boolean = normalizedEngine() == ENGINE_LLAMA_SERVER
 
-    fun supportsDirectAudioInput(): Boolean = isLlamaServerEngine() && supportsAudio
+    fun isLlamaSwapEngine(): Boolean = normalizedEngine() == ENGINE_LLAMA_SWAP
+
+    fun isLiteRtEngine(): Boolean = normalizedEngine() == ENGINE_LITERT_LM
+
+    fun usesOpenAiCompatibleEngine(): Boolean = isLlamaServerEngine() || isLlamaSwapEngine()
+
+    fun hasDirectAudioInputCapability(): Boolean =
+        (usesOpenAiCompatibleEngine() || isLiteRtEngine()) && supportsAudio
+
+    fun supportsDirectAudioInput(): Boolean =
+        hasDirectAudioInputCapability() && !preferWhisperAudioTranscription
 
     fun requiresAudioTranscriptionFallback(): Boolean = !supportsDirectAudioInput()
 
@@ -35,6 +48,8 @@ data class LlamaServerEntity(
     companion object {
         const val ENGINE_LLAMA_SERVER = "llama-server"
         const val ENGINE_OLLAMA = "ollama"
+        const val ENGINE_LLAMA_SWAP = "llama-swap"
+        const val ENGINE_LITERT_LM = "litert-lm"
         const val DEFAULT_WHISPER_LANGUAGE = "auto"
     }
 }
@@ -209,10 +224,16 @@ data class LlamaServerCapabilityState(
 )
 
 fun normalizeLlamaServerEngine(engine: String?): String =
-    if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
-        LlamaServerEntity.ENGINE_OLLAMA
-    } else {
-        LlamaServerEntity.ENGINE_LLAMA_SERVER
+    when (engine?.trim()?.lowercase(java.util.Locale.US)?.replace('_', '-')) {
+        LlamaServerEntity.ENGINE_OLLAMA -> LlamaServerEntity.ENGINE_OLLAMA
+        LlamaServerEntity.ENGINE_LLAMA_SWAP, "llamaswap" -> LlamaServerEntity.ENGINE_LLAMA_SWAP
+        LlamaServerEntity.ENGINE_LITERT_LM,
+        "litert",
+        "litertlm",
+        "lite-rt",
+        "lite-rt-lm",
+        "qnn" -> LlamaServerEntity.ENGINE_LITERT_LM
+        else -> LlamaServerEntity.ENGINE_LLAMA_SERVER
     }
 
 fun buildLlamaServerBaseUrl(host: String, port: Int): String {

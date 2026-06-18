@@ -20,8 +20,9 @@ class ModelManagerViewModel(
     private val repository: ModelRepository
 ) : ViewModel() {
 
-    // Installed LLM Models only (not SD models)
-    val installedModels: StateFlow<List<ModelEntity>> = repository.getLLMModels()
+    // Installed text-model family rows shown by this manager. Quadtrix is displayed
+    // here, but runtime llama.cpp pickers still use repository.getLLMModels().
+    val installedModels: StateFlow<List<ModelEntity>> = repository.getModelManagerModels()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
     // Download Progress

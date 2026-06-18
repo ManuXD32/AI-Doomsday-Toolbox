@@ -2,8 +2,9 @@ package com.example.llamadroid.service
 
 import android.content.Context
 import android.content.Intent
-import com.example.llamadroid.R
+import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
+import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,16 +59,18 @@ internal object AiRuntimeRecovery {
     suspend fun performRecovery(context: Context) {
         val staleJobs = AiRuntimeJobStore.markStaleActiveJobsTerminal(context)
         val recoverableJobs = AiRuntimeJobStore.getRecoverableJobs(context)
-        val hasForegroundRuntimeJobs = recoverableJobs.isNotEmpty()
+        val hasRecoverableMediaWorkflow = MediaTranslationWorkflowService.hasRecoverableRuntime(context)
+        val hasRecoverableRuntimeJobs = recoverableJobs.isNotEmpty() || hasRecoverableMediaWorkflow
         recordBreadcrumbSafely(
             event = "receiver_recovery_state",
-            details = "hasForegroundRuntimeJobs=$hasForegroundRuntimeJobs stalePruned=${staleJobs.size} recoverable=${recoverableJobs.size}"
+            details = "hasRecoverableRuntimeJobs=$hasRecoverableRuntimeJobs stalePruned=${staleJobs.size} recoverable=${recoverableJobs.size} mediaWorkflow=$hasRecoverableMediaWorkflow"
         )
         TamaNotificationScheduler.scheduleAll(context)
-        if (hasForegroundRuntimeJobs) {
-            AgentForegroundService.startForRecovery(
-                context,
-                context.getString(R.string.agent_runtime_recovering_jobs)
+        val recoveryAction = resolveAiRuntimeBootRecoveryAction(recoverableJobs, hasRecoverableMediaWorkflow)
+        if (recoveryAction.shouldShowManualResumeNotification && recoveryAction.manualResumeRoute != null) {
+            UnifiedNotificationManager.showAiRuntimeRecoveryNotification(
+                recoverableCount = recoveryAction.recoverableCount,
+                route = recoveryAction.manualResumeRoute
             )
         }
     }
@@ -91,4 +94,30 @@ internal object AiRuntimeRecovery {
             )
         }
     }
+}
+
+internal data class AiRuntimeBootRecoveryAction(
+    val recoverableCount: Int,
+    val manualResumeRoute: String?,
+    val foregroundServiceAction: String?
+) {
+    val shouldShowManualResumeNotification: Boolean
+        get() = manualResumeRoute != null && recoverableCount > 0
+}
+
+internal fun resolveAiRuntimeBootRecoveryAction(
+    recoverableJobs: List<AiRuntimeJobEntity>,
+    hasRecoverableMediaWorkflow: Boolean = false
+): AiRuntimeBootRecoveryAction {
+    val route = when {
+        hasRecoverableMediaWorkflow -> Screen.Workflows.route
+        recoverableJobs.isEmpty() -> null
+        recoverableJobs.all { it.type == AiRuntimeJobStore.TYPE_DATASET_PIPELINE } -> Screen.Dataset.route
+        else -> Screen.Agent.route
+    }
+    return AiRuntimeBootRecoveryAction(
+        recoverableCount = recoverableJobs.size + if (hasRecoverableMediaWorkflow) 1 else 0,
+        manualResumeRoute = route,
+        foregroundServiceAction = null
+    )
 }

@@ -37,6 +37,7 @@ class LlamaApplication : Application() {
         instance = this  // Safe: Application lives for entire app lifecycle
         container = DefaultAppContainer(this)
         UnifiedNotificationManager.init(this)
+        DebugLog.init(this)
         GenerationDiagnosticsStore.init(this)
         installCrashBreadcrumbHandler()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {

@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import android.content.Context
 import android.os.PowerManager
 import android.widget.Toast
+import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.NoteEntity
@@ -110,7 +111,8 @@ object VideoSumupService {
         threads: Int = 4,
         saveToNotes: Boolean = true,
         noteType: NoteType = NoteType.VIDEO_SUMMARY,  // WORKFLOW for workflow calls
-        audioSourcePath: String? = null  // Original audio path for workflow notes
+        audioSourcePath: String? = null,  // Original audio path for workflow notes
+        settingsOverride: RemoteSummarySettingsSnapshot? = null
     ) {
         currentJob?.cancel()
         _result.value = null
@@ -160,7 +162,7 @@ object VideoSumupService {
         
         currentJob = serviceScope.launch {
             try {
-                val result = summarizeVideo(context, videoPath, videoFileName, whisperModelPath, language, threads, saveToNotes, noteType, audioSourcePath)
+                val result = summarizeVideo(context, videoPath, videoFileName, whisperModelPath, language, threads, saveToNotes, noteType, audioSourcePath, settingsOverride)
                 _result.value = result
                 
                 // Complete notification on success
@@ -198,7 +200,8 @@ object VideoSumupService {
         threads: Int,
         saveToNotes: Boolean,
         noteType: NoteType,
-        audioSourcePath: String?
+        audioSourcePath: String?,
+        settingsOverride: RemoteSummarySettingsSnapshot?
     ): Result<VideoSumupResult> = withContext(Dispatchers.IO) {
         try {
             // Step 1: Extract audio
@@ -258,7 +261,8 @@ object VideoSumupService {
             val summaryResult = summarizeRemotely(
                 context = context,
                 transcript = transcript,
-                noteType = noteType
+                noteType = noteType,
+                settingsOverride = settingsOverride
             )
             if (summaryResult.isFailure) {
                 _state.value = VideoSumupState.Error(summaryResult.exceptionOrNull()?.message ?: "Summary failed")
@@ -446,21 +450,32 @@ object VideoSumupService {
     private suspend fun summarizeRemotely(
         context: Context,
         transcript: String,
-        noteType: NoteType
+        noteType: NoteType,
+        settingsOverride: RemoteSummarySettingsSnapshot?
     ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val settingsRepo = SettingsRepository(context)
-            val snapshot = if (noteType == NoteType.WORKFLOW) {
+            val snapshot = settingsOverride ?: if (noteType == NoteType.WORKFLOW) {
                 settingsRepo.workflowSummarySettings.snapshot()
             } else {
                 settingsRepo.videoSummarySettings.snapshot()
             }
-            val client = RemoteSummaryClientFactory.fromSnapshot(snapshot)
+            val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
             currentRemoteClient = client
             val orchestrator = RemoteSummaryOrchestrator(client)
 
-            if (snapshot.backend == SettingsRepository.PDF_BACKEND_OLLAMA && snapshot.ollamaModel.isNullOrBlank()) {
-                throw IllegalStateException(context.getString(R.string.pdf_error_missing_ollama_model))
+            val selectedModel = when (SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)) {
+                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapModel
+                SettingsRepository.PDF_BACKEND_OLLAMA -> snapshot.ollamaModel
+                else -> snapshot.llamaServerModelLabel
+            }
+            if (SettingsRepository.requiresSelectedRemoteModel(snapshot.backend) && selectedModel.isNullOrBlank()) {
+                val message = if (SettingsRepository.isLlamaSwapBackend(snapshot.backend)) {
+                    context.getString(R.string.pdf_error_missing_llama_swap_model)
+                } else {
+                    context.getString(R.string.pdf_error_missing_ollama_model)
+                }
+                throw IllegalStateException(message)
             }
 
             val summaryPrompt = snapshot.summaryPrompt ?: SettingsRepository.DEFAULT_TRANSCRIPT_SUMMARY_PROMPT

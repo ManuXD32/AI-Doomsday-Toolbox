@@ -50,7 +50,8 @@ private const val LLAMA_FOLDER_FILTER_UNFILED = 0L
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaChatListScreen(
-    navController: NavController
+    navController: NavController,
+    initialFolderId: Long? = null
 ) {
     val context = LocalContext.current
     val database = AppDatabase.getDatabase(context)
@@ -77,7 +78,9 @@ fun LlamaChatListScreen(
     var chatToMove by remember { mutableStateOf<LlamaChatEntity?>(null) }
     var folderToDelete by remember { mutableStateOf<LlamaChatFolderEntity?>(null) }
     var showFabMenu by remember { mutableStateOf(false) }
-    var selectedFolderFilter by remember { mutableLongStateOf(LLAMA_FOLDER_FILTER_ALL) }
+    var selectedFolderFilter by remember(initialFolderId) {
+        mutableLongStateOf(initialFolderId?.takeIf { it > 0 } ?: LLAMA_FOLDER_FILTER_ALL)
+    }
     val scope = rememberCoroutineScope()
     val filteredChats = remember(chats, selectedFolderFilter) {
         when (selectedFolderFilter) {
@@ -96,7 +99,7 @@ fun LlamaChatListScreen(
     }
 
     LaunchedEffect(folders, selectedFolderFilter) {
-        if (selectedFolderFilter > 0 && folders.none { it.id == selectedFolderFilter }) {
+        if (folders.isNotEmpty() && selectedFolderFilter > 0 && folders.none { it.id == selectedFolderFilter }) {
             selectedFolderFilter = LLAMA_FOLDER_FILTER_ALL
         }
     }
@@ -230,6 +233,19 @@ fun LlamaChatListScreen(
                 },
                 actions = {
                     if (currentFolder != null) {
+                        IconButton(
+                            onClick = {
+                                LlamaChatShortcutHelper.requestPinFolderShortcut(context, currentFolder)
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Home,
+                                contentDescription = stringResource(
+                                    R.string.llama_folder_shortcut_desc,
+                                    currentFolder.name
+                                )
+                            )
+                        }
                         IconButton(onClick = { folderToDelete = currentFolder }) {
                             Icon(
                                 Icons.Default.Delete,
@@ -332,6 +348,9 @@ fun LlamaChatListScreen(
                                     folder = folder,
                                     chatCount = chats.count { it.folderId == folder.id },
                                     onClick = { selectedFolderFilter = folder.id },
+                                    onShortcut = {
+                                        LlamaChatShortcutHelper.requestPinFolderShortcut(context, folder)
+                                    },
                                     onDelete = { folderToDelete = folder }
                                 )
                             }
@@ -831,6 +850,7 @@ private fun LlamaFolderCard(
     folder: LlamaChatFolderEntity,
     chatCount: Int,
     onClick: () -> Unit,
+    onShortcut: () -> Unit,
     onDelete: () -> Unit
 ) {
     ElevatedCard(
@@ -880,6 +900,19 @@ private fun LlamaFolderCard(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.llama_add_shortcut)) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Home,
+                                contentDescription = null
+                            )
+                        },
+                        onClick = {
+                            expanded = false
+                            onShortcut()
+                        }
+                    )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.llama_folder_delete)) },
                         leadingIcon = {

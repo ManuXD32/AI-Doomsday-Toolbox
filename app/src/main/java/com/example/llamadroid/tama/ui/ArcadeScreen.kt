@@ -131,7 +131,8 @@ private data class ArcadeResult(
     val misses: Int,
     val totalObjects: Int,
     val score: Int,
-    val coins: Int
+    val coins: Int,
+    val happiness: Int
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -179,7 +180,8 @@ fun ArcadeScreen(
             misses = catchGameState.misses,
             totalObjects = catchGameState.totalObjects,
             score = catchGameState.catches,
-            coins = reward
+            coins = reward,
+            happiness = arcadeHappinessForCoins(reward)
         )
         catchRewardClaimed = true
         catchResult = summary
@@ -187,6 +189,10 @@ fun ArcadeScreen(
             gameEngine.awardMoney(
                 reward.toLong(),
                 context.getString(R.string.tama_event_arcade_reward, reward, context.getString(R.string.tama_arcade_game_title))
+            )
+            gameEngine.awardHappiness(
+                summary.happiness.toFloat(),
+                context.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, context.getString(R.string.tama_arcade_game_title))
             )
         }
     }
@@ -200,6 +206,10 @@ fun ArcadeScreen(
             gameEngine.awardMoney(
                 summary.coins.toLong(),
                 context.getString(R.string.tama_event_arcade_reward, summary.coins, context.getString(R.string.tama_arcade_memory_game_title))
+            )
+            gameEngine.awardHappiness(
+                summary.happiness.toFloat(),
+                context.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, context.getString(R.string.tama_arcade_memory_game_title))
             )
         }
     }
@@ -787,6 +797,10 @@ private fun ArcadeResultDialog(
                     stringResource(R.string.tama_arcade_result_reward, summary.coins),
                     fontFamily = FontFamily.Monospace
                 )
+                Text(
+                    stringResource(R.string.tama_arcade_result_happiness, summary.happiness),
+                    fontFamily = FontFamily.Monospace
+                )
                 if (summary.coins > 0) {
                     Text(
                         stringResource(R.string.tama_arcade_result_rewarded),
@@ -859,6 +873,12 @@ private fun startCatchGame(): ArcadeCatchGameState {
         misses = 0,
         finished = false
     )
+}
+
+fun arcadeHappinessForCoins(coins: Int): Int = when {
+    coins >= 50 -> 12
+    coins > 0 -> 10
+    else -> 8
 }
 
 private fun chooseCatchLane(

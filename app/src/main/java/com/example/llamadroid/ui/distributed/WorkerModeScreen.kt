@@ -374,7 +374,7 @@ fun WorkerModeScreen(navController: NavController) {
                             qrBitmap?.let { bitmap ->
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "QR Code for $localIp:$workerPort",
+                                    contentDescription = stringResource(R.string.dashboard_qr_for, "$localIp:$workerPort"),
                                     modifier = Modifier
                                         .size(180.dp)
                                         .padding(12.dp)
@@ -449,7 +449,7 @@ fun WorkerModeScreen(navController: NavController) {
                                 OutlinedTextField(
                                     value = masterPort,
                                     onValueChange = { masterPort = it },
-                                    label = { Text("Port") },
+                                    label = { Text(stringResource(R.string.port_label)) },
                                     modifier = Modifier.width(90.dp),
                                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                     singleLine = true
@@ -499,7 +499,7 @@ fun WorkerModeScreen(navController: NavController) {
                                 Row {
                                     // Expand Button
                                     IconButton(onClick = { isFullScreen = true }) {
-                                        Icon(Icons.Default.OpenInFull, contentDescription = "Full Screen")
+                                        Icon(Icons.Default.OpenInFull, contentDescription = stringResource(R.string.action_full_screen))
                                     }
                                     IconButton(onClick = { webViewRef?.reload() }) {
                                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_reload))
@@ -604,7 +604,7 @@ fun WorkerModeScreen(navController: NavController) {
                                         .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text("Maximised", style = MaterialTheme.typography.bodySmall)
+                                    Text(stringResource(R.string.action_full_screen), style = MaterialTheme.typography.bodySmall)
                                 }
                             }
                         }
@@ -727,21 +727,21 @@ fun WorkerModeScreen(navController: NavController) {
                             IconButton(onClick = { 
                                 if (webViewRef?.canGoBack() == true) webViewRef?.goBack() 
                             }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                             }
                             
                             IconButton(onClick = { webViewRef?.reload() }) {
-                                Icon(Icons.Default.Refresh, contentDescription = "Reload")
+                                Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.action_reload))
                             }
                             
                             IconButton(onClick = { isFullScreen = false }) {
-                                Icon(Icons.Default.CloseFullscreen, contentDescription = "Minimize")
+                                Icon(Icons.Default.CloseFullscreen, contentDescription = stringResource(R.string.action_minimize))
                             }
                             
                             IconButton(onClick = { 
                                 if (webViewRef?.canGoForward() == true) webViewRef?.goForward() 
                             }) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward")
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = stringResource(R.string.action_forward))
                             }
                         }
                     }
@@ -761,7 +761,7 @@ fun WorkerModeScreen(navController: NavController) {
                                 Icons.Filled.ExpandMore 
                             else 
                                 Icons.Filled.ExpandLess,
-                            contentDescription = "Toggle Controls",
+                            contentDescription = stringResource(R.string.action_toggle_controls),
                             modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.onSurface
                         )

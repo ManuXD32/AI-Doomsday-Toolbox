@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SystemPromptEntity
 import com.example.llamadroid.data.model.LlamaScheduledTaskEntity
@@ -88,11 +89,20 @@ import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
+import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.isSdImageMainModel
+import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.service.LlamaScheduledTaskSchedule
 import com.example.llamadroid.service.LlamaScheduledTaskScheduler
 import com.example.llamadroid.service.LlamaScheduledTaskService
+import com.example.llamadroid.service.NativeChatImageGenerationEngine
 import com.example.llamadroid.service.NativeChatImageToolParams
+import com.example.llamadroid.service.NativeChatSdImageToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.SamplingMethod
+import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftNullableIntTextField
@@ -628,9 +638,32 @@ private fun LlamaScheduledTaskEditorDialog(
     val onnxImageModels by remember(database) {
         database.modelDao().getModelsByType(ModelType.ONNX_IMAGE_GEN)
     }.collectAsState(initial = emptyList())
+    val sdImageMainModels by remember(database) {
+        database.modelDao().getModelsByTypes(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
+    }.collectAsState(initial = emptyList())
+    val sdImageSupportModels by remember(database) {
+        database.modelDao().getModelsByTypes(
+            listOf(
+                ModelType.SD_VAE,
+                ModelType.SD_TAE,
+                ModelType.SD_CLIP_L,
+                ModelType.SD_CLIP_G,
+                ModelType.SD_T5XXL,
+                ModelType.LLM,
+                ModelType.VISION_PROJECTOR,
+                ModelType.SD_PHOTOMAKER
+            )
+        )
+    }.collectAsState(initial = emptyList())
     val nativeChatImageModelOptions = remember(onnxImageModels) {
         onnxImageModels
             .filter { it.isOnnxTxt2ImgBundle() }
+            .map { it.filename }
+            .distinct()
+    }
+    val nativeChatSdImageModelOptions = remember(sdImageMainModels) {
+        sdImageMainModels
+            .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() }
             .map { it.filename }
             .distinct()
     }
@@ -672,6 +705,7 @@ private fun LlamaScheduledTaskEditorDialog(
     var fetchMaxChars by remember { mutableIntStateOf(initialConfig.fetchUrlMaxChars) }
     var maxToolRounds by remember { mutableIntStateOf(initialConfig.maxToolRounds) }
     var imageToolModel by remember { mutableStateOf(initialConfig.imageParams.model.orEmpty()) }
+    var imageToolEngine by remember { mutableStateOf(initialConfig.imageParams.engine) }
     var imageToolWidth by remember { mutableIntStateOf(initialConfig.imageParams.width) }
     var imageToolHeight by remember { mutableIntStateOf(initialConfig.imageParams.height) }
     var imageToolSteps by remember { mutableIntStateOf(initialConfig.imageParams.steps) }
@@ -691,6 +725,29 @@ private fun LlamaScheduledTaskEditorDialog(
     var imageToolCpuArena by remember { mutableStateOf(initialConfig.imageParams.cpuArenaAllocator) }
     var imageToolNnapiCpuDisabled by remember { mutableStateOf(initialConfig.imageParams.nnapiCpuDisabled) }
     var imageToolNnapiFp16 by remember { mutableStateOf(initialConfig.imageParams.nnapiUseFp16) }
+    var imageToolSdModel by remember { mutableStateOf(initialConfig.imageParams.sdParams.model.orEmpty()) }
+    var imageToolSdVae by remember { mutableStateOf(initialConfig.imageParams.sdParams.vaePath.orEmpty()) }
+    var imageToolSdTae by remember { mutableStateOf(initialConfig.imageParams.sdParams.taePath.orEmpty()) }
+    var imageToolSdClipL by remember { mutableStateOf(initialConfig.imageParams.sdParams.clipLPath.orEmpty()) }
+    var imageToolSdClipG by remember { mutableStateOf(initialConfig.imageParams.sdParams.clipGPath.orEmpty()) }
+    var imageToolSdT5xxl by remember { mutableStateOf(initialConfig.imageParams.sdParams.t5xxlPath.orEmpty()) }
+    var imageToolSdLlm by remember { mutableStateOf(initialConfig.imageParams.sdParams.llmPath.orEmpty()) }
+    var imageToolSdLlmVision by remember { mutableStateOf(initialConfig.imageParams.sdParams.llmVisionPath.orEmpty()) }
+    var imageToolSdPhotoMaker by remember { mutableStateOf(initialConfig.imageParams.sdParams.photoMakerPath.orEmpty()) }
+    var imageToolSdWidth by remember { mutableIntStateOf(initialConfig.imageParams.sdParams.width) }
+    var imageToolSdHeight by remember { mutableIntStateOf(initialConfig.imageParams.sdParams.height) }
+    var imageToolSdSteps by remember { mutableIntStateOf(initialConfig.imageParams.sdParams.steps) }
+    var imageToolSdCfg by remember { mutableStateOf(initialConfig.imageParams.sdParams.cfgScale) }
+    var imageToolSdSampler by remember { mutableStateOf(initialConfig.imageParams.sdParams.sampler) }
+    var imageToolSdSeed by remember { mutableStateOf(initialConfig.imageParams.sdParams.seed) }
+    var imageToolSdNegativePrompt by remember { mutableStateOf(initialConfig.imageParams.sdParams.negativePrompt) }
+    var imageToolSdThreads by remember { mutableIntStateOf(initialConfig.imageParams.sdParams.threads) }
+    var imageToolSdFlowShift by remember { mutableStateOf(initialConfig.imageParams.sdParams.flowShift) }
+    var imageToolSdDiffusionFa by remember { mutableStateOf(initialConfig.imageParams.sdParams.diffusionFa) }
+    var imageToolSdMmap by remember { mutableStateOf(initialConfig.imageParams.sdParams.mmap) }
+    var imageToolSdVaeConvDirect by remember { mutableStateOf(initialConfig.imageParams.sdParams.vaeConvDirect) }
+    var imageToolSdQwenZeroCondT by remember { mutableStateOf(initialConfig.imageParams.sdParams.qwenImageZeroCondT) }
+    var imageToolSdChromaDisableDitMask by remember { mutableStateOf(initialConfig.imageParams.sdParams.chromaDisableDitMask) }
     var serverMenuExpanded by remember { mutableStateOf(false) }
     var scheduleMenuExpanded by remember { mutableStateOf(false) }
 
@@ -860,49 +917,151 @@ private fun LlamaScheduledTaskEditorDialog(
                     ToolToggleRow(stringResource(R.string.llama_tool_image_generation), imageEnabled) { imageEnabled = it }
                     if (imageEnabled) {
                         ToolToggleRow(stringResource(R.string.llama_tool_image_iteration), imageIterationEnabled) { imageIterationEnabled = it }
-                        SchedulerNativeImageToolSettings(
-                            model = imageToolModel,
-                            availableModels = nativeChatImageModelOptions,
-                            onModelChange = { imageToolModel = it },
-                            width = imageToolWidth,
-                            onWidthChange = { imageToolWidth = it.coerceIn(NativeChatImageToolParams.MIN_SIZE, NativeChatImageToolParams.MAX_SIZE) },
-                            height = imageToolHeight,
-                            onHeightChange = { imageToolHeight = it.coerceIn(NativeChatImageToolParams.MIN_SIZE, NativeChatImageToolParams.MAX_SIZE) },
-                            steps = imageToolSteps,
-                            onStepsChange = { imageToolSteps = it.coerceIn(NativeChatImageToolParams.MIN_STEPS, NativeChatImageToolParams.MAX_STEPS) },
-                            cfg = imageToolCfg,
-                            onCfgChange = { imageToolCfg = it.coerceIn(NativeChatImageToolParams.MIN_CFG, NativeChatImageToolParams.MAX_CFG) },
-                            seed = imageToolSeed,
-                            onSeedChange = { imageToolSeed = it },
-                            negativePrompt = imageToolNegativePrompt,
-                            onNegativePromptChange = { imageToolNegativePrompt = it },
-                            backend = imageToolBackend,
-                            onBackendChange = { imageToolBackend = it },
-                            runtimeThreads = imageToolRuntimeThreads,
-                            onRuntimeThreadsChange = { imageToolRuntimeThreads = it },
-                            graphOptimizationLevel = imageToolGraphOpt,
-                            onGraphOptimizationLevelChange = { imageToolGraphOpt = it },
-                            unetBackendOverride = imageToolUnetBackend,
-                            onUnetBackendOverrideChange = { imageToolUnetBackend = it },
-                            vaeDecoderBackendOverride = imageToolVaeDecoderBackend,
-                            onVaeDecoderBackendOverrideChange = { imageToolVaeDecoderBackend = it },
-                            vaeEncoderBackendOverride = imageToolVaeEncoderBackend,
-                            onVaeEncoderBackendOverrideChange = { imageToolVaeEncoderBackend = it },
-                            intraOpThreads = imageToolIntraThreads,
-                            onIntraOpThreadsChange = { imageToolIntraThreads = it },
-                            interOpThreads = imageToolInterThreads,
-                            onInterOpThreadsChange = { imageToolInterThreads = it },
-                            executionMode = imageToolExecutionMode,
-                            onExecutionModeChange = { imageToolExecutionMode = it },
-                            memoryPatternOptimization = imageToolMemoryPattern,
-                            onMemoryPatternOptimizationChange = { imageToolMemoryPattern = it },
-                            cpuArenaAllocator = imageToolCpuArena,
-                            onCpuArenaAllocatorChange = { imageToolCpuArena = it },
-                            nnapiCpuDisabled = imageToolNnapiCpuDisabled,
-                            onNnapiCpuDisabledChange = { imageToolNnapiCpuDisabled = it },
-                            nnapiUseFp16 = imageToolNnapiFp16,
-                            onNnapiUseFp16Change = { imageToolNnapiFp16 = it }
+                        SchedulerImageToolEnumDropdown(
+                            label = stringResource(R.string.image_tool_engine_label),
+                            selected = imageToolEngine,
+                            values = NativeChatImageGenerationEngine.entries,
+                            labelFor = {
+                                when (it) {
+                                    NativeChatImageGenerationEngine.ONNX -> stringResource(R.string.image_tool_engine_onnx)
+                                    NativeChatImageGenerationEngine.SD -> stringResource(R.string.image_tool_engine_sd)
+                                }
+                            },
+                            onSelected = { imageToolEngine = it }
                         )
+                        if (imageToolEngine == NativeChatImageGenerationEngine.ONNX) {
+                            SchedulerNativeImageToolSettings(
+                                model = imageToolModel,
+                                availableModels = nativeChatImageModelOptions,
+                                onModelChange = { imageToolModel = it },
+                                width = imageToolWidth,
+                                onWidthChange = { imageToolWidth = it.coerceIn(NativeChatImageToolParams.MIN_SIZE, NativeChatImageToolParams.MAX_SIZE) },
+                                height = imageToolHeight,
+                                onHeightChange = { imageToolHeight = it.coerceIn(NativeChatImageToolParams.MIN_SIZE, NativeChatImageToolParams.MAX_SIZE) },
+                                steps = imageToolSteps,
+                                onStepsChange = { imageToolSteps = it.coerceIn(NativeChatImageToolParams.MIN_STEPS, NativeChatImageToolParams.MAX_STEPS) },
+                                cfg = imageToolCfg,
+                                onCfgChange = { imageToolCfg = it.coerceIn(NativeChatImageToolParams.MIN_CFG, NativeChatImageToolParams.MAX_CFG) },
+                                seed = imageToolSeed,
+                                onSeedChange = { imageToolSeed = it },
+                                negativePrompt = imageToolNegativePrompt,
+                                onNegativePromptChange = { imageToolNegativePrompt = it },
+                                backend = imageToolBackend,
+                                onBackendChange = { imageToolBackend = it },
+                                runtimeThreads = imageToolRuntimeThreads,
+                                onRuntimeThreadsChange = { imageToolRuntimeThreads = it },
+                                graphOptimizationLevel = imageToolGraphOpt,
+                                onGraphOptimizationLevelChange = { imageToolGraphOpt = it },
+                                unetBackendOverride = imageToolUnetBackend,
+                                onUnetBackendOverrideChange = { imageToolUnetBackend = it },
+                                vaeDecoderBackendOverride = imageToolVaeDecoderBackend,
+                                onVaeDecoderBackendOverrideChange = { imageToolVaeDecoderBackend = it },
+                                vaeEncoderBackendOverride = imageToolVaeEncoderBackend,
+                                onVaeEncoderBackendOverrideChange = { imageToolVaeEncoderBackend = it },
+                                intraOpThreads = imageToolIntraThreads,
+                                onIntraOpThreadsChange = { imageToolIntraThreads = it },
+                                interOpThreads = imageToolInterThreads,
+                                onInterOpThreadsChange = { imageToolInterThreads = it },
+                                executionMode = imageToolExecutionMode,
+                                onExecutionModeChange = { imageToolExecutionMode = it },
+                                memoryPatternOptimization = imageToolMemoryPattern,
+                                onMemoryPatternOptimizationChange = { imageToolMemoryPattern = it },
+                                cpuArenaAllocator = imageToolCpuArena,
+                                onCpuArenaAllocatorChange = { imageToolCpuArena = it },
+                                nnapiCpuDisabled = imageToolNnapiCpuDisabled,
+                                onNnapiCpuDisabledChange = { imageToolNnapiCpuDisabled = it },
+                                nnapiUseFp16 = imageToolNnapiFp16,
+                                onNnapiUseFp16Change = { imageToolNnapiFp16 = it }
+                            )
+                        } else {
+                            val selectedSdModel = sdImageMainModels.firstOrNull {
+                                it.filename == imageToolSdModel || it.path == imageToolSdModel
+                            } ?: sdImageMainModels.firstOrNull { it.supportsSdTxt2Img() }
+                            val selectedSdSpec = selectedSdModel?.resolvedSdFamily()
+                                ?.let { (family, variant) -> family?.let { resolveSdFamilySpec(it, variant) } }
+                            val supportedComponentRoles = remember(selectedSdSpec) {
+                                val allowedRoles = setOf(
+                                    SdComponentRole.VAE,
+                                    SdComponentRole.TAE,
+                                    SdComponentRole.CLIP_L,
+                                    SdComponentRole.CLIP_G,
+                                    SdComponentRole.T5XXL,
+                                    SdComponentRole.LLM,
+                                    SdComponentRole.LLM_VISION,
+                                    SdComponentRole.PHOTOMAKER
+                                )
+                                ((selectedSdSpec?.requiredRoles.orEmpty() + selectedSdSpec?.optionalRoles.orEmpty()) intersect allowedRoles)
+                                    .toList()
+                            }
+                            SchedulerNativeSdImageToolSettings(
+                                model = imageToolSdModel,
+                                availableModels = nativeChatSdImageModelOptions,
+                                onModelChange = { imageToolSdModel = it },
+                                componentRoles = supportedComponentRoles,
+                                requiredRoles = selectedSdSpec?.requiredRoles.orEmpty(),
+                                componentOptions = { role -> schedulerSdComponentOptions(sdImageSupportModels, selectedSdModel, role) },
+                                selectedComponent = { role ->
+                                    when (role) {
+                                        SdComponentRole.VAE -> imageToolSdVae
+                                        SdComponentRole.TAE -> imageToolSdTae
+                                        SdComponentRole.CLIP_L -> imageToolSdClipL
+                                        SdComponentRole.CLIP_G -> imageToolSdClipG
+                                        SdComponentRole.T5XXL -> imageToolSdT5xxl
+                                        SdComponentRole.LLM -> imageToolSdLlm
+                                        SdComponentRole.LLM_VISION -> imageToolSdLlmVision
+                                        SdComponentRole.PHOTOMAKER -> imageToolSdPhotoMaker
+                                        else -> ""
+                                    }
+                                },
+                                onComponentChange = { role, value ->
+                                    when (role) {
+                                        SdComponentRole.VAE -> imageToolSdVae = value
+                                        SdComponentRole.TAE -> imageToolSdTae = value
+                                        SdComponentRole.CLIP_L -> imageToolSdClipL = value
+                                        SdComponentRole.CLIP_G -> imageToolSdClipG = value
+                                        SdComponentRole.T5XXL -> imageToolSdT5xxl = value
+                                        SdComponentRole.LLM -> imageToolSdLlm = value
+                                        SdComponentRole.LLM_VISION -> imageToolSdLlmVision = value
+                                        SdComponentRole.PHOTOMAKER -> imageToolSdPhotoMaker = value
+                                        else -> Unit
+                                    }
+                                },
+                                width = imageToolSdWidth,
+                                onWidthChange = { imageToolSdWidth = it.coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE) },
+                                height = imageToolSdHeight,
+                                onHeightChange = { imageToolSdHeight = it.coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE) },
+                                steps = imageToolSdSteps,
+                                onStepsChange = { imageToolSdSteps = it.coerceIn(NativeChatSdImageToolParams.MIN_STEPS, NativeChatSdImageToolParams.MAX_STEPS) },
+                                cfg = imageToolSdCfg,
+                                onCfgChange = { imageToolSdCfg = it.coerceIn(NativeChatSdImageToolParams.MIN_CFG, NativeChatSdImageToolParams.MAX_CFG) },
+                                sampler = imageToolSdSampler,
+                                onSamplerChange = { imageToolSdSampler = it },
+                                seed = imageToolSdSeed,
+                                onSeedChange = { imageToolSdSeed = it },
+                                negativePrompt = imageToolSdNegativePrompt,
+                                onNegativePromptChange = { imageToolSdNegativePrompt = it },
+                                threads = imageToolSdThreads,
+                                onThreadsChange = { imageToolSdThreads = it.coerceIn(NativeChatSdImageToolParams.MIN_THREADS, NativeChatSdImageToolParams.MAX_THREADS) },
+                                flowShift = imageToolSdFlowShift,
+                                onFlowShiftChange = { imageToolSdFlowShift = it },
+                                showFlowShift = selectedSdSpec?.supportsFlowShift == true,
+                                diffusionFa = imageToolSdDiffusionFa,
+                                onDiffusionFaChange = { imageToolSdDiffusionFa = it },
+                                showDiffusionFa = selectedSdSpec?.supportsDiffusionFa == true,
+                                mmap = imageToolSdMmap,
+                                onMmapChange = { imageToolSdMmap = it },
+                                showMmap = selectedSdSpec?.supportsMmap == true,
+                                vaeConvDirect = imageToolSdVaeConvDirect,
+                                onVaeConvDirectChange = { imageToolSdVaeConvDirect = it },
+                                showVaeConvDirect = selectedSdSpec?.supportsVaeConvDirect == true,
+                                qwenZeroCondT = imageToolSdQwenZeroCondT,
+                                onQwenZeroCondTChange = { imageToolSdQwenZeroCondT = it },
+                                showQwenZeroCondT = selectedSdSpec?.supportsQwenImageZeroCondT == true,
+                                chromaDisableDitMask = imageToolSdChromaDisableDitMask,
+                                onChromaDisableDitMaskChange = { imageToolSdChromaDisableDitMask = it },
+                                showChromaDisableDitMask = selectedSdSpec?.supportsChromaDisableDitMask == true
+                            )
+                        }
                     }
                     SchedulerToolNumberRow(
                         label = stringResource(R.string.llama_tool_max_rounds),
@@ -947,6 +1106,7 @@ private fun LlamaScheduledTaskEditorDialog(
                         imageGenerationEnabled = imageEnabled,
                         imageIterationEnabled = imageIterationEnabled,
                         imageParams = NativeChatImageToolParams(
+                            engine = imageToolEngine,
                             model = imageToolModel.takeIf { it.isNotBlank() },
                             width = imageToolWidth,
                             height = imageToolHeight,
@@ -966,7 +1126,32 @@ private fun LlamaScheduledTaskEditorDialog(
                             memoryPatternOptimization = imageToolMemoryPattern,
                             cpuArenaAllocator = imageToolCpuArena,
                             nnapiCpuDisabled = imageToolNnapiCpuDisabled,
-                            nnapiUseFp16 = imageToolNnapiFp16
+                            nnapiUseFp16 = imageToolNnapiFp16,
+                            sdParams = NativeChatSdImageToolParams(
+                                model = imageToolSdModel.takeIf { it.isNotBlank() },
+                                vaePath = imageToolSdVae.takeIf { it.isNotBlank() },
+                                taePath = imageToolSdTae.takeIf { it.isNotBlank() },
+                                clipLPath = imageToolSdClipL.takeIf { it.isNotBlank() },
+                                clipGPath = imageToolSdClipG.takeIf { it.isNotBlank() },
+                                t5xxlPath = imageToolSdT5xxl.takeIf { it.isNotBlank() },
+                                llmPath = imageToolSdLlm.takeIf { it.isNotBlank() },
+                                llmVisionPath = imageToolSdLlmVision.takeIf { it.isNotBlank() },
+                                photoMakerPath = imageToolSdPhotoMaker.takeIf { it.isNotBlank() },
+                                width = imageToolSdWidth,
+                                height = imageToolSdHeight,
+                                steps = imageToolSdSteps,
+                                cfgScale = imageToolSdCfg,
+                                sampler = imageToolSdSampler,
+                                seed = imageToolSdSeed,
+                                negativePrompt = imageToolSdNegativePrompt,
+                                threads = imageToolSdThreads,
+                                flowShift = imageToolSdFlowShift,
+                                diffusionFa = imageToolSdDiffusionFa,
+                                mmap = imageToolSdMmap,
+                                vaeConvDirect = imageToolSdVaeConvDirect,
+                                qwenImageZeroCondT = imageToolSdQwenZeroCondT,
+                                chromaDisableDitMask = imageToolSdChromaDisableDitMask
+                            )
                         ),
                         maxToolRounds = maxToolRounds
                     )
@@ -1433,6 +1618,230 @@ private fun SchedulerNativeImageToolSettings(
 }
 
 @Composable
+private fun SchedulerNativeSdImageToolSettings(
+    model: String,
+    availableModels: List<String>,
+    onModelChange: (String) -> Unit,
+    componentRoles: List<SdComponentRole>,
+    requiredRoles: Set<SdComponentRole>,
+    componentOptions: (SdComponentRole) -> List<String>,
+    selectedComponent: (SdComponentRole) -> String,
+    onComponentChange: (SdComponentRole, String) -> Unit,
+    width: Int,
+    onWidthChange: (Int) -> Unit,
+    height: Int,
+    onHeightChange: (Int) -> Unit,
+    steps: Int,
+    onStepsChange: (Int) -> Unit,
+    cfg: Float,
+    onCfgChange: (Float) -> Unit,
+    sampler: SamplingMethod,
+    onSamplerChange: (SamplingMethod) -> Unit,
+    seed: String,
+    onSeedChange: (String) -> Unit,
+    negativePrompt: String,
+    onNegativePromptChange: (String) -> Unit,
+    threads: Int,
+    onThreadsChange: (Int) -> Unit,
+    flowShift: String,
+    onFlowShiftChange: (String) -> Unit,
+    showFlowShift: Boolean,
+    diffusionFa: Boolean,
+    onDiffusionFaChange: (Boolean) -> Unit,
+    showDiffusionFa: Boolean,
+    mmap: Boolean,
+    onMmapChange: (Boolean) -> Unit,
+    showMmap: Boolean,
+    vaeConvDirect: Boolean,
+    onVaeConvDirectChange: (Boolean) -> Unit,
+    showVaeConvDirect: Boolean,
+    qwenZeroCondT: Boolean,
+    onQwenZeroCondTChange: (Boolean) -> Unit,
+    showQwenZeroCondT: Boolean,
+    chromaDisableDitMask: Boolean,
+    onChromaDisableDitMaskChange: (Boolean) -> Unit,
+    showChromaDisableDitMask: Boolean
+) {
+    var settingsExpanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { settingsExpanded = !settingsExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.native_chat_sd_image_generation_settings_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = stringResource(
+                            R.string.native_chat_image_generation_collapsed_summary,
+                            width,
+                            height,
+                            steps,
+                            cfg
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = if (settingsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = stringResource(R.string.native_chat_sd_image_generation_settings_title)
+                )
+            }
+
+            AnimatedVisibility(visible = settingsExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SchedulerImageToolStringDropdown(
+                        label = stringResource(R.string.agent_sd_image_generation_model_label),
+                        selected = model,
+                        values = availableModels,
+                        onSelected = onModelChange
+                    )
+
+                    componentRoles.forEach { role ->
+                        SchedulerSdComponentDropdown(
+                            label = stringResource(schedulerSdComponentLabelRes(role)) +
+                                if (role in requiredRoles) " *" else "",
+                            selected = selectedComponent(role),
+                            values = componentOptions(role),
+                            allowNone = role !in requiredRoles,
+                            onSelected = { onComponentChange(role, it) }
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SchedulerImageToolNumberField(
+                            value = width,
+                            onValueChange = onWidthChange,
+                            label = stringResource(R.string.onnx_image_gen_width_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        SchedulerImageToolNumberField(
+                            value = height,
+                            onValueChange = onHeightChange,
+                            label = stringResource(R.string.onnx_image_gen_height_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SchedulerImageToolNumberField(
+                            value = steps,
+                            onValueChange = onStepsChange,
+                            label = stringResource(R.string.onnx_image_gen_steps_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        SchedulerImageToolFloatField(
+                            value = cfg,
+                            onValueChange = onCfgChange,
+                            label = stringResource(R.string.onnx_image_gen_cfg_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    SchedulerImageToolEnumDropdown(
+                        label = stringResource(R.string.imagegen_sampler_label),
+                        selected = sampler,
+                        values = SamplingMethod.entries,
+                        labelFor = { it.cliName },
+                        onSelected = onSamplerChange
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SchedulerImageToolNumberField(
+                            value = threads,
+                            onValueChange = onThreadsChange,
+                            label = stringResource(R.string.imagegen_threads_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = seed,
+                            onValueChange = onSeedChange,
+                            label = { Text(stringResource(R.string.onnx_image_gen_seed_label)) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = negativePrompt,
+                        onValueChange = onNegativePromptChange,
+                        label = { Text(stringResource(R.string.native_chat_image_generation_negative_prompt_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4
+                    )
+
+                    if (showFlowShift) {
+                        OutlinedTextField(
+                            value = flowShift,
+                            onValueChange = onFlowShiftChange,
+                            label = { Text(stringResource(R.string.imagegen_flow_shift_label)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                        )
+                    }
+                    if (showDiffusionFa) {
+                        SchedulerImageToolSwitchRow(
+                            title = stringResource(R.string.video_gen_diffusion_fa_label),
+                            checked = diffusionFa,
+                            onCheckedChange = onDiffusionFaChange
+                        )
+                    }
+                    if (showMmap) {
+                        SchedulerImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_mmap_label),
+                            checked = mmap,
+                            onCheckedChange = onMmapChange
+                        )
+                    }
+                    if (showVaeConvDirect) {
+                        SchedulerImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_vae_conv_direct_label),
+                            checked = vaeConvDirect,
+                            onCheckedChange = onVaeConvDirectChange
+                        )
+                    }
+                    if (showQwenZeroCondT) {
+                        SchedulerImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_qwen_zero_cond_t_label),
+                            checked = qwenZeroCondT,
+                            onCheckedChange = onQwenZeroCondTChange
+                        )
+                    }
+                    if (showChromaDisableDitMask) {
+                        SchedulerImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_chroma_disable_dit_mask_label),
+                            checked = chromaDisableDitMask,
+                            onCheckedChange = onChromaDisableDitMaskChange
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SchedulerImageToolNumberField(
     value: Int,
     onValueChange: (Int) -> Unit,
@@ -1529,6 +1938,106 @@ private fun <T : Enum<T>> SchedulerImageToolEnumDropdown(
 }
 
 @Composable
+private fun SchedulerImageToolStringDropdown(
+    label: String,
+    selected: String,
+    values: List<String>,
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = values.isNotEmpty()
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = selected.ifBlank { stringResource(R.string.image_tool_component_none) },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(imageVector = Icons.Default.ExpandMore, contentDescription = label)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            values.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SchedulerSdComponentDropdown(
+    label: String,
+    selected: String,
+    values: List<String>,
+    allowNone: Boolean,
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val displayValue = selected.ifBlank { stringResource(R.string.image_tool_component_none) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(displayValue, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Icon(imageVector = Icons.Default.ExpandMore, contentDescription = label)
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            if (allowNone) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.image_tool_component_none)) },
+                    onClick = {
+                        onSelected("")
+                        expanded = false
+                    }
+                )
+            }
+            values.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SchedulerImageToolSwitchRow(
     title: String,
     checked: Boolean,
@@ -1548,6 +2057,44 @@ private fun SchedulerImageToolSwitchRow(
         )
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
+}
+
+private fun schedulerSdComponentOptions(
+    models: List<ModelEntity>,
+    selectedModel: ModelEntity?,
+    role: SdComponentRole
+): List<String> {
+    val (family, variant) = selectedModel?.resolvedSdFamily() ?: return emptyList()
+    val modelType = role.toSchedulerModelType() ?: return emptyList()
+    val resolvedFamily = family ?: return emptyList()
+    return models
+        .filter { model -> model.type == modelType && model.matchesSdFamily(resolvedFamily, variant) }
+        .map { it.filename }
+        .distinct()
+}
+
+private fun SdComponentRole.toSchedulerModelType(): ModelType? = when (this) {
+    SdComponentRole.VAE -> ModelType.SD_VAE
+    SdComponentRole.TAE -> ModelType.SD_TAE
+    SdComponentRole.CLIP_L -> ModelType.SD_CLIP_L
+    SdComponentRole.CLIP_G -> ModelType.SD_CLIP_G
+    SdComponentRole.T5XXL -> ModelType.SD_T5XXL
+    SdComponentRole.LLM -> ModelType.LLM
+    SdComponentRole.LLM_VISION -> ModelType.VISION_PROJECTOR
+    SdComponentRole.PHOTOMAKER -> ModelType.SD_PHOTOMAKER
+    else -> null
+}
+
+private fun schedulerSdComponentLabelRes(role: SdComponentRole): Int = when (role) {
+    SdComponentRole.VAE -> R.string.imagegen_component_vae
+    SdComponentRole.TAE -> R.string.imagegen_component_tae
+    SdComponentRole.CLIP_L -> R.string.imagegen_component_clip_l
+    SdComponentRole.CLIP_G -> R.string.imagegen_component_clip_g
+    SdComponentRole.T5XXL -> R.string.imagegen_component_t5xxl
+    SdComponentRole.LLM -> R.string.imagegen_component_llm
+    SdComponentRole.LLM_VISION -> R.string.imagegen_component_llm_vision
+    SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    else -> R.string.imagegen_component_main_model
 }
 
 @Composable

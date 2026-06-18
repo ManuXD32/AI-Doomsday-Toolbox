@@ -2,9 +2,12 @@ package com.example.llamadroid.data.binary
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.util.Log
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.util.CpuFeatures
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.DynamicFeatureManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -36,13 +39,13 @@ class BinaryRepository(private val context: Context) {
             "ffmpeg",
             "ffprobe",
             "whisper-cli",
-            "llama-cli",
             "llama_server",
             "llama-bench",
             "mtmd",
             "sd",
             "kiwix-serve",
-            "kiwix-manage"
+            "kiwix-manage",
+            "quadtrix_trainer"
         )
         
         // Preference keys
@@ -73,9 +76,31 @@ class BinaryRepository(private val context: Context) {
             "dotprod" -> listOf("dotprod", "baseline")
             else -> listOf("baseline")
         }
+
+        internal fun acceleratorLibNames(
+            name: String,
+            accelerationMode: String = SettingsRepository.ACCELERATION_AUTO
+        ): List<String> {
+            val normalizedMode = SettingsRepository.normalizeAccelerationMode(accelerationMode)
+            if (normalizedMode == SettingsRepository.ACCELERATION_CPU) return emptyList()
+
+            return when (name) {
+                "llama_server" -> when (normalizedMode) {
+                    SettingsRepository.ACCELERATION_GPU -> listOf("libllama_server_snapdragon_opencl.so")
+                    else -> listOf("libllama_server_snapdragon_opencl.so")
+                }
+                "llama-bench" -> when (normalizedMode) {
+                    SettingsRepository.ACCELERATION_GPU -> listOf("libllama-bench_snapdragon_opencl.so")
+                    else -> listOf("libllama-bench_snapdragon_opencl.so")
+                }
+                "sd" -> emptyList()
+                else -> emptyList()
+            }
+        }
     }
     
     private var cachedTier: String? = null
+    private val settingsRepository by lazy { SettingsRepository(context) }
     
     /**
      * Get the current CPU tier (cached).
@@ -103,26 +128,120 @@ class BinaryRepository(private val context: Context) {
         else -> listOf("baseline")
     }
 
+    private fun nativeLibraryCandidateDirs(): List<File> {
+        val primary = File(context.applicationInfo.nativeLibraryDir)
+        val dirs = linkedSetOf<File>()
+        dirs += primary
+
+        val packageRoot = primary.parentFile?.parentFile
+        if (packageRoot != null && packageRoot.exists()) {
+            runCatching {
+                packageRoot.walkTopDown()
+                    .maxDepth(4)
+                    .filter { it.isDirectory }
+                    .filter { dir ->
+                        dir == primary ||
+                            dir.name in setOf("arm64", "arm64-v8a") ||
+                            dir.listFiles()?.any { it.extension == "so" } == true
+                    }
+                    .forEach { dirs += it }
+            }
+        }
+
+        context.applicationInfo.splitSourceDirs
+            ?.mapNotNull { File(it).parentFile }
+            ?.forEach { splitParent ->
+                listOf(
+                    File(splitParent, "lib/${CpuFeatures.getArch()}"),
+                    File(splitParent, "lib/arm64"),
+                    File(splitParent, "lib/arm64-v8a")
+                ).filter { it.exists() }.forEach { dirs += it }
+            }
+
+        return dirs.filter { it.exists() }
+    }
+
+    private fun findAcceleratorBinaries(acceleratorNames: List<String>): List<File> {
+        val results = linkedMapOf<String, File>()
+
+        fun addFromDir(dir: File) {
+            for (libName in acceleratorNames) {
+                val file = File(dir, libName)
+                if (file.exists()) {
+                    results.putIfAbsent(file.absolutePath, file)
+                }
+            }
+        }
+
+        nativeLibraryCandidateDirs().forEach(::addFromDir)
+
+        listOf(
+            "com.example.llamadroid.feature.llm.snapdragon.opencl"
+        ).forEach { pkgName ->
+            runCatching {
+                val featureContext = context.createPackageContext(pkgName, 0)
+                addFromDir(File(featureContext.applicationInfo.nativeLibraryDir))
+            }
+        }
+
+        listOf(
+            "feature_llm_snapdragon_opencl"
+        ).forEach { splitName ->
+            val splitDir = File(context.filesDir.parent, "split_$splitName")
+            if (splitDir.exists()) {
+                listOf(CpuFeatures.getArch(), "arm64", "arm64-v8a")
+                    .map { File(splitDir, "lib/$it") }
+                    .filter { it.exists() }
+                    .forEach(::addFromDir)
+            }
+        }
+
+        return results.values.toList()
+    }
+
+    private fun canUseDeployedBinExecutables(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+
     /**
      * Get path to a tiered binary, with fallback to lower tiers.
      * 
-     * @param name Binary name without "lib" prefix (e.g., "ffmpeg", "llama-cli")
+     * @param name Binary name without "lib" prefix (e.g., "ffmpeg", "llama-bench")
      * @return File path to the binary, or null if not found
      */
     /**
      * Get path to a tiered binary, with fallback to lower tiers.
      * 
-     * @param name Binary name without "lib" prefix (e.g., "ffmpeg", "llama-cli")
+     * @param name Binary name without "lib" prefix (e.g., "ffmpeg", "llama-bench")
      * @return File path to the binary, or null if not found
      */
     /**
      * Get path to a tiered binary, with fallback to lower tiers.
      * 
-     * @param name Binary name without "lib" prefix (e.g., "ffmpeg", "llama-cli")
+     * @param name Binary name without "lib" prefix (e.g., "ffmpeg", "llama-bench")
      * @return File path to the binary, or null if not found
      */
     fun getTieredBinary(name: String): File? {
         return getTieredBinary(name, getTier())
+    }
+
+    fun getCpuTieredBinary(name: String): File? {
+        val deviceTier = getTier()
+        val tiersToTry = buildBinarySearchTiers(deviceTier, deviceTier)
+        return findTieredBinary(name, deviceTier, tiersToTry, allowAccelerator = false)
+    }
+
+    fun getAcceleratorBinaries(name: String): List<File> {
+        if (!DeviceAcceleration.isSnapdragonCompatible()) return emptyList()
+        val acceleratorNames = acceleratorLibNames(name, accelerationModeFor(name))
+        if (acceleratorNames.isEmpty()) return emptyList()
+        return findAcceleratorBinaries(acceleratorNames)
+    }
+
+    private fun accelerationModeFor(name: String): String = when (name) {
+        "llama_server",
+        "llama-bench" -> settingsRepository.llmAccelerationMode.value
+        "sd" -> settingsRepository.stableDiffusionAccelerationMode.value
+        else -> SettingsRepository.ACCELERATION_AUTO
     }
 
     private fun getTieredBinary(name: String, selectedTier: String): File? {
@@ -134,24 +253,49 @@ class BinaryRepository(private val context: Context) {
     private fun findTieredBinary(
         name: String,
         selectedTier: String,
-        tiersToTry: List<String>
+        tiersToTry: List<String>,
+        allowAccelerator: Boolean = true
     ): File? {
         if (!DynamicFeatureManager.isNativeLibsReady(context)) {
             Log.w(TAG, "Native libs modules not fully ready yet; probing available paths for $name anyway")
         }
         
-        // 1. Check nativeLibraryDir (System installed) - EXECUTE DIRECTLY FROM HERE
-        // Android 10+ restricts W^X, so we must execute from read-only system paths if possible.
-        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        val nativeLibDirs = nativeLibraryCandidateDirs()
+        val accelerationMode = accelerationModeFor(name)
+        val acceleratorNames = if (allowAccelerator && DeviceAcceleration.isSnapdragonCompatible()) {
+            acceleratorLibNames(name, accelerationMode)
+        } else {
+            emptyList()
+        }
+        DebugLog.log(
+            "$TAG: Resolving $name allowAccelerator=$allowAccelerator accelerationMode=$accelerationMode modules=" +
+                "${DynamicFeatureManager.getOptionalAcceleratorModules().associateWith { DynamicFeatureManager.isModuleInstalled(context, it) }} dirs=" +
+                nativeLibDirs.joinToString { it.absolutePath }
+        )
         
-        // Strategy 1: Check main APK native lib dir (where splits are merged/symlinked on some OS versions)
-        for (tryTier in tiersToTry) {
-            val libName = "lib${name}_${tryTier}.so"
-            val file = File(nativeLibDir, libName)
-            
-            if (file.exists()) {
-                DebugLog.log("$TAG: Found $name at ${file.absolutePath} (tier: $tryTier)")
-                return file
+        // Strategy 1: Check installed native lib dirs. Android 10+ restricts W^X, so
+        // native payloads must be executed from package/split paths when possible.
+        if (acceleratorNames.isNotEmpty()) {
+            for (dir in nativeLibDirs) {
+                for (libName in acceleratorNames) {
+                    val file = File(dir, libName)
+                    if (file.exists()) {
+                        DebugLog.log("$TAG: Found accelerator $name at ${file.absolutePath}")
+                        return file
+                    }
+                }
+            }
+        }
+
+        for (dir in nativeLibDirs) {
+            for (tryTier in tiersToTry) {
+                val libName = "lib${name}_${tryTier}.so"
+                val file = File(dir, libName)
+
+                if (file.exists()) {
+                    DebugLog.log("$TAG: Found $name at ${file.absolutePath} (tier: $tryTier)")
+                    return file
+                }
             }
         }
         
@@ -159,6 +303,9 @@ class BinaryRepository(private val context: Context) {
         // On some devices, splits have their own nativeLibraryDir. We must execute from THERE.
         val featureSearchTiers = tiersToTry
         val featurePackages = buildList {
+            if (acceleratorNames.isNotEmpty()) {
+                add("com.example.llamadroid.feature.llm.snapdragon.opencl")
+            }
             featureSearchTiers.forEach { tier ->
                 add("com.example.llamadroid.feature.llm.$tier")
                 add("com.example.llamadroid.feature.media.$tier")
@@ -173,6 +320,15 @@ class BinaryRepository(private val context: Context) {
                 val featureLibDir = File(featureContext.applicationInfo.nativeLibraryDir)
                 
                 if (featureLibDir.exists()) {
+                    if (acceleratorNames.isNotEmpty()) {
+                        for (libName in acceleratorNames) {
+                            val sourceFile = File(featureLibDir, libName)
+                            if (sourceFile.exists()) {
+                                DebugLog.log("$TAG: Found accelerator $name in feature dir at ${sourceFile.absolutePath}")
+                                return sourceFile
+                            }
+                        }
+                    }
                     for (tryTier in tiersToTry) {
                         val libName = "lib${name}_${tryTier}.so"
                         val sourceFile = File(featureLibDir, libName)
@@ -192,6 +348,9 @@ class BinaryRepository(private val context: Context) {
         // Strategy 3: Check Legacy Split Directories (Backup for older Android versions)
         try {
             val splitDirs = buildList {
+                if (acceleratorNames.isNotEmpty()) {
+                    add("feature_llm_snapdragon_opencl")
+                }
                 featureSearchTiers.forEach { tier ->
                     add("feature_llm_$tier")
                     add("feature_kiwix_$tier")
@@ -207,6 +366,15 @@ class BinaryRepository(private val context: Context) {
 
                     for (dir in searchDirs) {
                         if (dir.exists()) {
+                            if (acceleratorNames.isNotEmpty()) {
+                                for (libName in acceleratorNames) {
+                                    val file = File(dir, libName)
+                                    if (file.exists()) {
+                                        DebugLog.log("$TAG: Found accelerator $name in split dir at ${file.absolutePath}")
+                                        return file
+                                    }
+                                }
+                            }
                             for (tryTier in tiersToTry) {
                                 val libName = "lib${name}_${tryTier}.so"
                                 val file = File(dir, libName)
@@ -223,9 +391,20 @@ class BinaryRepository(private val context: Context) {
             Log.e(TAG, "Failed to check split dir", e)
         }
         
-        // Strategy 4: Fallback to deployed 'bin' dir (User uploaded or legacy extration)
-        // Only use this if system execution failed, as it might trigger Permission Denied on Android 10+
+        // Strategy 4: Fallback to deployed 'bin' dir only on old Android releases.
+        // Android 10+ enforces W^X for app-data executables, so copied payloads in
+        // files/bin are useful as diagnostics but not valid process candidates.
         val deployedBinDir = File(context.filesDir, "bin")
+        if (acceleratorNames.isNotEmpty() && deployedBinDir.exists()) {
+            DebugLog.log("$TAG: Skipping app-data accelerator copies in ${deployedBinDir.absolutePath}; Android cannot execute these reliably.")
+        }
+        if (!canUseDeployedBinExecutables()) {
+            if (deployedBinDir.exists()) {
+                DebugLog.log("$TAG: Skipping deployed app-data binaries in ${deployedBinDir.absolutePath} on Android ${Build.VERSION.SDK_INT}.")
+            }
+            Log.w(TAG, "Binary not found: $name (selected tier: $selectedTier, tried tiers: $tiersToTry)")
+            return null
+        }
         for (tryTier in tiersToTry) {
             val libName = "lib${name}_${tryTier}.so"
             val file = File(deployedBinDir, libName)
@@ -256,6 +435,10 @@ class BinaryRepository(private val context: Context) {
         return@withContext getTieredBinary("llama_server")
     }
 
+    suspend fun getCpuExecutable(): File? = withContext(Dispatchers.IO) {
+        getCpuTieredBinary("llama_server")
+    }
+
     /**
      * Get the library directory path - needed for LD_LIBRARY_PATH
      */
@@ -266,8 +449,8 @@ class BinaryRepository(private val context: Context) {
             paths.add(customBinDir.absolutePath)
         }
         
-        // Add system native lib dir (Preferred for system libraries)
-        paths.add(context.applicationInfo.nativeLibraryDir)
+        // Add system/split native lib dirs (preferred for package libraries)
+        nativeLibraryCandidateDirs().forEach { paths.add(it.absolutePath) }
         
         // Add centralized asset binaries directory (Fallback)
         val assetBinDir = com.example.llamadroid.util.AssetPackManagerUtil.getBinariesDir(context)
@@ -300,11 +483,6 @@ class BinaryRepository(private val context: Context) {
     fun getWhisperCliBinary(): File? = getTieredBinary("whisper-cli")
     
     /**
-     * Get llama-cli binary (tiered).
-     */
-    fun getLlamaCliBinary(): File? = getTieredBinary("llama-cli")
-    
-    /**
      * Get llama-server binary (tiered).
      */
     fun getLlamaServerBinary(): File? = getTieredBinary("llama_server")
@@ -318,6 +496,8 @@ class BinaryRepository(private val context: Context) {
      * Get stable-diffusion binary (tiered).
      */
     fun getSdBinary(): File? = getTieredBinary("sd")
+
+    fun getCpuSdBinary(): File? = getCpuTieredBinary("sd")
     
     /**
      * Get llama-bench binary (tiered) for benchmarking.
@@ -357,7 +537,11 @@ class BinaryRepository(private val context: Context) {
         
         val serverFile = getTieredBinary("llama_server")
         if (serverFile == null) return null
-        return "Bundled (${getTier()})"
+        return if (DeviceAcceleration.isAcceleratorBinary(serverFile)) {
+            "Bundled Snapdragon"
+        } else {
+            "Bundled (${getTier()})"
+        }
     }
     
     /**

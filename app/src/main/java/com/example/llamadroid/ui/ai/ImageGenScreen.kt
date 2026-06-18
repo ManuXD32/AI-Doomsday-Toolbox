@@ -162,6 +162,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     // Gallery filter: 0 = All, 1 = txt2img, 2 = img2img, 3 = upscaled
     var galleryFilter by remember { mutableIntStateOf(0) }
+    var gallerySourceFilter by remember { mutableIntStateOf(0) }
+    val serverImagePaths by db.aiServerDao()
+        .observeServerArtifactPathsByType(AiServerArtifactTypes.IMAGE)
+        .collectAsState(initial = emptyList())
+    val serverImagePathSet = remember(serverImagePaths) { serverImagePaths.toSet() }
 
     // Image input for img2img/upscale
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -1869,13 +1874,38 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            val filteredImages = remember(galleryImages, galleryFilter) {
-                when (galleryFilter) {
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                listOf(
+                    stringResource(R.string.ai_servers_gallery_source_all),
+                    stringResource(R.string.ai_servers_gallery_source_app),
+                    stringResource(R.string.ai_servers_gallery_source_server)
+                ).forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = gallerySourceFilter == index,
+                        onClick = { gallerySourceFilter = index },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 3)
+                    ) {
+                        Text(label, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val filteredImages = remember(galleryImages, galleryFilter, gallerySourceFilter, serverImagePathSet) {
+                val modeFiltered = when (galleryFilter) {
                     1 -> galleryImages.filter { it.parentFile?.name == "txt2img" }
                     2 -> galleryImages.filter { it.parentFile?.name == "img2img" }
                     3 -> galleryImages.filter { it.parentFile?.name == "upscaled" }
                     4 -> galleryImages.filter { it.parentFile?.name == "workflow" }
                     else -> galleryImages
+                }
+                when (gallerySourceFilter) {
+                    1 -> modeFiltered.filterNot { it.absolutePath in serverImagePathSet }
+                    2 -> modeFiltered.filter { it.absolutePath in serverImagePathSet }
+                    else -> modeFiltered
                 }
             }
 

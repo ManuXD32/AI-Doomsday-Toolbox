@@ -1,6 +1,7 @@
 package com.example.llamadroid.service
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
@@ -89,6 +90,19 @@ class VideoUpscalerService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForegroundWithNotification()
+        when (intent?.action) {
+            ACTION_START_UPSCALE -> {
+                val config = intent.toUpscalerConfig()
+                if (config == null) {
+                    _state.value = VideoUpscalerState.Error("Missing video upscale configuration")
+                } else {
+                    scope.launch {
+                        upscale(config)
+                    }
+                }
+            }
+            ACTION_CANCEL_UPSCALE -> cancel()
+        }
         return START_NOT_STICKY
     }
     
@@ -116,6 +130,24 @@ class VideoUpscalerService : Service() {
         notificationTaskId?.let {
             UnifiedNotificationManager.updateProgress(it, progress / 100f, text)
         }
+    }
+
+    private fun publishProgress(
+        status: String,
+        progress: Float,
+        currentFrame: Int = 0,
+        totalFrames: Int = 0,
+        resultPath: String? = null,
+        error: String? = null,
+        processing: Boolean = true
+    ) {
+        VideoUpscalerStateHolder.setIsProcessing(processing)
+        VideoUpscalerStateHolder.setProgress(progress.coerceIn(0f, 1f))
+        VideoUpscalerStateHolder.setCurrentFrame(currentFrame)
+        VideoUpscalerStateHolder.setTotalFrames(totalFrames)
+        VideoUpscalerStateHolder.setStatus(status)
+        VideoUpscalerStateHolder.setResultPath(resultPath)
+        VideoUpscalerStateHolder.setError(error)
     }
     
     private fun startForegroundWithNotification() {
@@ -234,6 +266,9 @@ class VideoUpscalerService : Service() {
      */
     suspend fun upscale(config: VideoUpscalerConfig): Result<String> = withContext(Dispatchers.IO) {
         isCancelled = false
+        VideoUpscalerStateHolder.reset()
+        VideoUpscalerStateHolder.setInputPath(config.inputPath)
+        publishProgress("Preparing video upscale", 0f)
         
         val tmpDir = File(cacheDir, "upscaler_tmp").apply { mkdirs() }
         val outDir = File(cacheDir, "upscaler_out").apply { mkdirs() }
@@ -242,6 +277,7 @@ class VideoUpscalerService : Service() {
             // Step 1: Get video info
             _state.value = VideoUpscalerState.Analyzing
             updateNotification("Analyzing video...", 0)
+            publishProgress("Analyzing video", 0.03f)
             
             val videoInfoResult = getVideoInfo(config.inputPath)
             if (videoInfoResult.isFailure) {
@@ -252,6 +288,7 @@ class VideoUpscalerService : Service() {
             // Step 2: Extract frames
             _state.value = VideoUpscalerState.ExtractingFrames
             updateNotification("Extracting frames...", 5)
+            publishProgress("Extracting frames", 0.08f)
             
             val extractResult = extractFrames(config.inputPath, tmpDir)
             if (extractResult.isFailure) {
@@ -272,6 +309,7 @@ class VideoUpscalerService : Service() {
             // Step 4: Upscale frames
             _state.value = VideoUpscalerState.Upscaling(0, frameCount)
             updateNotification("Upscaling 0/$frameCount frames...", 10)
+            publishProgress("Upscaling 0/$frameCount frames", 0.1f, currentFrame = 0, totalFrames = frameCount)
             
             val upscaleResult = upscaleFrames(config, tmpDir, outDir, frameCount)
             if (upscaleResult.isFailure) {
@@ -286,6 +324,7 @@ class VideoUpscalerService : Service() {
             // Step 5: Rebuild video with audio
             _state.value = VideoUpscalerState.Rebuilding
             updateNotification("Rebuilding video with audio...", 95)
+            publishProgress("Rebuilding video with audio", 0.95f, totalFrames = frameCount)
             
             val rebuildResult = rebuildVideoWithAudio(
                 config.inputPath,
@@ -302,12 +341,19 @@ class VideoUpscalerService : Service() {
             
             _state.value = VideoUpscalerState.Completed
             updateNotification("Upscaling complete!", 100)
+            publishProgress("Upscaling complete", 1f, resultPath = config.outputPath, processing = false)
             
             Result.success(config.outputPath)
         } catch (e: Exception) {
             cleanup(tmpDir, outDir)
             _state.value = VideoUpscalerState.Error(e.message ?: "Unknown error")
             updateNotification("Error: ${e.message}", 0)
+            publishProgress(
+                status = e.message ?: "Video upscale failed",
+                progress = 0f,
+                error = e.message ?: "Unknown error",
+                processing = false
+            )
             Result.failure(e)
         }
     }
@@ -462,6 +508,17 @@ class VideoUpscalerService : Service() {
                             10 + (progressPercent * 0.85).toInt()
                         )
                     }
+                    val status = if (_eta.value.isBlank()) {
+                        "Upscaling $outputCount/$totalFrames frames"
+                    } else {
+                        "Upscaling $outputCount/$totalFrames | ETA: ${_eta.value}"
+                    }
+                    publishProgress(
+                        status = status,
+                        progress = 0.1f + (_progress.value * 0.85f),
+                        currentFrame = outputCount,
+                        totalFrames = totalFrames
+                    )
                     
                     delay(1000)
                 }
@@ -546,12 +603,62 @@ class VideoUpscalerService : Service() {
         currentProcess = null
         _state.value = VideoUpscalerState.Idle
         updateNotification("Upscaling cancelled", 0)
+        publishProgress("Upscaling cancelled", 0f, processing = false)
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
         notificationTaskId = null
     }
+
+    private fun Intent.toUpscalerConfig(): VideoUpscalerConfig? {
+        val inputPath = getStringExtra(EXTRA_INPUT_PATH)?.takeIf { it.isNotBlank() } ?: return null
+        val outputPath = getStringExtra(EXTRA_OUTPUT_PATH)?.takeIf { it.isNotBlank() } ?: return null
+        val engine = getStringExtra(EXTRA_ENGINE)
+            ?.let { value -> UpscalerEngine.entries.firstOrNull { it.name.equals(value, ignoreCase = true) } }
+            ?: return null
+        val model = getStringExtra(EXTRA_MODEL)?.takeIf { it.isNotBlank() } ?: return null
+        return VideoUpscalerConfig(
+            inputPath = inputPath,
+            outputPath = outputPath,
+            engine = engine,
+            model = model,
+            scale = getIntExtra(EXTRA_SCALE, 2),
+            denoise = getIntExtra(EXTRA_DENOISE, -1),
+            loadThreads = getIntExtra(EXTRA_LOAD_THREADS, 1),
+            procThreads = getIntExtra(EXTRA_PROC_THREADS, 1),
+            saveThreads = getIntExtra(EXTRA_SAVE_THREADS, 1)
+        )
+    }
     
     companion object {
-        // Notification handled by UnifiedNotificationManager
+        private const val ACTION_START_UPSCALE = "com.example.llamadroid.action.START_VIDEO_UPSCALE"
+        private const val ACTION_CANCEL_UPSCALE = "com.example.llamadroid.action.CANCEL_VIDEO_UPSCALE"
+        private const val EXTRA_INPUT_PATH = "extra_video_upscale_input"
+        private const val EXTRA_OUTPUT_PATH = "extra_video_upscale_output"
+        private const val EXTRA_ENGINE = "extra_video_upscale_engine"
+        private const val EXTRA_MODEL = "extra_video_upscale_model"
+        private const val EXTRA_SCALE = "extra_video_upscale_scale"
+        private const val EXTRA_DENOISE = "extra_video_upscale_denoise"
+        private const val EXTRA_LOAD_THREADS = "extra_video_upscale_load_threads"
+        private const val EXTRA_PROC_THREADS = "extra_video_upscale_proc_threads"
+        private const val EXTRA_SAVE_THREADS = "extra_video_upscale_save_threads"
+
+        fun createStartIntent(context: Context, config: VideoUpscalerConfig): Intent =
+            Intent(context, VideoUpscalerService::class.java).apply {
+                action = ACTION_START_UPSCALE
+                putExtra(EXTRA_INPUT_PATH, config.inputPath)
+                putExtra(EXTRA_OUTPUT_PATH, config.outputPath)
+                putExtra(EXTRA_ENGINE, config.engine.name)
+                putExtra(EXTRA_MODEL, config.model)
+                putExtra(EXTRA_SCALE, config.scale)
+                putExtra(EXTRA_DENOISE, config.denoise)
+                putExtra(EXTRA_LOAD_THREADS, config.loadThreads)
+                putExtra(EXTRA_PROC_THREADS, config.procThreads)
+                putExtra(EXTRA_SAVE_THREADS, config.saveThreads)
+            }
+
+        fun createCancelIntent(context: Context): Intent =
+            Intent(context, VideoUpscalerService::class.java).apply {
+                action = ACTION_CANCEL_UPSCALE
+            }
     }
 }
 

@@ -71,7 +71,7 @@ class OnnxImg2ImgPipeline {
             "ONNX img2img requires a fixed ${ONNX_IMG2IMG_CANVAS_SIZE}x${ONNX_IMG2IMG_CANVAS_SIZE} canvas"
         }
         val initImagePath = config.initImagePath ?: error("Missing init image for ONNX img2img")
-        val strength = (config.strength ?: 0.35f).coerceIn(0.1f, 0.95f)
+        val strength = (config.strength ?: ONNX_IMAGE_GEN_DEFAULT_STRENGTH).coerceIn(0.1f, 0.95f)
         val seed = if (config.seed >= 0L) config.seed else System.currentTimeMillis()
         val random = Random(seed)
 

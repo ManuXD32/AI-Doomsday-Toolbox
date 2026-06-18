@@ -13,7 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -22,10 +25,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -53,7 +59,9 @@ fun PDFSettingsScreen(navController: NavController) {
     val backend by settingsRepo.pdfSummaryBackend.collectAsState()
     val ollamaUrl by settingsRepo.pdfSummaryOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.pdfSummaryLlamaServerUrl.collectAsState()
+    val llamaSwapUrl by settingsRepo.pdfSummaryLlamaSwapUrl.collectAsState()
     val ollamaModel by settingsRepo.pdfSummaryOllamaModel.collectAsState()
+    val llamaSwapModel by settingsRepo.pdfSummaryLlamaSwapModel.collectAsState()
     val thinkingEnabled by settingsRepo.pdfSummaryThinkingEnabled.collectAsState()
     val pdfContextSize by settingsRepo.pdfContextSize.collectAsState()
     val pdfTemperature by settingsRepo.pdfTemperature.collectAsState()
@@ -66,11 +74,16 @@ fun PDFSettingsScreen(navController: NavController) {
     val serverModelLabel by settingsRepo.pdfSummaryLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.pdfSummaryLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.pdfSummaryLlamaServerContextTokens.collectAsState()
+    val liteRtModelId by settingsRepo.pdfSummaryLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepo.pdfSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.pdfSummaryLiteRtMtpEnabled.collectAsState()
 
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
-        settingsRepo.setPdfSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-        settingsRepo.setPdfSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-        settingsRepo.setPdfSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+            settingsRepo.setPdfSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+            settingsRepo.setPdfSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+            settingsRepo.setPdfSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+        }
     }
 
     AppScreenScaffold(
@@ -93,14 +106,26 @@ fun PDFSettingsScreen(navController: NavController) {
                     onOllamaUrlChange = settingsRepo::setPdfSummaryOllamaUrl,
                     llamaServerUrl = llamaServerUrl,
                     onLlamaServerUrlChange = settingsRepo::setPdfSummaryLlamaServerUrl,
+                    llamaSwapUrl = llamaSwapUrl,
+                    onLlamaSwapUrlChange = settingsRepo::setPdfSummaryLlamaSwapUrl,
                     ollamaModel = ollamaModel,
                     onOllamaModelSelected = settingsRepo::setPdfSummaryOllamaModel,
+                    llamaSwapModel = llamaSwapModel,
+                    onLlamaSwapModelSelected = settingsRepo::setPdfSummaryLlamaSwapModel,
                     llamaServerModelLabel = serverModelLabel,
                     llamaServerContextLabel = serverContextLabel,
                     llamaServerContextTokens = serverContextTokens,
                     requestedContextForWarning = pdfMergeContextSize,
+                    liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = settingsRepo::setPdfSummaryLiteRtModelId,
+                    liteRtBackend = liteRtBackend,
+                    onLiteRtBackendChange = settingsRepo::setPdfSummaryLiteRtBackend,
+                    liteRtMtpEnabled = liteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = settingsRepo::setPdfSummaryLiteRtMtpEnabled,
+                    liteRtThinkingEnabled = thinkingEnabled,
+                    onLiteRtThinkingEnabledChange = settingsRepo::setPdfSummaryThinkingEnabled,
                     fetchMetadata = {
-                        RemoteSummaryClientFactory.fromSnapshot(settingsRepo.pdfSummarySettings.snapshot())
+                        RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.pdfSummarySettings.snapshot())
                             .fetchMetadata()
                     },
                     onMetadataLoaded = ::persistMetadata
@@ -196,7 +221,6 @@ fun PDFSettingsScreen(navController: NavController) {
                             label = { Text(stringResource(R.string.pdf_target_language_label)) },
                             supportingText = { Text(stringResource(R.string.pdf_target_language_desc)) }
                         )
-                        Spacer(modifier = Modifier.height(16.dp))
                         OutlinedTextField(
                             value = pdfSummaryPrompt ?: PDFSummaryService.DEFAULT_SUMMARY_PROMPT,
                             onValueChange = settingsRepo::setPdfSummaryPrompt,
@@ -230,5 +254,84 @@ fun PDFSettingsScreen(navController: NavController) {
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PdfTranslationLanguagePicker(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val commonLanguages = listOf(
+        "Spanish" to stringResource(R.string.pdf_translation_language_spanish),
+        "English" to stringResource(R.string.pdf_translation_language_english),
+        "Portuguese (Brazil)" to stringResource(R.string.pdf_translation_language_portuguese_brazil),
+        "French" to stringResource(R.string.pdf_translation_language_french),
+        "German" to stringResource(R.string.pdf_translation_language_german),
+        "Italian" to stringResource(R.string.pdf_translation_language_italian),
+        "Japanese" to stringResource(R.string.pdf_translation_language_japanese),
+        "Korean" to stringResource(R.string.pdf_translation_language_korean),
+        "Chinese (Simplified)" to stringResource(R.string.pdf_translation_language_chinese_simplified)
+    )
+    val currentCommon = commonLanguages.firstOrNull { it.first == value }
+    var forceCustom by remember { mutableStateOf(false) }
+    val isCustom = forceCustom || currentCommon == null
+    var customDraft by remember(value) { mutableStateOf(value) }
+    val selectedLabel = currentCommon?.second ?: stringResource(R.string.pdf_translation_language_custom)
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it }
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            readOnly = true,
+            label = { Text(stringResource(R.string.pdf_translation_language_label)) },
+            supportingText = { Text(stringResource(R.string.pdf_translation_language_desc)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            commonLanguages.forEach { (languageValue, languageLabel) ->
+                DropdownMenuItem(
+                    text = { Text(languageLabel) },
+                    onClick = {
+                        forceCustom = false
+                        onValueChange(languageValue)
+                        expanded = false
+                    }
+                )
+            }
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.pdf_translation_language_custom)) },
+                onClick = {
+                    forceCustom = true
+                    customDraft = customDraft.ifBlank { value }
+                    expanded = false
+                }
+            )
+        }
+    }
+
+    if (isCustom) {
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = customDraft,
+            onValueChange = {
+                customDraft = it
+                onValueChange(it)
+            },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.pdf_translation_language_custom_label)) },
+            supportingText = { Text(stringResource(R.string.pdf_translation_language_custom_desc)) }
+        )
     }
 }

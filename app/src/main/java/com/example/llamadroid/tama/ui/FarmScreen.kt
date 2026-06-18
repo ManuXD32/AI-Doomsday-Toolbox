@@ -47,6 +47,8 @@ import com.example.llamadroid.tama.game.wellProductionIntervalForSpeedLevel
 import com.example.llamadroid.tama.game.wellSpeedUpgradeCostForLevel
 import com.example.llamadroid.tama.db.FarmUpgradeEntity
 import com.example.llamadroid.tama.game.wellCapacityForLevel
+import com.example.llamadroid.ui.components.pressAndHoldRepeat
+import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -78,16 +80,31 @@ fun FarmScreen(
     var showSeedPicker by remember { mutableStateOf<Int?>(null) }
     var showWellDialog by remember { mutableStateOf(false) }
     var showComposterDialog by remember { mutableStateOf(false) }
+    var showPlantingDroneDialog by remember { mutableStateOf(false) }
+    var showHarvesterDroneDialog by remember { mutableStateOf(false) }
     var showComposterCropPickerForSlot by remember { mutableStateOf<Int?>(null) }
+    var inspectedCropTile by remember { mutableStateOf<FarmTile?>(null) }
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
     val wellUpgrade = upgrades.find { u -> u.type == "well" }
     val composterUpgrade = upgrades.find { u -> u.type == "composter" }
+    val farmlandUpgrade = upgrades.find { u -> u.type == FARMLAND_UPGRADE_ID }
+    val plantingDroneUpgrade = upgrades.find { u -> u.type == FARM_PLANTING_DRONE_ID }
+    val harvesterDroneUpgrade = upgrades.find { u -> u.type == FARM_HARVESTING_DRONE_ID }
+    val farmlandLevel = farmlandUpgrade?.takeIf { it.isPurchased }?.level ?: 0
+    val unlockedFarmPages = farmPageCountForFarmlandLevel(farmlandLevel)
+    var currentFarmPage by remember { mutableIntStateOf(0) }
     val wellState = remember(wellUpgrade?.extraDataJson, wellUpgrade?.storedOutput, wellUpgrade?.level, currentTime) {
         farmRepository.decodeWellState(wellUpgrade, currentTime)
     }
     val composterSlots = remember(composterUpgrade?.extraDataJson, composterUpgrade?.level) {
         farmRepository.decodeComposterSlots(composterUpgrade)
+    }
+    val plantingDroneState = remember(plantingDroneUpgrade?.extraDataJson, currentTime) {
+        farmRepository.decodePlantingDroneState(plantingDroneUpgrade, currentTime)
+    }
+    val harvesterDroneState = remember(harvesterDroneUpgrade?.extraDataJson, currentTime) {
+        farmRepository.decodeHarvesterDroneState(harvesterDroneUpgrade, currentTime)
     }
     val canBuyWell = pet.money >= FARM_WELL_COST
     val canBuyComposter = pet.money >= 800
@@ -110,6 +127,12 @@ fun FarmScreen(
         }
     }
 
+    LaunchedEffect(unlockedFarmPages) {
+        if (currentFarmPage >= unlockedFarmPages) {
+            currentFarmPage = (unlockedFarmPages - 1).coerceAtLeast(0)
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -120,11 +143,17 @@ fun FarmScreen(
                     }
                 },
                 actions = {
-                    Text(
-                        "${pet.money} 🪙",
+                    Row(
                         modifier = Modifier.padding(end = 16.dp),
-                        fontWeight = FontWeight.Bold
-                    )
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            pet.money.toString(),
+                            fontWeight = FontWeight.Bold
+                        )
+                        TamaUiIcon("🪙", fontSize = 16.sp)
+                    }
                 }
             )
         },
@@ -132,7 +161,9 @@ fun FarmScreen(
             ToolSidebar(
                 inventory = pet.inventory,
                 selectedTool = selectedTool,
-                onToolSelect = { selectedTool = it }
+                onToolSelect = { selectedTool = it },
+                onPlantingDroneOpen = { showPlantingDroneDialog = true },
+                onHarvesterDroneOpen = { showHarvesterDroneDialog = true }
             )
         }
     ) { padding ->
@@ -205,33 +236,51 @@ fun FarmScreen(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    val gridSide = if (maxWidth < maxHeight) maxWidth else maxHeight
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        modifier = Modifier.size(gridSide),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    val controlsReserve = if (unlockedFarmPages > 1) 48.dp else 0.dp
+                    val gridSide = minOf(maxWidth, (maxHeight - controlsReserve).coerceAtLeast(160.dp))
+                    val visibleTileIds = farmTileIdsForPage(currentFarmPage).toList()
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        items(9) { index ->
-                            val tile = tiles.find { it.id == index } ?: FarmTile(id = index)
-                            FarmTileItem(
-                                tile = tile,
-                                onClick = {
-                                    handleTileClick(
-                                        tile = tile,
-                                        tool = selectedTool,
-                                        gameEngine = gameEngine,
-                                        pet = pet,
-                                        scope = scope,
-                                        context = context,
-                                        onSeedPlantRequest = {
-                                            showSeedPicker = index
-                                        },
-                                        onAction = { updated ->
-                                            scope.launch { farmRepository.saveTile(pet.id, updated) }
-                                        }
-                                    )
-                                }
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(3),
+                            modifier = Modifier.size(gridSide),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(visibleTileIds, key = { it }) { tileId ->
+                                val tile = tiles.find { it.id == tileId } ?: FarmTile(id = tileId)
+                                FarmTileItem(
+                                    tile = tile,
+                                    onClick = {
+                                        handleTileClick(
+                                            tile = tile,
+                                            tool = selectedTool,
+                                            gameEngine = gameEngine,
+                                            pet = pet,
+                                            scope = scope,
+                                            context = context,
+                                            onSeedPlantRequest = {
+                                                showSeedPicker = tile.id
+                                            },
+                                            onAction = { updated ->
+                                                scope.launch { farmRepository.saveTile(pet.id, updated) }
+                                            }
+                                        )
+                                    },
+                                    onLongPress = {
+                                        if (tile.crop != null) inspectedCropTile = tile
+                                    }
+                                )
+                            }
+                        }
+                        if (unlockedFarmPages > 1) {
+                            FarmPageControls(
+                                currentPage = currentFarmPage,
+                                pageCount = unlockedFarmPages,
+                                onPrevious = { currentFarmPage = (currentFarmPage - 1).coerceAtLeast(0) },
+                                onNext = { currentFarmPage = (currentFarmPage + 1).coerceAtMost(unlockedFarmPages - 1) }
                             )
                         }
                     }
@@ -379,6 +428,94 @@ fun FarmScreen(
             )
         }
 
+        if (showPlantingDroneDialog) {
+            PlantingDroneDialog(
+                state = plantingDroneState,
+                inventory = pet.inventory,
+                currentTime = currentTime,
+                onDismiss = { showPlantingDroneDialog = false },
+                onStateChange = { updated ->
+                    scope.launch {
+                        farmRepository.savePlantingDroneState(
+                            pet.id,
+                            updated.copy(lastUpdatedAt = System.currentTimeMillis())
+                        )
+                    }
+                },
+                onTransferItem = { item, quantity, transform ->
+                    scope.launch {
+                        if (gameEngine.consumeItem(item, quantity)) {
+                            val latest = farmRepository.decodePlantingDroneState(
+                                farmRepository.getUpgrade(pet.id, FARM_PLANTING_DRONE_ID),
+                                System.currentTimeMillis()
+                            )
+                            farmRepository.savePlantingDroneState(
+                                pet.id,
+                                transform(latest).copy(lastUpdatedAt = System.currentTimeMillis())
+                            )
+                        }
+                    }
+                },
+                onTransferToolDurability = { familyId, amount, transform ->
+                    scope.launch {
+                        val transferred = gameEngine.consumeFarmToolDurability(familyId, amount)
+                        if (transferred > 0) {
+                            val latest = farmRepository.decodePlantingDroneState(
+                                farmRepository.getUpgrade(pet.id, FARM_PLANTING_DRONE_ID),
+                                System.currentTimeMillis()
+                            )
+                            farmRepository.savePlantingDroneState(
+                                pet.id,
+                                transform(latest, transferred).copy(lastUpdatedAt = System.currentTimeMillis())
+                            )
+                        }
+                    }
+                }
+            )
+        }
+
+        if (showHarvesterDroneDialog) {
+            HarvesterDroneDialog(
+                state = harvesterDroneState,
+                inventory = pet.inventory,
+                currentTime = currentTime,
+                onDismiss = { showHarvesterDroneDialog = false },
+                onStateChange = { updated ->
+                    scope.launch {
+                        farmRepository.saveHarvesterDroneState(
+                            pet.id,
+                            updated.copy(lastUpdatedAt = System.currentTimeMillis())
+                        )
+                    }
+                },
+                onTransferFuel = { item, quantity ->
+                    scope.launch {
+                        if (gameEngine.consumeItem(item, quantity)) {
+                            val latest = farmRepository.decodeHarvesterDroneState(
+                                farmRepository.getUpgrade(pet.id, FARM_HARVESTING_DRONE_ID),
+                                System.currentTimeMillis()
+                            )
+                            val addedFuel = (latest.fuel + quantity).coerceAtMost(
+                                farmDroneFuelCapacityForUpgradeLevel(latest.fuelUpgradeLevel)
+                            )
+                            farmRepository.saveHarvesterDroneState(
+                                pet.id,
+                                latest.copy(
+                                    fuel = addedFuel,
+                                    lastUpdatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        }
+                    }
+                },
+                onCollectStorage = {
+                    scope.launch {
+                        gameEngine.collectHarvesterDroneStorage()
+                    }
+                }
+            )
+        }
+
         if (showComposterCropPickerForSlot != null) {
             ComposterCropPickerDialog(
                 crops = compostableItems,
@@ -404,18 +541,30 @@ fun FarmScreen(
                 }
             )
         }
+
+        inspectedCropTile?.let { tile ->
+            CropInspectDialog(
+                tile = tile,
+                onDismiss = { inspectedCropTile = null }
+            )
+        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun FarmTileItem(
     tile: FarmTile,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongPress: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
             .aspectRatio(1f)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongPress
+            ),
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
@@ -487,6 +636,83 @@ fun FarmTileItem(
             }
         }
     }
+}
+
+@Composable
+private fun FarmPageControls(
+    currentPage: Int,
+    pageCount: Int,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit
+) {
+    Surface(
+        color = Color.Black.copy(alpha = 0.55f),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            IconButton(
+                onClick = onPrevious,
+                enabled = currentPage > 0,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowLeft,
+                    contentDescription = stringResource(R.string.tama_farm_page_previous),
+                    tint = Color.White
+                )
+            }
+            Text(
+                text = stringResource(R.string.tama_farm_page_label, currentPage + 1, pageCount),
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(
+                onClick = onNext,
+                enabled = currentPage < pageCount - 1,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    Icons.Default.KeyboardArrowRight,
+                    contentDescription = stringResource(R.string.tama_farm_page_next),
+                    tint = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CropInspectDialog(
+    tile: FarmTile,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val crop = tile.crop ?: return
+    val cropName = cropDisplayName(context, crop.type)
+    val status = when {
+        crop.isDecayed -> stringResource(R.string.tama_farm_crop_inspect_wilted)
+        crop.stage >= 3 -> stringResource(R.string.tama_farm_crop_inspect_ready)
+        else -> stringResource(R.string.tama_farm_crop_inspect_growing, calculateRemaining(crop))
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(cropName, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.tama_farm_crop_inspect_title, cropName))
+                Text(status)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    )
 }
 
 @Composable
@@ -563,7 +789,9 @@ internal fun canWaterFarmTile(tile: FarmTile): Boolean {
 fun ToolSidebar(
     inventory: List<InventoryItem>,
     selectedTool: InventoryItem?,
-    onToolSelect: (InventoryItem?) -> Unit
+    onToolSelect: (InventoryItem?) -> Unit,
+    onPlantingDroneOpen: () -> Unit,
+    onHarvesterDroneOpen: () -> Unit
 ) {
     val tools = inventory.filter { it.type == ItemType.TOOL || it.id == "fertilizer" || it.id == "water" }
     
@@ -578,18 +806,27 @@ fun ToolSidebar(
     ) {
         items(tools) { item ->
             val isSelected = selectedTool?.id == item.id
+            val isDrone = item.id == FARM_PLANTING_DRONE_ID || item.id == FARM_HARVESTING_DRONE_ID
             Surface(
                 modifier = Modifier
                     .size(68.dp)
-                    .clickable { if (isSelected) onToolSelect(null) else onToolSelect(item) },
+                    .clickable {
+                        when (item.id) {
+                            FARM_PLANTING_DRONE_ID -> onPlantingDroneOpen()
+                            FARM_HARVESTING_DRONE_ID -> onHarvesterDroneOpen()
+                            else -> if (isSelected) onToolSelect(null) else onToolSelect(item)
+                        }
+                    },
                 shape = RoundedCornerShape(8.dp),
-                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
+                color = if (isSelected && !isDrone) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                border = if (isSelected && !isDrone) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     val iconSource = when(item.id) {
                         "hoe_starter", "hoe" -> "Others/hoe.png"
                         "watering_can_starter", "watering_can" -> "Others/watering_can.png"
+                        FARM_PLANTING_DRONE_ID -> "Others/planting_drone.png"
+                        FARM_HARVESTING_DRONE_ID -> "Others/harvesting_drone.png"
                         "fertilizer" -> "Others/fertilizer.png"
                         "water" -> "Others/water.png"
                         else -> "Others/soil.png"
@@ -605,7 +842,7 @@ fun ToolSidebar(
                     
                     // Show quantity for resources
                     // Show quantity for resources or durability for tools
-                    if (item.type == ItemType.TOOL) {
+                    if (item.type == ItemType.TOOL && !isDrone) {
                         Surface(
                             color = MaterialTheme.colorScheme.tertiary,
                             shape = RoundedCornerShape(4.dp),
@@ -871,6 +1108,268 @@ private fun ComposterDialog(
 }
 
 @Composable
+private fun PlantingDroneDialog(
+    state: PlantingDroneState,
+    inventory: List<InventoryItem>,
+    currentTime: Long,
+    onDismiss: () -> Unit,
+    onStateChange: (PlantingDroneState) -> Unit,
+    onTransferItem: (InventoryItem, Int, (PlantingDroneState) -> PlantingDroneState) -> Unit,
+    onTransferToolDurability: (String, Int, (PlantingDroneState, Int) -> PlantingDroneState) -> Unit
+) {
+    val context = LocalContext.current
+    val fuelItem = inventory.firstOrNull { it.id == FARM_FUEL_BUCKET_ID && it.quantity > 0 }
+    val waterItem = inventory.firstOrNull { it.id == "water" && it.quantity > 0 }
+    val fertilizerItem = inventory.firstOrNull { it.id == "fertilizer" && it.quantity > 0 }
+    val hoeAvailableDurability = farmToolTotalDurability(inventory, "hoe")
+    val wateringCanAvailableDurability = farmToolTotalDurability(inventory, "watering_can")
+    val seedItems = inventory.filter { it.type == ItemType.SEED && it.quantity > 0 }
+    val fuelCapacity = farmDroneFuelCapacityForUpgradeLevel(state.fuelUpgradeLevel)
+    val fuelTransferAmount = farmDroneFuelTransferAmountForUpgradeLevel(state.fuelUpgradeLevel)
+    val fuelSpace = (fuelCapacity - state.fuel).coerceAtLeast(0)
+    val fuelTransfer = minOf(fuelTransferAmount, fuelSpace, fuelItem?.quantity ?: 0)
+    val hoeTransfer = minOf(FARM_TOOL_REPAIR_AMOUNT, hoeAvailableDurability, (FARM_TOOL_DURABILITY_CAP - (state.hoe?.durability ?: 0)).coerceAtLeast(0))
+    val wateringCanTransfer = minOf(FARM_TOOL_REPAIR_AMOUNT, wateringCanAvailableDurability, (FARM_TOOL_DURABILITY_CAP - (state.wateringCan?.durability ?: 0)).coerceAtLeast(0))
+
+    FarmUpgradeDialogFrame(
+        title = stringResource(R.string.tama_farm_planting_drone),
+        backgroundAssetPath = "file:///android_asset/farm/Others/farm_field_background.png",
+        onDismiss = onDismiss,
+        actions = {
+            Spacer(modifier = Modifier.height(0.dp))
+        }
+    ) {
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_status_section)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(stringResource(R.string.tama_farm_drone_enabled), color = TamaDark, fontWeight = FontWeight.Bold)
+                Switch(
+                    checked = state.enabled,
+                    onCheckedChange = { onStateChange(state.copy(enabled = it, statusKey = null, lastUpdatedAt = currentTime)) }
+                )
+            }
+            Text(stringResource(R.string.tama_farm_drone_fuel_status, state.fuel, fuelCapacity), color = TamaDark)
+            Text(plantingDroneStatusText(context, state), color = TamaMutedText)
+            Text(stringResource(R.string.tama_farm_drone_job_cost_planting, FARM_PLANTING_DRONE_FUEL_COST), color = TamaMutedText)
+            DroneTransferButton(
+                label = stringResource(R.string.tama_farm_drone_refill_fuel, fuelTransferAmount),
+                enabled = fuelItem != null && fuelTransfer > 0,
+                onClick = {
+                    if (fuelItem != null) {
+                        val item = fuelItem
+                        onTransferItem(item, fuelTransfer) { it.copy(fuel = (it.fuel + fuelTransfer).coerceAtMost(farmDroneFuelCapacityForUpgradeLevel(it.fuelUpgradeLevel))) }
+                        true
+                    } else {
+                        false
+                    }
+                }
+            )
+        }
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_owned_resources_section)) {
+            DroneResourceLine(stringResource(R.string.tama_farm_drone_hoe), state.hoe?.let { "${it.durability}/${it.maxDurability}" } ?: stringResource(R.string.tama_farm_drone_missing))
+            DroneResourceLine(stringResource(R.string.tama_farm_drone_watering_can), state.wateringCan?.let { "${it.durability}/${it.maxDurability}" } ?: stringResource(R.string.tama_farm_drone_missing))
+            DroneResourceLine(stringResource(R.string.tama_item_water), state.water.toString())
+            DroneResourceLine(stringResource(R.string.tama_item_fertilizer), state.fertilizer.toString())
+            DroneResourceLine(stringResource(R.string.tama_farm_drone_seed_total), state.seeds.sumOf { it.quantity }.toString())
+        }
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_transfer_section)) {
+            DroneTransferButton(
+                label = stringResource(R.string.tama_farm_drone_give_hoe),
+                enabled = hoeTransfer > 0,
+                onClick = {
+                    onTransferToolDurability("hoe", hoeTransfer) { latest, transferred ->
+                        latest.copy(hoe = addDroneToolDurability(latest.hoe, "hoe", context.getString(R.string.tama_inventory_hoe), transferred))
+                    }
+                    true
+                }
+            )
+            DroneTransferButton(
+                label = stringResource(R.string.tama_farm_drone_give_watering_can),
+                enabled = wateringCanTransfer > 0,
+                onClick = {
+                    onTransferToolDurability("watering_can", wateringCanTransfer) { latest, transferred ->
+                        latest.copy(wateringCan = addDroneToolDurability(latest.wateringCan, "watering_can", context.getString(R.string.tama_inventory_watering_can), transferred))
+                    }
+                    true
+                }
+            )
+            DroneTransferButton(
+                label = stringResource(R.string.tama_farm_drone_add_water),
+                enabled = waterItem != null,
+                onClick = {
+                    if (waterItem != null) {
+                        val item = waterItem
+                        onTransferItem(item, 1) { it.copy(water = it.water + 1) }
+                        true
+                    } else {
+                        false
+                    }
+                }
+            )
+            DroneTransferButton(
+                label = stringResource(R.string.tama_farm_drone_add_fertilizer),
+                enabled = fertilizerItem != null,
+                onClick = {
+                    if (fertilizerItem != null) {
+                        val item = fertilizerItem
+                        onTransferItem(item, 1) { it.copy(fertilizer = it.fertilizer + 1) }
+                        true
+                    } else {
+                        false
+                    }
+                }
+            )
+        }
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_seed_priority_section)) {
+            if (state.seeds.isEmpty()) {
+                Text(stringResource(R.string.tama_farm_drone_no_seeds), color = TamaMutedText)
+            } else {
+                state.seeds.forEachIndexed { index, seed ->
+                    DroneSeedPriorityRow(
+                        cropId = seed.cropId,
+                        quantity = seed.quantity,
+                        canMoveUp = index > 0,
+                        canMoveDown = index < state.seeds.lastIndex,
+                        onMoveUp = { onStateChange(state.copy(seeds = state.seeds.moveItem(index, index - 1), lastUpdatedAt = currentTime)) },
+                        onMoveDown = { onStateChange(state.copy(seeds = state.seeds.moveItem(index, index + 1), lastUpdatedAt = currentTime)) }
+                    )
+                }
+            }
+            seedItems.forEach { item ->
+                val cropId = item.id.removePrefix("seed_")
+                DroneTransferButton(
+                    label = stringResource(R.string.tama_farm_drone_add_seed, inventoryItemDisplayName(context, item), item.quantity),
+                    enabled = item.quantity > 0,
+                    onClick = {
+                        onTransferItem(item, 1) { it.copy(seeds = addDroneSeed(it.seeds, cropId, 1)) }
+                        true
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun HarvesterDroneDialog(
+    state: HarvesterDroneState,
+    inventory: List<InventoryItem>,
+    currentTime: Long,
+    onDismiss: () -> Unit,
+    onStateChange: (HarvesterDroneState) -> Unit,
+    onTransferFuel: (InventoryItem, Int) -> Unit,
+    onCollectStorage: () -> Unit
+) {
+    val fuelItem = inventory.firstOrNull { it.id == FARM_FUEL_BUCKET_ID && it.quantity > 0 }
+    val fuelCapacity = farmDroneFuelCapacityForUpgradeLevel(state.fuelUpgradeLevel)
+    val fuelTransferAmount = farmDroneFuelTransferAmountForUpgradeLevel(state.fuelUpgradeLevel)
+    val fuelSpace = (fuelCapacity - state.fuel).coerceAtLeast(0)
+    val fuelTransfer = minOf(fuelTransferAmount, fuelSpace, fuelItem?.quantity ?: 0)
+    val context = LocalContext.current
+
+    FarmUpgradeDialogFrame(
+        title = stringResource(R.string.tama_farm_harvesting_drone),
+        backgroundAssetPath = "file:///android_asset/farm/Others/farm_field_background.png",
+        onDismiss = onDismiss,
+        actions = {
+            Spacer(modifier = Modifier.height(0.dp))
+        }
+    ) {
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_status_section)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(stringResource(R.string.tama_farm_drone_enabled), color = TamaDark, fontWeight = FontWeight.Bold)
+                Switch(
+                    checked = state.enabled,
+                    onCheckedChange = { onStateChange(state.copy(enabled = it, statusKey = null, lastUpdatedAt = currentTime)) }
+                )
+            }
+            Text(stringResource(R.string.tama_farm_drone_fuel_status, state.fuel, fuelCapacity), color = TamaDark)
+            Text(harvesterDroneStatusText(context, state), color = TamaMutedText)
+            Text(stringResource(R.string.tama_farm_drone_job_cost_harvest, FARM_HARVESTING_DRONE_FUEL_COST), color = TamaMutedText)
+            DroneTransferButton(
+                label = stringResource(R.string.tama_farm_drone_refill_fuel, fuelTransferAmount),
+                enabled = fuelItem != null && fuelTransfer > 0,
+                onClick = {
+                    if (fuelItem != null) {
+                        onTransferFuel(fuelItem, fuelTransfer)
+                        true
+                    } else {
+                        false
+                    }
+                }
+            )
+        }
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_filter_section)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = state.mode == HarvesterDroneMode.BLACKLIST,
+                    onClick = { onStateChange(state.copy(mode = HarvesterDroneMode.BLACKLIST, lastUpdatedAt = currentTime)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text(
+                            text = stringResource(R.string.tama_farm_drone_blacklist_mode),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                )
+                FilterChip(
+                    selected = state.mode == HarvesterDroneMode.WHITELIST,
+                    onClick = { onStateChange(state.copy(mode = HarvesterDroneMode.WHITELIST, lastUpdatedAt = currentTime)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = {
+                        Text(
+                            text = stringResource(R.string.tama_farm_drone_whitelist_mode),
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                )
+            }
+            CropDefinitions.CROPS.keys.sorted().forEach { cropId ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(cropDisplayName(context, cropId), color = TamaDark)
+                    Checkbox(
+                        checked = cropId in state.cropFilter,
+                        onCheckedChange = { checked ->
+                            val updated = if (checked) state.cropFilter + cropId else state.cropFilter - cropId
+                            onStateChange(state.copy(cropFilter = updated, lastUpdatedAt = currentTime))
+                        }
+                    )
+                }
+            }
+        }
+        FarmInfoSection(title = stringResource(R.string.tama_farm_drone_storage_section)) {
+            if (state.storage.isEmpty()) {
+                Text(stringResource(R.string.tama_farm_drone_storage_empty), color = TamaMutedText)
+            } else {
+                state.storage.forEach { stored ->
+                    DroneResourceLine(inventoryIdDisplayName(context, stored.inventoryId), stored.quantity.toString())
+                }
+                Button(
+                    onClick = onCollectStorage,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = farmPopupButtonColors()
+                ) {
+                    Text(stringResource(R.string.tama_farm_drone_collect_storage))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun FarmUtilityTileGrid(
     count: Int,
     content: @Composable (Int) -> Unit
@@ -991,6 +1490,124 @@ private fun FarmInfoSection(
             }
         }
     }
+}
+
+@Composable
+private fun DroneResourceLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = TamaDark)
+        Text(value, color = TamaDark, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun DroneTransferButton(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Boolean
+) {
+    val repeatState = rememberPressAndHoldRepeatState()
+    Button(
+        onClick = { repeatState.handleClick { onClick() } },
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .pressAndHoldRepeat(
+                state = repeatState,
+                enabled = enabled
+            ) { onClick() },
+        colors = farmPopupButtonColors()
+    ) {
+        Text(label)
+    }
+}
+
+@Composable
+private fun DroneSeedPriorityRow(
+    cropId: String,
+    quantity: Int,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    val context = LocalContext.current
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = stringResource(R.string.tama_farm_drone_seed_row, cropDisplayName(context, cropId), quantity),
+            color = TamaDark,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.tama_farm_drone_priority_up))
+        }
+        IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(36.dp)) {
+            Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.tama_farm_drone_priority_down))
+        }
+    }
+}
+
+private fun <T> List<T>.moveItem(from: Int, to: Int): List<T> {
+    if (from !in indices || to !in indices) return this
+    return toMutableList().also { current ->
+        val item = current.removeAt(from)
+        current.add(to, item)
+    }
+}
+
+private fun plantingDroneStatusText(context: android.content.Context, state: PlantingDroneState): String {
+    if (state.enabled) return context.getString(R.string.tama_farm_drone_status_ready)
+    return when (state.statusKey) {
+        "fuel_empty" -> context.getString(R.string.tama_farm_drone_status_no_fuel)
+        "hoe_missing" -> context.getString(R.string.tama_farm_drone_status_no_hoe)
+        "watering_can_missing" -> context.getString(R.string.tama_farm_drone_status_no_watering_can)
+        "water_empty" -> context.getString(R.string.tama_farm_drone_status_no_water)
+        "seeds_empty" -> context.getString(R.string.tama_farm_drone_status_no_seeds)
+        "hoe_broken" -> context.getString(R.string.tama_farm_drone_status_hoe_broken)
+        "watering_can_broken" -> context.getString(R.string.tama_farm_drone_status_watering_can_broken)
+        else -> context.getString(R.string.tama_farm_drone_status_disabled)
+    }
+}
+
+private fun harvesterDroneStatusText(context: android.content.Context, state: HarvesterDroneState): String {
+    if (state.enabled) return context.getString(R.string.tama_farm_drone_status_ready)
+    return when (state.statusKey) {
+        "fuel_empty" -> context.getString(R.string.tama_farm_drone_status_no_fuel)
+        else -> context.getString(R.string.tama_farm_drone_status_disabled)
+    }
+}
+
+private fun addDroneToolDurability(
+    current: DroneToolState?,
+    id: String,
+    name: String,
+    amount: Int
+): DroneToolState {
+    val currentDurability = current?.durability ?: 0
+    return DroneToolState(
+        id = current?.id ?: id,
+        name = current?.name ?: name,
+        durability = (currentDurability + amount).coerceIn(0, FARM_TOOL_DURABILITY_CAP),
+        maxDurability = FARM_TOOL_DURABILITY_CAP
+    )
+}
+
+private fun inventoryIdDisplayName(context: android.content.Context, inventoryId: String): String {
+    if (inventoryId == "rotten_crop") return context.getString(R.string.tama_item_rotten_crop)
+    if (inventoryId.startsWith("crop_")) {
+        return cropDisplayName(context, inventoryId.removePrefix("crop_"))
+    }
+    return FarmTradeItemCatalog.displayName(inventoryId, context.resources.configuration.locales[0])
 }
 
 @Composable

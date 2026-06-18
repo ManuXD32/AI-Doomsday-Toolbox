@@ -108,9 +108,29 @@ class Converters {
         OrganizerEventEntity::class,
         OrganizerAlarmEntity::class,
         OrganizerLlmSettingsEntity::class,
-        SavedCommand::class
+        SavedCommand::class,
+        QuadtrixProfileEntity::class,
+        QuadtrixRunEntity::class,
+        QuadtrixMetricEntity::class,
+        KnowledgeBaseEntity::class,
+        KnowledgeSourceEntity::class,
+        KnowledgeChunkEntity::class,
+        com.example.llamadroid.data.model.LiteRtModelEntity::class,
+        LiveTranslatorTemplateEntity::class,
+        LiveTranslatorSessionEntity::class,
+        LiveTranslatorTurnEntity::class,
+        AiServerConfigEntity::class,
+        AiServerUserEntity::class,
+        AiServerPermissionEntity::class,
+        AiServerSessionEntity::class,
+        AiServerArtifactEntity::class,
+        AiServerWebProviderEntity::class,
+        AiServerWebChatEntity::class,
+        AiServerWebMessageEntity::class,
+        AiServerWebMessageAttachmentEntity::class,
+        AiServerWebToolEventEntity::class
     ], 
-    version = 56,
+    version = 81,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -139,6 +159,15 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaMessageDao(): com.example.llamadroid.data.dao.LlamaMessageDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
     abstract fun organizerDao(): OrganizerDao
+    abstract fun quadtrixProfileDao(): QuadtrixProfileDao
+    abstract fun quadtrixRunDao(): QuadtrixRunDao
+    abstract fun quadtrixMetricDao(): QuadtrixMetricDao
+    abstract fun knowledgeBaseDao(): KnowledgeBaseDao
+    abstract fun liteRtModelDao(): com.example.llamadroid.data.dao.LiteRtModelDao
+    abstract fun liveTranslatorTemplateDao(): LiveTranslatorTemplateDao
+    abstract fun liveTranslatorSessionDao(): LiveTranslatorSessionDao
+    abstract fun liveTranslatorTurnDao(): LiveTranslatorTurnDao
+    abstract fun aiServerDao(): AiServerDao
 
     companion object {
         @Volatile

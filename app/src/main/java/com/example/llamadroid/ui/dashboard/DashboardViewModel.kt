@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.util.SystemMonitor
 import com.example.llamadroid.util.SystemStats
@@ -70,7 +71,13 @@ class DashboardViewModel(
 
                 // Pass global speculative decoding settings
                 if (settingsRepo.speculativeEnabled.value) {
-                    putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
+                    val speculativeMode = settingsRepo.speculativeMode.value
+                    val shouldPassDraftModel =
+                        speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE ||
+                            (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
+                    if (shouldPassDraftModel) {
+                        putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
+                    }
                     putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
                     putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
                     putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)

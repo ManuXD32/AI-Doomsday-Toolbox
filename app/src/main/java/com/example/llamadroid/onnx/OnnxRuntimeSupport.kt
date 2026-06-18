@@ -191,9 +191,10 @@ fun OnnxRuntimeOptions.toDisplayLines(): List<String> {
 fun createOnnxCpuSession(
     environment: OrtEnvironment,
     modelFile: File,
-    runtimeOptions: OnnxRuntimeOptions
+    runtimeOptions: OnnxRuntimeOptions,
+    loadOrtFormat: Boolean = true
 ): OrtSession {
-    val options = createOnnxSessionOptions(runtimeOptions)
+    val options = createOnnxSessionOptions(runtimeOptions, loadOrtFormat)
     return environment.createSession(modelFile.absolutePath, options)
 }
 
@@ -202,11 +203,12 @@ fun createOnnxSessionWithBackend(
     modelFile: File,
     requestedBackend: OnnxRuntimeBackend,
     runtimeOptions: OnnxRuntimeOptions,
-    componentLabel: String
+    componentLabel: String,
+    loadOrtFormat: Boolean = true
 ): OnnxSessionLoadResult {
     if (requestedBackend == OnnxRuntimeBackend.CPU) {
         return OnnxSessionLoadResult(
-            session = createOnnxCpuSession(environment, modelFile, runtimeOptions),
+            session = createOnnxCpuSession(environment, modelFile, runtimeOptions, loadOrtFormat),
             summary = OnnxRuntimeComponentSummary(
                 component = componentLabel,
                 requestedBackend = requestedBackend.name,
@@ -216,7 +218,7 @@ fun createOnnxSessionWithBackend(
     }
 
     return try {
-        val nnapiOptions = createOnnxSessionOptions(runtimeOptions)
+        val nnapiOptions = createOnnxSessionOptions(runtimeOptions, loadOrtFormat)
         val enabled = tryEnableNnapi(nnapiOptions, runtimeOptions)
         require(enabled) { "NNAPI provider is not available in this ONNX Runtime build" }
         OnnxSessionLoadResult(
@@ -234,7 +236,7 @@ fun createOnnxSessionWithBackend(
             nnapiErrorMessage = e.message
         )
         OnnxSessionLoadResult(
-            session = createOnnxCpuSession(environment, modelFile, runtimeOptions),
+            session = createOnnxCpuSession(environment, modelFile, runtimeOptions, loadOrtFormat),
             summary = OnnxRuntimeComponentSummary(
                 component = componentLabel,
                 requestedBackend = requestedBackend.name,
@@ -245,12 +247,17 @@ fun createOnnxSessionWithBackend(
     }
 }
 
-private fun createOnnxSessionOptions(runtimeOptions: OnnxRuntimeOptions): OrtSession.SessionOptions {
+private fun createOnnxSessionOptions(
+    runtimeOptions: OnnxRuntimeOptions,
+    loadOrtFormat: Boolean
+): OrtSession.SessionOptions {
     return OrtSession.SessionOptions().apply {
-        runCatching {
-            javaClass.methods
-                .firstOrNull { it.name == "addConfigEntry" && it.parameterTypes.size == 2 }
-                ?.invoke(this, "session.load_model_format", "ORT")
+        if (loadOrtFormat) {
+            runCatching {
+                javaClass.methods
+                    .firstOrNull { it.name == "addConfigEntry" && it.parameterTypes.size == 2 }
+                    ?.invoke(this, "session.load_model_format", "ORT")
+            }
         }
         runtimeOptions.runtimeThreadCount?.let { threadCount ->
             if (runtimeOptions.intraOpThreads == null) {

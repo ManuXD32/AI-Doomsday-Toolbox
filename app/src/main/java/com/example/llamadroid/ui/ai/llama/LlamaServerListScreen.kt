@@ -9,12 +9,15 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -26,6 +29,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -49,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -61,9 +66,19 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.api.OllamaModel
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.KnowledgeBaseEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.LlamaServerEntity
+import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
+import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
+import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
+import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.model.supportsLiteRtAudio
+import com.example.llamadroid.data.model.supportsLiteRtVision
+import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.LlamaRepository
+import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.ui.components.DraftIntTextField
@@ -78,6 +93,13 @@ fun LlamaServerListScreen(
 ) {
     val context = LocalContext.current
     val database = AppDatabase.getDatabase(context)
+    val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, database) }
+    val liteRtModelRepository = remember {
+        LiteRtModelRepository(
+            context = context,
+            modelDao = database.liteRtModelDao()
+        )
+    }
     val repository = remember {
         LlamaRepository(
             database.llamaServerDao(),
@@ -88,8 +110,12 @@ fun LlamaServerListScreen(
     }
     val viewModel: LlamaServerViewModel = viewModel(factory = LlamaServerViewModelFactory(repository))
     val servers by viewModel.servers.collectAsState()
+    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases().collectAsState(initial = emptyList())
     val whisperModels by remember(database) {
         database.modelDao().getModelsByType(ModelType.WHISPER)
+    }.collectAsState(initial = emptyList())
+    val liteRtModels by remember(liteRtModelRepository) {
+        liteRtModelRepository.observeModels()
     }.collectAsState(initial = emptyList())
 
     var showAddDialog by remember { mutableStateOf(false) }
@@ -150,6 +176,8 @@ fun LlamaServerListScreen(
         LlamaServerDialog(
             initialServer = serverToEdit,
             whisperModelPaths = whisperModels.map { it.path },
+            liteRtModels = liteRtModels,
+            knowledgeBases = knowledgeBases,
             onDismiss = {
                 showAddDialog = false
                 serverToEdit = null
@@ -160,7 +188,8 @@ fun LlamaServerListScreen(
                 serverToEdit = null
             },
             onLoadOllamaModels = viewModel::loadOllamaModels,
-            onLoadOllamaCapabilities = viewModel::loadOllamaCapabilities
+            onLoadOllamaCapabilities = viewModel::loadOllamaCapabilities,
+            onLoadLlamaSwapModels = viewModel::loadLlamaSwapModels
         )
     }
 }
@@ -170,10 +199,13 @@ fun LlamaServerListScreen(
 private fun LlamaServerDialog(
     initialServer: LlamaServerEntity?,
     whisperModelPaths: List<String>,
+    liteRtModels: List<LiteRtModelEntity>,
+    knowledgeBases: List<KnowledgeBaseEntity>,
     onDismiss: () -> Unit,
     onSave: (LlamaServerEntity) -> Unit,
     onLoadOllamaModels: (String, Int, (Result<List<OllamaModel>>) -> Unit) -> Unit,
-    onLoadOllamaCapabilities: (String, Int, String, (Result<Pair<Boolean, Boolean>>) -> Unit) -> Unit
+    onLoadOllamaCapabilities: (String, Int, String, (Result<Pair<Boolean, Boolean>>) -> Unit) -> Unit,
+    onLoadLlamaSwapModels: (String, Int, (Result<List<String>>) -> Unit) -> Unit
 ) {
     val dialogKey = initialServer?.id ?: -1L
     val scrollState = rememberScrollState()
@@ -191,6 +223,13 @@ private fun LlamaServerDialog(
         mutableStateOf(initialServer?.whisperLanguage?.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE }
             ?: LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE)
     }
+    var preferWhisperAudioTranscription by remember(dialogKey) {
+        mutableStateOf(initialServer?.preferWhisperAudioTranscription ?: false)
+    }
+    var liteRtModelId by remember(dialogKey) { mutableStateOf(initialServer?.liteRtModelId) }
+    var liteRtBackend by remember(dialogKey) {
+        mutableStateOf(normalizeLiteRtBackend(initialServer?.liteRtBackend))
+    }
     var ollamaModelName by remember(dialogKey) { mutableStateOf(initialServer?.modelName.orEmpty()) }
     var availableOllamaModels by remember(dialogKey) {
         mutableStateOf(initialServer?.modelName?.takeIf { it.isNotBlank() }?.let(::listOf) ?: emptyList())
@@ -198,6 +237,7 @@ private fun LlamaServerDialog(
     var showWhisperModelMenu by remember(dialogKey) { mutableStateOf(false) }
     var showWhisperLanguageMenu by remember(dialogKey) { mutableStateOf(false) }
     var showOllamaModelMenu by remember(dialogKey) { mutableStateOf(false) }
+    var showLiteRtModelMenu by remember(dialogKey) { mutableStateOf(false) }
     var statusMessage by remember(dialogKey) { mutableStateOf<String?>(null) }
     var isLoadingOllamaModels by remember(dialogKey) { mutableStateOf(false) }
     var isLoadingOllamaCapabilities by remember(dialogKey) { mutableStateOf(false) }
@@ -209,14 +249,24 @@ private fun LlamaServerDialog(
     var defaultKiwixSearchEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.kiwixSearchEnabled) }
     var defaultKiwixServerUrl by remember(dialogKey) { mutableStateOf(initialToolDefaults.kiwixServerUrl) }
     var defaultFetchUrlEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.fetchUrlEnabled) }
+    var defaultDeepResearchEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.deepResearchEnabled) }
+    var defaultDeepResearchImportIntoSelectedKbEnabled by remember(dialogKey) {
+        mutableStateOf(initialToolDefaults.deepResearchImportIntoSelectedKbEnabled)
+    }
+    var defaultDeepResearchSourceLimit by remember(dialogKey) { mutableStateOf(initialToolDefaults.deepResearchSourceLimit) }
     var defaultDateTimeEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.dateTimeEnabled) }
     var defaultCalculatorEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.calculatorEnabled) }
     var defaultNoteToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.noteToolsEnabled) }
     var defaultTodoToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.todoToolsEnabled) }
     var defaultCalendarToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.calendarToolsEnabled) }
     var defaultAlarmToolsEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.alarmToolsEnabled) }
+    var defaultKnowledgeBaseEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseEnabled) }
+    var defaultKnowledgeBaseAutoContextEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseAutoContextEnabled) }
+    var defaultSelectedKnowledgeBaseIds by remember(dialogKey) { mutableStateOf(initialToolDefaults.selectedKnowledgeBaseIds) }
+    var defaultKnowledgeBaseMaxResults by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseMaxResults) }
     var defaultImageGenerationEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.imageGenerationEnabled) }
     var defaultImageIterationEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.imageIterationEnabled) }
+    var defaultBackgroundRemovalEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.backgroundRemovalEnabled) }
     var defaultMaxToolRounds by remember(dialogKey) { mutableStateOf(initialToolDefaults.maxToolRounds) }
 
     val portInt = port.toIntOrNull() ?: 8080
@@ -226,9 +276,36 @@ private fun LlamaServerDialog(
             addAll(availableOllamaModels)
         }.distinct()
     }
-    val canSave = name.isNotBlank() &&
-        host.isNotBlank() &&
-        (engine != LlamaServerEntity.ENGINE_OLLAMA || ollamaModelName.isNotBlank())
+    val selectedLiteRtModel = remember(liteRtModels, liteRtModelId) {
+        liteRtModels.firstOrNull { it.id == liteRtModelId }
+    }
+    val directAudioInputAvailable = remember(engine, supportsAudio) {
+        supportsAudio && (
+            engine == LlamaServerEntity.ENGINE_LLAMA_SERVER ||
+                engine == LlamaServerEntity.ENGINE_LLAMA_SWAP ||
+                engine == LlamaServerEntity.ENGINE_LITERT_LM
+            )
+    }
+    LaunchedEffect(engine, liteRtModels, selectedLiteRtModel) {
+        if (engine == LlamaServerEntity.ENGINE_LITERT_LM && selectedLiteRtModel == null) {
+            val firstModel = liteRtModels.firstOrNull()
+            if (firstModel != null) {
+                liteRtModelId = firstModel.id
+                if (name.isBlank()) name = firstModel.displayName
+            }
+        }
+    }
+    LaunchedEffect(engine, selectedLiteRtModel?.id) {
+        if (engine == LlamaServerEntity.ENGINE_LITERT_LM) {
+            supportsVision = selectedLiteRtModel?.supportsLiteRtVision() == true
+            supportsAudio = selectedLiteRtModel?.supportsLiteRtAudio() == true
+        }
+    }
+    val canSave = name.isNotBlank() && when (engine) {
+        LlamaServerEntity.ENGINE_LITERT_LM -> selectedLiteRtModel != null
+        LlamaServerEntity.ENGINE_LLAMA_SERVER -> host.isNotBlank()
+        else -> host.isNotBlank() && ollamaModelName.isNotBlank()
+    }
 
     fun refreshOllamaModels() {
         if (host.isBlank()) return
@@ -242,6 +319,23 @@ private fun LlamaServerDialog(
                     null
                 } else {
                     null
+                }
+            }.onFailure {
+                statusMessage = it.message
+            }
+        }
+    }
+
+    fun refreshLlamaSwapModels() {
+        if (host.isBlank()) return
+        isLoadingOllamaModels = true
+        statusMessage = null
+        onLoadLlamaSwapModels(host, portInt) { result ->
+            isLoadingOllamaModels = false
+            result.onSuccess { models ->
+                availableOllamaModels = models
+                if (ollamaModelName.isBlank() && models.isNotEmpty()) {
+                    ollamaModelName = models.first()
                 }
             }.onFailure {
                 statusMessage = it.message
@@ -276,6 +370,11 @@ private fun LlamaServerDialog(
             availableOllamaModels.isEmpty()
         ) {
             refreshOllamaModels()
+        } else if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP &&
+            host.isNotBlank() &&
+            availableOllamaModels.isEmpty()
+        ) {
+            refreshLlamaSwapModels()
         }
     }
 
@@ -302,35 +401,43 @@ private fun LlamaServerDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
-                    value = host,
-                    onValueChange = {
-                        host = it
-                        if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
-                            supportsVision = false
-                            supportsAudio = false
-                        }
-                        statusMessage = null
-                    },
-                    label = { Text(stringResource(R.string.llama_server_host_hint)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = port,
-                    onValueChange = {
-                        port = it.filter { char -> char.isDigit() }
-                        if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
-                            supportsVision = false
-                            supportsAudio = false
-                        }
-                        statusMessage = null
-                    },
-                    label = { Text(stringResource(R.string.llama_server_port_hint)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (engine != LlamaServerEntity.ENGINE_LITERT_LM) {
+                    OutlinedTextField(
+                        value = host,
+                        onValueChange = {
+                            host = it
+                            if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
+                                supportsVision = false
+                                supportsAudio = false
+                            }
+                            if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
+                                availableOllamaModels = emptyList()
+                            }
+                            statusMessage = null
+                        },
+                        label = { Text(stringResource(R.string.llama_server_host_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = port,
+                        onValueChange = {
+                            port = it.filter { char -> char.isDigit() }
+                            if (engine == LlamaServerEntity.ENGINE_OLLAMA) {
+                                supportsVision = false
+                                supportsAudio = false
+                            }
+                            if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
+                                availableOllamaModels = emptyList()
+                            }
+                            statusMessage = null
+                        },
+                        label = { Text(stringResource(R.string.llama_server_port_hint)) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
 
                 Text(
                     text = stringResource(R.string.llama_server_engine_label),
@@ -346,6 +453,9 @@ private fun LlamaServerDialog(
                         selected = engine == LlamaServerEntity.ENGINE_LLAMA_SERVER,
                         onClick = {
                             engine = LlamaServerEntity.ENGINE_LLAMA_SERVER
+                            if (port == "9292") {
+                                port = "8080"
+                            }
                             supportsVision = if (initialServer?.isLlamaServerEngine() == true) {
                                 initialServer.supportsVision
                             } else {
@@ -364,6 +474,10 @@ private fun LlamaServerDialog(
                         selected = engine == LlamaServerEntity.ENGINE_OLLAMA,
                         onClick = {
                             engine = LlamaServerEntity.ENGINE_OLLAMA
+                            if (initialServer?.isOllamaEngine() != true) {
+                                ollamaModelName = ""
+                                availableOllamaModels = emptyList()
+                            }
                             supportsVision = if (initialServer?.isOllamaEngine() == true) {
                                 initialServer.supportsVision
                             } else {
@@ -378,9 +492,49 @@ private fun LlamaServerDialog(
                         },
                         label = { Text(stringResource(R.string.llama_engine_ollama)) }
                     )
+                    FilterChip(
+                        selected = engine == LlamaServerEntity.ENGINE_LLAMA_SWAP,
+                        onClick = {
+                            engine = LlamaServerEntity.ENGINE_LLAMA_SWAP
+                            if (initialServer?.isLlamaSwapEngine() != true) {
+                                ollamaModelName = ""
+                                availableOllamaModels = emptyList()
+                            }
+                            if (port == "8080") {
+                                port = "9292"
+                            }
+                            supportsVision = if (initialServer?.isLlamaSwapEngine() == true) {
+                                initialServer.supportsVision
+                            } else {
+                                false
+                            }
+                            supportsAudio = if (initialServer?.isLlamaSwapEngine() == true) {
+                                initialServer.supportsAudio
+                            } else {
+                                false
+                            }
+                            statusMessage = null
+                        },
+                        label = { Text(stringResource(R.string.llama_engine_llama_swap)) }
+                    )
+                    FilterChip(
+                        selected = engine == LlamaServerEntity.ENGINE_LITERT_LM,
+                        onClick = {
+                            engine = LlamaServerEntity.ENGINE_LITERT_LM
+                            host = "local"
+                            port = "0"
+                            supportsVision = selectedLiteRtModel?.supportsLiteRtVision() == true
+                            supportsAudio = selectedLiteRtModel?.supportsLiteRtAudio() == true
+                            if (liteRtModelId == null) {
+                                liteRtModelId = liteRtModels.firstOrNull()?.id
+                            }
+                            statusMessage = null
+                        },
+                        label = { Text(stringResource(R.string.llama_engine_litert)) }
+                    )
                 }
 
-                if (engine == LlamaServerEntity.ENGINE_LLAMA_SERVER) {
+                if (engine == LlamaServerEntity.ENGINE_LLAMA_SERVER || engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -411,6 +565,151 @@ private fun LlamaServerDialog(
                     }
                     Text(
                         text = stringResource(R.string.llama_audio_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
+                        Text(
+                            text = stringResource(R.string.llama_swap_model_label),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = ollamaModelName,
+                                onValueChange = {
+                                    ollamaModelName = it
+                                    statusMessage = null
+                                },
+                                label = { Text(stringResource(R.string.llama_swap_model_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                                trailingIcon = {
+                                    IconButton(
+                                        onClick = { showOllamaModelMenu = !showOllamaModelMenu }
+                                    ) {
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            contentDescription = stringResource(R.string.llama_swap_available_models)
+                                        )
+                                    }
+                                }
+                            )
+                            androidx.compose.material3.DropdownMenu(
+                                expanded = showOllamaModelMenu && mergedOllamaModels.isNotEmpty(),
+                                onDismissRequest = { showOllamaModelMenu = false }
+                            ) {
+                                mergedOllamaModels.forEach { modelName ->
+                                    androidx.compose.material3.DropdownMenuItem(
+                                        text = { Text(modelName) },
+                                        onClick = {
+                                            ollamaModelName = modelName
+                                            showOllamaModelMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = { refreshLlamaSwapModels() },
+                            enabled = !isLoadingOllamaModels && host.isNotBlank(),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.ollama_refresh_models))
+                        }
+                        if (isLoadingOllamaModels) {
+                            Text(
+                                text = stringResource(R.string.llama_loading),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else if (mergedOllamaModels.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.llama_swap_no_models_loaded),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                } else if (engine == LlamaServerEntity.ENGINE_LITERT_LM) {
+                    Text(
+                        text = stringResource(R.string.litert_models_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = selectedLiteRtModel?.displayName ?: stringResource(R.string.litert_models_empty),
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(stringResource(R.string.litert_models_display_name)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            trailingIcon = {
+                                IconButton(
+                                    onClick = { showLiteRtModelMenu = !showLiteRtModelMenu },
+                                    enabled = liteRtModels.isNotEmpty()
+                                ) {
+                                    Icon(
+                                        Icons.Default.KeyboardArrowDown,
+                                        contentDescription = stringResource(R.string.litert_models_title)
+                                    )
+                                }
+                            }
+                        )
+                        androidx.compose.material3.DropdownMenu(
+                            expanded = showLiteRtModelMenu && liteRtModels.isNotEmpty(),
+                            onDismissRequest = { showLiteRtModelMenu = false }
+                        ) {
+                            liteRtModels.forEach { model ->
+                                androidx.compose.material3.DropdownMenuItem(
+                                    text = { Text(model.displayName) },
+                                    onClick = {
+                                        liteRtModelId = model.id
+                                        if (name.isBlank()) name = model.displayName
+                                        showLiteRtModelMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    if (liteRtModels.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.litert_models_empty),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.litert_backend_label),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        listOf(
+                            LITERT_BACKEND_AUTO to stringResource(R.string.general_acceleration_mode_auto),
+                            LITERT_BACKEND_CPU to stringResource(R.string.general_acceleration_mode_cpu),
+                            LITERT_BACKEND_GPU to stringResource(R.string.litert_backend_gpu)
+                        ).forEach { (backend, label) ->
+                            FilterChip(
+                                selected = liteRtBackend == backend,
+                                onClick = { liteRtBackend = backend },
+                                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                            )
+                        }
+                    }
+                    Text(
+                        text = stringResource(R.string.litert_backend_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = stringResource(R.string.litert_gpu_isolation_required_desc),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -521,6 +820,33 @@ private fun LlamaServerDialog(
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
+                if (directAudioInputAvailable) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.llama_use_whisper_for_audio),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Switch(
+                            checked = preferWhisperAudioTranscription,
+                            onCheckedChange = { preferWhisperAudioTranscription = it }
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.llama_use_whisper_for_audio_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.llama_whisper_required_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Box(modifier = Modifier.fillMaxWidth()) {
                     OutlinedTextField(
                         value = whisperModelPath.ifBlank { stringResource(R.string.llama_whisper_model_auto) },
@@ -603,6 +929,13 @@ private fun LlamaServerDialog(
                     }
                 }
 
+                if (engine == LlamaServerEntity.ENGINE_LITERT_LM) {
+                    Text(
+                        text = stringResource(R.string.litert_tools_unavailable_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 NativeServerToolDefaultsSection(
                     toolsEnabled = defaultToolsEnabled,
                     onToolsEnabledChange = { defaultToolsEnabled = it },
@@ -614,6 +947,12 @@ private fun LlamaServerDialog(
                     onKiwixServerUrlChange = { defaultKiwixServerUrl = it },
                     fetchUrlEnabled = defaultFetchUrlEnabled,
                     onFetchUrlEnabledChange = { defaultFetchUrlEnabled = it },
+                    deepResearchEnabled = defaultDeepResearchEnabled,
+                    onDeepResearchEnabledChange = { defaultDeepResearchEnabled = it },
+                    deepResearchImportIntoSelectedKbEnabled = defaultDeepResearchImportIntoSelectedKbEnabled,
+                    onDeepResearchImportIntoSelectedKbEnabledChange = { defaultDeepResearchImportIntoSelectedKbEnabled = it },
+                    deepResearchSourceLimit = defaultDeepResearchSourceLimit,
+                    onDeepResearchSourceLimitChange = { defaultDeepResearchSourceLimit = it },
                     dateTimeEnabled = defaultDateTimeEnabled,
                     onDateTimeEnabledChange = { defaultDateTimeEnabled = it },
                     calculatorEnabled = defaultCalculatorEnabled,
@@ -622,6 +961,15 @@ private fun LlamaServerDialog(
                     onNoteToolsEnabledChange = { defaultNoteToolsEnabled = it },
                     todoToolsEnabled = defaultTodoToolsEnabled,
                     onTodoToolsEnabledChange = { defaultTodoToolsEnabled = it },
+                    knowledgeBases = knowledgeBases,
+                    knowledgeBaseEnabled = defaultKnowledgeBaseEnabled,
+                    onKnowledgeBaseEnabledChange = { defaultKnowledgeBaseEnabled = it },
+                    knowledgeBaseAutoContextEnabled = defaultKnowledgeBaseAutoContextEnabled,
+                    onKnowledgeBaseAutoContextEnabledChange = { defaultKnowledgeBaseAutoContextEnabled = it },
+                    selectedKnowledgeBaseIds = defaultSelectedKnowledgeBaseIds,
+                    onSelectedKnowledgeBaseIdsChange = { defaultSelectedKnowledgeBaseIds = it },
+                    knowledgeBaseMaxResults = defaultKnowledgeBaseMaxResults,
+                    onKnowledgeBaseMaxResultsChange = { defaultKnowledgeBaseMaxResults = it },
                     calendarToolsEnabled = defaultCalendarToolsEnabled,
                     onCalendarToolsEnabledChange = { defaultCalendarToolsEnabled = it },
                     alarmToolsEnabled = defaultAlarmToolsEnabled,
@@ -630,6 +978,8 @@ private fun LlamaServerDialog(
                     onImageGenerationEnabledChange = { defaultImageGenerationEnabled = it },
                     imageIterationEnabled = defaultImageIterationEnabled,
                     onImageIterationEnabledChange = { defaultImageIterationEnabled = it },
+                    backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
+                    onBackgroundRemovalEnabledChange = { defaultBackgroundRemovalEnabled = it },
                     maxToolRounds = defaultMaxToolRounds,
                     onMaxToolRoundsChange = { defaultMaxToolRounds = it }
                 )
@@ -647,37 +997,52 @@ private fun LlamaServerDialog(
             TextButton(
                 onClick = {
                     if (!canSave) return@TextButton
+                    val isLiteRtEngine = engine == LlamaServerEntity.ENGINE_LITERT_LM
                     onSave(
                         (initialServer ?: LlamaServerEntity(
                             name = name.trim(),
-                            host = host.trim(),
-                            port = portInt
+                            host = if (isLiteRtEngine) "local" else host.trim(),
+                            port = if (isLiteRtEngine) 0 else portInt
                         )).copy(
                             name = name.trim(),
-                            host = host.trim(),
-                            port = portInt,
+                            host = if (isLiteRtEngine) "local" else host.trim(),
+                            port = if (isLiteRtEngine) 0 else portInt,
                             engine = engine,
-                            supportsVision = supportsVision,
-                            supportsAudio = supportsAudio,
-                            modelName = ollamaModelName.trim().ifBlank {
-                                if (engine == LlamaServerEntity.ENGINE_OLLAMA) null else initialServer?.modelName
+                            supportsVision = if (isLiteRtEngine) selectedLiteRtModel?.supportsLiteRtVision() == true else supportsVision,
+                            supportsAudio = if (isLiteRtEngine) selectedLiteRtModel?.supportsLiteRtAudio() == true else supportsAudio,
+                            modelName = when (engine) {
+                                LlamaServerEntity.ENGINE_OLLAMA,
+                                LlamaServerEntity.ENGINE_LLAMA_SWAP -> ollamaModelName.trim().ifBlank { null }
+                                LlamaServerEntity.ENGINE_LITERT_LM -> selectedLiteRtModel?.displayName
+                                else -> initialServer?.modelName
                             },
+                            liteRtModelId = if (isLiteRtEngine) selectedLiteRtModel?.id else null,
+                            liteRtBackend = if (isLiteRtEngine) normalizeLiteRtBackend(liteRtBackend) else LITERT_BACKEND_AUTO,
                             whisperModelPath = whisperModelPath.ifBlank { null },
                             whisperLanguage = whisperLanguage.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE },
+                            preferWhisperAudioTranscription = preferWhisperAudioTranscription && directAudioInputAvailable,
                             defaultApiParams = buildServerDefaultToolApiParams(
                                 toolsEnabled = defaultToolsEnabled,
                                 webSearchEnabled = defaultWebSearchEnabled,
                                 kiwixSearchEnabled = defaultKiwixSearchEnabled,
                                 kiwixServerUrl = defaultKiwixServerUrl,
                                 fetchUrlEnabled = defaultFetchUrlEnabled,
+                                deepResearchEnabled = defaultDeepResearchEnabled,
+                                deepResearchImportIntoSelectedKbEnabled = defaultDeepResearchImportIntoSelectedKbEnabled,
+                                deepResearchSourceLimit = defaultDeepResearchSourceLimit,
                                 dateTimeEnabled = defaultDateTimeEnabled,
                                 calculatorEnabled = defaultCalculatorEnabled,
                                 noteToolsEnabled = defaultNoteToolsEnabled,
                                 todoToolsEnabled = defaultTodoToolsEnabled,
+                                knowledgeBaseEnabled = defaultKnowledgeBaseEnabled,
+                                knowledgeBaseAutoContextEnabled = defaultKnowledgeBaseAutoContextEnabled,
+                                selectedKnowledgeBaseIds = defaultSelectedKnowledgeBaseIds,
+                                knowledgeBaseMaxResults = defaultKnowledgeBaseMaxResults,
                                 calendarToolsEnabled = defaultCalendarToolsEnabled,
                                 alarmToolsEnabled = defaultAlarmToolsEnabled,
                                 imageGenerationEnabled = defaultImageGenerationEnabled,
                                 imageIterationEnabled = defaultImageIterationEnabled,
+                                backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
                                 maxToolRounds = defaultMaxToolRounds
                             )
                         )
@@ -708,6 +1073,12 @@ private fun NativeServerToolDefaultsSection(
     onKiwixServerUrlChange: (String) -> Unit,
     fetchUrlEnabled: Boolean,
     onFetchUrlEnabledChange: (Boolean) -> Unit,
+    deepResearchEnabled: Boolean,
+    onDeepResearchEnabledChange: (Boolean) -> Unit,
+    deepResearchImportIntoSelectedKbEnabled: Boolean,
+    onDeepResearchImportIntoSelectedKbEnabledChange: (Boolean) -> Unit,
+    deepResearchSourceLimit: Int,
+    onDeepResearchSourceLimitChange: (Int) -> Unit,
     dateTimeEnabled: Boolean,
     onDateTimeEnabledChange: (Boolean) -> Unit,
     calculatorEnabled: Boolean,
@@ -716,6 +1087,15 @@ private fun NativeServerToolDefaultsSection(
     onNoteToolsEnabledChange: (Boolean) -> Unit,
     todoToolsEnabled: Boolean,
     onTodoToolsEnabledChange: (Boolean) -> Unit,
+    knowledgeBases: List<KnowledgeBaseEntity>,
+    knowledgeBaseEnabled: Boolean,
+    onKnowledgeBaseEnabledChange: (Boolean) -> Unit,
+    knowledgeBaseAutoContextEnabled: Boolean,
+    onKnowledgeBaseAutoContextEnabledChange: (Boolean) -> Unit,
+    selectedKnowledgeBaseIds: List<Long>,
+    onSelectedKnowledgeBaseIdsChange: (List<Long>) -> Unit,
+    knowledgeBaseMaxResults: Int,
+    onKnowledgeBaseMaxResultsChange: (Int) -> Unit,
     calendarToolsEnabled: Boolean,
     onCalendarToolsEnabledChange: (Boolean) -> Unit,
     alarmToolsEnabled: Boolean,
@@ -724,6 +1104,8 @@ private fun NativeServerToolDefaultsSection(
     onImageGenerationEnabledChange: (Boolean) -> Unit,
     imageIterationEnabled: Boolean,
     onImageIterationEnabledChange: (Boolean) -> Unit,
+    backgroundRemovalEnabled: Boolean,
+    onBackgroundRemovalEnabledChange: (Boolean) -> Unit,
     maxToolRounds: Int,
     onMaxToolRoundsChange: (Int) -> Unit
 ) {
@@ -777,6 +1159,26 @@ private fun NativeServerToolDefaultsSection(
                     onCheckedChange = onFetchUrlEnabledChange
                 )
                 ServerToolDefaultSwitchRow(
+                    title = stringResource(R.string.llama_tool_deep_research),
+                    checked = deepResearchEnabled,
+                    onCheckedChange = onDeepResearchEnabledChange
+                )
+                if (deepResearchEnabled) {
+                    ServerToolDefaultSwitchRow(
+                        title = stringResource(R.string.llama_tool_deep_research_import_selected_kb),
+                        checked = deepResearchImportIntoSelectedKbEnabled,
+                        onCheckedChange = onDeepResearchImportIntoSelectedKbEnabledChange
+                    )
+                    DraftIntTextField(
+                        value = deepResearchSourceLimit,
+                        onValueChange = onDeepResearchSourceLimitChange,
+                        valueRange = NativeChatToolConfig.MIN_DEEP_RESEARCH_SOURCE_LIMIT..Int.MAX_VALUE,
+                        label = { Text(stringResource(R.string.llama_tool_deep_research_source_limit)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                ServerToolDefaultSwitchRow(
                     title = stringResource(R.string.llama_tool_datetime),
                     checked = dateTimeEnabled,
                     onCheckedChange = onDateTimeEnabledChange
@@ -796,6 +1198,80 @@ private fun NativeServerToolDefaultsSection(
                     checked = todoToolsEnabled,
                     onCheckedChange = onTodoToolsEnabledChange
                 )
+                ServerToolDefaultSwitchRow(
+                    title = stringResource(R.string.llama_tool_knowledge_bases),
+                    checked = knowledgeBaseEnabled,
+                    onCheckedChange = onKnowledgeBaseEnabledChange
+                )
+                if (knowledgeBaseEnabled) {
+                    ServerToolDefaultSwitchRow(
+                        title = stringResource(R.string.llama_tool_kb_auto_context),
+                        checked = knowledgeBaseAutoContextEnabled,
+                        onCheckedChange = onKnowledgeBaseAutoContextEnabledChange
+                    )
+                    if (knowledgeBases.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.kb_no_bases_yet),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 160.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            knowledgeBases.forEach { kb ->
+                                val selected = kb.id in selectedKnowledgeBaseIds
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable {
+                                            onSelectedKnowledgeBaseIdsChange(
+                                                if (selected) {
+                                                    selectedKnowledgeBaseIds - kb.id
+                                                } else {
+                                                    (selectedKnowledgeBaseIds + kb.id).distinct()
+                                                }
+                                            )
+                                        }
+                                        .padding(vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = selected,
+                                        onCheckedChange = { checked ->
+                                            onSelectedKnowledgeBaseIdsChange(
+                                                if (checked) {
+                                                    (selectedKnowledgeBaseIds + kb.id).distinct()
+                                                } else {
+                                                    selectedKnowledgeBaseIds - kb.id
+                                                }
+                                            )
+                                        }
+                                    )
+                                    Text(
+                                        text = kb.name,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    DraftIntTextField(
+                        value = knowledgeBaseMaxResults,
+                        onValueChange = onKnowledgeBaseMaxResultsChange,
+                        valueRange = NativeChatToolConfig.MIN_KB_RESULTS..NativeChatToolConfig.MAX_KB_RESULTS,
+                        label = { Text(stringResource(R.string.llama_tool_kb_max_results)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 ServerToolDefaultSwitchRow(
                     title = stringResource(R.string.llama_tool_calendar),
                     checked = calendarToolsEnabled,
@@ -818,10 +1294,15 @@ private fun NativeServerToolDefaultsSection(
                         onCheckedChange = onImageIterationEnabledChange
                     )
                 }
+                ServerToolDefaultSwitchRow(
+                    title = stringResource(R.string.llama_tool_bgr),
+                    checked = backgroundRemovalEnabled,
+                    onCheckedChange = onBackgroundRemovalEnabledChange
+                )
                 DraftIntTextField(
                     value = maxToolRounds,
                     onValueChange = onMaxToolRoundsChange,
-                    valueRange = 1..10,
+                    valueRange = NativeChatToolConfig.MIN_TOOL_ROUNDS..NativeChatToolConfig.MAX_TOOL_ROUNDS,
                     label = { Text(stringResource(R.string.llama_tool_max_rounds)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
@@ -869,14 +1350,22 @@ private fun buildServerDefaultToolApiParams(
     kiwixSearchEnabled: Boolean,
     kiwixServerUrl: String,
     fetchUrlEnabled: Boolean,
+    deepResearchEnabled: Boolean,
+    deepResearchImportIntoSelectedKbEnabled: Boolean,
+    deepResearchSourceLimit: Int,
     dateTimeEnabled: Boolean,
     calculatorEnabled: Boolean,
     noteToolsEnabled: Boolean,
     todoToolsEnabled: Boolean,
+    knowledgeBaseEnabled: Boolean,
+    knowledgeBaseAutoContextEnabled: Boolean,
+    selectedKnowledgeBaseIds: List<Long>,
+    knowledgeBaseMaxResults: Int,
     calendarToolsEnabled: Boolean,
     alarmToolsEnabled: Boolean,
     imageGenerationEnabled: Boolean,
     imageIterationEnabled: Boolean,
+    backgroundRemovalEnabled: Boolean,
     maxToolRounds: Int
 ): String {
     return Gson().toJson(
@@ -886,14 +1375,22 @@ private fun buildServerDefaultToolApiParams(
             kiwixSearchEnabled = kiwixSearchEnabled,
             kiwixServerUrl = kiwixServerUrl.ifBlank { NativeChatToolConfig.DEFAULT_KIWIX_URL },
             fetchUrlEnabled = fetchUrlEnabled,
+            deepResearchEnabled = deepResearchEnabled,
+            deepResearchImportIntoSelectedKbEnabled = deepResearchImportIntoSelectedKbEnabled,
+            deepResearchSourceLimit = deepResearchSourceLimit,
             dateTimeEnabled = dateTimeEnabled,
             calculatorEnabled = calculatorEnabled,
             noteToolsEnabled = noteToolsEnabled,
             todoToolsEnabled = todoToolsEnabled,
+            knowledgeBaseEnabled = knowledgeBaseEnabled,
+            knowledgeBaseAutoContextEnabled = knowledgeBaseAutoContextEnabled,
+            selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
+            knowledgeBaseMaxResults = knowledgeBaseMaxResults,
             calendarToolsEnabled = calendarToolsEnabled,
             alarmToolsEnabled = alarmToolsEnabled,
             imageGenerationEnabled = imageGenerationEnabled,
             imageIterationEnabled = imageIterationEnabled,
+            backgroundRemovalEnabled = backgroundRemovalEnabled,
             maxToolRounds = maxToolRounds
         ).toParamMap()
     )
@@ -993,10 +1490,11 @@ fun LlamaServerCard(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 LlamaServerBadge(
-                    label = if (server.isOllamaEngine()) {
-                        stringResource(R.string.llama_engine_ollama)
-                    } else {
-                        stringResource(R.string.llama_engine_llama_server)
+                    label = when {
+                        server.isOllamaEngine() -> stringResource(R.string.llama_engine_ollama)
+                        server.isLlamaSwapEngine() -> stringResource(R.string.llama_engine_llama_swap)
+                        server.isLiteRtEngine() -> stringResource(R.string.llama_engine_litert)
+                        else -> stringResource(R.string.llama_engine_llama_server)
                     },
                     containerColor = MaterialTheme.colorScheme.primaryContainer,
                     contentColor = MaterialTheme.colorScheme.onPrimaryContainer
@@ -1015,14 +1513,14 @@ fun LlamaServerCard(
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
-                server.whisperModelPath?.takeIf { it.isNotBlank() }?.let {
+                if (server.preferWhisperAudioTranscription || !server.whisperModelPath.isNullOrBlank()) {
                     LlamaServerBadge(
                         label = stringResource(R.string.llama_badge_whisper),
                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                if (parseServerDefaultToolConfig(server.defaultApiParams).toolsEnabled) {
+                if (!server.isLiteRtEngine() && parseServerDefaultToolConfig(server.defaultApiParams).toolsEnabled) {
                     LlamaServerBadge(
                         label = stringResource(R.string.llama_badge_default_tools),
                         containerColor = MaterialTheme.colorScheme.tertiaryContainer,

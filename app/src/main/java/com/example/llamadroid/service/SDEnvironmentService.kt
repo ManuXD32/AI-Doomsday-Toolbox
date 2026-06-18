@@ -257,10 +257,10 @@ class SDEnvironmentService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "SD Environment",
+                getString(R.string.sd_environment_channel_name),
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Stable Diffusion environment management"
+                description = getString(R.string.sd_environment_channel_desc)
             }
             val manager = getSystemService(NotificationManager::class.java)
             manager.createNotificationChannel(channel)
@@ -269,7 +269,7 @@ class SDEnvironmentService : Service() {
     
     private fun createNotification(text: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("LlamaDroid")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_LOW)

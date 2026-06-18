@@ -279,11 +279,11 @@ class DistributedService : Service() {
         val masterDraftModel: StateFlow<ModelEntity?> = _masterDraftModel.asStateFlow()
         fun setMasterDraftModel(model: ModelEntity?) { _masterDraftModel.value = model }
 
-        private val _masterDraftMax = MutableStateFlow<Int>(16)
+        private val _masterDraftMax = MutableStateFlow<Int>(3)
         val masterDraftMax: StateFlow<Int> = _masterDraftMax.asStateFlow()
         fun setMasterDraftMax(max: Int) { _masterDraftMax.value = max }
 
-        private val _masterDraftMaxText = MutableStateFlow<String>("16")
+        private val _masterDraftMaxText = MutableStateFlow<String>("3")
         val masterDraftMaxText: StateFlow<String> = _masterDraftMaxText.asStateFlow()
         fun setMasterDraftMaxText(text: String) { _masterDraftMaxText.value = text }
 
@@ -295,11 +295,11 @@ class DistributedService : Service() {
         val masterDraftMinText: StateFlow<String> = _masterDraftMinText.asStateFlow()
         fun setMasterDraftMinText(text: String) { _masterDraftMinText.value = text }
 
-        private val _masterDraftPMin = MutableStateFlow<Float>(0.75f)
+        private val _masterDraftPMin = MutableStateFlow<Float>(0.0f)
         val masterDraftPMin: StateFlow<Float> = _masterDraftPMin.asStateFlow()
         fun setMasterDraftPMin(pmin: Float) { _masterDraftPMin.value = pmin }
 
-        private val _masterDraftPMinText = MutableStateFlow<String>("0.75")
+        private val _masterDraftPMinText = MutableStateFlow<String>("0.00")
         val masterDraftPMinText: StateFlow<String> = _masterDraftPMinText.asStateFlow()
         fun setMasterDraftPMinText(text: String) { _masterDraftPMinText.value = text }
         
@@ -379,11 +379,11 @@ class DistributedService : Service() {
         val remoteUIDraftMin: StateFlow<String> = _remoteUIDraftMin.asStateFlow()
         fun setRemoteUIDraftMin(min: String) { _remoteUIDraftMin.value = min }
 
-        private val _remoteUIDraftMax = MutableStateFlow<String>("16")
+        private val _remoteUIDraftMax = MutableStateFlow<String>("3")
         val remoteUIDraftMax: StateFlow<String> = _remoteUIDraftMax.asStateFlow()
         fun setRemoteUIDraftMax(max: String) { _remoteUIDraftMax.value = max }
 
-        private val _remoteUIDraftPMin = MutableStateFlow<String>("0.75")
+        private val _remoteUIDraftPMin = MutableStateFlow<String>("0.00")
         val remoteUIDraftPMin: StateFlow<String> = _remoteUIDraftPMin.asStateFlow()
         fun setRemoteUIDraftPMin(pmin: String) { _remoteUIDraftPMin.value = pmin }
         

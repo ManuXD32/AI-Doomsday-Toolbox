@@ -61,6 +61,8 @@ class LlamaScheduledTaskService : Service() {
             organizerChanged = { OrganizerCalendarWidgetProvider.refreshAll(applicationContext) },
             notesChanged = { NoteDisplayWidgetProvider.refreshAll(applicationContext) },
             imageGenerator = NativeChatOnnxImageGenerator(applicationContext, database),
+            backgroundRemover = NativeChatOnnxBackgroundRemover(applicationContext, database),
+            knowledgeBaseRepository = com.example.llamadroid.data.repository.KnowledgeBaseRepository(applicationContext, database),
             pdfTextExtractor = { pdfBytes, maxChars ->
                 com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
                 extractNativePdfTextFromBytes(pdfBytes, maxChars)
@@ -339,7 +341,13 @@ class LlamaScheduledTaskService : Service() {
             putExtra(LlamaService.EXTRA_HOST, localHostForServer(server.host))
             putExtra(LlamaService.EXTRA_PORT, server.port)
             if (settingsRepo.speculativeEnabled.value) {
-                putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
+                val speculativeMode = settingsRepo.speculativeMode.value
+                val shouldPassDraftModel =
+                    speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE ||
+                        (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
+                if (shouldPassDraftModel) {
+                    putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
+                }
                 putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
                 putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
                 putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)

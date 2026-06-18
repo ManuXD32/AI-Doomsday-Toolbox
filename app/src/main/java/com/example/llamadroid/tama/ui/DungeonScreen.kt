@@ -49,7 +49,6 @@ fun DungeonScreen(
     database: TamaDatabase,
     settingsRepository: SettingsRepository
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var completedDungeonCount by remember { mutableStateOf(0) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -190,9 +189,8 @@ fun DungeonCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Emoji
-                Text(
-                    text = dungeon.emoji,
+                TamaUiIcon(
+                    emoji = dungeon.emoji,
                     fontSize = 32.sp,
                     modifier = Modifier.padding(end = 16.dp)
                 )

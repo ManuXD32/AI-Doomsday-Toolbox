@@ -45,7 +45,7 @@ object PDFSummaryLogic {
         Regex("""^\s*(sampling time =|samplers time =|prompt eval time =|eval time =|load time =|total time =|common_perf_print:).*$""", RegexOption.IGNORE_CASE),
         Regex("""^\s*\d+(\.\d+)?\s*ms per token.*$""", RegexOption.IGNORE_CASE),
         Regex("""^\s*\d+(\.\d+)?\s*tokens per second.*$""", RegexOption.IGNORE_CASE),
-        Regex("""^\s*(interactive mode|press ctrl|press return|new llama-cli|more info:).*$""", RegexOption.IGNORE_CASE),
+        Regex("""^\s*(interactive mode|press ctrl|press return|more info:).*$""", RegexOption.IGNORE_CASE),
         Regex("""^\s*(n_ctx|n_batch|n_ubatch|n_predict|n_keep|n_seq|n_layer|n_head|n_embd|n_ff|n_vocab|n_expert|n_rot|n_swa|n_gqa|n_merges|n_group|flash_attn|kv_|cache|warmup).*$""", RegexOption.IGNORE_CASE),
         Regex("""^\s*(top_k|top_p|min_p|typical|temp|mirostat|frequency_penalty|presence_penalty|repeat_last_n|repeat_penalty|dry_).*$""", RegexOption.IGNORE_CASE),
         Regex("""^\s*(model type|model params|vocab type|arch|quant|graph nodes|graph splits|file format|file type|file size).*$""", RegexOption.IGNORE_CASE),

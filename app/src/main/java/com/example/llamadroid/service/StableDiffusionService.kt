@@ -15,7 +15,9 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.getParcelableExtraCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -23,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -512,17 +515,48 @@ class StableDiffusionService : Service() {
     }
 
     private suspend fun runGeneration(config: SDConfig, modeStateHolder: SDModeStateHolder): String = withContext(Dispatchers.IO) {
+        SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
         val sdBinary = binaryRepo.getSdBinary()
 
         if (sdBinary == null || !sdBinary.exists()) {
             throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
         }
+        runCatching {
+            runGenerationWithBinary(config, modeStateHolder, binaryRepo, sdBinary)
+        }.getOrElse { error ->
+            val cpuBinary = binaryRepo.getCpuSdBinary()
+            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
+                cpuBinary != null &&
+                cpuBinary.exists() &&
+                cpuBinary.absolutePath != sdBinary.absolutePath
+            ) {
+                DebugLog.log("[StableDiffusionService] Accelerator SD binary failed, retrying CPU fallback: ${error.message}")
+                runGenerationWithBinary(config, modeStateHolder, binaryRepo, cpuBinary)
+            } else {
+                throw error
+            }
+        }
+        }
+    }
 
-        val binaryCapabilities = probeSdBinaryCapabilities(sdBinary, binaryRepo)
+    private suspend fun runGenerationWithBinary(
+        config: SDConfig,
+        modeStateHolder: SDModeStateHolder,
+        binaryRepo: BinaryRepository,
+        sdBinary: File
+    ): String = coroutineScope {
+        DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
+
+        val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
         try {
-            args.addAll(buildSdCommandArgs(config, binaryCapabilities))
+            args.addAll(
+                buildSdCommandArgs(
+                    config = config,
+                    binaryCapabilities = binaryCapabilities
+                )
+            )
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(
                 getString(
@@ -538,7 +572,6 @@ class StableDiffusionService : Service() {
                 )
             )
         }
-
         DebugLog.log("[StableDiffusionService] Running command: ${args.joinToString(" ")}")
         if (config.mode == SDMode.UPSCALE) {
             recordModeBreadcrumb(
@@ -554,7 +587,7 @@ class StableDiffusionService : Service() {
             .directory(sdBinary.parentFile)
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
-        setupLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
+        setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
         val process = pb.start()
@@ -615,6 +648,11 @@ class StableDiffusionService : Service() {
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Process exited with code $exitCode")
         if (exitCode != 0) {
+            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+                val detail = "Stable Diffusion accelerator ${sdBinary.name} failed with exit code $exitCode."
+                DebugLog.log("[StableDiffusionService] $detail")
+                DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
+            }
             throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
         }
 
@@ -625,14 +663,40 @@ class StableDiffusionService : Service() {
         config: SDUpscaleConfig,
         modeStateHolder: SDModeStateHolder
     ): String = withContext(Dispatchers.IO) {
+        SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
         val sdBinary = binaryRepo.getSdBinary()
 
         if (sdBinary == null || !sdBinary.exists()) {
             throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
         }
+        runCatching {
+            runUpscaleGenerationWithBinary(config, modeStateHolder, binaryRepo, sdBinary)
+        }.getOrElse { error ->
+            val cpuBinary = binaryRepo.getCpuSdBinary()
+            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
+                cpuBinary != null &&
+                cpuBinary.exists() &&
+                cpuBinary.absolutePath != sdBinary.absolutePath
+            ) {
+                DebugLog.log("[StableDiffusionService] Accelerator SD upscale binary failed, retrying CPU fallback: ${error.message}")
+                runUpscaleGenerationWithBinary(config, modeStateHolder, binaryRepo, cpuBinary)
+            } else {
+                throw error
+            }
+        }
+        }
+    }
 
-        val binaryCapabilities = probeSdBinaryCapabilities(sdBinary, binaryRepo)
+    private suspend fun runUpscaleGenerationWithBinary(
+        config: SDUpscaleConfig,
+        modeStateHolder: SDModeStateHolder,
+        binaryRepo: BinaryRepository,
+        sdBinary: File
+    ): String = coroutineScope {
+        DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
+
+        val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
         try {
             args.addAll(buildSdUpscaleCommandArgs(config, binaryCapabilities))
@@ -658,7 +722,7 @@ class StableDiffusionService : Service() {
             .directory(sdBinary.parentFile)
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
-        setupLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
+        setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
         val process = pb.start()
@@ -716,6 +780,11 @@ class StableDiffusionService : Service() {
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Upscale process exited with code $exitCode")
         if (exitCode != 0) {
+            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+                val detail = "Stable Diffusion accelerator ${sdBinary.name} failed during upscale with exit code $exitCode."
+                DebugLog.log("[StableDiffusionService] $detail")
+                DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
+            }
             throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
         }
 
@@ -929,6 +998,7 @@ class StableDiffusionService : Service() {
         stopStallMonitorIfIdle()
         if (!hasActiveWork()) {
             modeDiagnostics.clear()
+            DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, null)
         }
     }
 

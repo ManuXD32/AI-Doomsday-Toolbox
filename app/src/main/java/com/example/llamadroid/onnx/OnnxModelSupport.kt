@@ -7,6 +7,8 @@ import android.os.Parcelable
 import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
+import com.example.llamadroid.data.db.ONNX_CAPABILITY_TTS
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
 import com.example.llamadroid.tama.data.TamaPicGenDefaults
@@ -32,10 +34,21 @@ import java.util.Locale
 import kotlin.math.abs
 
 const val ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION = "sdai_local_diffusion"
+const val ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS = "supertonic_tts"
+const val ONNX_PIPELINE_FAMILY_BACKGROUND_REMOVAL = "background_removal"
 const val ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE = "sdai_catalog_bundle"
+const val ONNX_ASSET_KIND_SUPERTONIC_CATALOG_BUNDLE = "supertonic_catalog_bundle"
+const val ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE = "background_removal_file"
 const val ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE = "custom_import_bundle"
 const val ONNX_INSTALL_KIND_FILE = "file"
 const val ONNX_INSTALL_KIND_ARCHIVE_BUNDLE = "archive_bundle"
+const val ONNX_INSTALL_KIND_HF_TREE_BUNDLE = "hf_tree_bundle"
+const val ONNX_IMAGE_GEN_DEFAULT_STRENGTH = 0.35f
+
+data class OnnxCatalogFile(
+    val relativePath: String,
+    val sizeBytes: Long
+)
 
 enum class OnnxRuntimeBackend {
     CPU,
@@ -78,10 +91,22 @@ enum class OnnxCatalogProvider(
     MANUXD32(
         id = "manuxd32",
         repoOwner = "ManuXD32/Local-Diffusion-Models-SDAI-ONXX"
+    ),
+    SUPERTONIC(
+        id = "supertonic",
+        repoOwner = ""
+    ),
+    BACKGROUND_REMOVAL(
+        id = "background_removal",
+        repoOwner = ""
     );
 
     fun releaseDownloadUrl(releaseTag: String, assetName: String): String =
-        "https://github.com/$repoOwner/releases/download/$releaseTag/$assetName"
+        if (this == SUPERTONIC) {
+            "https://huggingface.co/Supertone/supertonic-3/tree/main"
+        } else {
+            "https://github.com/$repoOwner/releases/download/$releaseTag/$assetName"
+        }
 
     companion object {
         fun fromId(value: String?): OnnxCatalogProvider? =
@@ -123,7 +148,13 @@ data class OnnxCatalogEntry(
     val releaseTag: String,
     val sourceLabel: String,
     val summary: String,
-    val archiveSizeBytes: Long
+    val archiveSizeBytes: Long,
+    val modelType: ModelType = ModelType.ONNX_IMAGE_GEN,
+    val capabilities: String? = buildOnnxCapabilities(ONNX_CAPABILITY_TXT2IMG),
+    val assetKind: String = ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE,
+    val pipelineFamily: String = ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION,
+    val directDownloadUrl: String? = null,
+    val gated: Boolean = false
 ) {
     val stableId: String
         get() = buildOnnxCatalogStableId(provider, bundleId)
@@ -132,7 +163,7 @@ data class OnnxCatalogEntry(
         get() = buildOnnxCatalogRepoId(provider, bundleId)
 
     val downloadUrl: String
-        get() = provider.releaseDownloadUrl(releaseTag, assetName)
+        get() = directDownloadUrl ?: provider.releaseDownloadUrl(releaseTag, assetName)
 }
 
 data class OnnxBundleValidationResult(
@@ -150,6 +181,18 @@ data class OnnxBundlePaths(
     val vaeEncoderModel: File? = null,
     val tokenizerVocab: File,
     val tokenizerMerges: File
+)
+
+data class OnnxTtsBundlePaths(
+    val root: File,
+    val onnxDir: File,
+    val durationPredictor: File,
+    val textEncoder: File,
+    val vectorEstimator: File,
+    val vocoder: File,
+    val config: File,
+    val unicodeIndexer: File,
+    val voiceStylesDir: File
 )
 
 private val onnxMetadataJson = Json {
@@ -200,6 +243,30 @@ data class OnnxGeneratedImageMetadata(
 }
 
 object OnnxCatalog {
+    private const val SUPERTONIC_REPO_ID = "Supertone/supertonic-3"
+
+    val supertonicRequiredFiles: List<OnnxCatalogFile> = listOf(
+        OnnxCatalogFile("onnx/duration_predictor.onnx", 3_700_000L),
+        OnnxCatalogFile("onnx/text_encoder.onnx", 36_400_000L),
+        OnnxCatalogFile("onnx/tts.json", 8_250L),
+        OnnxCatalogFile("onnx/unicode_indexer.json", 278_000L),
+        OnnxCatalogFile("onnx/vector_estimator.onnx", 257_000_000L),
+        OnnxCatalogFile("onnx/vocoder.onnx", 101_000_000L),
+        OnnxCatalogFile("voice_styles/F1.json", 292_000L),
+        OnnxCatalogFile("voice_styles/F2.json", 292_000L),
+        OnnxCatalogFile("voice_styles/F3.json", 291_000L),
+        OnnxCatalogFile("voice_styles/F4.json", 292_000L),
+        OnnxCatalogFile("voice_styles/F5.json", 291_000L),
+        OnnxCatalogFile("voice_styles/M1.json", 292_000L),
+        OnnxCatalogFile("voice_styles/M2.json", 292_000L),
+        OnnxCatalogFile("voice_styles/M3.json", 290_000L),
+        OnnxCatalogFile("voice_styles/M4.json", 292_000L),
+        OnnxCatalogFile("voice_styles/M5.json", 291_000L)
+    )
+
+    fun supertonicResolveUrl(relativePath: String): String =
+        "https://huggingface.co/$SUPERTONIC_REPO_ID/resolve/main/$relativePath"
+
     private val sdaiEntries: List<OnnxCatalogEntry> = listOf(
         OnnxCatalogEntry(OnnxCatalogProvider.SDAI, "chilloutmix", "Chilloutmix", "chilloutmix.zip", "patch-14022024", "TIEMING/Chilloutmix", "Balanced photorealistic SD1.5 bundle for txt2img.", 822990569L),
         OnnxCatalogEntry(OnnxCatalogProvider.SDAI, "majicmix", "Majicmix", "majicmix.zip", "patch-14022024", "absolute_reality", "General-purpose realistic blend from the original SDAI list.", 631257048L),
@@ -263,7 +330,81 @@ object OnnxCatalog {
         OnnxCatalogEntry(OnnxCatalogProvider.MANUXD32, "universestable", "Universe Stable", "universestable.zip", "vae_encoder", "universestable", "General-use SD1.5 ORT bundle with img2img-ready VAE encoder.", 650520961L)
     )
 
-    val entries: List<OnnxCatalogEntry> = (sdaiEntries + manuEntries)
+    private val supertonicEntries: List<OnnxCatalogEntry> = listOf(
+        OnnxCatalogEntry(
+            provider = OnnxCatalogProvider.SUPERTONIC,
+            bundleId = "supertonic-3",
+            title = "Supertonic 3",
+            assetName = "onnx+voice_styles",
+            releaseTag = "main",
+            sourceLabel = SUPERTONIC_REPO_ID,
+            summary = "Multilingual ONNX text-to-speech bundle with preset voices.",
+            archiveSizeBytes = 404_000_000L,
+            modelType = ModelType.ONNX_TTS,
+            capabilities = buildOnnxCapabilities(ONNX_CAPABILITY_TTS),
+            assetKind = ONNX_ASSET_KIND_SUPERTONIC_CATALOG_BUNDLE,
+            pipelineFamily = ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS
+        )
+    )
+
+    private fun bgrEntry(
+        bundleId: String,
+        title: String,
+        repoId: String,
+        path: String,
+        summary: String,
+        sizeBytes: Long,
+        gated: Boolean = false
+    ): OnnxCatalogEntry = OnnxCatalogEntry(
+        provider = OnnxCatalogProvider.BACKGROUND_REMOVAL,
+        bundleId = bundleId,
+        title = title,
+        assetName = path,
+        releaseTag = "main",
+        sourceLabel = repoId,
+        summary = summary,
+        archiveSizeBytes = sizeBytes,
+        modelType = ModelType.ONNX_BACKGROUND_REMOVAL,
+        capabilities = buildOnnxCapabilities(ONNX_CAPABILITY_BACKGROUND_REMOVAL),
+        assetKind = ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE,
+        pipelineFamily = ONNX_PIPELINE_FAMILY_BACKGROUND_REMOVAL,
+        directDownloadUrl = "https://huggingface.co/$repoId/resolve/main/$path",
+        gated = gated
+    )
+
+    private val backgroundRemovalEntries: List<OnnxCatalogEntry> = listOf(
+        bgrEntry(
+            bundleId = "ben2_fp16",
+            title = "BEN2 FP16",
+            repoId = "onnx-community/BEN2-ONNX",
+            path = "onnx/model_fp16.onnx",
+            summary = "MIT-licensed BEN2 background-removal model optimized for ONNX Runtime.",
+            sizeBytes = 219_000_000L
+        ),
+        bgrEntry(
+            bundleId = "rmbg_2_0_full",
+            title = "RMBG 2.0 Full",
+            repoId = "briaai/RMBG-2.0",
+            path = "onnx/model.onnx",
+            summary = "BRIA RMBG 2.0 full ONNX model. Requires accepted Hugging Face access and a token.",
+            sizeBytes = 1_020_000_000L,
+            gated = true
+        ),
+        bgrEntry("rmbg_2_0_fp16", "RMBG 2.0 FP16", "briaai/RMBG-2.0", "onnx/model_fp16.onnx", "BRIA RMBG 2.0 FP16 ONNX model. Requires accepted Hugging Face access and a token.", 514_000_000L, gated = true),
+        bgrEntry("rmbg_2_0_bnb4", "RMBG 2.0 BNB4", "briaai/RMBG-2.0", "onnx/model_bnb4.onnx", "BRIA RMBG 2.0 BNB4 ONNX variant. Requires accepted Hugging Face access and a token.", 355_000_000L, gated = true),
+        bgrEntry("rmbg_2_0_int8", "RMBG 2.0 INT8", "briaai/RMBG-2.0", "onnx/model_int8.onnx", "BRIA RMBG 2.0 INT8 ONNX variant. Requires accepted Hugging Face access and a token.", 366_000_000L, gated = true),
+        bgrEntry("rmbg_2_0_q4", "RMBG 2.0 Q4", "briaai/RMBG-2.0", "onnx/model_q4.onnx", "BRIA RMBG 2.0 Q4 ONNX variant. Requires accepted Hugging Face access and a token.", 367_000_000L, gated = true),
+        bgrEntry("rmbg_2_0_q4f16", "RMBG 2.0 Q4F16", "briaai/RMBG-2.0", "onnx/model_q4f16.onnx", "BRIA RMBG 2.0 Q4F16 ONNX variant. Requires accepted Hugging Face access and a token.", 234_000_000L, gated = true),
+        bgrEntry("rmbg_2_0_quantized", "RMBG 2.0 Quantized", "briaai/RMBG-2.0", "onnx/model_quantized.onnx", "BRIA RMBG 2.0 quantized ONNX variant. Requires accepted Hugging Face access and a token.", 366_000_000L, gated = true),
+        bgrEntry("rmbg_2_0_uint8", "RMBG 2.0 UINT8", "briaai/RMBG-2.0", "onnx/model_uint8.onnx", "BRIA RMBG 2.0 UINT8 ONNX variant. Requires accepted Hugging Face access and a token.", 366_000_000L, gated = true),
+        bgrEntry("rmbg_1_4_full", "RMBG 1.4 Full", "briaai/RMBG-1.4", "onnx/model.onnx", "BRIA RMBG 1.4 full ONNX model. Requires accepted Hugging Face access and a token.", 176_000_000L, gated = true),
+        bgrEntry("rmbg_1_4_fp16", "RMBG 1.4 FP16", "briaai/RMBG-1.4", "onnx/model_fp16.onnx", "BRIA RMBG 1.4 FP16 ONNX model. Requires accepted Hugging Face access and a token.", 88_200_000L, gated = true),
+        bgrEntry("rmbg_1_4_quantized", "RMBG 1.4 Quantized", "briaai/RMBG-1.4", "onnx/model_quantized.onnx", "BRIA RMBG 1.4 quantized ONNX model. Requires accepted Hugging Face access and a token.", 44_400_000L, gated = true),
+        bgrEntry("inspyrenet_swinb_full", "InSPyReNet SwinB Full", "OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX", "onnx/model.onnx", "MIT-licensed InSPyReNet SwinB Plus Ultra ONNX segmentation model.", 395_000_000L),
+        bgrEntry("inspyrenet_swinb_fp16", "InSPyReNet SwinB FP16", "OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX", "onnx/model_fp16.onnx", "MIT-licensed InSPyReNet SwinB Plus Ultra FP16 ONNX model.", 199_000_000L)
+    )
+
+    val entries: List<OnnxCatalogEntry> = (sdaiEntries + manuEntries + supertonicEntries + backgroundRemovalEntries)
         .sortedWith(compareBy<OnnxCatalogEntry> { it.provider.id }.thenBy { it.title.lowercase(Locale.US) })
 
     fun entriesFor(provider: OnnxCatalogProvider): List<OnnxCatalogEntry> =
@@ -452,6 +593,54 @@ object OnnxBundleValidator {
     }
 }
 
+object OnnxTtsBundleValidator {
+    val requiredRelativePaths = listOf(
+        "onnx/duration_predictor.onnx",
+        "onnx/text_encoder.onnx",
+        "onnx/vector_estimator.onnx",
+        "onnx/vocoder.onnx",
+        "onnx/tts.json",
+        "onnx/unicode_indexer.json"
+    )
+
+    fun validateDirectory(bundleRoot: File): OnnxBundleValidationResult {
+        val missing = requiredRelativePaths.filterNot { relative ->
+            File(bundleRoot, relative).isFile
+        }.toMutableList()
+        val voiceStylesDir = File(bundleRoot, "voice_styles")
+        val hasVoices = voiceStylesDir.isDirectory &&
+            voiceStylesDir.listFiles().orEmpty().any { it.isFile && it.extension.equals("json", ignoreCase = true) }
+        if (!hasVoices) {
+            missing += "voice_styles/*.json"
+        }
+        return OnnxBundleValidationResult(
+            isValid = missing.isEmpty(),
+            missingPaths = missing,
+            bundleRoot = bundleRoot,
+            supportedCapabilities = if (missing.isEmpty()) setOf(ONNX_CAPABILITY_TTS) else emptySet()
+        )
+    }
+
+    fun requirePaths(bundleRoot: File): OnnxTtsBundlePaths {
+        val result = validateDirectory(bundleRoot)
+        require(result.isValid) {
+            "Missing Supertonic bundle files: ${result.missingPaths.joinToString(", ")}"
+        }
+        val onnxDir = File(bundleRoot, "onnx")
+        return OnnxTtsBundlePaths(
+            root = bundleRoot,
+            onnxDir = onnxDir,
+            durationPredictor = File(onnxDir, "duration_predictor.onnx"),
+            textEncoder = File(onnxDir, "text_encoder.onnx"),
+            vectorEstimator = File(onnxDir, "vector_estimator.onnx"),
+            vocoder = File(onnxDir, "vocoder.onnx"),
+            config = File(onnxDir, "tts.json"),
+            unicodeIndexer = File(onnxDir, "unicode_indexer.json"),
+            voiceStylesDir = File(bundleRoot, "voice_styles")
+        )
+    }
+}
+
 object OnnxImportSupport {
     fun sanitizeBundleId(rawName: String): String {
         val trimmed = rawName.trim().ifBlank { "onnx_bundle" }
@@ -619,9 +808,15 @@ object OnnxImportSupport {
                 installDir.toPath(),
                 StandardCopyOption.REPLACE_EXISTING
             )
-            val validation = OnnxBundleValidator.validateDirectory(installDir)
-            require(validation.isValid) {
-                "Missing SDAI bundle files after extraction: ${validation.missingPaths.joinToString(", ")}"
+            val imageValidation = OnnxBundleValidator.validateDirectory(installDir)
+            val ttsValidation = OnnxTtsBundleValidator.validateDirectory(installDir)
+            require(imageValidation.isValid || ttsValidation.isValid) {
+                val missing = if (ttsValidation.missingPaths.size < imageValidation.missingPaths.size) {
+                    ttsValidation.missingPaths
+                } else {
+                    imageValidation.missingPaths
+                }
+                "Missing ONNX bundle files after extraction: ${missing.joinToString(", ")}"
             }
             onPhase("completed")
             onProgress(1f)
@@ -635,14 +830,23 @@ object OnnxImportSupport {
     }
 
     private fun locateBundleRoot(stagingDir: File): File? {
-        if (OnnxBundleValidator.validateDirectory(stagingDir).isValid) {
+        if (OnnxBundleValidator.validateDirectory(stagingDir).isValid ||
+            OnnxTtsBundleValidator.validateDirectory(stagingDir).isValid
+        ) {
             return stagingDir
         }
         val directChildren = stagingDir.listFiles().orEmpty().filter { it.isDirectory }
-        if (directChildren.size == 1 && OnnxBundleValidator.validateDirectory(directChildren.first()).isValid) {
+        if (directChildren.size == 1 && (
+                OnnxBundleValidator.validateDirectory(directChildren.first()).isValid ||
+                    OnnxTtsBundleValidator.validateDirectory(directChildren.first()).isValid
+                )
+        ) {
             return directChildren.first()
         }
-        return directChildren.firstOrNull { OnnxBundleValidator.validateDirectory(it).isValid }
+        return directChildren.firstOrNull {
+            OnnxBundleValidator.validateDirectory(it).isValid ||
+                OnnxTtsBundleValidator.validateDirectory(it).isValid
+        }
     }
 
     private fun safeResolve(root: File, entryName: String): File {
@@ -751,6 +955,12 @@ fun ModelEntity.isOnnxTxt2ImgBundle(): Boolean {
 
 fun ModelEntity.isOnnxImg2ImgBundle(): Boolean {
     return isOnnxTxt2ImgBundle() && hasOnnxCapability(ONNX_CAPABILITY_IMG2IMG)
+}
+
+fun ModelEntity.isOnnxBackgroundRemovalModel(): Boolean {
+    return type == ModelType.ONNX_BACKGROUND_REMOVAL &&
+        onnxPipelineFamily == ONNX_PIPELINE_FAMILY_BACKGROUND_REMOVAL &&
+        hasOnnxCapability(ONNX_CAPABILITY_BACKGROUND_REMOVAL)
 }
 
 fun ModelEntity.isTamaDefaultPicGenModel(): Boolean {

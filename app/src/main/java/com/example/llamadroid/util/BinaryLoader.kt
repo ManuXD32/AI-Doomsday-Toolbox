@@ -24,7 +24,6 @@ object BinaryLoader {
         "ffmpeg",
         "ffprobe",
         "whisper-cli",
-        "llama-cli",
         "llama_server",
         "mtmd",
         "sd"

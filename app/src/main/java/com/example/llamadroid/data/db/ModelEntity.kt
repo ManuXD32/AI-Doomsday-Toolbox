@@ -34,6 +34,8 @@ const val SD_CAPABILITY_UPSCALE = "upscale"
 const val SD_CAPABILITY_VID_GEN = "vid_gen"
 const val ONNX_CAPABILITY_TXT2IMG = "txt2img"
 const val ONNX_CAPABILITY_IMG2IMG = "img2img"
+const val ONNX_CAPABILITY_TTS = "tts"
+const val ONNX_CAPABILITY_BACKGROUND_REMOVAL = "background_removal"
 
 fun String?.parseSdCapabilities(): Set<String> =
     this
@@ -99,6 +101,9 @@ enum class ModelType {
     ONNX_IMAGE_GEN,           // End-to-end image generation model
     ONNX_BACKGROUND_REMOVAL,  // Background-removal / alpha-mask model
     ONNX_IMAGE_UPSCALER,      // Image upscaler model
+    ONNX_TTS,                 // ONNX text-to-speech bundle
     // Whisper types
-    WHISPER           // WhisperCPP speech-to-text model
+    WHISPER,          // WhisperCPP speech-to-text model
+    // Quadtrix.cpp training checkpoints
+    QUADTRIX          // Native Quadtrix checkpoint; not compatible with llama.cpp/GGUF
 }

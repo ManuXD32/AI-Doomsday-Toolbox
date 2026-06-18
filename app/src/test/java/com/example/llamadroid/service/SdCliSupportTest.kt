@@ -1,12 +1,131 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdLoraApplyMode
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
 class SdCliSupportTest {
+
+    @Test
+    fun `checkpoint txt2img builds without required components`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                modelVariant = "sd1",
+                prompt = "a tiny cabin",
+                outputPath = "/tmp/out.png"
+            )
+        )
+
+        assertTrue(args.contains("-m"))
+        assertTrue(args.contains("/models/sd15.safetensors"))
+        assertFalse(args.contains("--diffusion-model"))
+    }
+
+    @Test
+    fun `diffusion txt2img builds with required family components`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/flux1.gguf",
+                modelFamily = "flux_1",
+                prompt = "a storm over a field",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/ae.safetensors",
+                clipLPath = "/models/clip_l.safetensors",
+                t5xxlPath = "/models/t5xxl.gguf"
+            )
+        )
+
+        assertTrue(args.contains("--diffusion-model"))
+        assertTrue(args.contains("--vae"))
+        assertTrue(args.contains("--clip_l"))
+        assertTrue(args.contains("--t5xxl"))
+    }
+
+    @Test
+    fun `family toggles only emit when supported by resolved family`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                modelVariant = "sd1",
+                prompt = "a clear lake",
+                outputPath = "/tmp/out.png",
+                flowShift = 3.0f,
+                diffusionFa = true,
+                mmap = true,
+                vaeConvDirect = true,
+                qwenImageZeroCondT = true,
+                chromaDisableDitMask = true
+            )
+        )
+
+        assertTrue(args.contains("--diffusion-fa"))
+        assertTrue(args.contains("--mmap"))
+        assertTrue(args.contains("--vae-conv-direct"))
+        assertFalse(args.contains("--flow-shift"))
+        assertFalse(args.contains("--qwen-image-zero-cond-t"))
+        assertFalse(args.contains("--chroma-disable-dit-mask"))
+    }
+
+    @Test
+    fun `sd tool components resolve by family and selected component id`() {
+        val model = sdModel(
+            filename = "flux1.gguf",
+            path = "/models/flux1.gguf",
+            type = ModelType.SD_DIFFUSION,
+            family = "flux_1"
+        )
+        val components = resolveSdToolComponents(
+            supportModels = listOf(
+                sdModel(
+                    filename = "ae.safetensors",
+                    path = "/models/ae.safetensors",
+                    type = ModelType.SD_VAE,
+                    compatProfiles = "flux_1"
+                ),
+                sdModel(
+                    filename = "wrong-vae.safetensors",
+                    path = "/models/wrong-vae.safetensors",
+                    type = ModelType.SD_VAE,
+                    compatProfiles = "checkpoint"
+                ),
+                sdModel(
+                    filename = "clip_l.safetensors",
+                    path = "/models/clip_l.safetensors",
+                    type = ModelType.SD_CLIP_L,
+                    compatProfiles = "flux_1"
+                ),
+                sdModel(
+                    filename = "t5xxl.gguf",
+                    path = "/models/t5xxl.gguf",
+                    type = ModelType.SD_T5XXL,
+                    compatProfiles = "flux_1"
+                )
+            ),
+            sdParams = NativeChatSdImageToolParams(
+                vaePath = "ae.safetensors",
+                clipLPath = "clip_l.safetensors",
+                t5xxlPath = "t5xxl.gguf"
+            ),
+            model = model
+        )
+
+        assertEquals("/models/ae.safetensors", components.pathForRole(SdComponentRole.VAE))
+        assertEquals("/models/clip_l.safetensors", components.pathForRole(SdComponentRole.CLIP_L))
+        assertEquals("/models/t5xxl.gguf", components.pathForRole(SdComponentRole.T5XXL))
+        assertEquals(null, components.taePath)
+    }
 
     @Test
     fun `flux2 img2img uses llm and reference image path`() {
@@ -177,4 +296,26 @@ class SdCliSupportTest {
         assertTrue(args.contains("4"))
         assertFalse(args.contains("-p"))
     }
+
+    private fun assertOption(args: List<String>, flag: String, value: String) {
+        val index = args.indexOf(flag)
+        assertTrue("$flag should be present", index >= 0)
+        assertEquals(value, args.getOrNull(index + 1))
+    }
+
+    private fun sdModel(
+        filename: String,
+        path: String,
+        type: ModelType,
+        family: String? = null,
+        compatProfiles: String? = null
+    ): ModelEntity = ModelEntity(
+        filename = filename,
+        path = path,
+        sizeBytes = 1024L,
+        type = type,
+        repoId = "local/test",
+        sdFamily = family,
+        sdCompatProfiles = compatProfiles
+    )
 }

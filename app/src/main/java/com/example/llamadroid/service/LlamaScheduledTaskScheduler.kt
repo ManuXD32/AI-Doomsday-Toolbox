@@ -173,32 +173,79 @@ object LlamaScheduledTaskScheduler {
         context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 }
 
+class LlamaScheduledTaskBootReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent?) {
+        val appContext = context.applicationContext
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (resolveLlamaScheduledTaskBootRoute(intent?.action) == LlamaScheduledTaskBroadcastRoute.RESCHEDULE_ALL) {
+                    LlamaScheduledTaskScheduler.rescheduleAll(appContext)
+                }
+            } finally {
+                pendingResult.finish()
+            }
+        }
+    }
+}
+
 class LlamaScheduledTaskReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         val appContext = context.applicationContext
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                when (intent?.action) {
-                    Intent.ACTION_BOOT_COMPLETED,
-                    Intent.ACTION_MY_PACKAGE_REPLACED -> LlamaScheduledTaskScheduler.rescheduleAll(appContext)
-                    LlamaScheduledTaskScheduler.ACTION_CATCH_UP_RUN -> {
-                        val logId = intent.getLongExtra(LlamaScheduledTaskScheduler.EXTRA_LOG_ID, -1L)
-                        if (logId > 0L) LlamaScheduledTaskScheduler.runCatchUp(appContext, logId)
-                    }
-                    LlamaScheduledTaskScheduler.ACTION_CATCH_UP_SKIP -> {
-                        val logId = intent.getLongExtra(LlamaScheduledTaskScheduler.EXTRA_LOG_ID, -1L)
-                        if (logId > 0L) LlamaScheduledTaskScheduler.skipCatchUp(appContext, logId)
-                    }
-                    else -> {
-                        val taskId = intent?.getLongExtra(LlamaScheduledTaskScheduler.EXTRA_TASK_ID, -1L) ?: -1L
+                val taskId = intent?.getLongExtra(LlamaScheduledTaskScheduler.EXTRA_TASK_ID, -1L) ?: -1L
+                val logId = intent?.getLongExtra(LlamaScheduledTaskScheduler.EXTRA_LOG_ID, -1L) ?: -1L
+                when (resolveLlamaScheduledTaskRuntimeRoute(intent?.action, taskId, logId)) {
+                    LlamaScheduledTaskBroadcastRoute.CATCH_UP_RUN -> LlamaScheduledTaskScheduler.runCatchUp(appContext, logId)
+                    LlamaScheduledTaskBroadcastRoute.CATCH_UP_SKIP -> LlamaScheduledTaskScheduler.skipCatchUp(appContext, logId)
+                    LlamaScheduledTaskBroadcastRoute.DELIVER_DUE_TASK -> {
                         val scheduledAt = intent?.getLongExtra(LlamaScheduledTaskScheduler.EXTRA_SCHEDULED_AT, -1L) ?: -1L
-                        if (taskId > 0L) LlamaScheduledTaskScheduler.deliverDueTask(appContext, taskId, scheduledAt)
+                        LlamaScheduledTaskScheduler.deliverDueTask(appContext, taskId, scheduledAt)
                     }
+                    LlamaScheduledTaskBroadcastRoute.RESCHEDULE_ALL,
+                    LlamaScheduledTaskBroadcastRoute.IGNORE -> Unit
                 }
             } finally {
                 pendingResult.finish()
             }
+        }
+    }
+}
+
+internal enum class LlamaScheduledTaskBroadcastRoute {
+    RESCHEDULE_ALL,
+    CATCH_UP_RUN,
+    CATCH_UP_SKIP,
+    DELIVER_DUE_TASK,
+    IGNORE
+}
+
+internal fun resolveLlamaScheduledTaskBootRoute(action: String?): LlamaScheduledTaskBroadcastRoute {
+    return when (action) {
+        Intent.ACTION_BOOT_COMPLETED,
+        Intent.ACTION_MY_PACKAGE_REPLACED -> LlamaScheduledTaskBroadcastRoute.RESCHEDULE_ALL
+        else -> LlamaScheduledTaskBroadcastRoute.IGNORE
+    }
+}
+
+internal fun resolveLlamaScheduledTaskRuntimeRoute(
+    action: String?,
+    taskId: Long,
+    logId: Long
+): LlamaScheduledTaskBroadcastRoute {
+    return when (action) {
+        Intent.ACTION_BOOT_COMPLETED,
+        Intent.ACTION_MY_PACKAGE_REPLACED -> LlamaScheduledTaskBroadcastRoute.IGNORE
+        LlamaScheduledTaskScheduler.ACTION_CATCH_UP_RUN -> {
+            if (logId > 0L) LlamaScheduledTaskBroadcastRoute.CATCH_UP_RUN else LlamaScheduledTaskBroadcastRoute.IGNORE
+        }
+        LlamaScheduledTaskScheduler.ACTION_CATCH_UP_SKIP -> {
+            if (logId > 0L) LlamaScheduledTaskBroadcastRoute.CATCH_UP_SKIP else LlamaScheduledTaskBroadcastRoute.IGNORE
+        }
+        else -> {
+            if (taskId > 0L) LlamaScheduledTaskBroadcastRoute.DELIVER_DUE_TASK else LlamaScheduledTaskBroadcastRoute.IGNORE
         }
     }
 }

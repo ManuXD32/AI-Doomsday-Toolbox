@@ -554,7 +554,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                             agentService.readFileBytes(file.path).onSuccess { bytes ->
                                                 imagePreviewPath = persistPreviewImage(file.name, bytes)
                                             }.onFailure { e: Throwable ->
-                                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.getString(R.string.error_param, e.message), Toast.LENGTH_SHORT).show()
                                                 viewingImage = null
                                             }
                                         }
@@ -566,7 +566,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                                 fileContent = content
                                                 editedContent = content
                                             }.onFailure { e: Throwable ->
-                                                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.getString(R.string.error_param, e.message), Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     }

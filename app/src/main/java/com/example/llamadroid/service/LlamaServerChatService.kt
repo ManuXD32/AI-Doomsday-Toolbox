@@ -320,7 +320,7 @@ internal fun buildLlamaServerChatRequestPayload(
     samplingParams: LlamaServerSamplingParams = LlamaServerSamplingParams()
 ): Map<String, Any?> {
     val normalizedMessages = normalizeLlamaServerMessageSequence(
-        messages = messages,
+        messages = normalizeLlamaServerSystemMessages(messages),
         thinkingEnabled = thinkingEnabled
     )
     val payload = linkedMapOf<String, Any?>(
@@ -405,6 +405,30 @@ internal fun buildLlamaServerChatRequestPayload(
     }
 
     return payload
+}
+
+internal fun normalizeLlamaServerSystemMessages(
+    messages: List<OllamaService.ChatMessage>
+): List<OllamaService.ChatMessage> {
+    val systemMessages = messages.filter { it.role == "system" }
+    if (systemMessages.isEmpty()) return messages
+
+    val mergedSystemContent = systemMessages
+        .mapNotNull { it.content.takeIf(String::isNotBlank) }
+        .joinToString("\n\n")
+
+    val nonSystemMessages = messages.filterNot { it.role == "system" }
+    if (mergedSystemContent.isBlank()) return nonSystemMessages
+
+    return listOf(
+        systemMessages.first().copy(
+            content = mergedSystemContent,
+            toolCalls = null,
+            toolCallId = null,
+            imagePath = null,
+            audioPath = null
+        )
+    ) + nonSystemMessages
 }
 
 internal fun normalizeLlamaServerMessageSequence(

@@ -308,9 +308,9 @@ class RemoteMasterServer(
             // Speculative decoding info
             put("speculativeEnabled", lastParams["draftModelPath"] != null)
             put("draftModel", lastParams["draftModelPath"] as? String ?: "")
-            put("draftMax", lastParams["draftMax"] as? Int ?: 16)
+            put("draftMax", lastParams["draftMax"] as? Int ?: 3)
             put("draftMin", lastParams["draftMin"] as? Int ?: 0)
-            put("draftPMin", lastParams["draftPMin"] as? Float ?: 0.75f)
+            put("draftPMin", lastParams["draftPMin"] as? Float ?: 0.0f)
             
             // Advanced Settings
             put("parallel", lastParams["parallel"] as? Int ?: -1)

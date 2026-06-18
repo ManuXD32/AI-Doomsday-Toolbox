@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
 
@@ -324,6 +325,44 @@ object GenerationDiagnosticsStore {
         }
     }
 
+    fun describeRecentProcessExit(
+        processNameSuffix: String,
+        sinceTimestamp: Long
+    ): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+        val context = appContext ?: return null
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val exitInfo = runCatching {
+            activityManager
+                .getHistoricalProcessExitReasons(context.packageName, 0, 30)
+                .filter { info ->
+                    info.timestamp >= sinceTimestamp &&
+                        info.processName.orEmpty().endsWith(processNameSuffix)
+                }
+                .maxByOrNull { it.timestamp }
+        }.getOrNull() ?: return null
+
+        val traceLine = readTraceSnippet(exitInfo)
+            ?.lineSequence()
+            ?.firstOrNull { it.isNotBlank() }
+            ?.take(700)
+        return buildString {
+            append(exitInfo.processName)
+            append(": ")
+            append(exitReasonLabel(exitInfo.reason))
+            append(" status=")
+            append(exitInfo.status)
+            exitInfo.description?.takeIf { it.isNotBlank() }?.let { description ->
+                append(" description=")
+                append(description.take(700))
+            }
+            traceLine?.let {
+                append(" trace=")
+                append(it)
+            }
+        }
+    }
+
     fun consumePendingRelaunchWarning(): GenerationExitSnapshot? {
         synchronized(lock) {
             ensureInitializedLocked()
@@ -415,18 +454,56 @@ object GenerationDiagnosticsStore {
 
     private fun readTraceSnippet(exitInfo: ApplicationExitInfo): String? {
         return runCatching {
-            exitInfo.traceInputStream?.bufferedReader()?.use { reader ->
-                val builder = StringBuilder()
-                val buffer = CharArray(512)
-                while (builder.length < TRACE_SNIPPET_LIMIT) {
-                    val toRead = minOf(buffer.size, TRACE_SNIPPET_LIMIT - builder.length)
-                    val read = reader.read(buffer, 0, toRead)
+            exitInfo.traceInputStream?.use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(512)
+                while (output.size() < TRACE_SNIPPET_LIMIT) {
+                    val toRead = minOf(buffer.size, TRACE_SNIPPET_LIMIT - output.size())
+                    val read = input.read(buffer, 0, toRead)
                     if (read <= 0) break
-                    builder.append(buffer, 0, read)
+                    output.write(buffer, 0, read)
                 }
-                builder.toString().trim().takeIf { it.isNotBlank() }
+                output.toByteArray()
+                    .takeIf { it.isNotEmpty() }
+                    ?.toReadableExitTraceSnippet()
             }
         }.getOrNull()
+    }
+
+    private fun ByteArray.toReadableExitTraceSnippet(): String {
+        if (isLikelyBinaryExitTrace()) return "binary trace (${size} bytes)"
+        return toString(Charsets.UTF_8).trim()
+            .takeIf { it.isNotBlank() }
+            ?.toReadableExitTraceSnippet()
+            ?: "binary trace (${size} bytes)"
+    }
+
+    private fun ByteArray.isLikelyBinaryExitTrace(): Boolean {
+        if (any { it.toInt() == 0 }) return true
+        val sample = take(512)
+        if (sample.isEmpty()) return false
+        val controlCount = sample.count { byte ->
+            val value = byte.toInt() and 0xff
+            value < 0x09 || value in 0x0E..0x1F || value == 0x7F
+        }
+        return controlCount > sample.size / 50
+    }
+
+    private fun String.toReadableExitTraceSnippet(): String {
+        val line = lineSequence()
+            .map { it.trim() }
+            .firstOrNull { it.isReadableExitTraceLine() }
+        return line?.take(TRACE_SNIPPET_LIMIT)
+            ?: "binary trace (${length} chars)"
+    }
+
+    private fun String.isReadableExitTraceLine(): Boolean {
+        if (isBlank()) return false
+        if (none { it.isLetterOrDigit() }) return false
+        val controlCount = count { it.code < 32 && it != '\t' }
+        if (controlCount > 0) return false
+        val readableCount = count { it == '\t' || it.code in 32..126 }
+        return readableCount >= (length * 0.9).toInt()
     }
 
     private fun exitReasonLabel(reason: Int): String = when (reason) {

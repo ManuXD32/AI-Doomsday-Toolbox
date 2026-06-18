@@ -17,5 +17,7 @@ data class BenchmarkResult(
     val genTokensPerSecond: Float,     // tg speed
     val promptTokens: Int,   // -p value used
     val genTokens: Int,      // -n value used
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val runStartedAt: Long = timestamp,
+    val runName: String = ""
 )

@@ -32,6 +32,11 @@ class AdventureService(
     private val settingsRepository: SettingsRepository,
     private val context: Context
 ) {
+    private companion object {
+        private const val MIN_ADVENTURE_IMAGE_MAX_HEAP_BYTES = 384L * 1024L * 1024L
+        private const val MIN_ADVENTURE_IMAGE_AVAILABLE_HEAP_BYTES = 96L * 1024L * 1024L
+    }
+
     private val json = Json {
         ignoreUnknownKeys = true
         prettyPrint = true
@@ -298,6 +303,10 @@ class AdventureService(
         schematic: StorySchematic,
         onProgress: (Float, String) -> Unit
     ): StorySchematic {
+        if (!hasAdventureImageHeapHeadroom("world")) {
+            onProgress(0.48f, context.getString(R.string.adventure_status_image_skipped_low_memory))
+            return schematic
+        }
         val model = resolveAdventureImageModel() ?: return schematic
 
         val positivePrompt = generateText(
@@ -357,6 +366,10 @@ class AdventureService(
         dungeonType: DungeonType,
         onProgress: (Float, String) -> Unit
     ): AdventureStage {
+        if (!hasAdventureImageHeapHeadroom("stage_${stage.stageNumber}")) {
+            onProgress(0.86f, context.getString(R.string.adventure_status_image_skipped_low_memory))
+            return stage
+        }
         val model = resolveAdventureImageModel() ?: return stage
         val positivePrompt = generateText(
             systemPrompt = adventureImagePositivePromptSystem(),
@@ -416,6 +429,23 @@ class AdventureService(
             DebugLog.log("[Adventure] Stage image generation skipped: ${error.message}")
             stage
         }
+    }
+
+    private fun hasAdventureImageHeapHeadroom(phase: String): Boolean {
+        val runtime = Runtime.getRuntime()
+        val maxHeap = runtime.maxMemory()
+        val usedHeap = runtime.totalMemory() - runtime.freeMemory()
+        val availableHeap = maxHeap - usedHeap
+        val hasHeadroom = maxHeap >= MIN_ADVENTURE_IMAGE_MAX_HEAP_BYTES &&
+            availableHeap >= MIN_ADVENTURE_IMAGE_AVAILABLE_HEAP_BYTES
+        if (!hasHeadroom) {
+            DebugLog.log(
+                "[Adventure] Skipping optional $phase image: " +
+                    "maxHeap=${maxHeap / (1024L * 1024L)}MB " +
+                    "availableHeap=${availableHeap / (1024L * 1024L)}MB"
+            )
+        }
+        return hasHeadroom
     }
 
     private suspend fun resolveAdventureImageModel() =
@@ -561,30 +591,35 @@ class AdventureService(
     }
 
     private fun buildBackendConfig(useSummarizer: Boolean): RemoteSummaryBackendConfig {
-        val backend = settingsRepository.adventureBackend.value
-        val baseUrl = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-            settingsRepository.adventureLlamaServerUrl.value.trim().trimEnd('/')
-        } else {
-            settingsRepository.adventureOllamaUrl.value.trim().trimEnd('/')
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepository.adventureBackend.value)
+        val baseUrl = when (backend) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> settingsRepository.adventureLlamaServerUrl.value.trim().trimEnd('/')
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> settingsRepository.adventureLlamaSwapUrl.value.trim().trimEnd('/')
+            else -> settingsRepository.adventureOllamaUrl.value.trim().trimEnd('/')
         }
-        val model = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-            settingsRepository.adventureLlamaServerModelLabel.value?.trim()?.ifBlank { null }
-        } else if (useSummarizer) {
-            settingsRepository.adventureSummarizerModel.value.trim().ifBlank { null }
-        } else {
-            settingsRepository.adventureModel.value.trim().ifBlank { null }
+        val model = when {
+            backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
+                settingsRepository.adventureLlamaServerModelLabel.value?.trim()?.ifBlank { null }
+            useSummarizer ->
+                settingsRepository.adventureSummarizerModel.value.trim().ifBlank { null }
+            else ->
+                settingsRepository.adventureModel.value.trim().ifBlank { null }
         }
         return RemoteSummaryBackendConfig(
             backend = backend,
             baseUrl = baseUrl,
             model = model,
-            timeoutMinutes = 10
+            timeoutMinutes = 10,
+            context = context,
+            liteRtModelId = settingsRepository.adventureLiteRtModelId.value.takeIf { it > 0L },
+            liteRtBackend = settingsRepository.adventureLiteRtBackend.value,
+            liteRtMtpEnabled = settingsRepository.adventureLiteRtMtpEnabled.value
         )
     }
 
     private fun backendContextSize(): Int {
         val llamaContext = settingsRepository.adventureLlamaServerContextTokens.value
-        return if (settingsRepository.adventureBackend.value == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
+        return if (SettingsRepository.isLlamaServerBackend(settingsRepository.adventureBackend.value)) {
             llamaContext.takeIf { it > 0 } ?: settingsRepository.adventureOllamaNumCtx.value.coerceAtLeast(4096)
         } else {
             settingsRepository.adventureOllamaNumCtx.value.coerceAtLeast(4096)

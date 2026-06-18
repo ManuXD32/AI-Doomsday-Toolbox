@@ -235,7 +235,7 @@ fun TermuxScreen(navController: NavController) {
     }
     fun copyToClipboard(text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("command", text))
+        clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.clipboard_label_command), text))
         Toast.makeText(context, context.getString(R.string.termux_copy_toast), Toast.LENGTH_SHORT).show()
     }
 

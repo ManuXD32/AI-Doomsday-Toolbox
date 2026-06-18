@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -44,9 +45,12 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.example.llamadroid.service.FileServerService
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.launch
 
 
@@ -58,11 +62,19 @@ fun DashboardScreen(
     val systemMonitor = remember { SystemMonitor(context) }
     val viewModel = remember { DashboardViewModel(systemMonitor) }
     val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
+    val appDatabase = remember { AppDatabase.getDatabase(context) }
+    val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, appDatabase) }
     
     val stats by viewModel.stats.collectAsState()
     val selectedModelPath by settingsRepo.selectedModelPath.collectAsState()
     val contextSize by settingsRepo.contextSize.collectAsState()
     val serverState by viewModel.serverState.collectAsState()
+    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases().collectAsState(initial = emptyList())
+    val knowledgeSourceCount by knowledgeBaseRepository.observeSourceCount().collectAsState(initial = 0)
+    val knowledgeChunkCount by knowledgeBaseRepository.observeChunkCount().collectAsState(initial = 0)
+    val knowledgeErrorCount by knowledgeBaseRepository.observeErrorSourceCount().collectAsState(initial = 0)
+    val knowledgePendingCount by knowledgeBaseRepository.observePendingSourceCount().collectAsState(initial = 0)
+    val embeddingModelPath by settingsRepo.selectedEmbeddingModelPath.collectAsState()
     
     val isRunning = serverState is ServerState.Running
     val isStarting = serverState is ServerState.Starting
@@ -236,8 +248,8 @@ fun DashboardScreen(
                                 maxLines = 1
                             )
                             // RAM Estimation
-                            if (selectedModelPath != null) {
-                                val modelFile = java.io.File(selectedModelPath)
+                            selectedModelPath?.let { modelPath ->
+                                val modelFile = java.io.File(modelPath)
                                 if (modelFile.exists()) {
                                     val modelSizeGb = modelFile.length() / (1024.0 * 1024.0 * 1024.0)
                                     // Context memory: ~2 bytes per token per layer (rough estimate)
@@ -307,7 +319,75 @@ fun DashboardScreen(
                 }
             }
         }
-        
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+            ),
+            onClick = { navController.navigate(Screen.KnowledgeBase.route) }
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            stringResource(R.string.kb_dashboard_title),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Text(
+                            stringResource(
+                                R.string.kb_dashboard_summary,
+                                knowledgeBases.size,
+                                knowledgeSourceCount,
+                                knowledgeChunkCount
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.72f)
+                        )
+                    }
+                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    AssistChip(
+                        onClick = { navController.navigate(Screen.KnowledgeBase.route) },
+                        label = { Text(stringResource(R.string.kb_pending_count, knowledgePendingCount)) }
+                    )
+                    AssistChip(
+                        onClick = { navController.navigate(Screen.KnowledgeBase.route) },
+                        label = {
+                            Text(
+                                if (knowledgeErrorCount > 0) {
+                                    stringResource(R.string.kb_errors_count, knowledgeErrorCount)
+                                } else {
+                                    stringResource(R.string.kb_no_errors)
+                                }
+                            )
+                        }
+                    )
+                    AssistChip(
+                        onClick = { navController.navigate(Screen.KnowledgeBase.route) },
+                        label = {
+                            Text(
+                                embeddingModelPath?.substringAfterLast("/")
+                                    ?: stringResource(R.string.kb_embedding_model_none),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
+                }
+            }
+        }
+
         // QR Code Section (when server is running with LAN access enabled)
         val remoteAccess by settingsRepo.remoteAccess.collectAsState()
         if (isRunning && remoteAccess) {
@@ -626,8 +706,7 @@ fun DashboardScreen(
         }
         
         val kiwixRunning by kiwixService?.isRunning?.collectAsState() ?: remember { mutableStateOf(false) }
-        val db = remember { com.example.llamadroid.data.db.AppDatabase.getDatabase(context) }
-        val installedZims by db.zimDao().getAllZims().collectAsState(initial = emptyList())
+        val installedZims by appDatabase.zimDao().getAllZims().collectAsState(initial = emptyList())
         var kiwixQrExpanded by remember { mutableStateOf(false) }
         var kiwixQrBitmaps by remember { mutableStateOf<Map<String, Bitmap?>>(emptyMap()) }
         val kiwixInterfaces = remember { getDeviceIPs(context) }
@@ -945,7 +1024,7 @@ fun DashboardScreen(
                         IconButton(onClick = { navController.navigate("kiwix_viewer") }) {
                             Icon(
                                 Icons.Default.PlayArrow,
-                                contentDescription = "View",
+                                contentDescription = stringResource(R.string.action_view),
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }
@@ -998,7 +1077,6 @@ fun DashboardScreen(
         }
     }
 }
-
 
 /**
  * Get all IPv4 addresses from all network interfaces.

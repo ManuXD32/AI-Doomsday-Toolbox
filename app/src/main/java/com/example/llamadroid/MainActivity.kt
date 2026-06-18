@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -17,18 +18,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.core.view.WindowCompat
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.coroutineScope
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
 import com.example.llamadroid.ui.theme.LlamaDroidTheme
 import com.example.llamadroid.ui.LlamaApp
 import com.example.llamadroid.service.GenerationDiagnosticsStore
@@ -73,8 +66,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Enable Edge-to-Edge
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        enableEdgeToEdge()
 
         val preferences = getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
         val currentVersionCode = appVersionCode()
@@ -148,6 +140,8 @@ class MainActivity : ComponentActivity() {
                     )
                     com.example.llamadroid.util.DynamicFeatureManager.installAllFeatures(this@MainActivity)
                 }
+
+                com.example.llamadroid.util.DynamicFeatureManager.installOptionalAccelerators(this@MainActivity)
 
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = "main_activity",

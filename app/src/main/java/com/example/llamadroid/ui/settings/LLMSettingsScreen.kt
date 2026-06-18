@@ -4,8 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
@@ -20,13 +21,103 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
-import com.example.llamadroid.data.db.SavedCommandEntity
+import com.example.llamadroid.data.db.SavedCommand
 import com.example.llamadroid.data.db.SavedCommandScopes
-import androidx.compose.foundation.clickable
+import com.example.llamadroid.service.LlamaSpeculativeMode
+import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppScreenScaffold
-import com.example.llamadroid.ui.components.DraftFloatTextField
-import com.example.llamadroid.ui.components.DraftIntTextField
 import kotlinx.coroutines.launch
+
+private typealias SavedCommandEntity = SavedCommand
+
+@Composable
+private fun DraftIntTextField(
+    value: Int,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    label: @Composable (() -> Unit)? = null,
+    placeholder: @Composable (() -> Unit)? = null,
+    valueRange: IntRange? = null,
+    singleLine: Boolean = true
+) {
+    var draft by remember(value) { mutableStateOf(value.toString()) }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = {
+            draft = it.filter(Char::isDigit)
+            draft.toIntOrNull()?.let { parsed ->
+                if (valueRange?.contains(parsed) != false) onValueChange(parsed)
+            }
+        },
+        modifier = modifier,
+        label = label,
+        placeholder = placeholder,
+        singleLine = singleLine
+    )
+}
+
+@Composable
+private fun DraftNullableIntTextField(
+    value: Int?,
+    onValueChange: (Int?) -> Unit,
+    modifier: Modifier = Modifier,
+    label: @Composable (() -> Unit)? = null,
+    placeholder: @Composable (() -> Unit)? = null,
+    singleLine: Boolean = true,
+    valueRange: IntRange? = null
+) {
+    var draft by remember(value) { mutableStateOf(value?.toString().orEmpty()) }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = {
+            draft = it.filter(Char::isDigit)
+            if (draft.isBlank()) {
+                onValueChange(null)
+            } else {
+                draft.toIntOrNull()?.let { parsed ->
+                    if (valueRange?.contains(parsed) != false) onValueChange(parsed)
+                }
+            }
+        },
+        modifier = modifier,
+        label = label,
+        placeholder = placeholder,
+        singleLine = singleLine
+    )
+}
+
+@Composable
+private fun DraftFloatTextField(
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    label: @Composable (() -> Unit)? = null,
+    singleLine: Boolean = true,
+    valueRange: ClosedFloatingPointRange<Float>? = null
+) {
+    var draft by remember(value) { mutableStateOf(value.toString()) }
+    OutlinedTextField(
+        value = draft,
+        onValueChange = {
+            draft = buildString {
+                var seenDot = false
+                it.forEach { ch ->
+                    if (ch.isDigit()) append(ch)
+                    if (ch == '.' && !seenDot) {
+                        append(ch)
+                        seenDot = true
+                    }
+                }
+            }
+            draft.toFloatOrNull()?.let { parsed ->
+                if (valueRange?.contains(parsed) != false) onValueChange(parsed)
+            }
+        },
+        modifier = modifier,
+        label = label,
+        singleLine = singleLine
+    )
+}
 
 /**
  * LLM/Chat Settings - Threads, Context Size, Temperature, Vision
@@ -46,11 +137,21 @@ fun LLMSettingsScreen(navController: NavController) {
     val enableVision by settingsRepo.enableVision.collectAsState()
     
     val speculativeEnabled by settingsRepo.speculativeEnabled.collectAsState()
+    val speculativeMode by settingsRepo.speculativeMode.collectAsState()
     val draftModelPath by settingsRepo.draftModelPath.collectAsState()
     val draftMaxTokens by settingsRepo.draftMaxTokens.collectAsState()
     val draftMinTokens by settingsRepo.draftMinTokens.collectAsState()
     val draftPMin by settingsRepo.draftPMin.collectAsState()
+    val mtpDraftMaxTokens by settingsRepo.mtpDraftMaxTokens.collectAsState()
+    val mtpDraftMinTokens by settingsRepo.mtpDraftMinTokens.collectAsState()
+    val mtpDraftPMin by settingsRepo.mtpDraftPMin.collectAsState()
+    val mtpUseDraftModel by settingsRepo.mtpUseDraftModel.collectAsState()
     val flashAttentionEnabled by settingsRepo.flashAttentionEnabled.collectAsState()
+    val serverPort by settingsRepo.serverPort.collectAsState()
+    val serverBatchSize by settingsRepo.serverBatchSize.collectAsState()
+    val serverPhysicalBatchSize by settingsRepo.serverPhysicalBatchSize.collectAsState()
+    val serverParallel by settingsRepo.serverParallel.collectAsState()
+    val serverCacheRam by settingsRepo.serverCacheRam.collectAsState()
     
     // Custom Commands Additions
     val customFlags by settingsRepo.customFlags.collectAsState()
@@ -96,11 +197,17 @@ fun LLMSettingsScreen(navController: NavController) {
         title = stringResource(R.string.llm_settings_title),
         subtitle = stringResource(R.string.settings_llm_desc),
         onBack = { navController.popBackStack() }
-    ) { _ ->
+    ) { contentPadding ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(contentPadding),
+            contentPadding = PaddingValues(
+                start = AppChromeDefaults.ScreenPadding,
+                top = 12.dp,
+                end = AppChromeDefaults.ScreenPadding,
+                bottom = AppChromeDefaults.ScreenPadding
+            ),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Active Model
@@ -149,26 +256,34 @@ fun LLMSettingsScreen(navController: NavController) {
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             OutlinedButton(
                                 onClick = { showLoadCommandDialog = true },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(Icons.Default.Menu, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.dist_load_command))
+                                Text(
+                                    stringResource(R.string.dist_load_command),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             
                             Button(
                                 onClick = { showSaveCommandDialog = true },
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(Icons.Default.Star, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.dist_save_command))
+                                Text(
+                                    stringResource(R.string.dist_save_command),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
                     }
@@ -225,6 +340,72 @@ fun LLMSettingsScreen(navController: NavController) {
                 }
             }
             
+            // Generated llama.cpp parameters
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.llm_generated_params_title),
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            stringResource(R.string.llm_generated_params_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        DraftIntTextField(
+                            value = serverPort,
+                            onValueChange = settingsRepo::setServerPort,
+                            valueRange = 1..65535,
+                            label = { Text(stringResource(R.string.llm_port)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        DraftIntTextField(
+                            value = serverBatchSize,
+                            onValueChange = settingsRepo::setServerBatchSize,
+                            valueRange = 1..131072,
+                            label = { Text(stringResource(R.string.dist_batch_size)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        DraftNullableIntTextField(
+                            value = serverPhysicalBatchSize,
+                            onValueChange = settingsRepo::setServerPhysicalBatchSize,
+                            valueRange = 1..131072,
+                            label = { Text(stringResource(R.string.llm_physical_batch_size)) },
+                            placeholder = { Text(stringResource(R.string.llm_optional_flag_blank)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        DraftNullableIntTextField(
+                            value = serverParallel,
+                            onValueChange = settingsRepo::setServerParallel,
+                            valueRange = 1..512,
+                            label = { Text(stringResource(R.string.dist_advanced_parallel)) },
+                            placeholder = { Text(stringResource(R.string.llm_optional_flag_blank)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        DraftNullableIntTextField(
+                            value = serverCacheRam,
+                            onValueChange = settingsRepo::setServerCacheRam,
+                            valueRange = 0..262144,
+                            label = { Text(stringResource(R.string.dist_advanced_cache_ram)) },
+                            placeholder = { Text(stringResource(R.string.llm_optional_flag_blank)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                }
+            }
+
             // Threads
             item {
                 Card(
@@ -569,53 +750,166 @@ fun LLMSettingsScreen(navController: NavController) {
                         if (speculativeEnabled) {
                             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-                            // Draft Model Selection
-                            Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
+                            Text(stringResource(R.string.dist_speculative_mode_label), fontWeight = FontWeight.Medium)
                             Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(
-                                onClick = { showDraftSelector = true },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            // Parameters Grid
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                // Max tokens
-                                DraftIntTextField(
-                                    value = draftMaxTokens,
-                                    onValueChange = settingsRepo::setDraftMaxTokens,
-                                    label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true
+                                FilterChip(
+                                    selected = speculativeMode == LlamaSpeculativeMode.DRAFT_MTP,
+                                    onClick = { settingsRepo.setSpeculativeMode(LlamaSpeculativeMode.DRAFT_MTP) },
+                                    label = { Text(stringResource(R.string.dist_speculative_mode_mtp)) },
+                                    modifier = Modifier.weight(1f)
                                 )
+                                FilterChip(
+                                    selected = speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE,
+                                    onClick = { settingsRepo.setSpeculativeMode(LlamaSpeculativeMode.DRAFT_SIMPLE) },
+                                    label = { Text(stringResource(R.string.dist_speculative_mode_simple)) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
 
-                                // Min tokens
-                                DraftIntTextField(
-                                    value = draftMinTokens,
-                                    onValueChange = settingsRepo::setDraftMinTokens,
-                                    label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true
-                                )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = when (speculativeMode) {
+                                    LlamaSpeculativeMode.DRAFT_MTP -> stringResource(R.string.general_mtp_decoding_hint)
+                                    LlamaSpeculativeMode.DRAFT_SIMPLE -> stringResource(R.string.dist_speculative_simple_hint)
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
 
-                                // p-min
-                                DraftFloatTextField(
-                                    value = draftPMin,
-                                    onValueChange = settingsRepo::setDraftPMin,
-                                    label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
-                                    modifier = Modifier.weight(1f),
-                                    singleLine = true
-                                )
+                            Spacer(modifier = Modifier.height(16.dp))
+
+                            if (speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE) {
+                                Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = { showDraftSelector = true },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                if (draftModelPath != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    TextButton(
+                                        onClick = { settingsRepo.setDraftModelPath(null) },
+                                        modifier = Modifier.align(Alignment.End)
+                                    ) {
+                                        Text(stringResource(R.string.dist_speculative_clear_draft))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(16.dp))
+
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    DraftIntTextField(
+                                        value = draftMaxTokens,
+                                        onValueChange = settingsRepo::setDraftMaxTokens,
+                                        label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+
+                                    DraftIntTextField(
+                                        value = draftMinTokens,
+                                        onValueChange = settingsRepo::setDraftMinTokens,
+                                        label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+
+                                    DraftFloatTextField(
+                                        value = draftPMin,
+                                        onValueChange = settingsRepo::setDraftPMin,
+                                        valueRange = 0f..1f,
+                                        label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                }
+                            } else {
+                                Column(
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                stringResource(R.string.general_mtp_use_draft_model_title),
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                            Text(
+                                                stringResource(R.string.general_mtp_use_draft_model_desc),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Switch(
+                                            checked = mtpUseDraftModel,
+                                            onCheckedChange = settingsRepo::setMtpUseDraftModel
+                                        )
+                                    }
+
+                                    if (mtpUseDraftModel) {
+                                        Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
+                                        OutlinedButton(
+                                            onClick = { showDraftSelector = true },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+
+                                        if (draftModelPath != null) {
+                                            TextButton(
+                                                onClick = { settingsRepo.setDraftModelPath(null) },
+                                                modifier = Modifier.align(Alignment.End)
+                                            ) {
+                                                Text(stringResource(R.string.dist_speculative_clear_draft))
+                                            }
+                                        }
+                                    }
+
+                                    DraftIntTextField(
+                                        value = mtpDraftMaxTokens,
+                                        onValueChange = settingsRepo::setMtpDraftMaxTokens,
+                                        label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+
+                                    DraftIntTextField(
+                                        value = mtpDraftMinTokens,
+                                        onValueChange = settingsRepo::setMtpDraftMinTokens,
+                                        label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+
+                                    DraftFloatTextField(
+                                        value = mtpDraftPMin,
+                                        onValueChange = settingsRepo::setMtpDraftPMin,
+                                        valueRange = 0f..1f,
+                                        label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true
+                                    )
+                                }
                             }
                         }
                     }
@@ -761,17 +1055,18 @@ fun LLMSettingsScreen(navController: NavController) {
                                 scope = SavedCommandScopes.GENERAL,
                                 modelPath = selectedModelPath ?: "",
                                 contextSize = ctxSize,
-                                batchSize = 512, // Default or generic
+                                batchSize = serverBatchSize,
                                 temperature = temp,
                                 threads = threads,
                                 host = if (settingsRepo.remoteAccess.value) "0.0.0.0" else "127.0.0.1",
                                 speculativeEnabled = speculativeEnabled,
+                                speculativeMode = speculativeMode.flagValue,
                                 draftModelPath = draftModelPath,
                                 draftMax = draftMaxTokens,
                                 draftMin = draftMinTokens,
                                 draftPMin = draftPMin,
-                                parallel = null,
-                                cacheRam = null,
+                                parallel = serverParallel,
+                                cacheRam = serverCacheRam,
                                 customFlags = customFlagsText,
                                 flashAttention = flashAttentionEnabled,
                                 kvCacheEnabled = kvCacheEnabled,
@@ -849,9 +1144,11 @@ fun LLMSettingsScreen(navController: NavController) {
                                             settingsRepo.setContextSize(cmd.contextSize)
                                             settingsRepo.setTemperature(cmd.temperature)
                                             settingsRepo.setThreads(cmd.threads)
+                                            settingsRepo.setServerBatchSize(cmd.batchSize)
                                             
                                             // Speculative
                                             settingsRepo.setSpeculativeEnabled(cmd.speculativeEnabled)
+                                            settingsRepo.setSpeculativeMode(LlamaSpeculativeMode.fromFlagValue(cmd.speculativeMode))
                                             settingsRepo.setDraftModelPath(cmd.draftModelPath)
                                             settingsRepo.setDraftMaxTokens(cmd.draftMax)
                                             settingsRepo.setDraftMinTokens(cmd.draftMin)
@@ -860,6 +1157,8 @@ fun LLMSettingsScreen(navController: NavController) {
                                             // Advanced & Vision
                                             settingsRepo.setCustomCommandTemplate(cmd.commandTemplate)
                                             settingsRepo.setCustomFlags(cmd.customFlags)
+                                            settingsRepo.setServerParallel(cmd.parallel)
+                                            settingsRepo.setServerCacheRam(cmd.cacheRam)
                                             settingsRepo.setFlashAttentionEnabled(cmd.flashAttention)
                                             settingsRepo.setServerKvCacheEnabled(cmd.kvCacheEnabled)
                                             settingsRepo.setServerKvCacheTypeK(cmd.kvCacheTypeK)
@@ -876,7 +1175,7 @@ fun LLMSettingsScreen(navController: NavController) {
                                         }.padding(8.dp)
                                     ) {
                                         Text(cmd.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                        Text("Model: ${cmd.modelPath.substringAfterLast("/")}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(stringResource(R.string.model_filename_label, cmd.modelPath.substringAfterLast("/")), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     
                                     Row {
@@ -1050,6 +1349,18 @@ fun LLMSettingsScreen(navController: NavController) {
             confirmButton = {
                 TextButton(onClick = { showDraftSelector = false }) {
                     Text(stringResource(R.string.action_cancel))
+                }
+            },
+            dismissButton = {
+                if (draftModelPath != null) {
+                    TextButton(
+                        onClick = {
+                            settingsRepo.setDraftModelPath(null)
+                            showDraftSelector = false
+                        }
+                    ) {
+                        Text(stringResource(R.string.dist_speculative_clear_draft))
+                    }
                 }
             },
             shape = RoundedCornerShape(20.dp)

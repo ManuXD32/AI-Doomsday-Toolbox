@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.ai.llama
 
 import androidx.activity.ComponentActivity
+import android.content.ClipboardManager
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.llamadroid.R
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -46,6 +48,34 @@ class LlamaChatComponentsTest {
         composeRule
             .onNodeWithText(composeRule.activity.getString(R.string.action_copy))
             .assertIsDisplayed()
+    }
+
+    @Test
+    fun codeBlockCopyActionCopiesCodeToClipboard() {
+        val expectedCode = "val answer = 42"
+
+        composeRule.setContent {
+            MaterialTheme {
+                MarkdownText(
+                    text = """
+                        ```kotlin
+                        $expectedCode
+                        ```
+                    """.trimIndent(),
+                    textColor = MaterialTheme.colorScheme.onSurface
+                )
+            }
+        }
+
+        composeRule
+            .onNodeWithText(composeRule.activity.getString(R.string.llama_copy_code))
+            .performClick()
+
+        composeRule.runOnIdle {
+            val clipboard = composeRule.activity.getSystemService(ClipboardManager::class.java)
+            val copied = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(composeRule.activity)?.toString()
+            assertEquals(expectedCode, copied)
+        }
     }
 
     @Test

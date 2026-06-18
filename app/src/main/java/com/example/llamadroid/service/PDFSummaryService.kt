@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.PowerManager
 import android.widget.Toast
 import com.example.llamadroid.R
+import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.NoteEntity
@@ -103,16 +104,20 @@ Chunk summaries to unify:"""
 
     suspend fun refreshBackendMetadata(context: Context): Result<RemoteSummaryMetadata> = withContext(Dispatchers.IO) {
         val settingsRepo = SettingsRepository(context)
-        val client = RemoteSummaryClientFactory.fromSnapshot(settingsRepo.pdfSummarySettings.snapshot())
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.pdfSummarySettings.snapshot())
         client.fetchMetadata().onSuccess { metadata ->
             persistMetadata(settingsRepo, metadata)
             PdfSummaryStateHolder.setMetadataMessage(
-                if (metadata.backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
-                    context.getString(R.string.pdf_metadata_ollama_loaded, metadata.availableModels.size)
-                } else {
-                    val modelText = metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable)
-                    val contextText = metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
-                    context.getString(R.string.pdf_metadata_llama_loaded, modelText, contextText)
+                when (SettingsRepository.normalizeOllamaOrLlamaBackend(metadata.backend)) {
+                    SettingsRepository.PDF_BACKEND_OLLAMA ->
+                        context.getString(R.string.pdf_metadata_ollama_loaded, metadata.availableModels.size)
+                    SettingsRepository.PDF_BACKEND_LLAMA_SWAP ->
+                        context.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
+                    else -> {
+                        val modelText = metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                        val contextText = metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                        context.getString(R.string.pdf_metadata_llama_loaded, modelText, contextText)
+                    }
                 }
             )
         }
@@ -121,7 +126,7 @@ Chunk summaries to unify:"""
     suspend fun estimateChunkCount(context: Context, text: String): Result<RemoteSummaryPlanEstimate> = withContext(Dispatchers.IO) {
         val settingsRepo = SettingsRepository(context)
         val snapshot = settingsRepo.pdfSummarySettings.snapshot()
-        val client = RemoteSummaryClientFactory.fromSnapshot(snapshot)
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
         val orchestrator = RemoteSummaryOrchestrator(client)
         val summaryPrompt = snapshot.summaryPrompt ?: DEFAULT_SUMMARY_PROMPT
         runCatching {
@@ -140,7 +145,8 @@ Chunk summaries to unify:"""
     fun startSummarization(
         context: Context,
         text: String,
-        pdfFileName: String = "PDF"
+        pdfFileName: String = "PDF",
+        settingsOverride: RemoteSummarySettingsSnapshot? = null
     ) {
         currentJob?.cancel()
         isCancelled = false
@@ -162,8 +168,8 @@ Chunk summaries to unify:"""
 
         currentJob = serviceScope.launch {
             val settingsRepo = SettingsRepository(context)
-            val snapshot = settingsRepo.pdfSummarySettings.snapshot()
-            val client = RemoteSummaryClientFactory.fromSnapshot(snapshot)
+            val snapshot = settingsOverride ?: settingsRepo.pdfSummarySettings.snapshot()
+            val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
             val orchestrator = RemoteSummaryOrchestrator(client)
             currentClient = client
 
@@ -175,8 +181,10 @@ Chunk summaries to unify:"""
                 if (metadata != null) {
                     persistMetadata(settingsRepo, metadata)
                 }
-                if (snapshot.backend == SettingsRepository.PDF_BACKEND_OLLAMA && snapshot.ollamaModel.isNullOrBlank()) {
-                    Result.failure(Exception(context.getString(R.string.pdf_error_missing_ollama_model)))
+                if (SettingsRepository.requiresSelectedRemoteModel(snapshot.backend) &&
+                    selectedSummaryModel(snapshot).isNullOrBlank()
+                ) {
+                    Result.failure(Exception(missingModelMessage(context, snapshot.backend)))
                 } else {
                     val execution = orchestrator.summarize(
                         sourceText = text,
@@ -289,6 +297,20 @@ Chunk summaries to unify:"""
             settingsRepo.setPdfSummaryLlamaServerContextLabel(metadata.serverContextLabel)
         }
     }
+
+    private fun selectedSummaryModel(snapshot: com.example.llamadroid.data.RemoteSummarySettingsSnapshot): String? =
+        when (SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapModel
+            SettingsRepository.PDF_BACKEND_OLLAMA -> snapshot.ollamaModel
+            else -> snapshot.llamaServerModelLabel
+        }
+
+    private fun missingModelMessage(context: Context, backend: String): String =
+        if (SettingsRepository.isLlamaSwapBackend(backend)) {
+            context.getString(R.string.pdf_error_missing_llama_swap_model)
+        } else {
+            context.getString(R.string.pdf_error_missing_ollama_model)
+        }
 
     private suspend fun autoSaveSummary(context: Context, pdfFileName: String, summaryText: String) {
         try {

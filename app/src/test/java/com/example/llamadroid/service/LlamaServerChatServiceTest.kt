@@ -9,6 +9,30 @@ import org.junit.Test
 
 class LlamaServerChatServiceTest {
     @Test
+    fun `generationElapsedMs starts from first token when present`() {
+        assertEquals(
+            1_500L,
+            generationElapsedMs(
+                requestStartedAtMs = 1_000L,
+                firstTokenReceivedAtMs = 3_500L,
+                nowMs = 5_000L
+            )
+        )
+    }
+
+    @Test
+    fun `generationElapsedMs falls back to zero before first token`() {
+        assertEquals(
+            0L,
+            generationElapsedMs(
+                requestStartedAtMs = 1_000L,
+                firstTokenReceivedAtMs = null,
+                nowMs = 5_000L
+            )
+        )
+    }
+
+    @Test
     fun `buildLlamaServerChatRequestPayload disables reasoning when thinking is off`() {
         val payload = buildLlamaServerChatRequestPayload(
             messages = listOf(
@@ -90,6 +114,32 @@ class LlamaServerChatServiceTest {
         )
 
         assertEquals("qwen3-coder-30b", payload["model"])
+    }
+
+    @Test
+    fun `buildLlamaServerChatRequestPayload moves transient system reminders to the beginning`() {
+        val payload = buildLlamaServerChatRequestPayload(
+            messages = listOf(
+                OllamaService.ChatMessage(role = "system", content = "Base prompt"),
+                OllamaService.ChatMessage(role = "user", content = "hello"),
+                OllamaService.ChatMessage(role = "assistant", content = "hi"),
+                OllamaService.ChatMessage(role = "system", content = "Tool reminder"),
+                OllamaService.ChatMessage(role = "user", content = "use the note tools")
+            ),
+            tools = emptyList(),
+            thinkingEnabled = false,
+            maxTokens = 1024
+        )
+
+        val messages = payload["messages"] as List<*>
+        assertEquals(4, messages.size)
+        val first = messages.first() as Map<*, *>
+        assertEquals("system", first["role"])
+        assertEquals("Base prompt\n\nTool reminder", first["content"])
+        assertEquals(
+            listOf("system", "user", "assistant", "user"),
+            messages.map { (it as Map<*, *>)["role"] }
+        )
     }
 
     @Test

@@ -31,11 +31,21 @@ class LlamaServerEntityTest {
             engine = LlamaServerEntity.ENGINE_OLLAMA,
             supportsAudio = true
         )
+        val llamaSwapServer = LlamaServerEntity(
+            name = "swap",
+            host = "localhost",
+            port = 9292,
+            engine = "llama_swap",
+            supportsAudio = true
+        )
 
         assertTrue(llamaServer.supportsDirectAudioInput())
         assertFalse(llamaServer.requiresAudioTranscriptionFallback())
         assertFalse(ollamaServer.supportsDirectAudioInput())
         assertTrue(ollamaServer.requiresAudioTranscriptionFallback())
+        assertTrue(llamaSwapServer.isLlamaSwapEngine())
+        assertTrue(llamaSwapServer.usesOpenAiCompatibleEngine())
+        assertTrue(llamaSwapServer.supportsDirectAudioInput())
     }
 
     @Test

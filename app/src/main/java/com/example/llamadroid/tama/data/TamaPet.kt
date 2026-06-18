@@ -25,6 +25,8 @@ data class TamaPet(
     val relationships: Map<String, Int> = emptyMap(),
     val ownerBondLevel: Float = 50f,
     val educationLevel: Float = 0f,
+    val exerciseLevel: Float = 0f,
+    val introspectionLevel: Float = 0f,
     val currentLocationId: String = "home",
     val homeRoomId: String = TamaRoomCatalog.PRINCIPAL_ROOM_ID,
     val leftDecorationId: String? = null,
@@ -57,6 +59,9 @@ data class TamaPet(
 )
 
 const val TAMA_MISCARE_HEALTH_PENALTY = 20f
+const val TAMA_RELAX_INTROSPECTION_PER_HOUR = 10f
+const val TAMA_INTROSPECTION_HP_STEP = 10f
+const val TAMA_INTROSPECTION_HP_PER_STEP = 3
 
 fun TamaPet.isHealthForcedAngry(): Boolean = stats.health < 50f
 
@@ -66,6 +71,7 @@ fun TamaPet.isPoopGenerationPaused(): Boolean {
     return isSleeping || when (currentActivity) {
         ActivityType.WORKING,
         ActivityType.STUDYING,
+        ActivityType.TRAINING,
         ActivityType.RELAXING -> true
         else -> false
     }
@@ -96,6 +102,7 @@ enum class ActivityType {
     NONE,
     WORKING,
     STUDYING,
+    TRAINING,
     RELAXING  // At park
 }
 
@@ -137,12 +144,12 @@ enum class GrowthStage(
 }
 
 fun GrowthStage.canWork(): Boolean = when (this) {
+    GrowthStage.EGG,
+    GrowthStage.CHILD,
     GrowthStage.TEEN,
     GrowthStage.ADULT,
     GrowthStage.SENIOR -> true
-    GrowthStage.EGG,
-    GrowthStage.BABY,
-    GrowthStage.CHILD -> false
+    GrowthStage.BABY -> false
 }
 
 /**

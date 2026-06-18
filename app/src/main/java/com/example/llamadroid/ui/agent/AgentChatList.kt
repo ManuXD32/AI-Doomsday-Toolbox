@@ -97,6 +97,7 @@ fun AgentChatList(
     onSaveEdit: () -> Unit,
     onCancelEdit: () -> Unit,
     onToggleOutput: (String) -> Unit, // New callback
+    onKnowledgeLinkClick: (String) -> Boolean = { false },
     modifier: Modifier = Modifier
 ) {
     val visibleMessages = remember(messages, showAllOutput) {
@@ -138,7 +139,8 @@ fun AgentChatList(
                 onEditingTextChange = onEditingTextChange,
                 onSaveEdit = onSaveEdit,
                 onCancelEdit = onCancelEdit,
-                onToggleOutput = { onToggleOutput(message.id) }
+                onToggleOutput = { onToggleOutput(message.id) },
+                onKnowledgeLinkClick = onKnowledgeLinkClick
             )
         }
     }
@@ -157,7 +159,8 @@ fun ChatMessageBubble(
     onEditingTextChange: (String) -> Unit = {},
     onSaveEdit: () -> Unit = {},
     onCancelEdit: () -> Unit = {},
-    onToggleOutput: () -> Unit = {}
+    onToggleOutput: () -> Unit = {},
+    onKnowledgeLinkClick: (String) -> Boolean = { false }
 ) {
     val currentStatusText by AgentService.statusText.collectAsState()
     val context = LocalContext.current
@@ -379,7 +382,8 @@ fun ChatMessageBubble(
                                             onEditingTextChange = onEditingTextChange,
                                             onCancelEdit = onCancelEdit,
                                             onSaveEdit = onSaveEdit,
-                                            textColor = MaterialTheme.colorScheme.onSurface
+                                            textColor = MaterialTheme.colorScheme.onSurface,
+                                            onKnowledgeLinkClick = onKnowledgeLinkClick
                                         )
                                         
                                         // Terminal Output (if visible)
@@ -475,7 +479,8 @@ fun ChatMessageBubble(
                             onEditingTextChange = onEditingTextChange,
                             onCancelEdit = onCancelEdit,
                             onSaveEdit = onSaveEdit,
-                            textColor = MaterialTheme.colorScheme.onSurface
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            onKnowledgeLinkClick = onKnowledgeLinkClick
                         )
                     }
                     
@@ -529,7 +534,7 @@ fun ChatMessageBubble(
                     Icons.Default.ContentCopy,
                     stringResource(R.string.action_copy),
                     modifier = Modifier.size(14.dp).clickable {
-                        val clip = ClipData.newPlainText("Message", message.content)
+                        val clip = ClipData.newPlainText(context.getString(R.string.clipboard_label_message), message.content)
                         clipboardManager.setPrimaryClip(clip)
                     },
                     tint = MaterialTheme.colorScheme.outline
@@ -669,7 +674,8 @@ fun ChatMessageContent(
     onEditingTextChange: (String) -> Unit,
     onCancelEdit: () -> Unit,
     onSaveEdit: () -> Unit,
-    textColor: Color
+    textColor: Color,
+    onKnowledgeLinkClick: (String) -> Boolean = { false }
 ) {
     if (isEditing) {
         Column {
@@ -706,7 +712,8 @@ fun ChatMessageContent(
                         MarkdownText(
                             text = textToDisplay,
                             textColor = textColor,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            onLinkClick = onKnowledgeLinkClick
                         )
                     }
                 } else {
@@ -715,7 +722,8 @@ fun ChatMessageContent(
                         MarkdownText(
                             text = message.content,
                             textColor = textColor,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            onLinkClick = onKnowledgeLinkClick
                         )
                     }
                 }
@@ -724,7 +732,8 @@ fun ChatMessageContent(
                     MarkdownText(
                         text = message.content,
                         textColor = textColor,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        onLinkClick = onKnowledgeLinkClick
                     )
                 }
             }

@@ -2,6 +2,7 @@ package com.example.llamadroid.tama.game
 
 import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.TamaPet
+import com.example.llamadroid.tama.data.canStudy
 import com.example.llamadroid.tama.data.canWork
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,6 +30,7 @@ class TamaGrowthTimingTest {
             stageProgressStartTime = 9_000L,
             growthLocked = true,
             growthLockStartedAt = 12_000L,
+            introspectionLevel = 12.5f,
             stage = GrowthStage.TEEN
         )
 
@@ -37,16 +39,27 @@ class TamaGrowthTimingTest {
         assertEquals(1_000L, roundTrip.birthTimestamp)
         assertEquals(9_000L, roundTrip.stageProgressStartTime)
         assertEquals(12_000L, roundTrip.growthLockStartedAt)
+        assertEquals(12.5f, roundTrip.introspectionLevel, 0.001f)
         assertEquals(GrowthStage.TEEN, roundTrip.stage)
     }
 
     @Test
-    fun `senior pets can work while earlier stages stay blocked`() {
-        assertFalse(GrowthStage.EGG.canWork())
+    fun `only baby pets are blocked from work`() {
+        assertTrue(GrowthStage.EGG.canWork())
         assertFalse(GrowthStage.BABY.canWork())
-        assertFalse(GrowthStage.CHILD.canWork())
+        assertTrue(GrowthStage.CHILD.canWork())
         assertTrue(GrowthStage.TEEN.canWork())
         assertTrue(GrowthStage.ADULT.canWork())
         assertTrue(GrowthStage.SENIOR.canWork())
+    }
+
+    @Test
+    fun `only baby pets are blocked from study`() {
+        assertTrue(GrowthStage.EGG.canStudy())
+        assertFalse(GrowthStage.BABY.canStudy())
+        assertTrue(GrowthStage.CHILD.canStudy())
+        assertTrue(GrowthStage.TEEN.canStudy())
+        assertTrue(GrowthStage.ADULT.canStudy())
+        assertTrue(GrowthStage.SENIOR.canStudy())
     }
 }

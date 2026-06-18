@@ -714,6 +714,7 @@ object NativeChatNotesBackupManager {
         modelName = modelName,
         whisperModelPath = whisperModelPath,
         whisperLanguage = whisperLanguage,
+        preferWhisperAudioTranscription = preferWhisperAudioTranscription,
         defaultApiParams = defaultApiParams,
         lastUsed = lastUsed
     )
@@ -753,6 +754,7 @@ object NativeChatNotesBackupManager {
         modelName = modelName,
         whisperModelPath = whisperModelPath,
         whisperLanguage = whisperLanguage,
+        preferWhisperAudioTranscription = preferWhisperAudioTranscription,
         defaultApiParams = defaultApiParams,
         lastUsed = lastUsed
     )
@@ -1347,6 +1349,7 @@ data class LlamaServerBackup(
     val modelName: String? = null,
     val whisperModelPath: String? = null,
     val whisperLanguage: String = LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE,
+    val preferWhisperAudioTranscription: Boolean = false,
     val defaultApiParams: String? = null,
     val lastUsed: Long = 0
 )

@@ -6,6 +6,8 @@ Access our new wiki and read all about the app https://adt.manube.org/
 
 Run local LLMs, Whisper transcription, image generation, distributed inference, dataset creation, offline knowledge tools, and AI-powered utilities directly on Android. The project is built for people who care about privacy, edge AI, on-device AI, distributed compute, and squeezing useful work out of old phones instead of leaving them in a drawer.
 
+Read the web guide at [adt.manube.org](https://adt.manube.org/) for the page-by-page walkthrough.
+
 [![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://developer.android.com)
 [![Min SDK](https://img.shields.io/badge/Min%20SDK-26-blue.svg)](https://developer.android.com)
 [![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)](LICENSE)
@@ -33,6 +35,51 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - AI agent workspace with custom tools, custom agents, and project memory
 - Tama virtual pet systems with adventures, farming, chat, and persistent memories
 - Android share-intent support for PDFs, videos, images, and audio files
+
+## Guide Index
+
+- [Dashboard](#dashboard): servers, knowledge bases, file sharing, Kiwix, distributed inference
+- [AI HUB](#ai-hub): AI Servers, studios, workflows, datasets, native chat, agent tools
+- [Models](#models): model families, imports, downloads, exports, sharing
+- [Settings](#settings): runtime controls, backups, restore, prompts, output paths
+- [Organizer](#organizer): notes, calendar, alarms, widgets
+- [P.E.T.](#pet): pet systems, chat, gallery, farm, adventures
+
+## Pages From The Web Guide
+
+### Dashboard
+
+- The Dashboard is the control surface for the app's local services and infrastructure tools.
+- It brings together server start and stop controls, knowledge bases, local file sharing, Kiwix, and distributed inference entry points.
+
+### AI HUB
+
+- The AI HUB groups the main AI work surfaces inside the app.
+- It groups AI Servers, image and video generation, ONNX image generation, background removal, text to speech, audio transcription, subtitle and translation workflows, PDF tools, video summary, benchmark, dataset creation, training, Termux SSH tools, the AI agent workspace, Ollama Manager, and native llama chat.
+- The browser-facing AI Servers Hub also maps Image Studio, Video Studio, Workflows, Voice Studio, Video Upscale, Docs and Datasets, and Llama Chat into local web UIs with QR and LAN access controls.
+
+### Models
+
+- The Models area is split by model family so you can manage LLM, Stable Diffusion, ONNX, LiteRT, Whisper, and shared model workflows separately.
+- The model screens cover installed items, downloads, discovery, import, export, rename, and sharing flows.
+- The LLM-side model flow also includes vision-projector handling for compatible setups.
+
+### Settings
+
+- The Settings area covers general app behavior, LLM runtime controls, image generation settings, Whisper settings, video upscaler settings, and system prompts.
+- It also contains the backup and restore flows, including full app backup and the native chat plus Organizer ZIP transfer flow.
+- It includes output-folder, acceleration, thread-count, and saved-prompt controls.
+
+### Organizer
+
+- The Organizer groups notes, calendar events, alarms, and their widget surfaces.
+- It also connects with the native chat tooling and the ZIP transfer flow described in Settings.
+
+### P.E.T.
+
+- P.E.T. is the app's Tamagotchi-like subsystem with its own home screen, chat, gallery, farm, store, and adventure systems.
+- The broader P.E.T. area includes dream recaps, artwork/gallery flows, room and decoration systems, and Adventure Gate.
+- It also connects with the app's local AI backends and long-term saved state.
 
 ## Features
 
@@ -194,6 +241,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Work, farm, and interact across multiple gameplay systems
 - Talk to your pet and build memories over time
 - Discover different personalities and long-term companionship mechanics
+- Let your pet dream, paint, and keep growing with you over long play sessions
 
 
 ## Built With

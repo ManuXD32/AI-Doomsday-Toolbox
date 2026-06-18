@@ -144,8 +144,6 @@ object OnnxImageGenerationStateStore {
 }
 
 class OnnxImageGenerationService : Service() {
-    private val diagnosticSource = "OnnxImageGenerationService"
-
     inner class LocalBinder : Binder() {
         fun getService(): OnnxImageGenerationService = this@OnnxImageGenerationService
     }
@@ -154,7 +152,6 @@ class OnnxImageGenerationService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var generationJob: Job? = null
     private var notificationTaskId: Int? = null
-    private var sessionId: String? = null
     private var lastProgressStatus: String? = null
     private var generationStartedAtMs: Long = 0L
     private var firstDenoiseStepAtMs: Long? = null
@@ -219,18 +216,6 @@ class OnnxImageGenerationService : Service() {
                 "requested=${config.requestedWidth}x${config.requestedHeight} normalized=${config.width}x${config.height} " +
                 "steps=${config.steps} backend=${config.backend.name} runtime=${config.runtimeOptions.toDisplayLines().joinToString(";")}"
         )
-        val diagnosticMode = diagnosticMode(config)
-        sessionId = GenerationDiagnosticsStore.startSession(
-            source = diagnosticSource,
-            mode = diagnosticMode,
-            details = buildSessionDetails(config),
-            phase = "starting",
-            wakeLockHeld = null,
-            notificationActive = notificationTaskId != null,
-            batteryExempt = null,
-            interactive = null,
-            powerSaveMode = null
-        )
         generationJob = serviceScope.launch {
             etaTickerJob = launch {
                 while (isActive) {
@@ -281,13 +266,12 @@ class OnnxImageGenerationService : Service() {
                                 handleProgress(
                                     holder = holder,
                                     config = config,
-                                    diagnosticMode = diagnosticMode,
                                     progress = progress,
                                     status = status
                                 )
                             },
                             onDiagnostic = { message ->
-                                recordRuntimeDiagnostic(diagnosticMode, config, message)
+                                recordRuntimeDiagnostic(config, message)
                             }
                         ).let {
                             CompletedOnnxGeneration(
@@ -306,13 +290,12 @@ class OnnxImageGenerationService : Service() {
                                 handleProgress(
                                     holder = holder,
                                     config = config,
-                                    diagnosticMode = diagnosticMode,
                                     progress = progress,
                                     status = status
                                 )
                             },
                             onDiagnostic = { message ->
-                                recordRuntimeDiagnostic(diagnosticMode, config, message)
+                                recordRuntimeDiagnostic(config, message)
                             }
                         ).let {
                             CompletedOnnxGeneration(
@@ -395,18 +378,6 @@ class OnnxImageGenerationService : Service() {
                     )
                 )
                 DebugLog.log("[OnnxImageGenerationService] Completed ${result.outputFile.name}")
-                GenerationDiagnosticsStore.finishSession(
-                    sessionId = sessionId,
-                    source = diagnosticSource,
-                    mode = diagnosticMode,
-                    outcome = "complete",
-                    details = result.outputFile.name,
-                    wakeLockHeld = null,
-                    notificationActive = notificationTaskId != null,
-                    batteryExempt = null,
-                    interactive = null,
-                    powerSaveMode = null
-                )
                 notificationTaskId?.let { taskId ->
                     UnifiedNotificationManager.completeTask(
                         taskId,
@@ -415,42 +386,17 @@ class OnnxImageGenerationService : Service() {
                 }
             } catch (cancelled: CancellationException) {
                 DebugLog.log("[OnnxImageGenerationService] Cancelled")
-                GenerationDiagnosticsStore.finishSession(
-                    sessionId = sessionId,
-                    source = diagnosticSource,
-                    mode = diagnosticMode,
-                    outcome = "cancelled",
-                    details = null,
-                    wakeLockHeld = null,
-                    notificationActive = notificationTaskId != null,
-                    batteryExempt = null,
-                    interactive = null,
-                    powerSaveMode = null
-                )
                 notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
                 holder.reset()
             } catch (e: Exception) {
                 val message = e.message ?: getString(R.string.error_generic)
                 DebugLog.log("[OnnxImageGenerationService] Failed: $message")
                 holder.updateState(OnnxImageGenerationState.Error(message))
-                GenerationDiagnosticsStore.finishSession(
-                    sessionId = sessionId,
-                    source = diagnosticSource,
-                    mode = diagnosticMode,
-                    outcome = "failed",
-                    details = message,
-                    wakeLockHeld = null,
-                    notificationActive = notificationTaskId != null,
-                    batteryExempt = null,
-                    interactive = null,
-                    powerSaveMode = null
-                )
                 notificationTaskId?.let { taskId -> UnifiedNotificationManager.failTask(taskId, message) }
             } finally {
                 etaTickerJob?.cancel()
                 etaTickerJob = null
                 generationJob = null
-                sessionId = null
                 lastProgressStatus = null
                 generationStartedAtMs = 0L
                 firstDenoiseStepAtMs = null
@@ -466,7 +412,6 @@ class OnnxImageGenerationService : Service() {
     private fun handleProgress(
         holder: OnnxImageGenerationStateHolder,
         config: OnnxImageGenConfig,
-        diagnosticMode: String,
         progress: Float,
         status: String
     ) {
@@ -485,14 +430,6 @@ class OnnxImageGenerationService : Service() {
         if (status != lastProgressStatus) {
             lastProgressStatus = status
             DebugLog.log("[OnnxImageGenerationService] $notificationText (${(progress * 100f).toInt()}%)")
-            GenerationDiagnosticsStore.recordBreadcrumb(
-                source = diagnosticSource,
-                sessionId = sessionId,
-                mode = diagnosticMode,
-                event = "progress",
-                phase = notificationText,
-                details = buildSessionDetails(config)
-            )
         }
         holder.updateState(
             OnnxImageGenerationState.Generating(
@@ -659,11 +596,6 @@ class OnnxImageGenerationService : Service() {
         }.joinToString(" ")
     }
 
-    private fun diagnosticMode(config: OnnxImageGenConfig): String = when (config.mode) {
-        OnnxImageGenMode.TXT2IMG -> "ONNX_TXT2IMG"
-        OnnxImageGenMode.IMG2IMG -> "ONNX_IMG2IMG"
-    }
-
     private fun effectiveStepCount(config: OnnxImageGenConfig): Int {
         return if (config.mode == OnnxImageGenMode.IMG2IMG) {
             computeOnnxImg2ImgEffectiveSteps(
@@ -752,19 +684,7 @@ class OnnxImageGenerationService : Service() {
         }
     }
 
-    private fun recordRuntimeDiagnostic(
-        diagnosticMode: String,
-        config: OnnxImageGenConfig,
-        message: String
-    ) {
-        DebugLog.log("[OnnxImageGenerationService] $message")
-        GenerationDiagnosticsStore.recordBreadcrumb(
-            source = diagnosticSource,
-            sessionId = sessionId,
-            mode = diagnosticMode,
-            event = "onnx_runtime",
-            phase = message.substringBefore(' '),
-            details = "${buildSessionDetails(config)} :: $message"
-        )
+    private fun recordRuntimeDiagnostic(config: OnnxImageGenConfig, message: String) {
+        DebugLog.log("[OnnxImageGenerationService] ${config.mode.storageToken} $message")
     }
 }

@@ -17,13 +17,19 @@ import com.example.llamadroid.ui.settings.WhisperSettingsScreen
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsScreen
 import com.example.llamadroid.ui.settings.SystemPromptsSettingsScreen
 import com.example.llamadroid.ui.settings.PDFSettingsScreen
+import com.example.llamadroid.ui.settings.PDFTranslationSettingsScreen
 import com.example.llamadroid.ui.logs.LogsScreen
 import com.example.llamadroid.ui.pdf.PDFToolboxScreen
 import com.example.llamadroid.ui.pdf.PDFSummaryScreen
 import com.example.llamadroid.ui.ai.AIHubScreen
+import com.example.llamadroid.ui.ai.AiServersHubScreen
 import com.example.llamadroid.ui.ai.ImageGenScreen
 import com.example.llamadroid.ui.ai.LegacyUpscaleScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
+import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
+import com.example.llamadroid.ui.ai.OnnxTtsScreen
+import com.example.llamadroid.ui.ai.OnnxTtsGalleryScreen
+import com.example.llamadroid.ui.ai.LiveTranslatorScreen
 import com.example.llamadroid.ui.ai.SDModelsScreen
 import com.example.llamadroid.ui.ai.VideoGenScreen
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -58,7 +64,10 @@ import com.example.llamadroid.ui.ai.VideoUpscalerScreen
 import com.example.llamadroid.ui.models.WhisperModelsScreen
 import com.example.llamadroid.ui.models.OnnxModelsScreen
 import com.example.llamadroid.ui.models.ModelShareScreen
+import com.example.llamadroid.ui.models.LiteRtModelsScreen
 import com.example.llamadroid.ui.notes.NotesManagerScreen
+import com.example.llamadroid.ui.knowledge.KnowledgeBaseScreen
+import com.example.llamadroid.ui.knowledge.KnowledgeChunkReaderScreen
 import com.example.llamadroid.ui.ai.VideoSumupScreen
 import com.example.llamadroid.ui.ai.SubtitleBurnScreen
 import com.example.llamadroid.ui.ai.WorkflowsScreen
@@ -70,8 +79,11 @@ import com.example.llamadroid.ui.distributed.MasterModeScreen
 import com.example.llamadroid.ui.distributed.NetworkVisualizationScreen
 import com.example.llamadroid.ui.settings.WelcomeScreen
 import com.example.llamadroid.ui.settings.AboutScreen
+import com.example.llamadroid.ui.settings.BenchmarkHistoryScreen
 import com.example.llamadroid.ui.settings.BenchmarkScreen
 import com.example.llamadroid.ui.ai.DatasetScreen
+import com.example.llamadroid.ui.ai.QuadtrixTrainerScreen
+import com.example.llamadroid.ui.ai.QuadtrixWebUiScreen
 import com.example.llamadroid.ui.ai.TermuxScreen
 import com.example.llamadroid.ui.ai.TermuxWebViewScreen
 import com.example.llamadroid.ui.ai.TermuxFileManagerScreen
@@ -88,10 +100,18 @@ import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.FarmEngine
 import com.example.llamadroid.tama.data.CropDefinitions
 import com.example.llamadroid.tama.data.FarmLivestockType
+import com.example.llamadroid.tama.data.FARM_FUEL_BUCKET_ID
+import com.example.llamadroid.tama.data.FARMLAND_UPGRADE_ID
+import com.example.llamadroid.tama.data.FARM_HARVESTING_DRONE_FUEL_UPGRADE_ID
+import com.example.llamadroid.tama.data.FARM_HARVESTING_DRONE_ID
+import com.example.llamadroid.tama.data.FARM_PLANTING_DRONE_FUEL_UPGRADE_ID
+import com.example.llamadroid.tama.data.FARM_PLANTING_DRONE_ID
 import com.example.llamadroid.tama.data.FarmShopCatalog
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.InventoryItem
 import com.example.llamadroid.tama.data.ItemType
+import com.example.llamadroid.tama.data.farmDroneFuelUpgradeCostForLevel
+import com.example.llamadroid.tama.data.farmDroneIdForFuelUpgradeId
 import com.example.llamadroid.tama.ui.TamaChatScreen
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.ui.components.AssetDownloadDialog
@@ -287,9 +307,10 @@ fun LlamaApp(
                         currentRoute in listOf(
                             Screen.AIHub.route, Screen.Chat.route, Screen.ImageGen.route,
                             Screen.ImageGenUpscale.route,
-                            Screen.OnnxImageGen.route, Screen.VideoGen.route,
+                            Screen.OnnxImageGen.route, Screen.OnnxBackgroundRemoval.route, Screen.VideoGen.route,
+                            Screen.OnnxTts.route, Screen.OnnxTtsGallery.route, Screen.LiveTranslator.route,
                             Screen.AudioTranscription.route, Screen.VideoUpscaler.route,
-                            Screen.SubtitleBurn.route
+                            Screen.SubtitleBurn.route, Screen.AiServersHub.route, Screen.Workflows.route
                         )
                     
                     // For Model Hub, also highlight when on LLMModels or SDModels screens
@@ -297,7 +318,8 @@ fun LlamaApp(
                         currentRoute in listOf(
                             Screen.ModelManager.route, Screen.ModelHub.route,
                             Screen.LLMModels.route, Screen.SDModels.route,
-                            Screen.OnnxModels.route, Screen.WhisperModels.route
+                            Screen.OnnxModels.route, Screen.WhisperModels.route,
+                            Screen.LiteRtModels.route
                         )
                     
                     NavigationBarItem(
@@ -371,6 +393,7 @@ fun LlamaApp(
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
+            composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
             composable(Screen.Chat.route) { ChatScreen(navController) }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}",
@@ -386,11 +409,25 @@ fun LlamaApp(
             }
             composable(Screen.ImageGenUpscale.route) { LegacyUpscaleScreen(navController) }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
+            composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
+            composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
+            composable(Screen.OnnxTtsGallery.route) { OnnxTtsGalleryScreen(navController) }
+            composable(Screen.LiveTranslator.route) { LiveTranslatorScreen(navController) }
             composable(Screen.VideoGen.route) { VideoGenScreen(navController) }
             composable(Screen.AudioTranscription.route) { AudioTranscriptionScreen(navController) }
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
             composable(Screen.SubtitleBurn.route) { SubtitleBurnScreen(navController) }
             composable(Screen.NotesManager.route) { NotesManagerScreen(navController) }
+            composable(Screen.KnowledgeBase.route) { KnowledgeBaseScreen(navController) }
+            composable(
+                Screen.KnowledgeChunkReader.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("chunkId") { type = androidx.navigation.NavType.LongType }
+                )
+            ) { backStackEntry ->
+                val chunkId = backStackEntry.arguments?.getLong("chunkId") ?: -1L
+                KnowledgeChunkReaderScreen(navController, chunkId)
+            }
             composable(Screen.Workflows.route) { WorkflowsScreen(navController) }
             // Model screens
             composable(Screen.ModelHub.route) { ModelHubScreen(navController) }
@@ -398,6 +435,7 @@ fun LlamaApp(
             composable(Screen.SDModels.route) { SDModelsScreen(navController) }
             composable(Screen.OnnxModels.route) { OnnxModelsScreen(navController) }
             composable(Screen.WhisperModels.route) { WhisperModelsScreen(navController) }
+            composable(Screen.LiteRtModels.route) { LiteRtModelsScreen(navController) }
             composable("model_share") { ModelShareScreen(navController) }
             // Settings sub-screens
             composable("settings_general") { GeneralSettingsScreen(navController) }
@@ -411,6 +449,7 @@ fun LlamaApp(
             composable("pdf_toolbox") { PDFToolboxScreen(navController) }
             composable("pdf_summary") { PDFSummaryScreen(navController) }
             composable("settings_pdf") { PDFSettingsScreen(navController) }
+            composable("settings_pdf_translation") { PDFTranslationSettingsScreen(navController) }
             composable("video_sumup") { VideoSumupScreen(navController) }
             composable("about") { AboutScreen(navController) }
             // Kiwix screens
@@ -435,8 +474,19 @@ fun LlamaApp(
             composable(Screen.NetworkVisualization.route) { NetworkVisualizationScreen(navController) }
             // Benchmark
             composable(Screen.Benchmark.route) { BenchmarkScreen(navController) }
+            composable(Screen.BenchmarkHistory.route) { BenchmarkHistoryScreen(navController) }
             // Dataset Creator
             composable(Screen.Dataset.route) { DatasetScreen(navController) }
+            composable(Screen.QuadtrixTrainer.route) { QuadtrixTrainerScreen(navController) }
+            composable(
+                Screen.QuadtrixWebUi.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("url") { type = androidx.navigation.NavType.StringType }
+                )
+            ) { backStackEntry ->
+                val url = backStackEntry.arguments?.getString("url") ?: ""
+                QuadtrixWebUiScreen(navController, url)
+            }
             composable(
                 Screen.DatasetProject.route,
                 arguments = listOf(
@@ -538,6 +588,18 @@ fun LlamaApp(
             composable(Screen.LlamaChatList.route) {
                 com.example.llamadroid.ui.ai.llama.LlamaChatListScreen(navController)
             }
+            composable(
+                route = Screen.LlamaChatList.folderRoute,
+                arguments = listOf(
+                    androidx.navigation.navArgument("folderId") { type = androidx.navigation.NavType.LongType }
+                )
+            ) { backStackEntry ->
+                val folderId = backStackEntry.arguments?.getLong("folderId")
+                com.example.llamadroid.ui.ai.llama.LlamaChatListScreen(
+                    navController = navController,
+                    initialFolderId = folderId
+                )
+            }
             composable(Screen.LlamaScheduler.route) {
                 com.example.llamadroid.ui.ai.llama.LlamaSchedulerScreen(navController)
             }
@@ -570,6 +632,7 @@ fun LlamaApp(
                                 item.id == "hoe" -> 100L
                                 item.id == "watering_can" -> 150L
                                 item.id == "fertilizer" -> FarmShopCatalog.materialBuyPrice(item.id).toLong()
+                                item.id == FARM_FUEL_BUCKET_ID -> FarmShopCatalog.materialBuyPrice(item.id).toLong()
                                 else -> 5L
                             }
                             tamaGameEngine.buyItem(item, qty, price.toInt())
@@ -580,14 +643,98 @@ fun LlamaApp(
                         },
                         onBuyUpgrade = { type, price ->
                             val existingUpgrade = farmRepository.getUpgrade(activePet.id, type)
-                            if (existingUpgrade?.isPurchased == true) {
+                            val isFarmland = type == FARMLAND_UPGRADE_ID
+                            val droneFuelTarget = farmDroneIdForFuelUpgradeId(type)
+                            val displayName = when (type) {
+                                FARMLAND_UPGRADE_ID -> context.getString(R.string.tama_farm_upgrade_farmland)
+                                "well" -> context.getString(R.string.tama_farm_upgrade_well)
+                                "composter" -> context.getString(R.string.tama_farm_upgrade_composter)
+                                FARM_PLANTING_DRONE_FUEL_UPGRADE_ID -> context.getString(R.string.tama_farm_drone_fuel_upgrade_name, context.getString(R.string.tama_farm_planting_drone))
+                                FARM_HARVESTING_DRONE_FUEL_UPGRADE_ID -> context.getString(R.string.tama_farm_drone_fuel_upgrade_name, context.getString(R.string.tama_farm_harvesting_drone))
+                                else -> type.replaceFirstChar { it.uppercase() }
+                            }
+                            if (droneFuelTarget != null) {
+                                val droneUpgrade = farmRepository.getUpgrade(activePet.id, droneFuelTarget)
+                                if (droneUpgrade?.isPurchased != true) {
+                                    TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                } else {
+                                    val now = System.currentTimeMillis()
+                                    val cost = if (droneFuelTarget == FARM_PLANTING_DRONE_ID) {
+                                        val state = farmRepository.decodePlantingDroneState(droneUpgrade, now)
+                                        farmDroneFuelUpgradeCostForLevel(state.fuelUpgradeLevel)
+                                    } else {
+                                        val state = farmRepository.decodeHarvesterDroneState(droneUpgrade, now)
+                                        farmDroneFuelUpgradeCostForLevel(state.fuelUpgradeLevel)
+                                    }
+                                    if (cost == null) {
+                                        TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_upgrade_maxed))
+                                    } else if (!tamaGameEngine.spendMoney(cost.toLong())) {
+                                        TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                    } else {
+                                        if (droneFuelTarget == FARM_PLANTING_DRONE_ID) {
+                                            val state = farmRepository.decodePlantingDroneState(droneUpgrade, now)
+                                            farmRepository.savePlantingDroneState(
+                                                activePet.id,
+                                                state.copy(fuelUpgradeLevel = state.fuelUpgradeLevel + 1, lastUpdatedAt = now)
+                                            )
+                                        } else {
+                                            val state = farmRepository.decodeHarvesterDroneState(droneUpgrade, now)
+                                            farmRepository.saveHarvesterDroneState(
+                                                activePet.id,
+                                                state.copy(fuelUpgradeLevel = state.fuelUpgradeLevel + 1, lastUpdatedAt = now)
+                                            )
+                                        }
+                                        tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, displayName))
+                                        TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, displayName))
+                                    }
+                                }
+                            } else if (!isFarmland && existingUpgrade?.isPurchased == true) {
                                 TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
                             } else if (tamaGameEngine.spendMoney(price.toLong())) {
-                                farmRepository.buyUpgrade(activePet.id, type, price)
-                                tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, type.replaceFirstChar { it.uppercase() }))
-                                TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, type.replaceFirstChar { it.uppercase() }))
+                                val upgraded = if (isFarmland) {
+                                    farmRepository.upgradeFarmland(activePet.id)
+                                } else {
+                                    farmRepository.buyUpgrade(activePet.id, type, price)
+                                    true
+                                }
+                                if (upgraded) {
+                                    tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, displayName))
+                                    TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, displayName))
+                                } else {
+                                    tamaGameEngine.awardMoney(price.toLong())
+                                    TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_upgrade_maxed))
+                                }
                             } else {
                                 TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                            }
+                        },
+                        onBuyDrone = { type, price ->
+                            val displayName = context.getString(
+                                if (type == FARM_PLANTING_DRONE_ID) R.string.tama_farm_planting_drone else R.string.tama_farm_harvesting_drone
+                            )
+                            val existingUpgrade = farmRepository.getUpgrade(activePet.id, type)
+                            val alreadyInInventory = activePet.inventory.any { it.id == type }
+                            if (existingUpgrade?.isPurchased == true || alreadyInInventory) {
+                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                            } else {
+                                val result = tamaGameEngine.buyItem(
+                                    InventoryItem(
+                                        id = type,
+                                        name = displayName,
+                                        type = ItemType.TOOL
+                                    ),
+                                    1,
+                                    price
+                                )
+                                if (result.success) {
+                                    farmRepository.buyUpgrade(activePet.id, type, price)
+                                    tamaGameEngine.logEvent(
+                                        activePet.id,
+                                        EventType.OTHER,
+                                        context.getString(R.string.event_purchased_upgrade, displayName)
+                                    )
+                                }
+                                result
                             }
                         },
                         onBuyLivestock = { type ->
@@ -704,6 +851,21 @@ fun LlamaApp(
                     dungeonTypeName = dungeonTypeName,
                     database = tamaDatabase,
                     settingsRepository = settingsRepo
+                )
+            }
+
+            composable(Screen.AdventureGate.route) {
+                com.example.llamadroid.tama.ui.AdventureGateScreen(
+                    navController = navController,
+                    database = tamaDatabase
+                )
+            }
+
+            composable(Screen.NightArena.route) {
+                com.example.llamadroid.tama.ui.AdventureGateScreen(
+                    navController = navController,
+                    database = tamaDatabase,
+                    mode = com.example.llamadroid.tama.ui.AdventureGateScreenMode.NIGHT_ARENA
                 )
             }
         }

@@ -5,6 +5,9 @@ import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.db.TamaArtworkEntity
 import com.example.llamadroid.tama.db.AdventureSessionEntity
 import com.example.llamadroid.tama.db.AdventureStageEntity
+import com.example.llamadroid.tama.db.AdventureGateBattleStateEntity
+import com.example.llamadroid.tama.db.AdventureGateProfileEntity
+import com.example.llamadroid.tama.db.AdventureGateWorldProgressEntity
 import com.example.llamadroid.tama.db.DungeonProgressEntity
 import com.example.llamadroid.tama.db.FarmLivestockEntity
 import com.example.llamadroid.tama.db.FarmTileEntity
@@ -23,7 +26,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
-private const val TAMA_TRANSFER_VERSION = 13
+private const val TAMA_TRANSFER_VERSION = 19
 
 @Serializable
 data class TamaTransferBundle(
@@ -46,7 +49,10 @@ data class TamaTransferBundle(
     val studySessions: List<TamaTransferStudySession> = emptyList(),
     val adventureSessions: List<TamaTransferAdventureSession> = emptyList(),
     val adventureStages: List<TamaTransferAdventureStage> = emptyList(),
-    val dungeonProgress: TamaTransferDungeonProgress? = null
+    val dungeonProgress: TamaTransferDungeonProgress? = null,
+    val adventureGateProfile: TamaTransferAdventureGateProfile? = null,
+    val adventureGateWorldProgress: List<TamaTransferAdventureGateWorldProgress> = emptyList(),
+    val adventureGateBattleState: TamaTransferAdventureGateBattleState? = null
 )
 
 @Serializable
@@ -64,6 +70,7 @@ data class TamaTransferSettings(
     val tamaBackend: String = "OLLAMA",
     val tamaThinkingEnabled: Boolean = true,
     val tamaLlamaServerUrl: String = "",
+    val tamaLlamaSwapUrl: String = "",
     val tamaLlamaServerModelLabel: String? = null,
     val tamaLlamaServerContextTokens: Int = -1,
     val tamaLlamaServerContextLabel: String? = null,
@@ -86,6 +93,7 @@ data class TamaTransferSettings(
     val adventureLanguage: String = "English",
     val adventureBackend: String = "OLLAMA",
     val adventureLlamaServerUrl: String = "",
+    val adventureLlamaSwapUrl: String = "",
     val adventureLlamaServerModelLabel: String? = null,
     val adventureLlamaServerContextTokens: Int = -1,
     val adventureLlamaServerContextLabel: String? = null,
@@ -714,6 +722,150 @@ data class TamaTransferDungeonProgress(
             petId = entity.petId,
             completedDungeonCount = entity.completedDungeonCount,
             lastCompletedDungeonType = entity.lastCompletedDungeonType
+        )
+    }
+}
+
+@Serializable
+data class TamaTransferAdventureGateProfile(
+    val petId: String,
+    val level: Int = 1,
+    val xp: Int = 0,
+    val maxHp: Int = 120,
+    val maxMana: Int = 40,
+    val attack: Int = 18,
+    val magic: Int = 14,
+    val defense: Int = 10,
+    val speed: Int = 10,
+    val accuracy: Int = 100,
+    val evasion: Int = 5,
+    val currentHp: Int = maxHp,
+    val currentMana: Int = maxMana,
+    val skillPoints: Int = 0,
+    val purchasedSkillIdsJson: String = """["paw_strike","spark","guard"]""",
+    val learnedAttackIdsJson: String = """["paw_strike"]""",
+    val equippedAttackIdsJson: String = """["paw_strike"]""",
+    val learnedMagicIdsJson: String = """["spark","guard"]""",
+    val equippedMagicIdsJson: String = """["spark","guard"]""",
+    val equippedWeaponId: String? = null,
+    val equippedShieldId: String? = null,
+    val equippedRingId: String? = null,
+    val equippedRelicId: String? = null,
+    val lastRecoveryAt: Long = 0L,
+    val updatedAt: Long
+) {
+    fun toEntity() = AdventureGateProfileEntity(
+        petId = petId,
+        level = level,
+        xp = xp,
+        maxHp = maxHp,
+        maxMana = maxMana,
+        attack = attack,
+        magic = magic,
+        defense = defense,
+        speed = speed,
+        accuracy = accuracy,
+        evasion = evasion,
+        currentHp = currentHp,
+        currentMana = currentMana,
+        skillPoints = skillPoints,
+        purchasedSkillIdsJson = purchasedSkillIdsJson,
+        learnedAttackIdsJson = learnedAttackIdsJson,
+        equippedAttackIdsJson = equippedAttackIdsJson,
+        learnedMagicIdsJson = learnedMagicIdsJson,
+        equippedMagicIdsJson = equippedMagicIdsJson,
+        equippedWeaponId = equippedWeaponId,
+        equippedShieldId = equippedShieldId,
+        equippedRingId = equippedRingId,
+        equippedRelicId = equippedRelicId,
+        lastRecoveryAt = lastRecoveryAt.takeIf { it > 0L } ?: updatedAt,
+        updatedAt = updatedAt
+    )
+
+    companion object {
+        fun fromEntity(entity: AdventureGateProfileEntity) = TamaTransferAdventureGateProfile(
+            petId = entity.petId,
+            level = entity.level,
+            xp = entity.xp,
+            maxHp = entity.maxHp,
+            maxMana = entity.maxMana,
+            attack = entity.attack,
+            magic = entity.magic,
+            defense = entity.defense,
+            speed = entity.speed,
+            accuracy = entity.accuracy,
+            evasion = entity.evasion,
+            currentHp = entity.currentHp,
+            currentMana = entity.currentMana,
+            skillPoints = entity.skillPoints,
+            purchasedSkillIdsJson = entity.purchasedSkillIdsJson,
+            learnedAttackIdsJson = entity.learnedAttackIdsJson,
+            equippedAttackIdsJson = entity.equippedAttackIdsJson,
+            learnedMagicIdsJson = entity.learnedMagicIdsJson,
+            equippedMagicIdsJson = entity.equippedMagicIdsJson,
+            equippedWeaponId = entity.equippedWeaponId,
+            equippedShieldId = entity.equippedShieldId,
+            equippedRingId = entity.equippedRingId,
+            equippedRelicId = entity.equippedRelicId,
+            lastRecoveryAt = entity.lastRecoveryAt,
+            updatedAt = entity.updatedAt
+        )
+    }
+}
+
+@Serializable
+data class TamaTransferAdventureGateWorldProgress(
+    val petId: String,
+    val worldId: String,
+    val highestClearedPhase: Int = 0,
+    val midBossCleared: Boolean = false,
+    val finalBossCleared: Boolean = false,
+    val updatedAt: Long
+) {
+    fun toEntity() = AdventureGateWorldProgressEntity(
+        petId = petId,
+        worldId = worldId,
+        highestClearedPhase = highestClearedPhase,
+        midBossCleared = midBossCleared,
+        finalBossCleared = finalBossCleared,
+        updatedAt = updatedAt
+    )
+
+    companion object {
+        fun fromEntity(entity: AdventureGateWorldProgressEntity) = TamaTransferAdventureGateWorldProgress(
+            petId = entity.petId,
+            worldId = entity.worldId,
+            highestClearedPhase = entity.highestClearedPhase,
+            midBossCleared = entity.midBossCleared,
+            finalBossCleared = entity.finalBossCleared,
+            updatedAt = entity.updatedAt
+        )
+    }
+}
+
+@Serializable
+data class TamaTransferAdventureGateBattleState(
+    val petId: String,
+    val worldId: String,
+    val phaseNumber: Int,
+    val stateJson: String,
+    val updatedAt: Long
+) {
+    fun toEntity() = AdventureGateBattleStateEntity(
+        petId = petId,
+        worldId = worldId,
+        phaseNumber = phaseNumber,
+        stateJson = stateJson,
+        updatedAt = updatedAt
+    )
+
+    companion object {
+        fun fromEntity(entity: AdventureGateBattleStateEntity) = TamaTransferAdventureGateBattleState(
+            petId = entity.petId,
+            worldId = entity.worldId,
+            phaseNumber = entity.phaseNumber,
+            stateJson = entity.stateJson,
+            updatedAt = entity.updatedAt
         )
     }
 }

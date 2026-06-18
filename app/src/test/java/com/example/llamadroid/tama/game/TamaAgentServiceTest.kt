@@ -1,6 +1,7 @@
 package com.example.llamadroid.tama.game
 
 import com.example.llamadroid.service.OllamaService
+import com.example.llamadroid.tama.data.ActivityType
 import com.example.llamadroid.tama.data.Mood
 import com.example.llamadroid.tama.data.Personality
 import com.example.llamadroid.tama.data.PetSpeciesLine
@@ -106,5 +107,87 @@ class TamaAgentServiceTest {
         assertTrue(prompt.contains("Personality: CHEERFUL: Always optimistic and friendly"))
         assertTrue(prompt.contains("Current Local Time Right Now: 09:15"))
         assertTrue(prompt.contains("Default to 1-3 short sentences"))
+    }
+
+    @Test
+    fun `buildTamaActivityContextLine describes working state`() {
+        val now = 7_200_000L
+        val pet = TamaPet(
+            name = "Nori",
+            currentActivity = ActivityType.WORKING,
+            currentWorkJobId = "shop_helper",
+            activityStartTime = 3_600_000L
+        )
+
+        val contextLine = buildTamaActivityContextLine(
+            pet = pet,
+            workJobName = "Shop Helper",
+            now = now
+        )
+
+        assertTrue(contextLine.contains("working as Shop Helper"))
+        assertTrue(contextLine.contains("Elapsed time: 1:00:00"))
+        assertTrue(contextLine.contains("14 coins"))
+    }
+
+    @Test
+    fun `buildTamaActivityContextLine describes studying state`() {
+        val pet = TamaPet(
+            name = "Nori",
+            currentActivity = ActivityType.STUDYING,
+            activityStartTime = 60_000L
+        )
+
+        val contextLine = buildTamaActivityContextLine(
+            pet = pet,
+            studyContext = "The pet is studying in Pomodoro mode. Current phase: Focus. Selected labels: Math.",
+            now = 180_000L
+        )
+
+        assertTrue(contextLine.contains("studying right now"))
+        assertTrue(contextLine.contains("Pomodoro mode"))
+        assertTrue(contextLine.contains("Current phase: Focus"))
+        assertTrue(contextLine.contains("Elapsed study time: 02:00"))
+    }
+
+    @Test
+    fun `buildTamaActivityContextLine describes park relaxing state`() {
+        val pet = TamaPet(
+            name = "Nori",
+            currentActivity = ActivityType.RELAXING,
+            activityStartTime = 0L
+        )
+
+        val contextLine = buildTamaActivityContextLine(
+            pet = pet,
+            now = 30L * 60L * 1000L
+        )
+
+        assertTrue(contextLine.contains("relaxing in the park"))
+        assertTrue(contextLine.contains("Elapsed time: 30:00"))
+        assertTrue(contextLine.contains("20 happiness"))
+    }
+
+    @Test
+    fun `buildTamaSystemPrompt includes precise current moment detail`() {
+        val pet = TamaPet(
+            name = "Nori",
+            species = "dragon",
+            currentActivity = ActivityType.RELAXING,
+            activityStartTime = 0L
+        )
+
+        val prompt = buildTamaSystemPrompt(
+            basePrompt = "You are a lovable pet.",
+            pet = pet,
+            speciesLine = PetSpeciesLine.DRAGON,
+            memory = TamaStructuredMemory("", "", emptyList()),
+            recentEvents = emptyList(),
+            retrievalHints = emptySet(),
+            currentTime = "12:00",
+            activityContext = buildTamaActivityContextLine(pet, now = 60L * 60L * 1000L)
+        )
+
+        assertTrue(prompt.contains("Current moment detail: The pet is relaxing in the park right now."))
     }
 }

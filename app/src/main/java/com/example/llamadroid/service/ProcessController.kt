@@ -9,8 +9,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStreamReader
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.util.DeviceAcceleration
+import kotlin.math.min
+
+data class ProcessRunResult(
+    val exitCode: Int,
+    val becameReady: Boolean,
+    val stoppedIntentionally: Boolean,
+    val acceleratorBackendUnavailable: Boolean = false,
+    val acceleratorBackendDegraded: Boolean = false
+)
 
 class ProcessController {
     
@@ -42,6 +53,10 @@ class ProcessController {
             "--port", config.port.toString(),
             "--host", config.host
         )
+        config.physicalBatchSize?.let { physicalBatchSize ->
+            args.add("--ubatch-size")
+            args.add(physicalBatchSize.toString())
+        }
         
         // Add vision model projector if available
         if (config.mmprojPath != null) {
@@ -91,34 +106,33 @@ class ProcessController {
                 args.add(config.tensorSplit)
             }
         }
+
+        val customFlagsText = config.customFlags.orEmpty()
+        if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath)) &&
+            config.rpcWorkers.isEmpty() &&
+            "-ngl" !in customFlagsText &&
+            "--n-gpu-layers" !in customFlagsText
+        ) {
+            args.add("-ngl")
+            args.add("999")
+        }
         
         // Add --no-mmap flag if memory mapping is disabled
         if (config.noMmap) {
             args.add("--no-mmap")
         }
         
-        // Speculative decoding with draft model
-        if (config.draftModelPath != null) {
-            args.add("--model-draft")
-            args.add(config.draftModelPath)
-        }
-        
-        
-        // Draft parameters for draft model
-        if (config.draftModelPath != null) {
-            args.add("--draft-max")
-            args.add(config.draftMax.toString())
-            args.add("--draft-min")
-            args.add(config.draftMin.toString())
-            // p-min only applies to draft model mode
-            args.add("--draft-p-min")
-            args.add(String.format(java.util.Locale.US, "%.2f", config.draftPMin))
-        }
+        args.addAll(buildSpeculativeArgs(config))
 
         // Advanced Settings
         if (config.parallel != null) {
             args.add("--parallel")
             args.add(config.parallel.toString())
+        } else if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP &&
+            !hasAnyCommandFlag(customFlagsText, setOf("--parallel", "-np"))
+        ) {
+            args.add("--parallel")
+            args.add("1")
         }
         if (config.cacheRam != null) {
             args.add("--cache-ram")
@@ -199,16 +213,8 @@ class ProcessController {
         defaultArgs: List<String>
     ): String {
         val customFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
-        val speculativeArgs = if (config.draftModelPath != null) {
-            listOf(
-                "--model-draft", config.draftModelPath,
-                "--draft-max", config.draftMax.toString(),
-                "--draft-min", config.draftMin.toString(),
-                "--draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin)
-            )
-        } else {
-            emptyList()
-        }
+        val speculativeArgs = buildSpeculativeArgs(config)
+        val mtpArgs = emptyList<String>()
         val kvCacheArgs = if (config.kvCacheEnabled) {
             buildList {
                 add("--cache-type-k")
@@ -231,6 +237,7 @@ class ProcessController {
             "{mmproj}" to (config.mmprojPath ?: ""),
             "{threads}" to config.threads.toString(),
             "{batch_size}" to config.batchSize.toString(),
+            "{physical_batch_size}" to (config.physicalBatchSize ?: config.batchSize).toString(),
             "{context_size}" to config.contextSize.toString(),
             "{temperature}" to String.format(java.util.Locale.US, "%.2f", config.temperature),
             "{host}" to config.host,
@@ -247,6 +254,7 @@ class ProcessController {
             "{custom_flags}" to buildCommandString(customFlagsArgs),
             "{default_args}" to buildCommandString(defaultArgs.drop(1)),
             "{speculative_args}" to buildCommandString(speculativeArgs),
+            "{mtp_args}" to buildCommandString(mtpArgs),
             "{kv_cache_args}" to buildCommandString(kvCacheArgs)
         )
 
@@ -257,6 +265,79 @@ class ProcessController {
         return rendered.trim()
     }
 
+    private fun buildSpeculativeArgs(config: LlamaConfig): List<String> {
+        return when (config.speculativeMode) {
+            null -> emptyList()
+            LlamaSpeculativeMode.DRAFT_SIMPLE -> {
+                val draftModel = config.draftModelPath ?: return emptyList()
+                listOf(
+                    "--spec-type", config.speculativeMode.flagValue,
+                    "--spec-draft-model", draftModel,
+                    "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString(),
+                    "--spec-draft-n-min", config.draftMin.coerceAtLeast(0).toString(),
+                    "--spec-draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin.coerceIn(0f, 1f))
+                )
+            }
+            LlamaSpeculativeMode.DRAFT_MTP -> buildList {
+                add("--spec-type")
+                add(config.speculativeMode.flagValue)
+                config.draftModelPath?.let { draftModel ->
+                    add("--spec-draft-model")
+                    add(draftModel)
+                }
+                add("--spec-draft-n-max")
+                add(config.mtpDraftMax.coerceAtLeast(1).toString())
+                add("--spec-draft-n-min")
+                add(config.mtpDraftMin.coerceAtLeast(0).toString())
+                add("--spec-draft-p-min")
+                add(String.format(java.util.Locale.US, "%.2f", config.mtpDraftPMin.coerceIn(0f, 1f)))
+            }
+        }
+    }
+
+    fun binarySupportsMtpSpeculative(binaryFile: File): Boolean {
+        if (!binaryFile.isFile || !binaryFile.canRead()) return false
+        return binaryContainsMarker(binaryFile, MTP_SPEC_TYPE_MARKER)
+    }
+
+    private fun binaryContainsMarker(binaryFile: File, marker: ByteArray): Boolean {
+        if (marker.isEmpty()) return true
+        val buffer = ByteArray(DEFAULT_BINARY_SCAN_BUFFER_SIZE + marker.size)
+        var carry = 0
+        FileInputStream(binaryFile).use { input ->
+            while (true) {
+                val read = input.read(buffer, carry, DEFAULT_BINARY_SCAN_BUFFER_SIZE)
+                if (read <= 0) return false
+                val length = carry + read
+                if (indexOf(buffer, length, marker) >= 0) return true
+                carry = min(marker.size - 1, length)
+                if (carry > 0) {
+                    System.arraycopy(buffer, length - carry, buffer, 0, carry)
+                }
+            }
+        }
+    }
+
+    private fun indexOf(buffer: ByteArray, length: Int, marker: ByteArray): Int {
+        val lastStart = length - marker.size
+        for (start in 0..lastStart) {
+            var matched = true
+            for (offset in marker.indices) {
+                if (buffer[start + offset] != marker[offset]) {
+                    matched = false
+                    break
+                }
+            }
+            if (matched) return start
+        }
+        return -1
+    }
+
+    private fun hasAnyCommandFlag(command: String, flags: Set<String>): Boolean =
+        splitCommandLine(command).any { token ->
+            flags.any { flag -> token == flag || token.startsWith("$flag=") }
+        }
+
     private fun shellEscape(arg: String): String {
         if (arg.isEmpty()) return "''"
         val safeChars = "-_./:=,@+%".toSet()
@@ -264,13 +345,22 @@ class ProcessController {
         return "'" + arg.replace("'", "'\"'\"'") + "'"
     }
 
+    private companion object {
+        private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
+        private val MTP_SPEC_TYPE_MARKER = "draft-mtp".toByteArray(Charsets.US_ASCII)
+    }
+
     suspend fun start(
         binaryPath: String, 
         config: LlamaConfig, 
         filesDir: File, 
         customArgs: List<String>? = null,
-        onLog: ((String) -> Unit)? = null
-    ) = withContext(Dispatchers.IO) {
+        onLog: ((String) -> Unit)? = null,
+        onReady: (() -> Unit)? = null,
+        onState: ((ServerState) -> Unit)? = LlamaService.Companion::updateState,
+        onClearServerLogs: (() -> Unit)? = LlamaService.Companion::clearServerLogs,
+        onServerLog: ((String) -> Unit)? = LlamaService.Companion::addServerLog
+    ): ProcessRunResult = withContext(Dispatchers.IO) {
         stoppedIntentionally = false
         if (process?.isAlive == true) stop()
         
@@ -294,7 +384,15 @@ class ProcessController {
             pb.directory(filesDir)
             
             // Set LD_LIBRARY_PATH to include both native lib dir and our symlink dir
-            val ldPath = "${libDir.absolutePath}:${nativeLibDir?.absolutePath ?: ""}"
+            val ldPath = buildList {
+                add(libDir.absolutePath)
+                nativeLibDir?.absolutePath?.takeIf { it.isNotBlank() }?.let(::add)
+                if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath))) {
+                    DeviceAcceleration.acceleratorLibrarySearchDirs()
+                        .map { it.absolutePath }
+                        .forEach(::add)
+                }
+            }.distinct().joinToString(":")
             pb.environment()["LD_LIBRARY_PATH"] = ldPath
             DebugLog.log("ProcessController: LD_LIBRARY_PATH=$ldPath")
             
@@ -303,14 +401,26 @@ class ProcessController {
             pb.environment()["PWD"] = filesDir.absolutePath
             pb.environment()["TMPDIR"] = filesDir.absolutePath
             pb.environment()["PREFIX"] = filesDir.absolutePath
-            // Try to prevent backend loading by setting empty path
-            pb.environment()["GGML_BACKEND_PATH"] = ""
+            if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath))) {
+                pb.environment()["GGML_BACKEND_PATH"] = nativeLibDir?.absolutePath.orEmpty()
+                pb.environment()["AIDOOM_OPENCL_DEBUG"] = "1"
+                pb.environment()["ADSP_LIBRARY_PATH"] = buildList {
+                    nativeLibDir?.absolutePath?.takeIf { it.isNotBlank() }?.let(::add)
+                    add(filesDir.absolutePath)
+                    DeviceAcceleration.acceleratorLibrarySearchDirs()
+                        .map { it.absolutePath }
+                        .forEach(::add)
+                }.distinct().joinToString(";")
+            } else {
+                pb.environment()["GGML_BACKEND_PATH"] = ""
+                pb.environment().remove("ADSP_LIBRARY_PATH")
+            }
             DebugLog.log("ProcessController: Working dir=${filesDir.absolutePath}")
             
             process = pb.start()
             
             // Start log consumer
-            LlamaService.Companion.clearServerLogs()
+            onClearServerLogs?.invoke()
             val reader = BufferedReader(InputStreamReader(process!!.inputStream))
             var line: String?
             var modelLoaded = false
@@ -322,7 +432,7 @@ class ProcessController {
                 // Invoke callback
                 line?.let { 
                     onLog?.invoke(it) 
-                    LlamaService.Companion.addServerLog(it)
+                    onServerLog?.invoke(it)
                 }
                 
                 // Parse loading progress from server output
@@ -330,24 +440,30 @@ class ProcessController {
                 
                 // Detect model loading (llama.cpp outputs loading progress)
                 if (currentLine.contains("loading model")) {
-                    LlamaService.Companion.updateState(ServerState.Loading(-1f, "Loading model..."))
+                    onState?.invoke(ServerState.Loading(-1f, "Loading model..."))
                 }
                 
                 // Detect tensor loading progress (e.g., "llm_load_tensors: tensor")
                 if (currentLine.contains("llm_load_tensors") && !modelLoaded) {
-                    LlamaService.Companion.updateState(ServerState.Loading(-1f, "Loading tensors..."))
+                    onState?.invoke(ServerState.Loading(-1f, "Loading tensors..."))
                 }
                 
                 // Detect warming up
                 if (currentLine.contains("warming up")) {
-                    LlamaService.Companion.updateState(ServerState.Loading(-1f, "Warming up model..."))
+                    onState?.invoke(ServerState.Loading(-1f, "Warming up model..."))
                 }
                 
                 // Detect server ready (listening)
-                if (currentLine.contains("listening on") || currentLine.contains("HTTP server") || currentLine.contains("server listening")) {
-                    modelLoaded = true
-                    LlamaService.Companion.updateState(ServerState.Running(config.port))
-                    DebugLog.log("ProcessController: Server is ready and listening on port ${config.port}")
+                val serverReady = currentLine.contains("server is listening") ||
+                    currentLine.contains("listening on http://") ||
+                    currentLine.contains("server listening")
+                if (serverReady) {
+                    if (!modelLoaded) {
+                        modelLoaded = true
+                        onState?.invoke(ServerState.Running(config.port))
+                        onReady?.invoke()
+                        DebugLog.log("ProcessController: Server is ready and listening on port ${config.port}")
+                    }
                 }
             }
             
@@ -357,8 +473,23 @@ class ProcessController {
             process = null
             val appContext = LlamaApplication.instance
             val exitMessage = appContext.getString(R.string.llama_server_process_exited_unexpectedly, exitCode)
-            LlamaService.Companion.updateState(resolveExitState(exitCode, exitMessage))
+            onState?.invoke(resolveExitState(exitCode, exitMessage))
+            return@withContext ProcessRunResult(
+                exitCode = exitCode,
+                becameReady = modelLoaded,
+                stoppedIntentionally = stoppedIntentionally
+            )
         } catch (e: Exception) {
+            if (stoppedIntentionally) {
+                DebugLog.log("ProcessController: stopped while reading process output: ${e.message}")
+                process = null
+                onState?.invoke(ServerState.Stopped)
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
             DebugLog.log("ProcessController: FAILED - ${e.message}")
             Log.e("ProcessController", "Failed to start", e)
             throw e
@@ -422,10 +553,8 @@ class ProcessController {
             
             if (sourceFile != null) {
                 try {
-                    // Delete existing link/file
-                    if (linkFile.exists()) {
-                        linkFile.delete()
-                    }
+                    // Delete existing files and dangling symlinks before recreating the link/copy.
+                    linkFile.delete()
                     
                     // Try Java NIO symlink first
                     try {
@@ -445,7 +574,7 @@ class ProcessController {
                         DebugLog.log("ProcessController: Copied ${sourceFile.name} to ${linkName}")
                     }
                 } catch (e: Exception) {
-                    DebugLog.log("ProcessController: Error linking/copying $linkName: ${e.message}")
+                    DebugLog.log("ProcessController: Optional library link unavailable for $linkName: ${e.message}")
                 }
             } else {
                  DebugLog.log("ProcessController: Source library not found for $linkName (tried: $sourceCandidates)")

@@ -64,9 +64,13 @@ fun AdventureSettingsDialog(
     val backend by settingsRepository.adventureBackend.collectAsState()
     val ollamaUrl by settingsRepository.adventureOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepository.adventureLlamaServerUrl.collectAsState()
+    val llamaSwapUrl by settingsRepository.adventureLlamaSwapUrl.collectAsState()
     val llamaServerModelLabel by settingsRepository.adventureLlamaServerModelLabel.collectAsState()
     val llamaServerContextTokens by settingsRepository.adventureLlamaServerContextTokens.collectAsState()
     val llamaServerContextLabel by settingsRepository.adventureLlamaServerContextLabel.collectAsState()
+    val liteRtModelId by settingsRepository.adventureLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepository.adventureLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepository.adventureLiteRtMtpEnabled.collectAsState()
     val adventureLanguage by settingsRepository.adventureLanguage.collectAsState()
     val worldImageEnabled by settingsRepository.adventureWorldImageEnabled.collectAsState()
     val stageImagesEnabled by settingsRepository.adventureStageImagesEnabled.collectAsState()
@@ -95,9 +99,11 @@ fun AdventureSettingsDialog(
     var availableOllamaModels by remember { mutableStateOf<List<String>>(emptyList()) }
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
         availableOllamaModels = metadata.availableModels
-        settingsRepository.setAdventureLlamaServerModelLabel(metadata.serverModelLabel)
-        settingsRepository.setAdventureLlamaServerContextTokens(metadata.serverContextTokens)
-        settingsRepository.setAdventureLlamaServerContextLabel(metadata.serverContextLabel)
+        if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+            settingsRepository.setAdventureLlamaServerModelLabel(metadata.serverModelLabel)
+            settingsRepository.setAdventureLlamaServerContextTokens(metadata.serverContextTokens)
+            settingsRepository.setAdventureLlamaServerContextLabel(metadata.serverContextLabel)
+        }
     }
 
     LaunchedEffect(storyModel) {
@@ -129,26 +135,39 @@ fun AdventureSettingsDialog(
                     onOllamaUrlChange = settingsRepository::setAdventureOllamaUrl,
                     llamaServerUrl = llamaServerUrl,
                     onLlamaServerUrlChange = settingsRepository::setAdventureLlamaServerUrl,
+                    llamaSwapUrl = llamaSwapUrl,
+                    onLlamaSwapUrlChange = settingsRepository::setAdventureLlamaSwapUrl,
                     ollamaModel = storyModel,
                     onOllamaModelSelected = settingsRepository::setAdventureModel,
+                    llamaSwapModel = storyModel,
+                    onLlamaSwapModelSelected = settingsRepository::setAdventureModel,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
                     llamaServerContextTokens = llamaServerContextTokens,
                     requestedContextForWarning = null,
+                    liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = settingsRepository::setAdventureLiteRtModelId,
+                    liteRtBackend = liteRtBackend,
+                    onLiteRtBackendChange = settingsRepository::setAdventureLiteRtBackend,
+                    liteRtMtpEnabled = liteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = settingsRepository::setAdventureLiteRtMtpEnabled,
                     fetchMetadata = {
                         RemoteSummaryClientFactory.fromConfig(
                             RemoteSummaryBackendConfig(
+                                context = context,
                                 backend = backend,
-                                baseUrl = if (backend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER) {
-                                    llamaServerUrl.trim()
-                                } else {
-                                    ollamaUrl.trim()
+                                baseUrl = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.trim()
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.trim()
+                                    else -> ollamaUrl.trim()
                                 },
-                                model = if (backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
-                                    storyModel.trim().ifBlank { null }
-                                } else {
-                                    llamaServerModelLabel?.trim()?.ifBlank { null }
+                                model = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerModelLabel?.trim()?.ifBlank { null }
+                                    else -> storyModel.trim().ifBlank { null }
                                 },
+                                liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                                liteRtBackend = liteRtBackend,
+                                liteRtMtpEnabled = liteRtMtpEnabled,
                                 timeoutMinutes = 1
                             )
                         ).fetchMetadata()
@@ -156,7 +175,7 @@ fun AdventureSettingsDialog(
                     onMetadataLoaded = ::persistMetadata
                 )
 
-                if (backend == SettingsRepository.PDF_BACKEND_OLLAMA) {
+                if (SettingsRepository.requiresSelectedRemoteModel(backend)) {
                     AdventureModelDropdown(
                         title = stringResource(R.string.adventure_story_model_title),
                         selectedModel = storyModel,
@@ -469,7 +488,7 @@ fun DungeonThemesDialog(
                                 }
                             )
                         ) {
-                            Text(dungeon.emoji, fontSize = 18.sp)
+                            TamaUiIcon(dungeon.emoji, fontSize = 18.sp)
                         }
                     }
                 }

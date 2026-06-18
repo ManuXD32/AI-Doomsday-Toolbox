@@ -21,14 +21,20 @@ object Downloader {
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(0, TimeUnit.SECONDS)
+        .writeTimeout(0, TimeUnit.SECONDS)
+        .callTimeout(0, TimeUnit.SECONDS)
         .build()
     
     // Track active downloads by filename for cancellation
     private val activeDownloads = ConcurrentHashMap<String, Call>()
     
-    fun download(url: String, destFile: File, context: Context? = null): Flow<Float> = flow {
+    fun download(
+        url: String,
+        destFile: File,
+        context: Context? = null,
+        bearerToken: String? = null
+    ): Flow<Float> = flow {
         // Acquire WakeLock to prevent CPU sleep during download
         val wakeLock = context?.let {
             val powerManager = it.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -38,10 +44,14 @@ object Downloader {
         val downloadId = destFile.name
         
         try {
-            wakeLock?.acquire(60 * 60 * 1000L) // Max 1 hour
+            wakeLock?.acquire()
             DebugLog.log("Downloader: Starting download of $url")
             
-            val request = Request.Builder().url(url).build()
+            val requestBuilder = Request.Builder().url(url)
+            bearerToken?.trim()?.takeIf { it.isNotBlank() }?.let { token ->
+                requestBuilder.header("Authorization", "Bearer $token")
+            }
+            val request = requestBuilder.build()
             val call = client.newCall(request)
             activeDownloads[downloadId] = call
             
@@ -109,7 +119,7 @@ object Downloader {
         }
         
         try {
-            wakeLock?.acquire(60 * 60 * 1000L)
+            wakeLock?.acquire()
             DebugLog.log("Downloader: Starting SAF download of $url")
             
             val request = Request.Builder().url(url).build()

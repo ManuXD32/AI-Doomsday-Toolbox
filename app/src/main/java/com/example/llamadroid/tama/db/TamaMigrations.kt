@@ -601,6 +601,329 @@ object TamaMigrations {
             )
         }
     }
+
+    val MIGRATION_33_34 = object : Migration(33, 34) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 33 -> 34: Adventure Gate RPG")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS adventure_gate_profiles (
+                    petId TEXT PRIMARY KEY NOT NULL,
+                    level INTEGER NOT NULL DEFAULT 1,
+                    xp INTEGER NOT NULL DEFAULT 0,
+                    maxHp INTEGER NOT NULL DEFAULT 120,
+                    maxMana INTEGER NOT NULL DEFAULT 40,
+                    attack INTEGER NOT NULL DEFAULT 18,
+                    magic INTEGER NOT NULL DEFAULT 14,
+                    defense INTEGER NOT NULL DEFAULT 10,
+                    speed INTEGER NOT NULL DEFAULT 10,
+                    learnedAttackIdsJson TEXT NOT NULL DEFAULT '["paw_strike"]',
+                    equippedAttackIdsJson TEXT NOT NULL DEFAULT '["paw_strike"]',
+                    learnedMagicIdsJson TEXT NOT NULL DEFAULT '["spark","guard"]',
+                    equippedMagicIdsJson TEXT NOT NULL DEFAULT '["spark","guard"]',
+                    updatedAt INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS adventure_gate_world_progress (
+                    petId TEXT NOT NULL,
+                    worldId TEXT NOT NULL,
+                    highestClearedPhase INTEGER NOT NULL DEFAULT 0,
+                    midBossCleared INTEGER NOT NULL DEFAULT 0,
+                    finalBossCleared INTEGER NOT NULL DEFAULT 0,
+                    updatedAt INTEGER NOT NULL,
+                    PRIMARY KEY(petId, worldId)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS index_adventure_gate_world_progress_petId
+                ON adventure_gate_world_progress(petId)
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS adventure_gate_battle_state (
+                    petId TEXT PRIMARY KEY NOT NULL,
+                    worldId TEXT NOT NULL,
+                    phaseNumber INTEGER NOT NULL,
+                    stateJson TEXT NOT NULL,
+                    updatedAt INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS index_adventure_gate_battle_state_petId_worldId_phaseNumber
+                ON adventure_gate_battle_state(petId, worldId, phaseNumber)
+                """.trimIndent()
+            )
+        }
+    }
+
+    val MIGRATION_34_35 = object : Migration(34, 35) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 34 -> 35: Adventure Gate RPG V2 profile persistence")
+            if (!columnExists(db, "adventure_gate_profiles", "currentHp")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN currentHp INTEGER NOT NULL DEFAULT 120")
+                db.execSQL("UPDATE adventure_gate_profiles SET currentHp = maxHp")
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "currentMana")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN currentMana INTEGER NOT NULL DEFAULT 40")
+                db.execSQL("UPDATE adventure_gate_profiles SET currentMana = maxMana")
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "skillPoints")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN skillPoints INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE adventure_gate_profiles SET skillPoints = CASE WHEN level > 1 THEN level - 1 ELSE 0 END")
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "purchasedSkillIdsJson")) {
+                db.execSQL(
+                    """
+                    ALTER TABLE adventure_gate_profiles
+                    ADD COLUMN purchasedSkillIdsJson TEXT NOT NULL DEFAULT '["paw_strike","spark","guard"]'
+                    """.trimIndent()
+                )
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "lastRecoveryAt")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN lastRecoveryAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE adventure_gate_profiles SET lastRecoveryAt = updatedAt")
+            }
+            db.execSQL("UPDATE adventure_gate_profiles SET purchasedSkillIdsJson = '[\"paw_strike\",\"spark\",\"guard\"]'")
+            db.execSQL("UPDATE adventure_gate_profiles SET equippedAttackIdsJson = '[\"paw_strike\"]'")
+            db.execSQL("UPDATE adventure_gate_profiles SET equippedMagicIdsJson = '[\"spark\",\"guard\"]'")
+        }
+    }
+
+    val MIGRATION_35_36 = object : Migration(35, 36) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 35 -> 36: Adventure Gate equipment slots")
+            if (!columnExists(db, "adventure_gate_profiles", "equippedWeaponId")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN equippedWeaponId TEXT")
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "equippedShieldId")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN equippedShieldId TEXT")
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "equippedRingId")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN equippedRingId TEXT")
+            }
+        }
+    }
+
+    val MIGRATION_36_37 = object : Migration(36, 37) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 36 -> 37: Adventure Gate relic slot")
+            if (!columnExists(db, "adventure_gate_profiles", "equippedRelicId")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN equippedRelicId TEXT")
+            }
+            db.execSQL(
+                """
+                UPDATE adventure_gate_profiles
+                SET equippedRelicId = CASE
+                    WHEN equippedRingId LIKE 'ag_relic_%' THEN equippedRingId
+                    WHEN equippedShieldId LIKE 'ag_relic_%' THEN equippedShieldId
+                    WHEN equippedWeaponId LIKE 'ag_relic_%' THEN equippedWeaponId
+                    ELSE equippedRelicId
+                END
+                """.trimIndent()
+            )
+            db.execSQL("UPDATE adventure_gate_profiles SET equippedRingId = NULL WHERE equippedRingId LIKE 'ag_relic_%'")
+            db.execSQL("UPDATE adventure_gate_profiles SET equippedShieldId = NULL WHERE equippedShieldId LIKE 'ag_relic_%'")
+            db.execSQL("UPDATE adventure_gate_profiles SET equippedWeaponId = NULL WHERE equippedWeaponId LIKE 'ag_relic_%'")
+        }
+    }
+
+    val MIGRATION_37_38 = object : Migration(37, 38) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 37 -> 38: Adventure Gate accuracy/evasion")
+            if (!columnExists(db, "adventure_gate_profiles", "accuracy")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN accuracy INTEGER NOT NULL DEFAULT 100")
+                db.execSQL("UPDATE adventure_gate_profiles SET accuracy = 100 + (level - 1)")
+            }
+            if (!columnExists(db, "adventure_gate_profiles", "evasion")) {
+                db.execSQL("ALTER TABLE adventure_gate_profiles ADD COLUMN evasion INTEGER NOT NULL DEFAULT 5")
+                db.execSQL("UPDATE adventure_gate_profiles SET evasion = 5 + (level - 1)")
+            }
+        }
+    }
+
+    val MIGRATION_38_39 = object : Migration(38, 39) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 38 -> 39: Refresh Adventure Gate level stats")
+            db.execSQL(
+                """
+                UPDATE adventure_gate_profiles
+                SET
+                    maxHp = 120 + ((level - 1) * 10) + ${adventureGateGearBonusSql(AdventureGateProfileStat.MAX_HP)},
+                    maxMana = 40 + ((level - 1) * 5) + ${adventureGateGearBonusSql(AdventureGateProfileStat.MAX_MANA)} + ${adventureGateStudyManaBonusSql()},
+                    attack = 18 + ((level - 1) * 2) + ${adventureGateGearBonusSql(AdventureGateProfileStat.ATTACK)},
+                    magic = 14 + ((level - 1) * 2) + ${adventureGateGearBonusSql(AdventureGateProfileStat.MAGIC)} + ${adventureGateStudyMagicBonusSql()},
+                    defense = 10 + ((level - 1) * 2) + ${adventureGateGearBonusSql(AdventureGateProfileStat.DEFENSE)},
+                    speed = 10 + (level - 1) + ${adventureGateGearBonusSql(AdventureGateProfileStat.SPEED)},
+                    accuracy = 100 + (level - 1) + ${adventureGateGearBonusSql(AdventureGateProfileStat.ACCURACY)},
+                    evasion = 5 + (level - 1) + ${adventureGateGearBonusSql(AdventureGateProfileStat.EVASION)}
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                UPDATE adventure_gate_profiles
+                SET
+                    currentHp = CASE WHEN currentHp > maxHp THEN maxHp ELSE currentHp END,
+                    currentMana = CASE WHEN currentMana > maxMana THEN maxMana ELSE currentMana END
+                """.trimIndent()
+            )
+        }
+    }
+
+    val MIGRATION_39_40 = object : Migration(39, 40) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 39 -> 40: Adventure Gate Night Arena")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS adventure_gate_night_arena_runs (
+                    petId TEXT PRIMARY KEY NOT NULL,
+                    nightKey TEXT NOT NULL,
+                    levelsJson TEXT NOT NULL,
+                    clearedLevelIdsJson TEXT NOT NULL,
+                    createdAt INTEGER NOT NULL,
+                    updatedAt INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+        }
+    }
+
+    val MIGRATION_40_41 = object : Migration(40, 41) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 40 -> 41: Tama introspection")
+            if (!columnExists(db, "tama_pets", "introspectionLevel")) {
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN introspectionLevel REAL NOT NULL DEFAULT 0")
+            }
+        }
+    }
+
+    val MIGRATION_41_42 = object : Migration(41, 42) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 41 -> 42: Tama exercise and market quotes")
+            if (!columnExists(db, "tama_pets", "exerciseLevel")) {
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN exerciseLevel REAL NOT NULL DEFAULT 0")
+            }
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS tama_market_quotes (
+                    petId TEXT NOT NULL,
+                    itemId TEXT NOT NULL,
+                    quoteWeekKey TEXT NOT NULL,
+                    currentPrice INTEGER NOT NULL,
+                    unitsSoldSinceRefresh INTEGER NOT NULL,
+                    updatedAt INTEGER NOT NULL,
+                    PRIMARY KEY(petId, itemId)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS index_tama_market_quotes_petId_quoteWeekKey
+                ON tama_market_quotes(petId, quoteWeekKey)
+                """.trimIndent()
+            )
+        }
+    }
+
+    private enum class AdventureGateProfileStat {
+        MAX_HP,
+        MAX_MANA,
+        ATTACK,
+        MAGIC,
+        DEFENSE,
+        SPEED,
+        ACCURACY,
+        EVASION
+    }
+
+    private data class AdventureGateMigrationStatBonus(
+        val maxHp: Int = 0,
+        val maxMana: Int = 0,
+        val attack: Int = 0,
+        val magic: Int = 0,
+        val defense: Int = 0,
+        val speed: Int = 0,
+        val accuracy: Int = 0,
+        val evasion: Int = 0
+    ) {
+        fun valueFor(stat: AdventureGateProfileStat): Int = when (stat) {
+            AdventureGateProfileStat.MAX_HP -> maxHp
+            AdventureGateProfileStat.MAX_MANA -> maxMana
+            AdventureGateProfileStat.ATTACK -> attack
+            AdventureGateProfileStat.MAGIC -> magic
+            AdventureGateProfileStat.DEFENSE -> defense
+            AdventureGateProfileStat.SPEED -> speed
+            AdventureGateProfileStat.ACCURACY -> accuracy
+            AdventureGateProfileStat.EVASION -> evasion
+        }
+    }
+
+    private val adventureGateMigrationGearBonuses = mapOf(
+        "ag_weapon_sprout_baton" to AdventureGateMigrationStatBonus(attack = 4, accuracy = 3),
+        "ag_shield_leaf_shell" to AdventureGateMigrationStatBonus(defense = 5),
+        "ag_ring_dewdrop" to AdventureGateMigrationStatBonus(maxHp = 12),
+        "ag_weapon_ember_hammer" to AdventureGateMigrationStatBonus(attack = 8),
+        "ag_shield_brass_button" to AdventureGateMigrationStatBonus(defense = 9),
+        "ag_ring_warm_gear" to AdventureGateMigrationStatBonus(maxMana = 8),
+        "ag_weapon_coral_bubble_rod" to AdventureGateMigrationStatBonus(magic = 10),
+        "ag_shield_pearl_shell" to AdventureGateMigrationStatBonus(defense = 13),
+        "ag_ring_tide_loop" to AdventureGateMigrationStatBonus(speed = 2, evasion = 4),
+        "ag_weapon_clockwork_clawblade" to AdventureGateMigrationStatBonus(attack = 14, speed = 2, accuracy = 6),
+        "ag_shield_gyro_plate" to AdventureGateMigrationStatBonus(defense = 17),
+        "ag_ring_second_hand" to AdventureGateMigrationStatBonus(speed = 5, evasion = 5),
+        "ag_weapon_moonmoss_quillblade" to AdventureGateMigrationStatBonus(magic = 18),
+        "ag_shield_bookcover_ward" to AdventureGateMigrationStatBonus(maxMana = 18, defense = 20),
+        "ag_ring_bookmark" to AdventureGateMigrationStatBonus(maxMana = 16, magic = 6),
+        "ag_weapon_ribbon_ice_mallet" to AdventureGateMigrationStatBonus(attack = 22),
+        "ag_shield_snowbutton_bulwark" to AdventureGateMigrationStatBonus(maxHp = 40, defense = 25),
+        "ag_ring_aurora" to AdventureGateMigrationStatBonus(magic = 10, speed = 4, accuracy = 4, evasion = 4),
+        "ag_weapon_starfall_fang" to AdventureGateMigrationStatBonus(attack = 30, magic = 8, accuracy = 8),
+        "ag_shield_eclipse_mirror" to AdventureGateMigrationStatBonus(defense = 34, evasion = 6),
+        "ag_ring_dreamlight_crown" to AdventureGateMigrationStatBonus(maxHp = 55, maxMana = 35, magic = 12),
+        "ag_relic_bramble_crown" to AdventureGateMigrationStatBonus(defense = 11),
+        "ag_relic_moth_lantern" to AdventureGateMigrationStatBonus(magic = 8),
+        "ag_relic_foreman_tongs" to AdventureGateMigrationStatBonus(attack = 16),
+        "ag_relic_marionette_core" to AdventureGateMigrationStatBonus(maxMana = 22),
+        "ag_relic_tide_gauntlet" to AdventureGateMigrationStatBonus(attack = 18),
+        "ag_relic_leviathan_scale" to AdventureGateMigrationStatBonus(defense = 24),
+        "ag_relic_roc_spring" to AdventureGateMigrationStatBonus(speed = 7, evasion = 8),
+        "ag_relic_chrono_key" to AdventureGateMigrationStatBonus(maxMana = 30, speed = 5, accuracy = 6, evasion = 4),
+        "ag_relic_basilisk_clip" to AdventureGateMigrationStatBonus(magic = 22, accuracy = 10),
+        "ag_relic_libram_seal" to AdventureGateMigrationStatBonus(maxMana = 24, defense = 28),
+        "ag_relic_nutcracker_star" to AdventureGateMigrationStatBonus(attack = 28),
+        "ag_relic_aurora_ribbon" to AdventureGateMigrationStatBonus(maxHp = 60, magic = 14),
+        "ag_relic_eclipse_prism" to AdventureGateMigrationStatBonus(defense = 38, evasion = 8),
+        "ag_relic_regent_dream_key" to AdventureGateMigrationStatBonus(maxHp = 80, maxMana = 50, magic = 18),
+        "ag_relic_nexum_heart" to AdventureGateMigrationStatBonus(maxHp = 50, maxMana = 50)
+    )
+
+    private fun adventureGateGearBonusSql(stat: AdventureGateProfileStat): String =
+        listOf("equippedWeaponId", "equippedShieldId", "equippedRingId", "equippedRelicId")
+            .joinToString(" + ") { column -> adventureGateGearBonusSql(column, stat) }
+
+    private fun adventureGateGearBonusSql(columnName: String, stat: AdventureGateProfileStat): String {
+        val clauses = adventureGateMigrationGearBonuses.mapNotNull { (equipmentId, bonus) ->
+            bonus.valueFor(stat).takeIf { it != 0 }?.let { value -> "WHEN '$equipmentId' THEN $value" }
+        }
+        return if (clauses.isEmpty()) {
+            "0"
+        } else {
+            "(CASE $columnName ${clauses.joinToString(" ")} ELSE 0 END)"
+        }
+    }
+
+    private fun adventureGateStudyMagicBonusSql(): String =
+        "COALESCE((SELECT CAST(educationLevel / 15 AS INTEGER) FROM tama_pets WHERE tama_pets.id = adventure_gate_profiles.petId), 0)"
+
+    private fun adventureGateStudyManaBonusSql(): String =
+        "COALESCE((SELECT CAST(educationLevel / 10 AS INTEGER) * 4 FROM tama_pets WHERE tama_pets.id = adventure_gate_profiles.petId), 0)"
     
     /**
      * All migrations that should be applied.
@@ -626,7 +949,16 @@ object TamaMigrations {
         MIGRATION_29_30,
         MIGRATION_30_31,
         MIGRATION_31_32,
-        MIGRATION_32_33
+        MIGRATION_32_33,
+        MIGRATION_33_34,
+        MIGRATION_34_35,
+        MIGRATION_35_36,
+        MIGRATION_36_37,
+        MIGRATION_37_38,
+        MIGRATION_38_39,
+        MIGRATION_39_40,
+        MIGRATION_40_41,
+        MIGRATION_41_42
     )
     
     // ========== HELPER FUNCTIONS ==========

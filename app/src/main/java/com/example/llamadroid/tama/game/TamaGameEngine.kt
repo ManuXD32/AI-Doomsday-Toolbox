@@ -6,8 +6,15 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.db.*
+import com.example.llamadroid.tama.rpg.AdventureGateCatalog
+import com.example.llamadroid.tama.rpg.AdventureGateCombatEngine
+import com.example.llamadroid.tama.rpg.AdventureGateProfile
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
+import com.example.llamadroid.tama.rpg.AdventureGateRepository
+import com.example.llamadroid.tama.rpg.AdventureGateStats
+import com.example.llamadroid.tama.rpg.AdventureGateSupplyKind
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.widget.TamaPetWidgetProvider
 import androidx.room.withTransaction
 import java.io.File
 import java.io.BufferedInputStream
@@ -39,6 +46,7 @@ import kotlinx.serialization.json.encodeToJsonElement
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.ceil
+import kotlin.math.roundToInt
 import kotlin.random.Random
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -122,7 +130,9 @@ class TamaGameEngine(
             fixedLocation(1, 1, LocationType.SCHOOL),
             fixedLocation(2, 1, LocationType.WORKPLACE),
             fixedLocation(3, 1, LocationType.FARM),
+            fixedLocation(4, 1, LocationType.BOXING_RING),
             fixedLocation(0, 2, LocationType.DUNGEON),
+            fixedLocation(2, 2, LocationType.ADVENTURE_GATE),
             fixedLocation(4, 2, LocationType.DUNGEON)
         ).associateBy { it.id }
     }
@@ -425,10 +435,7 @@ class TamaGameEngine(
         context.resources.configuration.locales[0] ?: Locale.getDefault()
 
     private fun localizeParkEncounterLine(encounter: TamaParkEncounter): String {
-        val definition = TamaParkSocialCatalog.npcById(encounter.npcId) ?: return ""
-        return definition.lines.getOrElse(encounter.lineIndex.coerceAtLeast(0)) {
-            definition.lines.first()
-        }.resolve(currentLocale())
+        return TamaParkSocialCatalog.localizedLine(context, encounter)
     }
 
     private suspend fun buildParkEncounter(
@@ -563,6 +570,21 @@ class TamaGameEngine(
         return updatedInventory
     }
 
+    private fun DroneStoredCrop.toInventoryItem(): InventoryItem =
+        InventoryItem(
+            id = inventoryId,
+            name = inventoryIdDisplayName(inventoryId),
+            type = if (inventoryId.startsWith("crop_")) ItemType.CROP else ItemType.MATERIAL
+        )
+
+    private fun inventoryIdDisplayName(inventoryId: String): String {
+        if (inventoryId == "rotten_crop") return context.getString(R.string.tama_item_rotten_crop)
+        if (inventoryId.startsWith("crop_")) {
+            return cropDisplayName(context, inventoryId.removePrefix("crop_"))
+        }
+        return FarmTradeItemCatalog.displayName(inventoryId, context.resources.configuration.locales[0])
+    }
+
     private fun stagePotionDetails(targetStage: GrowthStage): Pair<Boolean, String> {
         val pet = _pet.value ?: return false to context.getString(R.string.tama_error_no_pet)
         if (targetStage == GrowthStage.EGG) {
@@ -645,6 +667,7 @@ class TamaGameEngine(
         return when (activity) {
             ActivityType.WORKING -> context.getString(R.string.tama_activity_working)
             ActivityType.STUDYING -> context.getString(R.string.tama_activity_studying)
+            ActivityType.TRAINING -> context.getString(R.string.tama_activity_training)
             ActivityType.RELAXING -> context.getString(R.string.tama_activity_relaxing)
             ActivityType.NONE -> context.getString(R.string.tama_activity_none)
         }
@@ -841,6 +864,251 @@ class TamaGameEngine(
         )
     }
 
+    suspend fun useAdventureGateSupply(supplyId: String): ActionResult {
+        val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        val supply = AdventureGateCatalog.supply(supplyId)
+            ?: return ActionResult(false, context.getString(R.string.tama_potion_missing))
+        val existingEntity = dao.getAdventureGateProfile(pet.id)
+        val rawProfile = existingEntity?.let { entity ->
+            AdventureGateProfile(
+                petId = entity.petId,
+                level = entity.level,
+                xp = entity.xp,
+                stats = AdventureGateStats(
+                    maxHp = entity.maxHp,
+                    maxMana = entity.maxMana,
+                    attack = entity.attack,
+                    magic = entity.magic,
+                    defense = entity.defense,
+                    speed = entity.speed,
+                    accuracy = entity.accuracy,
+                    evasion = entity.evasion
+                ),
+                currentHp = entity.currentHp,
+                currentMana = entity.currentMana,
+                skillPoints = entity.skillPoints,
+                equippedWeaponId = entity.equippedWeaponId,
+                equippedShieldId = entity.equippedShieldId,
+                equippedRingId = entity.equippedRingId,
+                equippedRelicId = entity.equippedRelicId,
+                lastRecoveryAt = entity.lastRecoveryAt,
+                updatedAt = entity.updatedAt
+            )
+        } ?: AdventureGateProfile(petId = pet.id)
+        val profile = AdventureGateCombatEngine.normalizedProfile(rawProfile, pet.educationLevel, pet.introspectionLevel, pet.exerciseLevel)
+        val potionBonus = AdventureGateCatalog.loadoutForProfile(profile).equipment.sumOf { it.effect.potionBonusPercent }
+        val amount = (supply.amount * (100 + potionBonus) / 100f).toInt().coerceAtLeast(1)
+        val updatedProfile = when (supply.kind) {
+            AdventureGateSupplyKind.HP -> {
+                if (profile.currentHp >= profile.stats.maxHp) {
+                    return ActionResult(false, context.getString(R.string.tama_potion_heal_already_full))
+                }
+                profile.copy(currentHp = (profile.currentHp + amount).coerceAtMost(profile.stats.maxHp))
+            }
+            AdventureGateSupplyKind.MANA -> {
+                if (profile.currentMana >= profile.stats.maxMana) {
+                    return ActionResult(false, context.getString(R.string.tama_potion_heal_already_full))
+                }
+                profile.copy(currentMana = (profile.currentMana + amount).coerceAtMost(profile.stats.maxMana))
+            }
+            AdventureGateSupplyKind.CLEANSE -> {
+                return ActionResult(false, context.getString(R.string.tama_action_adventure_gate_cleanse_battle_only))
+            }
+            AdventureGateSupplyKind.SKILL_POINT -> profile.copy(skillPoints = profile.skillPoints + supply.amount)
+        }.copy(updatedAt = System.currentTimeMillis())
+        val updatedInventory = consumeInventoryItem(pet.inventory, supply.id)
+            ?: return ActionResult(false, context.getString(R.string.tama_potion_not_owned))
+        val updatedPet = pet.copy(inventory = updatedInventory)
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        dao.saveAdventureGateProfile(
+            (existingEntity ?: AdventureGateProfileEntity(petId = pet.id)).copy(
+                level = updatedProfile.level,
+                xp = updatedProfile.xp,
+                maxHp = updatedProfile.stats.maxHp,
+                maxMana = updatedProfile.stats.maxMana,
+                attack = updatedProfile.stats.attack,
+                magic = updatedProfile.stats.magic,
+                defense = updatedProfile.stats.defense,
+                speed = updatedProfile.stats.speed,
+                accuracy = updatedProfile.stats.accuracy,
+                evasion = updatedProfile.stats.evasion,
+                currentHp = updatedProfile.currentHp,
+                currentMana = updatedProfile.currentMana,
+                skillPoints = updatedProfile.skillPoints,
+                equippedWeaponId = updatedProfile.equippedWeaponId,
+                equippedShieldId = updatedProfile.equippedShieldId,
+                equippedRingId = updatedProfile.equippedRingId,
+                equippedRelicId = updatedProfile.equippedRelicId,
+                lastRecoveryAt = System.currentTimeMillis(),
+                updatedAt = updatedProfile.updatedAt
+            )
+        )
+        val itemName = context.getString(supply.nameRes)
+        logEvent(
+            pet.id,
+            EventType.OTHER,
+            context.getString(R.string.tama_event_adventure_gate_supply_used, pet.name, itemName)
+        )
+        return ActionResult(
+            true,
+            if (supply.kind == AdventureGateSupplyKind.SKILL_POINT) {
+                context.getString(R.string.tama_action_adventure_gate_skill_star_used, itemName)
+            } else if (supply.kind == AdventureGateSupplyKind.CLEANSE) {
+                context.getString(R.string.tama_action_adventure_gate_cleanse_battle_only)
+            } else {
+                context.getString(R.string.tama_action_adventure_gate_supply_used, itemName, amount)
+            },
+            "eating"
+        )
+    }
+
+    suspend fun brewAdventureGatePotion(ingredientItemIds: List<String>): ActionResult {
+        val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        if (ingredientItemIds.isEmpty()) {
+            return ActionResult(false, context.getString(R.string.tama_alchemist_kitchen_empty_selection))
+        }
+        if (ingredientItemIds.any { !FarmTradeItemCatalog.isTradeItem(it) || !it.startsWith("crop_") }) {
+            return ActionResult(false, context.getString(R.string.tama_alchemist_kitchen_crops_only))
+        }
+
+        val selectedCounts = ingredientItemIds.groupingBy { it }.eachCount()
+        val ownedCounts = pet.inventory.groupingBy { it.id }.fold(0) { acc, item -> acc + item.quantity }
+        val hasIngredients = selectedCounts.all { (itemId, count) -> (ownedCounts[itemId] ?: 0) >= count }
+        if (!hasIngredients) {
+            return ActionResult(false, context.getString(R.string.tama_alchemist_kitchen_missing_ingredients))
+        }
+
+        val ownedRecipes = pet.inventory
+            .filter { it.type == ItemType.RECIPE }
+            .mapNotNull { AdventureGateCatalog.recipe(it.id) }
+        val matchedRecipe = ownedRecipes.firstOrNull { it.ingredientCounts == selectedCounts }
+        var updatedInventory: List<InventoryItem> = pet.inventory
+        selectedCounts.forEach { (itemId, count) ->
+            updatedInventory = consumeInventoryItem(updatedInventory, itemId, count)
+                ?: return ActionResult(false, context.getString(R.string.tama_alchemist_kitchen_missing_ingredients))
+        }
+
+        val resultItem = if (matchedRecipe != null) {
+            val supply = AdventureGateCatalog.supply(matchedRecipe.supplyId)
+                ?: return ActionResult(false, context.getString(R.string.tama_potion_missing))
+            InventoryItem(
+                id = supply.id,
+                name = context.getString(supply.nameRes),
+                type = ItemType.POTION,
+                quantity = 1
+            )
+        } else {
+            InventoryItem(
+                id = "rotten_crop",
+                name = context.getString(R.string.tama_item_rotten_crop),
+                type = ItemType.MATERIAL,
+                quantity = 2
+            )
+        }
+        updatedInventory = addInventoryItem(updatedInventory, resultItem, resultItem.quantity)
+
+        val updatedPet = pet.copy(inventory = updatedInventory)
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        val action = if (matchedRecipe != null) "alchemy_success" else "alchemy_failure"
+        val message = if (matchedRecipe != null) {
+            val supplyName = AdventureGateCatalog.supply(matchedRecipe.supplyId)
+                ?.let { context.getString(it.nameRes) }
+                ?: resultItem.name
+            context.getString(R.string.tama_alchemist_kitchen_success_message, supplyName)
+        } else {
+            context.getString(R.string.tama_alchemist_kitchen_failure_message)
+        }
+        logEvent(pet.id, EventType.OTHER, message)
+        return ActionResult(true, message, action)
+    }
+
+    private suspend fun grantAdventureGateWorkXp(pet: TamaPet, xpAwarded: Int) {
+        if (xpAwarded <= 0) return
+        val existingEntity = dao.getAdventureGateProfile(pet.id)
+        val profile = AdventureGateCombatEngine.normalizedProfile(
+            adventureGateProfileFromEntity(pet.id, existingEntity),
+            pet.educationLevel,
+            pet.introspectionLevel,
+            pet.exerciseLevel
+        )
+        val result = AdventureGateCombatEngine.grantXp(profile, xpAwarded, pet.educationLevel, pet.introspectionLevel)
+        dao.saveAdventureGateProfile(adventureGateProfileToEntity(result.profile, existingEntity))
+    }
+
+    private fun adventureGateProfileFromEntity(
+        petId: String,
+        entity: AdventureGateProfileEntity?
+    ): AdventureGateProfile {
+        if (entity == null) return AdventureGateProfile(petId = petId)
+        return AdventureGateProfile(
+            petId = entity.petId,
+            level = entity.level,
+            xp = entity.xp,
+            stats = AdventureGateStats(
+                maxHp = entity.maxHp,
+                maxMana = entity.maxMana,
+                attack = entity.attack,
+                magic = entity.magic,
+                defense = entity.defense,
+                speed = entity.speed,
+                accuracy = entity.accuracy,
+                evasion = entity.evasion
+            ),
+            currentHp = entity.currentHp,
+            currentMana = entity.currentMana,
+            skillPoints = entity.skillPoints,
+            purchasedSkillIds = jsonArrayToStringList(entity.purchasedSkillIdsJson)
+                .ifEmpty { AdventureGateCatalog.starterSkillIds },
+            learnedAttackIds = jsonArrayToStringList(entity.learnedAttackIdsJson)
+                .ifEmpty { AdventureGateCatalog.startingAttackIds },
+            equippedAttackIds = jsonArrayToStringList(entity.equippedAttackIdsJson)
+                .ifEmpty { AdventureGateCatalog.startingAttackIds },
+            learnedMagicIds = jsonArrayToStringList(entity.learnedMagicIdsJson)
+                .ifEmpty { AdventureGateCatalog.startingMagicIds },
+            equippedMagicIds = jsonArrayToStringList(entity.equippedMagicIdsJson)
+                .ifEmpty { AdventureGateCatalog.startingMagicIds },
+            equippedWeaponId = entity.equippedWeaponId.takeUnless { it.isNullOrBlank() },
+            equippedShieldId = entity.equippedShieldId.takeUnless { it.isNullOrBlank() },
+            equippedRingId = entity.equippedRingId.takeUnless { it.isNullOrBlank() },
+            equippedRelicId = entity.equippedRelicId.takeUnless { it.isNullOrBlank() },
+            lastRecoveryAt = entity.lastRecoveryAt,
+            updatedAt = entity.updatedAt
+        )
+    }
+
+    private fun adventureGateProfileToEntity(
+        profile: AdventureGateProfile,
+        existingEntity: AdventureGateProfileEntity?
+    ): AdventureGateProfileEntity =
+        (existingEntity ?: AdventureGateProfileEntity(petId = profile.petId)).copy(
+            level = profile.level,
+            xp = profile.xp,
+            maxHp = profile.stats.maxHp,
+            maxMana = profile.stats.maxMana,
+            attack = profile.stats.attack,
+            magic = profile.stats.magic,
+            defense = profile.stats.defense,
+            speed = profile.stats.speed,
+            accuracy = profile.stats.accuracy,
+            evasion = profile.stats.evasion,
+            currentHp = profile.currentHp,
+            currentMana = profile.currentMana,
+            skillPoints = profile.skillPoints,
+            purchasedSkillIdsJson = Json.encodeToString(profile.purchasedSkillIds),
+            learnedAttackIdsJson = Json.encodeToString(profile.learnedAttackIds),
+            equippedAttackIdsJson = Json.encodeToString(profile.equippedAttackIds),
+            learnedMagicIdsJson = Json.encodeToString(profile.learnedMagicIds),
+            equippedMagicIdsJson = Json.encodeToString(profile.equippedMagicIds),
+            equippedWeaponId = profile.equippedWeaponId,
+            equippedShieldId = profile.equippedShieldId,
+            equippedRingId = profile.equippedRingId,
+            equippedRelicId = profile.equippedRelicId,
+            lastRecoveryAt = profile.lastRecoveryAt,
+            updatedAt = profile.updatedAt
+        )
+
     suspend fun buyItem(itemName: String, price: Int): ActionResult {
         val item = InventoryItem(
             id = itemName.lowercase().replace(" ", "_"),
@@ -934,6 +1202,7 @@ class TamaGameEngine(
         } else {
             pet
         }
+        recoverAdventureGateProfile(pet.id)
         val updatedPet = advancePoopState(bedtimeTrackedPet, now).copy(
             isSleeping = true,
             sleepStartTime = now,
@@ -967,6 +1236,7 @@ class TamaGameEngine(
             health = (currentPet.stats.health + minutesSlept.toFloat()).coerceAtMost(100f)  // Sleep heals
         )
 
+        recoverAdventureGateProfile(currentPet.id)
         val updatedPet = currentPet.copy(
             isSleeping = false,
             sleepStartTime = null,
@@ -1029,6 +1299,7 @@ class TamaGameEngine(
             return ActionResult(false, context.getString(R.string.tama_action_only_teens_work))
         }
 
+        recoverAdventureGateProfile(pet.id)
         val updatedPet = pet.copy(
             currentActivity = activity,
             currentWorkJobId = if (activity == ActivityType.WORKING) pet.currentWorkJobId else null,
@@ -1040,12 +1311,14 @@ class TamaGameEngine(
         val action = when (activity) {
             ActivityType.WORKING -> "working"
             ActivityType.STUDYING -> "studying"
+            ActivityType.TRAINING -> "training"
             ActivityType.RELAXING -> "sunbathing"
             else -> "idle"
         }
         val emoji = when (activity) {
             ActivityType.WORKING -> "💼"
             ActivityType.STUDYING -> "📚"
+            ActivityType.TRAINING -> "🥊"
             ActivityType.RELAXING -> "🌳"
             else -> ""
         }
@@ -1240,6 +1513,7 @@ class TamaGameEngine(
         val minutesActive = (pausedDurationMs / (1000 * 60f)).toInt()
 
         if (pet.currentActivity == ActivityType.STUDYING) {
+            recoverAdventureGateProfile(pet.id)
             val result = TamaStudySessionSupport.stopActiveSession(
                 context = context,
                 dao = dao,
@@ -1251,6 +1525,7 @@ class TamaGameEngine(
             return ActionResult(true, result.message, "idle")
         }
 
+        recoverAdventureGateProfile(pet.id)
         var updatedPet = pet
         var message = ""
 
@@ -1258,7 +1533,9 @@ class TamaGameEngine(
             ActivityType.WORKING -> {
                 val job = TamaWorkCatalog.jobById(pet.currentWorkJobId) ?: TamaWorkCatalog.jobs.first()
                 val earnings = (hoursActive * job.hourlyPay).toLong().coerceAtLeast(if (minutesActive > 0) 1 else 0)
+                val workXp = earnings.toInt().coerceAtLeast(0)
                 updatedPet = updatedPet.copy(money = pet.money + earnings)
+                grantAdventureGateWorkXp(pet, workXp)
                 message = context.getString(R.string.tama_action_work_result, earnings)
                 logEvent(
                     pet.id,
@@ -1266,23 +1543,72 @@ class TamaGameEngine(
                     context.getString(R.string.tama_event_earned_job, earnings.toInt(), context.getString(job.titleRes))
                 )
             }
+            ActivityType.TRAINING -> {
+                val tier = TamaTrainingCatalog.tierById(pet.currentWorkJobId) ?: TamaTrainingCatalog.tiers.first()
+                val earnings = (hoursActive * tier.hourlyPay).toLong().coerceAtLeast(if (minutesActive > 0) 1 else 0)
+                val exerciseGain = hoursActive * TAMA_TRAINING_EXERCISE_PER_HOUR
+                val happinessGain = hoursActive * TAMA_TRAINING_HAPPINESS_PER_HOUR
+                updatedPet = updatedPet.copy(
+                    money = pet.money + earnings,
+                    exerciseLevel = pet.exerciseLevel + exerciseGain,
+                    stats = pet.stats.copy(
+                        happiness = (pet.stats.happiness + happinessGain).coerceIn(0f, 100f)
+                    )
+                )
+                message = context.getString(
+                    R.string.tama_action_training_result,
+                    exerciseGain.roundToInt(),
+                    happinessGain.roundToInt(),
+                    earnings.toInt()
+                )
+                logEvent(
+                    pet.id,
+                    EventType.GOT_PAID,
+                    context.getString(
+                        R.string.tama_event_trained,
+                        exerciseGain.roundToInt(),
+                        earnings.toInt(),
+                        context.getString(tier.titleRes)
+                    ),
+                    statsChange = mapOf(
+                        "exercise" to exerciseGain,
+                        "happiness" to happinessGain
+                    )
+                )
+            }
             ActivityType.STUDYING -> {
                 val intGain = (hoursActive * 5f)
-                updatedPet = updatedPet.copy(educationLevel = (pet.educationLevel + intGain).coerceAtMost(100f))
+                updatedPet = updatedPet.copy(educationLevel = pet.educationLevel + intGain)
                 message = context.getString(R.string.tama_action_study_result, intGain.toInt())
                 logEvent(pet.id, EventType.STUDIED, context.getString(R.string.tama_event_studied, intGain.toInt()))
             }
             ActivityType.RELAXING -> {
                 val happinessGain = (hoursActive * 40f)  // 40 happiness/hour
                 val healthGain = (hoursActive * 2f)
+                val introspectionGain = hoursActive * TAMA_RELAX_INTROSPECTION_PER_HOUR
                 updatedPet = updatedPet.copy(
+                    introspectionLevel = pet.introspectionLevel + introspectionGain,
                     stats = pet.stats.copy(
                         happiness = (pet.stats.happiness + happinessGain).coerceIn(0f, 100f),
                         health = (pet.stats.health + healthGain).coerceIn(0f, 100f)
                     )
                 )
-                message = context.getString(R.string.tama_action_relax_result, happinessGain.toInt(), healthGain.toInt())
-                logEvent(pet.id, EventType.RELAXED, context.getString(R.string.tama_event_relaxed))
+                message = context.getString(
+                    R.string.tama_action_relax_result,
+                    happinessGain.toInt(),
+                    healthGain.toInt(),
+                    introspectionGain.toInt()
+                )
+                logEvent(
+                    pet.id,
+                    EventType.RELAXED,
+                    context.getString(R.string.tama_event_relaxed, introspectionGain.toInt()),
+                    statsChange = mapOf(
+                        "happiness" to happinessGain,
+                        "health" to healthGain,
+                        "introspection" to introspectionGain
+                    )
+                )
             }
             else -> {}
         }
@@ -1294,6 +1620,9 @@ class TamaGameEngine(
         )
         _pet.value = updatedPet
         savePet(updatedPet)
+        if (pet.currentActivity == ActivityType.TRAINING) {
+            recoverAdventureGateProfile(updatedPet.id)
+        }
 
         return ActionResult(true, message, "idle")
     }
@@ -1348,6 +1677,48 @@ class TamaGameEngine(
         val before = pet.money
         stopActivity()
         return (_pet.value?.money ?: before) - before
+    }
+
+    suspend fun startTraining(tierId: String): ActionResult {
+        val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        val tier = TamaTrainingCatalog.tierById(tierId)
+            ?: return ActionResult(false, context.getString(R.string.tama_training_tier_missing))
+        if (pet.exerciseLevel < tier.requiredExercise) {
+            return ActionResult(
+                false,
+                context.getString(
+                    R.string.tama_training_tier_locked,
+                    tier.requiredExercise,
+                    context.getString(tier.titleRes)
+                )
+            )
+        }
+        if (pet.isSleeping) return ActionResult(false, context.getString(R.string.tama_sleeping_busy, pet.name))
+        if (pet.currentActivity != ActivityType.NONE) {
+            return ActionResult(false, context.getString(R.string.tama_action_already_busy, pet.name))
+        }
+        if (!pet.stage.canTrain()) {
+            return ActionResult(false, context.getString(R.string.tama_action_only_students_train))
+        }
+
+        recoverAdventureGateProfile(pet.id)
+        val updatedPet = pet.copy(
+            currentActivity = ActivityType.TRAINING,
+            currentWorkJobId = tier.id,
+            activityStartTime = System.currentTimeMillis()
+        )
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        logEvent(
+            pet.id,
+            EventType.STARTED_WORK,
+            context.getString(R.string.tama_event_started_training, pet.name, context.getString(tier.titleRes))
+        )
+        return ActionResult(
+            true,
+            context.getString(R.string.tama_training_started, context.getString(tier.titleRes), tier.hourlyPay.toInt()),
+            "training"
+        )
     }
 
     // ==================== Travel System ====================
@@ -1592,11 +1963,14 @@ class TamaGameEngine(
         if (!FarmTradeItemCatalog.isTradeItem(item.id)) {
             return ActionResult(false, context.getString(R.string.tama_park_seller_only_crops))
         }
-        val basePrice = FarmTradeItemCatalog.sellPrice(item.id).coerceAtLeast(5)
-        val boostedPrice = TamaParkSocialCatalog.boostedSellerPrice(basePrice)
-        val result = sellItem(item, quantity, boostedPrice)
+        val quote = ensureMarketQuotesForPet(
+            petId = _pet.value?.id ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        ).firstOrNull { it.itemId == item.id }
+            ?: return ActionResult(false, context.getString(R.string.tama_park_seller_only_crops))
+        val result = sellItem(item, quantity, quote.currentPrice.toLong())
         if (result.success) {
             val pet = _pet.value
+            recordMarketSale(pet?.id ?: return result, item.id, quantity)
             val displayName = inventoryItemDisplayName(context, item)
             logEvent(
                 pet?.id ?: return result,
@@ -1605,13 +1979,93 @@ class TamaGameEngine(
                     R.string.tama_park_seller_sale_details,
                     quantity,
                     displayName,
-                    boostedPrice.toInt() * quantity
+                    quote.currentPrice * quantity
                 ),
                 locationId = pet.currentLocationId,
                 npcId = pet.currentParkEncounter?.npcId
             )
         }
         return result
+    }
+
+    suspend fun getParkMarketBoard(now: Long = System.currentTimeMillis()): TamaMarketBoard {
+        val pet = _pet.value ?: return TamaMarketBoard(emptyList(), TamaMarketPricing.quoteWeekKey(now), TamaMarketPricing.nextFridayRefreshAt(now))
+        val quotes = ensureMarketQuotesForPet(pet.id, now)
+        return TamaMarketBoard(
+            quotes = quotes,
+            quoteWeekKey = TamaMarketPricing.quoteWeekKey(now),
+            nextRefreshAt = TamaMarketPricing.nextFridayRefreshAt(now)
+        )
+    }
+
+    private suspend fun ensureMarketQuotesForPet(
+        petId: String,
+        now: Long = System.currentTimeMillis()
+    ): List<TamaMarketQuote> {
+        val weekKey = TamaMarketPricing.quoteWeekKey(now)
+        val existing = dao.getMarketQuotesForPet(petId).associateBy { it.itemId }
+        val definitions = FarmTradeItemCatalog.allDefinitions()
+        val updatedEntities = definitions.map { definition ->
+            val row = existing[definition.inventoryId]
+            when {
+                row == null -> TamaMarketQuoteEntity(
+                    petId = petId,
+                    itemId = definition.inventoryId,
+                    quoteWeekKey = weekKey,
+                    currentPrice = TamaMarketPricing.maxPrice(definition.inventoryId),
+                    unitsSoldSinceRefresh = 0,
+                    updatedAt = now
+                )
+                row.quoteWeekKey != weekKey -> row.copy(
+                    quoteWeekKey = weekKey,
+                    currentPrice = TamaMarketPricing.priceForWeeklySales(
+                        definition.inventoryId,
+                        row.unitsSoldSinceRefresh
+                    ),
+                    unitsSoldSinceRefresh = 0,
+                    updatedAt = now
+                )
+                else -> row
+            }
+        }
+        val changed = updatedEntities.filter { entity ->
+            existing[entity.itemId] != entity
+        }
+        if (changed.isNotEmpty()) {
+            dao.saveMarketQuotes(changed)
+        }
+        return updatedEntities.mapNotNull(::marketQuoteEntityToDomain)
+    }
+
+    private suspend fun recordMarketSale(petId: String, itemId: String, quantity: Int) {
+        val now = System.currentTimeMillis()
+        val quote = ensureMarketQuotesForPet(petId, now).firstOrNull { it.itemId == itemId } ?: return
+        dao.saveMarketQuote(
+            TamaMarketQuoteEntity(
+                petId = petId,
+                itemId = itemId,
+                quoteWeekKey = quote.quoteWeekKey,
+                currentPrice = quote.currentPrice,
+                unitsSoldSinceRefresh = quote.unitsSoldSinceRefresh + quantity.coerceAtLeast(0),
+                updatedAt = now
+            )
+        )
+    }
+
+    private fun marketQuoteEntityToDomain(entity: TamaMarketQuoteEntity): TamaMarketQuote? {
+        val definition = FarmTradeItemCatalog.definitionForInventoryId(entity.itemId) ?: return null
+        val maxPrice = TamaMarketPricing.maxPrice(entity.itemId)
+        val minPrice = TamaMarketPricing.minPrice(entity.itemId).coerceAtMost(maxPrice)
+        return TamaMarketQuote(
+            itemId = entity.itemId,
+            displayText = definition.displayText,
+            assetPath = definition.assetPath,
+            currentPrice = entity.currentPrice.coerceIn(minPrice, maxPrice),
+            maxPrice = maxPrice,
+            minPrice = minPrice,
+            unitsSoldSinceRefresh = entity.unitsSoldSinceRefresh.coerceAtLeast(0),
+            quoteWeekKey = entity.quoteWeekKey
+        )
     }
 
     suspend fun getParkQuestBoard(now: Long = System.currentTimeMillis()): TamaQuestBoard {
@@ -1898,6 +2352,14 @@ class TamaGameEngine(
 
     suspend fun buyItem(item: InventoryItem, quantity: Int, pricePerUnit: Int): ActionResult {
         val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        TamaPotionCatalog.byId(item.id)?.let { potion ->
+            if (potion.kind == TamaPotionKind.STAGE && potion.targetStage == pet.stage) {
+                return ActionResult(false, context.getString(R.string.tama_potion_stage_already_current))
+            }
+        }
+        farmToolFamilyId(item.id)?.takeIf { item.type == ItemType.TOOL }?.let { familyId ->
+            return buyFarmToolDurability(pet, item, familyId, quantity, pricePerUnit)
+        }
         val totalCost = pricePerUnit.toLong() * quantity
         if (pet.money < totalCost) {
             return ActionResult(false, context.getString(R.string.tama_action_not_enough_coins, totalCost, pet.money))
@@ -1910,14 +2372,18 @@ class TamaGameEngine(
         val alreadyPlacedDecor = pet.leftDecorationId.equals(item.id, ignoreCase = true) ||
             pet.rightDecorationId.equals(item.id, ignoreCase = true)
 
-        if (isRoom || isDecor || item.type == ItemType.TOOL) {
+        if (isRoom || isDecor || item.type == ItemType.TOOL || item.type == ItemType.RECIPE) {
             if (isDecor && alreadyPlacedDecor) {
                 return ActionResult(false, context.getString(R.string.tama_toy_already_owned))
             }
             if (existingIndex != -1) {
                 return ActionResult(
                     false,
-                    if (isRoom) context.getString(R.string.tama_room_already_owned) else context.getString(R.string.tama_toy_already_owned)
+                    when {
+                        isRoom -> context.getString(R.string.tama_room_already_owned)
+                        item.type == ItemType.RECIPE -> context.getString(R.string.tama_alchemist_recipe_already_owned)
+                        else -> context.getString(R.string.tama_toy_already_owned)
+                    }
                 )
             }
             newInventory.add(item.copy(quantity = 1))
@@ -1939,8 +2405,63 @@ class TamaGameEngine(
         return ActionResult(true, context.getString(R.string.tama_action_bought_item, quantity, item.name), "buying")
     }
 
+    private suspend fun buyFarmToolDurability(
+        pet: TamaPet,
+        item: InventoryItem,
+        familyId: String,
+        requestedQuantity: Int,
+        pricePerUnit: Int
+    ): ActionResult {
+        val currentDurability = farmToolTotalDurability(pet.inventory, familyId)
+        if (currentDurability >= FARM_TOOL_DURABILITY_CAP) {
+            return ActionResult(false, context.getString(R.string.tama_farm_tool_durability_maxed))
+        }
+        val remainingDurability = FARM_TOOL_DURABILITY_CAP - currentDurability
+        val unitsToBuy = minOf(
+            requestedQuantity.coerceAtLeast(1),
+            ((remainingDurability + FARM_TOOL_REPAIR_AMOUNT - 1) / FARM_TOOL_REPAIR_AMOUNT).coerceAtLeast(1)
+        )
+        val totalCost = pricePerUnit.toLong() * unitsToBuy
+        if (pet.money < totalCost) {
+            return ActionResult(false, context.getString(R.string.tama_action_not_enough_coins, totalCost, pet.money))
+        }
+        val addedDurability = minOf(remainingDurability, unitsToBuy * FARM_TOOL_REPAIR_AMOUNT)
+        val updatedInventory = mergedFarmToolInventory(
+            inventory = pet.inventory,
+            familyId = familyId,
+            durability = currentDurability + addedDurability
+        )
+        val updatedPet = pet.copy(
+            money = pet.money - totalCost,
+            inventory = updatedInventory
+        )
+        _pet.value = updatedPet
+        savePet(updatedPet)
+
+        val displayName = farmToolDisplayName(familyId)
+        logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_bought, unitsToBuy, displayName, totalCost.toInt()))
+        return ActionResult(
+            true,
+            context.getString(R.string.tama_farm_tool_durability_added, addedDurability, displayName),
+            "buying"
+        )
+    }
+
     suspend fun grantItem(item: InventoryItem, quantity: Int = 1): Boolean {
         val pet = _pet.value ?: return false
+        farmToolFamilyId(item.id)?.takeIf { item.type == ItemType.TOOL }?.let { familyId ->
+            val currentDurability = farmToolTotalDurability(pet.inventory, familyId)
+            val addedDurability = (item.durability ?: item.maxDurability ?: FARM_TOOL_REPAIR_AMOUNT) * quantity.coerceAtLeast(1)
+            val updatedInventory = mergedFarmToolInventory(
+                inventory = pet.inventory,
+                familyId = familyId,
+                durability = (currentDurability + addedDurability).coerceAtMost(FARM_TOOL_DURABILITY_CAP)
+            )
+            val updatedPet = pet.copy(inventory = updatedInventory)
+            _pet.value = updatedPet
+            savePet(updatedPet)
+            return true
+        }
         val newInventory = pet.inventory.toMutableList()
         val isRoom = TamaRoomCatalog.isRoomId(item.id)
         val isDecor = TamaDecorCatalog.isDecorId(item.id)
@@ -1965,6 +2486,45 @@ class TamaGameEngine(
         val updatedPet = pet.copy(inventory = newInventory)
         _pet.value = updatedPet
         savePet(updatedPet)
+        return true
+    }
+
+    suspend fun collectHarvesterDroneStorage(): Boolean {
+        val currentPet = _pet.value ?: return false
+        val now = System.currentTimeMillis()
+        val database = TamaDatabase.getInstance(context.applicationContext)
+        val updatedPet = database.withTransaction {
+            val latestPet = dao.getPet(currentPet.id)?.let(PetMapper::toDomain) ?: currentPet
+            val upgrade = database.farmDao().getUpgrade(latestPet.id, FARM_HARVESTING_DRONE_ID)
+                ?: return@withTransaction null
+            if (!upgrade.isPurchased) return@withTransaction null
+
+            val state = farmRepository.decodeHarvesterDroneState(upgrade, now)
+            if (state.storage.isEmpty()) return@withTransaction null
+
+            val updatedInventory = state.storage.fold(latestPet.inventory) { inventory, stored ->
+                addInventoryItem(inventory, stored.toInventoryItem(), stored.quantity)
+            }
+            val normalized = normalizeGrowthTimerState(
+                ensurePoopSchedule(latestPet.copy(inventory = updatedInventory), now),
+                now
+            )
+            dao.savePet(PetMapper.toEntity(normalized))
+            database.farmDao().saveUpgrade(
+                upgrade.copy(
+                    isPurchased = true,
+                    storedOutput = state.fuel,
+                    extraDataJson = Json.encodeToString(
+                        state.copy(storage = emptyList(), lastUpdatedAt = now)
+                    )
+                )
+            )
+            normalized
+        } ?: return false
+
+        _pet.value = updatedPet
+        _currentLocation.value = resolveLocation(updatedPet.currentLocationId)
+        TamaNotificationScheduler.scheduleForPet(context.applicationContext, updatedPet.id)
         return true
     }
 
@@ -2132,8 +2692,50 @@ class TamaGameEngine(
         return true
     }
 
+    suspend fun consumeFarmToolDurability(familyId: String, amount: Int): Int {
+        val pet = _pet.value ?: return 0
+        val safeFamilyId = farmToolFamilyId(familyId) ?: familyId
+        if (safeFamilyId != "hoe" && safeFamilyId != "watering_can") return 0
+        val currentDurability = farmToolTotalDurability(pet.inventory, safeFamilyId)
+        val consumed = minOf(amount.coerceAtLeast(0), currentDurability)
+        if (consumed <= 0) return 0
+        val remaining = currentDurability - consumed
+        val updatedInventory = if (remaining > 0) {
+            mergedFarmToolInventory(pet.inventory, safeFamilyId, remaining)
+        } else {
+            pet.inventory.filterNot { farmToolFamilyId(it.id) == safeFamilyId }
+        }
+        val updatedPet = pet.copy(inventory = updatedInventory)
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        return consumed
+    }
+
+    private fun mergedFarmToolInventory(
+        inventory: List<InventoryItem>,
+        familyId: String,
+        durability: Int
+    ): List<InventoryItem> {
+        val clampedDurability = durability.coerceIn(0, FARM_TOOL_DURABILITY_CAP)
+        val withoutFamily = inventory.filterNot { farmToolFamilyId(it.id) == familyId }
+        if (clampedDurability <= 0) return withoutFamily
+        return withoutFamily + InventoryItem(
+            id = familyId,
+            name = farmToolDisplayName(familyId),
+            type = ItemType.TOOL,
+            quantity = 1,
+            durability = clampedDurability,
+            maxDurability = FARM_TOOL_DURABILITY_CAP
+        )
+    }
+
+    private fun farmToolDisplayName(familyId: String): String = when (familyId) {
+        "watering_can" -> context.getString(R.string.tama_inventory_watering_can)
+        else -> context.getString(R.string.tama_inventory_hoe)
+    }
+
     private fun roomByIdLabel(room: TamaRoomDefinition): String {
-        return context.getString(room.titleRes)
+        return TamaRoomCatalog.localizedTitle(context, room)
     }
 
     /**
@@ -2166,6 +2768,29 @@ class TamaGameEngine(
             pet.id,
             EventType.GOT_PAID,
             details ?: context.getString(R.string.tama_event_arcade_reward, safeAmount.toInt())
+        )
+        return true
+    }
+
+    suspend fun awardHappiness(amount: Float, details: String? = null): Boolean {
+        val pet = _pet.value ?: return false
+        val safeAmount = amount.coerceAtLeast(0f)
+        if (safeAmount == 0f) {
+            if (!details.isNullOrBlank()) {
+                logEvent(pet.id, EventType.OTHER, details)
+            }
+            return true
+        }
+
+        val updatedStats = pet.stats.copy(happiness = (pet.stats.happiness + safeAmount).coerceAtMost(100f))
+        val updatedPet = pet.copy(stats = updatedStats).let { it.copy(mood = effectiveMood(it)) }
+        _pet.value = updatedPet
+        savePet(updatedPet)
+        logEvent(
+            pet.id,
+            EventType.PLAYED,
+            details ?: context.getString(R.string.tama_event_happiness_reward, pet.name, safeAmount.roundToInt()),
+            statsChange = mapOf("happiness" to safeAmount)
         )
         return true
     }
@@ -2290,6 +2915,9 @@ class TamaGameEngine(
         val adventureSessions = dao.getAdventureHistory(pet.id)
         val adventureStages = adventureSessions.flatMap { dao.getAdventureStages(it.id) }
         val dungeonProgress = dao.getDungeonProgress(pet.id)
+        val adventureGateProfile = dao.getAdventureGateProfile(pet.id)
+        val adventureGateWorldProgress = dao.getAdventureGateWorldProgress(pet.id)
+        val adventureGateBattleState = dao.getAdventureGateBattleState(pet.id)
         val artworks = dao.getArtworks(pet.id)
         val exportedSummaries = buildExportSummaries(pet.id, summaries, artworks)
         val audioPaths = chatMessages.associate { message ->
@@ -2343,7 +2971,10 @@ class TamaGameEngine(
                     relativeImagePath = relativeImagePath
                 )
             },
-            dungeonProgress = dungeonProgress?.let(TamaTransferDungeonProgress::fromEntity)
+            dungeonProgress = dungeonProgress?.let(TamaTransferDungeonProgress::fromEntity),
+            adventureGateProfile = adventureGateProfile?.let(TamaTransferAdventureGateProfile::fromEntity),
+            adventureGateWorldProgress = adventureGateWorldProgress.map(TamaTransferAdventureGateWorldProgress::fromEntity),
+            adventureGateBattleState = adventureGateBattleState?.let(TamaTransferAdventureGateBattleState::fromEntity)
         )
         return TamaBackupPackage(bundle = bundle, artworks = artworks)
     }
@@ -2538,6 +3169,11 @@ class TamaGameEngine(
                 })
             }
             bundle.dungeonProgress?.let { dao.saveDungeonProgress(it.toEntity()) }
+            bundle.adventureGateProfile?.let { dao.saveAdventureGateProfile(it.toEntity()) }
+            if (bundle.adventureGateWorldProgress.isNotEmpty()) {
+                dao.saveAdventureGateWorldProgress(bundle.adventureGateWorldProgress.map { it.toEntity() })
+            }
+            bundle.adventureGateBattleState?.let { dao.saveAdventureGateBattleState(it.toEntity()) }
             if (restoredArtworkEntities.isNotEmpty()) {
                 dao.saveArtworks(restoredArtworkEntities)
             }
@@ -2629,6 +3265,14 @@ class TamaGameEngine(
             poopCreatedAt = pet.poopCreatedAt?.plus(pausedDurationMs),
             lastPoopMiscareAt = pet.lastPoopMiscareAt?.plus(pausedDurationMs)
         )
+    }
+
+    private suspend fun recoverAdventureGateProfile(petId: String) {
+        runCatching {
+            AdventureGateRepository(TamaDatabase.getInstance(context)).recoverProfile(petId)
+        }.onFailure { error ->
+            DebugLog.log("[TamaGameEngine] Adventure Gate recovery skipped: ${error.message}")
+        }
     }
 
     private suspend fun advancePoopState(pet: TamaPet, now: Long): TamaPet {
@@ -2867,6 +3511,12 @@ class TamaGameEngine(
     // ==================== Helpers ====================
 
     private suspend fun savePet(pet: TamaPet) {
+        val refreshTamaWidget = TamaPetWidgetProvider.hasWidgets(context.applicationContext)
+        val previousWidgetSignature = if (refreshTamaWidget) {
+            dao.getPet(pet.id)?.let(PetMapper::toDomain)?.tamaPetWidgetSignature()
+        } else {
+            null
+        }
         val normalized = normalizeGrowthTimerState(
             ensurePoopSchedule(pet, System.currentTimeMillis()),
             System.currentTimeMillis()
@@ -2874,11 +3524,33 @@ class TamaGameEngine(
         _pet.value = normalized
         _currentLocation.value = resolveLocation(normalized.currentLocationId)
         dao.savePet(PetMapper.toEntity(normalized))
+        if (refreshTamaWidget && previousWidgetSignature != normalized.tamaPetWidgetSignature()) {
+            TamaPetWidgetProvider.refreshAll(context.applicationContext)
+        }
         if (normalized.poopCount <= 0) {
             UnifiedNotificationManager.dismissTamaPoopNotifications(normalized.id)
         }
         TamaNotificationScheduler.scheduleForPet(context.applicationContext, normalized.id)
     }
+
+    private fun TamaPet.tamaPetWidgetSignature(): String = listOf(
+        id,
+        name,
+        species,
+        stage.name,
+        mood.name,
+        isMad,
+        currentLocationId,
+        homeRoomId,
+        leftDecorationId.orEmpty(),
+        rightDecorationId.orEmpty(),
+        currentActivity.name,
+        currentWorkJobId.orEmpty(),
+        activityStartTime ?: 0L,
+        isSleeping,
+        sleepStartTime ?: 0L,
+        poopCount
+    ).joinToString("|")
 
     private fun pausedGrowthDuration(pet: TamaPet, now: Long): Long {
         val lockedAt = pet.growthLockStartedAt ?: return 0L
@@ -3153,6 +3825,7 @@ class TamaGameEngine(
             tamaBackend = settingsRepo.tamaBackend.value,
             tamaThinkingEnabled = settingsRepo.tamaThinkingEnabled.value,
             tamaLlamaServerUrl = settingsRepo.tamaLlamaServerUrl.value,
+            tamaLlamaSwapUrl = settingsRepo.tamaLlamaSwapUrl.value,
             tamaLlamaServerModelLabel = settingsRepo.tamaLlamaServerModelLabel.value,
             tamaLlamaServerContextTokens = settingsRepo.tamaLlamaServerContextTokens.value,
             tamaLlamaServerContextLabel = settingsRepo.tamaLlamaServerContextLabel.value,
@@ -3175,6 +3848,7 @@ class TamaGameEngine(
             adventureLanguage = settingsRepo.adventureLanguage.value,
             adventureBackend = settingsRepo.adventureBackend.value,
             adventureLlamaServerUrl = settingsRepo.adventureLlamaServerUrl.value,
+            adventureLlamaSwapUrl = settingsRepo.adventureLlamaSwapUrl.value,
             adventureLlamaServerModelLabel = settingsRepo.adventureLlamaServerModelLabel.value,
             adventureLlamaServerContextTokens = settingsRepo.adventureLlamaServerContextTokens.value,
             adventureLlamaServerContextLabel = settingsRepo.adventureLlamaServerContextLabel.value,
@@ -3201,6 +3875,7 @@ class TamaGameEngine(
         settingsRepo.setTamaBackend(settings.tamaBackend)
         settingsRepo.setTamaThinkingEnabled(settings.tamaThinkingEnabled)
         settingsRepo.setTamaLlamaServerUrl(settings.tamaLlamaServerUrl)
+        settingsRepo.setTamaLlamaSwapUrl(settings.tamaLlamaSwapUrl)
         settingsRepo.setTamaLlamaServerModelLabel(settings.tamaLlamaServerModelLabel)
         settingsRepo.setTamaLlamaServerContextTokens(settings.tamaLlamaServerContextTokens)
         settingsRepo.setTamaLlamaServerContextLabel(settings.tamaLlamaServerContextLabel)
@@ -3223,6 +3898,7 @@ class TamaGameEngine(
         settingsRepo.setAdventureLanguage(settings.adventureLanguage)
         settingsRepo.setAdventureBackend(settings.adventureBackend)
         settingsRepo.setAdventureLlamaServerUrl(settings.adventureLlamaServerUrl)
+        settingsRepo.setAdventureLlamaSwapUrl(settings.adventureLlamaSwapUrl)
         settingsRepo.setAdventureLlamaServerModelLabel(settings.adventureLlamaServerModelLabel)
         settingsRepo.setAdventureLlamaServerContextTokens(settings.adventureLlamaServerContextTokens)
         settingsRepo.setAdventureLlamaServerContextLabel(settings.adventureLlamaServerContextLabel)
@@ -3244,6 +3920,9 @@ class TamaGameEngine(
         }
         dao.deleteAdventureSessionsForPet(petId)
         dao.deleteDungeonProgress(petId)
+        dao.deleteAdventureGateBattleState(petId)
+        dao.deleteAdventureGateWorldProgress(petId)
+        dao.deleteAdventureGateProfile(petId)
         dao.deleteDeepDreamRunsForPet(petId)
         dao.deleteStudySessionsForPet(petId)
         dao.deleteStudyLabelsForPet(petId)
@@ -3252,6 +3931,7 @@ class TamaGameEngine(
         dao.deleteEventsForPet(petId)
         dao.deleteQuestsForPet(petId)
         dao.deleteQuestChecklistForPet(petId)
+        dao.deleteMarketQuotesForPet(petId)
         dao.deleteArtworksForPet(petId)
         database.farmDao().clearTilesForPet(petId)
         database.farmDao().clearUpgradesForPet(petId)

@@ -1743,7 +1743,7 @@ fun MasterModeScreen(navController: NavController) {
             },
             dismissButton = {
                 TextButton(onClick = { showAddWorkerDialog = false }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )
@@ -2117,7 +2117,7 @@ fun MasterModeScreen(navController: NavController) {
                                         showLoadCommandDialog = false
                                     }) {
                                         Text(cmd.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                                        Text("Model: ${cmd.modelPath.substringAfterLast("/")}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(stringResource(R.string.model_filename_label, cmd.modelPath.substringAfterLast("/")), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                     
                                     IconButton(
@@ -2127,7 +2127,7 @@ fun MasterModeScreen(navController: NavController) {
                                             }
                                         }
                                     ) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                                        Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
                                     }
                                 }
                             }
@@ -2675,9 +2675,9 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                 val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
                                 IconButton(onClick = {
                                     clipboard.setText(androidx.compose.ui.text.AnnotatedString(serverLogs.joinToString("\n")))
-                                    android.widget.Toast.makeText(context, "Logs copied", android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, context.getString(R.string.dist_remote_logs_copied), android.widget.Toast.LENGTH_SHORT).show()
                                 }, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.action_copy), modifier = Modifier.size(18.dp))
                                 }
                             }
                         }
@@ -3108,9 +3108,9 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                             if (showCmd) {
                                                 IconButton(onClick = {
                                                     cmdClipboard.setText(androidx.compose.ui.text.AnnotatedString(launchCmd))
-                                                    android.widget.Toast.makeText(context, "Command copied", android.widget.Toast.LENGTH_SHORT).show()
+                                                    android.widget.Toast.makeText(context, context.getString(R.string.dist_command_copied), android.widget.Toast.LENGTH_SHORT).show()
                                                 }, modifier = Modifier.size(32.dp)) {
-                                                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy", modifier = Modifier.size(16.dp))
+                                                    Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.action_copy), modifier = Modifier.size(16.dp))
                                                 }
                                             }
                                             Icon(if (showCmd) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, contentDescription = null)
@@ -3222,7 +3222,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                         if (remoteSpecEnabled) {
                             var draftExpanded by remember { mutableStateOf(false) }
                             ExposedDropdownMenuBox(expanded = draftExpanded, onExpandedChange = { draftExpanded = it }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                                OutlinedTextField(value = remoteDraftModel ?: "Select Draft Model", onValueChange = {}, readOnly = true, label = { Text("Draft Model") }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = draftExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
+                                OutlinedTextField(value = remoteDraftModel ?: stringResource(R.string.dist_speculative_select_draft), onValueChange = {}, readOnly = true, label = { Text(stringResource(R.string.dist_speculative_draft_model)) }, trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = draftExpanded) }, modifier = Modifier.menuAnchor().fillMaxWidth())
                                 ExposedDropdownMenu(expanded = draftExpanded, onDismissRequest = { draftExpanded = false }) {
                                     clientModels.forEach { modelJson ->
                                         val filename = modelJson.optString("filename", "")
@@ -3233,8 +3233,8 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                 }
                             }
                             Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedTextField(value = remoteDraftMin, onValueChange = { DistributedService.setRemoteUIDraftMin(it.filter { char -> char.isDigit() }) }, label = { Text("Draft Min") }, modifier = Modifier.weight(1f), singleLine = true)
-                                OutlinedTextField(value = remoteDraftMax, onValueChange = { DistributedService.setRemoteUIDraftMax(it.filter { char -> char.isDigit() }) }, label = { Text("Draft Max") }, modifier = Modifier.weight(1f), singleLine = true)
+                                OutlinedTextField(value = remoteDraftMin, onValueChange = { DistributedService.setRemoteUIDraftMin(it.filter { char -> char.isDigit() }) }, label = { Text(stringResource(R.string.dist_speculative_draft_min)) }, modifier = Modifier.weight(1f), singleLine = true)
+                                OutlinedTextField(value = remoteDraftMax, onValueChange = { DistributedService.setRemoteUIDraftMax(it.filter { char -> char.isDigit() }) }, label = { Text(stringResource(R.string.dist_speculative_draft_max)) }, modifier = Modifier.weight(1f), singleLine = true)
                             }
                         }
                         Button(
@@ -3247,8 +3247,8 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                             if (remoteSpecEnabled) {
                                                 put("draftModel", remoteDraftModel ?: "")
                                                 put("draftMin", remoteDraftMin.toIntOrNull() ?: 0)
-                                                put("draftMax", remoteDraftMax.toIntOrNull() ?: 16)
-                                                put("draftPMin", remoteDraftPMin.toFloatOrNull() ?: 0.75f)
+                                                put("draftMax", remoteDraftMax.toIntOrNull() ?: 3)
+                                                put("draftPMin", remoteDraftPMin.toFloatOrNull() ?: 0.0f)
                                             }
                                         }
                                         val httpClient = createRemoteHttpClient()
@@ -3289,7 +3289,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                         Text(filename, style = MaterialTheme.typography.bodySmall.copy(fontWeight = if (isCurrentModel) FontWeight.Bold else FontWeight.Normal), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                         Text(sizeFormatted, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
-                                    if (isCurrentModel) Icon(Icons.Default.PlayArrow, contentDescription = "Active", tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                                    if (isCurrentModel) Icon(Icons.Default.PlayArrow, contentDescription = stringResource(R.string.action_active), tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
                                     IconButton(onClick = { showDeleteConfirm = filename }, enabled = !isCurrentModel && !deleteInProgress, modifier = Modifier.size(32.dp)) {
                                         Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.dist_remote_delete_model), tint = if (isCurrentModel) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f) else MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
                                     }
@@ -3325,9 +3325,9 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                             } catch (e: Exception) { com.example.llamadroid.util.DebugLog.log("Remote delete error: ${e.message}") }
                                             finally { deleteInProgress = false }
                                         }
-                                    }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Delete", color = MaterialTheme.colorScheme.onError) }
+                                    }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.onError) }
                                 },
-                                dismissButton = { TextButton(onClick = { showDeleteConfirm = null }) { Text("Cancel") } }
+                                dismissButton = { TextButton(onClick = { showDeleteConfirm = null }) { Text(stringResource(R.string.action_cancel)) } }
                             )
                         }
                         
@@ -3477,16 +3477,16 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                             remoteWorkersList = remoteWorkersList.filter { w -> !(w.optString("ip") == wIp && w.optInt("port") == wPort) }
                                         } catch (_: Exception) {}
                                     }
-                                }) { Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error) }
+                                }) { Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_remove), tint = MaterialTheme.colorScheme.error) }
                             }
                         }
                         
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(value = workerIpInput, onValueChange = { workerIpInput = it }, label = { Text("IP") }, modifier = Modifier.weight(2f), singleLine = true)
-                            OutlinedTextField(value = workerPortInput, onValueChange = { workerPortInput = it.filter { c -> c.isDigit() } }, label = { Text("Port") }, modifier = Modifier.weight(1f), singleLine = true)
+                            OutlinedTextField(value = workerIpInput, onValueChange = { workerIpInput = it }, label = { Text(stringResource(R.string.label_ip)) }, modifier = Modifier.weight(2f), singleLine = true)
+                            OutlinedTextField(value = workerPortInput, onValueChange = { workerPortInput = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.port_label)) }, modifier = Modifier.weight(1f), singleLine = true)
                         }
-                        OutlinedTextField(value = workerRamInput, onValueChange = { workerRamInput = it.filter { c -> c.isDigit() } }, label = { Text("RAM (MB)") }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), singleLine = true)
+                        OutlinedTextField(value = workerRamInput, onValueChange = { workerRamInput = it.filter { c -> c.isDigit() } }, label = { Text(stringResource(R.string.label_ram_mb)) }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp), singleLine = true)
                         Button(
                             onClick = {
                                 if (workerIpInput.isNotBlank()) {
@@ -3565,8 +3565,8 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                                                 IconButton(onClick = {
                                                     clipboard.setText(androidx.compose.ui.text.AnnotatedString(remoteLogsList.joinToString("\n")))
                                                     android.widget.Toast.makeText(ctx, logsCopiedStr, android.widget.Toast.LENGTH_SHORT).show()
-                                                }) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy") }
-                                                IconButton(onClick = { showLogs = false }) { Icon(Icons.Default.Close, contentDescription = "Close") }
+                                                }) { Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.action_copy)) }
+                                                IconButton(onClick = { showLogs = false }) { Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_close)) }
                                             }
                                         }
                                         HorizontalDivider()
@@ -3645,9 +3645,9 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                         } catch (e: Exception) { com.example.llamadroid.util.DebugLog.log("Remote switch error: ${e.message}") }
                         finally { clientSwitching = false }
                     }
-                }) { Text("Yes") }
+                }) { Text(stringResource(R.string.action_yes)) }
             },
-            dismissButton = { TextButton(onClick = { showSwitchConfirm = null }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showSwitchConfirm = null }) { Text(stringResource(R.string.action_cancel)) } }
         )
     }
 }
