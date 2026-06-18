@@ -26,7 +26,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
-private const val TAMA_TRANSFER_VERSION = 18
+private const val TAMA_TRANSFER_VERSION = 19
 
 @Serializable
 data class TamaTransferBundle(

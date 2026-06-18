@@ -102,9 +102,12 @@ object UnifiedNotificationManager {
         MODEL_SHARE("🔁", "Model Share"),
         LLAMA_SERVER("🦙", "LLM Server"),
         LLAMA_CLIENT("💭", "Llama Chat"),
+        LLAMA_CALL("☎", "Llama Call"),
+        LIVE_TRANSLATOR("🌐", "Live Translator"),
         KNOWLEDGE_BASE("📚", "Knowledge Base"),
         ONNX_TTS("🔊", "Text to Speech"),
         BACKGROUND_REMOVAL("🪄", "Background Removal"),
+        AI_SERVERS("🌐", "AI Servers"),
         LLAMA_SCHEDULED_TASK("🗓", "Scheduled Llama Task", CompletionAlertPolicy.SUCCESS_ONLY),
         ZIM_SHARE("📚", "ZIM File Share"),
         BENCHMARK("⚡", "Benchmark"),
@@ -596,6 +599,8 @@ object UnifiedNotificationManager {
             TaskType.MODEL_SHARE -> android.R.drawable.ic_menu_upload
             TaskType.LLAMA_SERVER -> android.R.drawable.ic_menu_manage
             TaskType.LLAMA_CLIENT -> android.R.drawable.ic_menu_send
+            TaskType.LLAMA_CALL -> android.R.drawable.ic_btn_speak_now
+            TaskType.LIVE_TRANSLATOR -> android.R.drawable.ic_menu_upload
             TaskType.KNOWLEDGE_BASE -> android.R.drawable.ic_menu_search
             TaskType.ONNX_TTS -> android.R.drawable.ic_btn_speak_now
             TaskType.BACKGROUND_REMOVAL -> android.R.drawable.ic_menu_crop
@@ -605,6 +610,7 @@ object UnifiedNotificationManager {
             TaskType.ADVENTURE -> android.R.drawable.ic_menu_compass
             TaskType.AGENT -> android.R.drawable.ic_menu_manage
             TaskType.QUADTRIX -> android.R.drawable.ic_menu_upload
+            TaskType.AI_SERVERS -> android.R.drawable.ic_menu_share
         }
         
         val builder = NotificationCompat.Builder(appContext, CHANNEL_ID)
@@ -662,6 +668,13 @@ object UnifiedNotificationManager {
                 createCancelOnnxTtsPendingIntent(task.id)
             )
         }
+        if (task.type == TaskType.LLAMA_CALL && !task.isComplete && !task.isError) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.llama_call_hang_up),
+                createHangUpLlamaCallPendingIntent(task.id)
+            )
+        }
         if (task.type == TaskType.BACKGROUND_REMOVAL && !task.isComplete && !task.isError) {
             builder.addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
@@ -696,20 +709,20 @@ object UnifiedNotificationManager {
         val errorCount = tasks.count { it.isError }
         
         val summaryText = buildString {
-            if (runningCount > 0) append("$runningCount running")
+            if (runningCount > 0) append(appContext.getString(R.string.notification_summary_running_count, runningCount))
             if (completedCount > 0) {
                 if (isNotEmpty()) append(" • ")
-                append("$completedCount done")
+                append(appContext.getString(R.string.notification_summary_done_count, completedCount))
             }
             if (errorCount > 0) {
                 if (isNotEmpty()) append(" • ")
-                append("$errorCount failed")
+                append(appContext.getString(R.string.notification_summary_failed_count, errorCount))
             }
         }
         
         // Build expanded style
         val inbox = NotificationCompat.InboxStyle()
-            .setBigContentTitle("Doomsday AI Toolbox")
+            .setBigContentTitle(appContext.getString(R.string.app_name))
             .setSummaryText(summaryText)
         
         tasks.take(5).forEach { task ->
@@ -722,7 +735,7 @@ object UnifiedNotificationManager {
         }
         
         if (tasks.size > 5) {
-            inbox.addLine("... and ${tasks.size - 5} more")
+            inbox.addLine(appContext.getString(R.string.notification_summary_more, tasks.size - 5))
         }
         
         val intent = Intent(appContext, MainActivity::class.java)
@@ -733,7 +746,7 @@ object UnifiedNotificationManager {
         
         val builder = NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_manage)
-            .setContentTitle("Doomsday AI Toolbox")
+            .setContentTitle(appContext.getString(R.string.app_name))
             .setContentText(summaryText)
             .setStyle(inbox)
             .setContentIntent(pendingIntent)
@@ -798,6 +811,13 @@ object UnifiedNotificationManager {
                 createCancelOnnxTtsPendingIntent(taskId)
             )
         }
+        if (task.type == TaskType.LLAMA_CALL) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.llama_call_hang_up),
+                createHangUpLlamaCallPendingIntent(taskId)
+            )
+        }
         if (task.type == TaskType.BACKGROUND_REMOVAL) {
             builder.addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
@@ -806,6 +826,15 @@ object UnifiedNotificationManager {
             )
         }
         return builder.build()
+    }
+
+    private fun createHangUpLlamaCallPendingIntent(requestCode: Int): PendingIntent {
+        return PendingIntent.getService(
+            appContext,
+            requestCode + 80_000,
+            LlamaCallService.hangUpIntent(appContext),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun createCancelOnnxBgrPendingIntent(requestCode: Int): PendingIntent {
@@ -856,7 +885,7 @@ object UnifiedNotificationManager {
         return NotificationCompat.Builder(appContext, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setContentTitle(title)
-            .setContentText("Initializing...")
+            .setContentText(appContext.getString(R.string.notification_initializing))
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .build()

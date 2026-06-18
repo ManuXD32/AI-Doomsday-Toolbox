@@ -2,13 +2,20 @@ package com.example.llamadroid.data.repository
 
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
 import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.advertisedLiteRtMaxContextTokens
+import com.example.llamadroid.data.model.defaultLiteRtChatContextTokens
 import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import com.example.llamadroid.data.model.liteRtDeviceTargetInfoFromText
+import com.example.llamadroid.data.model.liteRtDefaultChatContextTokensFromText
+import com.example.llamadroid.data.model.liteRtAudioSupportFromText
 import com.example.llamadroid.data.model.liteRtEngineMaxTokensFromText
 import com.example.llamadroid.data.model.liteRtPackageMatchesDeviceTarget
 import com.example.llamadroid.data.model.liteRtPackageMatchesDeviceTargets
 import com.example.llamadroid.data.model.liteRtPackageTargetFromText
+import com.example.llamadroid.data.model.liteRtVisionSupportFromText
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.model.supportsLiteRtAudio
+import com.example.llamadroid.data.model.supportsLiteRtVision
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -114,13 +121,26 @@ class LiteRtModelCatalogTest {
 
     @Test
     fun `LiteRT engine max tokens follow model package defaults`() {
-        assertEquals(4000, liteRtEngineMaxTokensFromText("gemma-4-E2B-it.litertlm"))
+        assertEquals(32768, liteRtEngineMaxTokensFromText("gemma-4-E2B-it.litertlm"))
+        assertEquals(8192, liteRtDefaultChatContextTokensFromText("gemma-4-E2B-it.litertlm"))
+        assertEquals(2048, liteRtEngineMaxTokensFromText("gemma3-1b-it-int4.litertlm"))
         assertEquals(4096, liteRtEngineMaxTokensFromText("DeepSeek-R1-Distill-Qwen-1.5B_multi-prefill-seq_q8_ekv4096.litertlm"))
         assertEquals(1024, liteRtEngineMaxTokensFromText("mobile-actions_q8_ekv1024.litertlm"))
     }
 
     @Test
-    fun `managed LiteRT model derives Gemma 4 max tokens from filename`() {
+    fun `LiteRT catalog exposes known context caps`() {
+        val entries = LiteRtModelCatalog.defaultEntries.associateBy { it.preferredFileName }
+
+        assertEquals(4096, entries["Qwen3-0.6B.litertlm"]?.maxContextTokens)
+        assertEquals(2048, entries["gemma3-1b-it-int4.litertlm"]?.maxContextTokens)
+        assertEquals(32768, entries["gemma-4-E2B-it.litertlm"]?.maxContextTokens)
+        assertEquals(4096, entries["Qwen2.5-1.5B-Instruct_multi-prefill-seq_q8_ekv4096.litertlm"]?.maxContextTokens)
+        assertEquals(1024, entries["mobile-actions_q8_ekv1024.litertlm"]?.maxContextTokens)
+    }
+
+    @Test
+    fun `managed LiteRT model separates Gemma 4 advertised cap from default chat context`() {
         val model = LiteRtModelEntity(
             displayName = "Gemma 4 E2B IT LiteRT-LM",
             path = "/tmp/gemma-4-E2B-it.litertlm",
@@ -128,6 +148,73 @@ class LiteRtModelCatalogTest {
             filename = "gemma-4-E2B-it.litertlm"
         )
 
-        assertEquals(4000, model.defaultLiteRtEngineMaxTokens())
+        assertEquals(32768, model.advertisedLiteRtMaxContextTokens())
+        assertEquals(32768, model.defaultLiteRtEngineMaxTokens())
+        assertEquals(8192, model.defaultLiteRtChatContextTokens())
+    }
+
+    @Test
+    fun `managed LiteRT model can override inferred advertised max tokens`() {
+        val model = LiteRtModelEntity(
+            displayName = "Imported package",
+            path = "/tmp/custom.litertlm",
+            filename = "custom.litertlm",
+            maxContextTokens = 8192
+        )
+
+        assertEquals(8192, model.defaultLiteRtEngineMaxTokens())
+        assertEquals(8192, model.defaultLiteRtChatContextTokens())
+    }
+
+    @Test
+    fun `managed Gemma 4 LiteRT model keeps custom context caps selectable above default`() {
+        val sixteenK = LiteRtModelEntity(
+            displayName = "Gemma 4 E2B IT LiteRT-LM",
+            path = "/tmp/gemma-4-E2B-it.litertlm",
+            repoId = "litert-community/gemma-4-E2B-it-litert-lm",
+            filename = "gemma-4-E2B-it.litertlm",
+            maxContextTokens = 16384
+        )
+        val thirtyTwoK = sixteenK.copy(maxContextTokens = 32768)
+
+        assertEquals(16384, sixteenK.advertisedLiteRtMaxContextTokens())
+        assertEquals(8192, sixteenK.defaultLiteRtChatContextTokens())
+        assertEquals(32768, thirtyTwoK.advertisedLiteRtMaxContextTokens())
+        assertEquals(8192, thirtyTwoK.defaultLiteRtChatContextTokens())
+    }
+
+    @Test
+    fun `LiteRT vision support is inferred for multimodal model families`() {
+        val gemma4 = LiteRtModelEntity(
+            displayName = "Gemma 4 E2B IT LiteRT-LM",
+            path = "/tmp/gemma-4-E2B-it.litertlm",
+            repoId = "litert-community/gemma-4-E2B-it-litert-lm",
+            filename = "gemma-4-E2B-it.litertlm",
+            supportsVision = true,
+            supportsAudio = true
+        )
+        val gemma3n = LiteRtModelEntity(
+            displayName = "Gemma 3n E2B IT LiteRT-LM",
+            path = "/tmp/gemma-3n-E2B-it-int4.litertlm",
+            repoId = "google/gemma-3n-E2B-it-litert-lm",
+            filename = "gemma-3n-E2B-it-int4.litertlm",
+            supportsVision = true,
+            supportsAudio = true
+        )
+        val qwen = LiteRtModelEntity(
+            displayName = "Qwen3 0.6B",
+            path = "/tmp/Qwen3-0.6B.litertlm",
+            repoId = "litert-community/Qwen3-0.6B",
+            filename = "Qwen3-0.6B.litertlm"
+        )
+
+        assertTrue(gemma4.supportsLiteRtVision())
+        assertTrue(gemma3n.supportsLiteRtVision())
+        assertTrue(gemma4.supportsLiteRtAudio())
+        assertTrue(gemma3n.supportsLiteRtAudio())
+        assertTrue(liteRtVisionSupportFromText("custom-vlm-image-model.litertlm"))
+        assertTrue(liteRtAudioSupportFromText("gemma-4-E4B-it.litertlm"))
+        assertFalse(qwen.supportsLiteRtVision())
+        assertFalse(qwen.supportsLiteRtAudio())
     }
 }

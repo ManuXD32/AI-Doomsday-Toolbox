@@ -113,22 +113,7 @@ class OnnxTtsSupportTest {
     fun `metadata sidecar round trips for generated audio`() {
         val workspace = createTempDirectory("supertonic-metadata-test").toFile()
         val audioFile = File(workspace, "sample.wav").apply { writeText("wav") }
-        val metadata = OnnxTtsMetadata(
-            audioPath = audioFile.absolutePath,
-            wavPath = audioFile.absolutePath,
-            mp3Path = null,
-            sourceName = "source.txt",
-            textPreview = "Hello there.",
-            modelName = "Supertonic 3",
-            language = "en",
-            voiceName = "M1",
-            totalSteps = 8,
-            speed = 1.05f,
-            durationSeconds = 1.2f,
-            sampleRate = 24000,
-            createdAtEpochMs = 123L,
-            mp3ConversionStatus = "wav_fallback"
-        )
+        val metadata = sampleMetadata(audioFile = audioFile, wavFile = audioFile)
 
         OnnxTtsStorage.writeMetadata(audioFile, metadata)
         val loaded = OnnxTtsStorage.readMetadata(audioFile)
@@ -137,6 +122,71 @@ class OnnxTtsSupportTest {
         assertEquals(metadata.sourceName, loaded?.sourceName)
         assertEquals(metadata.voiceName, loaded?.voiceName)
         assertEquals(metadata.mp3ConversionStatus, loaded?.mp3ConversionStatus)
+    }
+
+    @Test
+    fun `deleting an mp3 output removes wav sibling and both sidecars`() {
+        val workspace = createTempDirectory("supertonic-delete-mp3-test").toFile()
+        val wavFile = File(workspace, "sample.wav").apply { writeText("wav") }
+        val mp3File = File(workspace, "sample.mp3").apply { writeText("mp3") }
+        val metadata = sampleMetadata(audioFile = mp3File, wavFile = wavFile, mp3File = mp3File)
+        OnnxTtsStorage.writeMetadata(mp3File, metadata)
+        OnnxTtsStorage.writeMetadata(wavFile, metadata)
+
+        val result = OnnxTtsStorage.deleteGeneratedAudioSet(workspace, mp3File)
+
+        assertTrue(result.success)
+        assertEquals(2, result.deletedAudioFiles)
+        assertEquals(2, result.deletedMetadataFiles)
+        assertFalse(mp3File.exists())
+        assertFalse(wavFile.exists())
+        assertFalse(OnnxTtsStorage.metadataFileFor(mp3File).exists())
+        assertFalse(OnnxTtsStorage.metadataFileFor(wavFile).exists())
+    }
+
+    @Test
+    fun `deleting a wav fallback removes its sidecar`() {
+        val workspace = createTempDirectory("supertonic-delete-wav-test").toFile()
+        val wavFile = File(workspace, "sample.wav").apply { writeText("wav") }
+        OnnxTtsStorage.writeMetadata(wavFile, sampleMetadata(audioFile = wavFile, wavFile = wavFile))
+
+        val result = OnnxTtsStorage.deleteGeneratedAudioSet(workspace, wavFile)
+
+        assertTrue(result.success)
+        assertEquals(1, result.deletedAudioFiles)
+        assertEquals(1, result.deletedMetadataFiles)
+        assertFalse(wavFile.exists())
+        assertFalse(OnnxTtsStorage.metadataFileFor(wavFile).exists())
+    }
+
+    @Test
+    fun `deleted sibling pair no longer appears in generated audio list`() {
+        val workspace = createTempDirectory("supertonic-delete-list-test").toFile()
+        val wavFile = File(workspace, "sample.wav").apply { writeText("wav") }
+        val mp3File = File(workspace, "sample.mp3").apply { writeText("mp3") }
+
+        assertEquals(listOf(mp3File.absolutePath), OnnxTtsStorage.listGeneratedAudio(workspace).map { it.absolutePath })
+
+        OnnxTtsStorage.deleteGeneratedAudioSet(workspace, mp3File)
+
+        assertTrue(OnnxTtsStorage.listGeneratedAudio(workspace).isEmpty())
+        assertFalse(wavFile.exists())
+        assertFalse(mp3File.exists())
+    }
+
+    @Test
+    fun `deleting generated audio ignores files outside output directory`() {
+        val workspace = createTempDirectory("supertonic-safe-root-test").toFile()
+        val outside = createTempDirectory("supertonic-unsafe-target-test").toFile()
+        val outsideAudio = File(outside, "sample.mp3").apply { writeText("mp3") }
+        OnnxTtsStorage.metadataFileFor(outsideAudio).writeText("{}")
+
+        val result = OnnxTtsStorage.deleteGeneratedAudioSet(workspace, outsideAudio)
+
+        assertFalse(result.success)
+        assertTrue(result.skippedUnsafe)
+        assertTrue(outsideAudio.exists())
+        assertTrue(OnnxTtsStorage.metadataFileFor(outsideAudio).exists())
     }
 
     @Test
@@ -178,4 +228,25 @@ class OnnxTtsSupportTest {
         }
         return zipFile.readBytes()
     }
+
+    private fun sampleMetadata(
+        audioFile: File,
+        wavFile: File,
+        mp3File: File? = null
+    ): OnnxTtsMetadata = OnnxTtsMetadata(
+        audioPath = audioFile.absolutePath,
+        wavPath = wavFile.absolutePath,
+        mp3Path = mp3File?.absolutePath,
+        sourceName = "source.txt",
+        textPreview = "Hello there.",
+        modelName = "Supertonic 3",
+        language = "en",
+        voiceName = "M1",
+        totalSteps = 8,
+        speed = 1.05f,
+        durationSeconds = 1.2f,
+        sampleRate = 24000,
+        createdAtEpochMs = 123L,
+        mp3ConversionStatus = if (mp3File == null) "wav_fallback" else "converted"
+    )
 }

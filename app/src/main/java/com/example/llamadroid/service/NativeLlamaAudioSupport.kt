@@ -19,7 +19,8 @@ internal fun requiresNativeLlamaAudioConversion(filePath: String): Boolean =
 
 internal suspend fun prepareAudioPathForNativeLlama(
     context: Context,
-    audioPath: String
+    audioPath: String,
+    forcePcmWav: Boolean = false
 ): Result<String> = withContext(Dispatchers.IO) {
     try {
         val inputFile = File(audioPath)
@@ -27,7 +28,10 @@ internal suspend fun prepareAudioPathForNativeLlama(
             return@withContext Result.failure(Exception(context.getString(R.string.llama_audio_file_missing)))
         }
 
-        if (!requiresNativeLlamaAudioConversion(audioPath)) {
+        if (!forcePcmWav && !requiresNativeLlamaAudioConversion(audioPath)) {
+            return@withContext Result.success(audioPath)
+        }
+        if (forcePcmWav && isPreparedNativeLlamaAudio(inputFile, context)) {
             return@withContext Result.success(audioPath)
         }
 
@@ -102,6 +106,13 @@ internal suspend fun prepareAudioPathForNativeLlama(
             )
         )
     }
+}
+
+private fun isPreparedNativeLlamaAudio(file: File, context: Context): Boolean {
+    val audioDir = File(context.filesDir, "llama_chat_audio")
+    return file.extension.equals("wav", ignoreCase = true) &&
+        file.parentFile?.canonicalPath == audioDir.canonicalPath &&
+        file.nameWithoutExtension.contains("_llama_")
 }
 
 private fun setupNativeLlamaFfmpegLibrarySymlinks(context: Context) {

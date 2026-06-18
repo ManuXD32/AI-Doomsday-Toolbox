@@ -109,6 +109,7 @@ import com.example.llamadroid.onnx.OnnxImageGenMode
 import com.example.llamadroid.onnx.OnnxRamProfile
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.OnnxRuntimeOptions
+import com.example.llamadroid.onnx.ONNX_IMAGE_GEN_DEFAULT_STRENGTH
 import com.example.llamadroid.onnx.ONNX_IMG2IMG_CANVAS_SIZE
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.onnx.computeOnnxImg2ImgEffectiveSteps
@@ -118,6 +119,7 @@ import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
 import com.example.llamadroid.onnx.normalizeOnnxCanvasSize
 import com.example.llamadroid.onnx.resolveOnnxCatalogEntry
 import com.example.llamadroid.onnx.toDisplayLines
+import com.example.llamadroid.service.AiServerArtifactTypes
 import com.example.llamadroid.service.OnnxImageGenerationService
 import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
@@ -141,6 +143,10 @@ fun OnnxImageGenScreen(navController: NavController) {
     val settingsRepo = remember { SettingsRepository(context) }
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val installedModels by db.modelDao().getModelsByType(ModelType.ONNX_IMAGE_GEN).collectAsState(initial = emptyList())
+    val serverImagePaths by db.aiServerDao()
+        .observeServerArtifactPathsByType(AiServerArtifactTypes.IMAGE)
+        .collectAsState(initial = emptyList())
+    val serverImagePathSet = remember(serverImagePaths) { serverImagePaths.toSet() }
     val onnxModels = remember(installedModels) { installedModels.filter { it.isOnnxTxt2ImgBundle() } }
     val holder = remember { OnnxImageGenerationStateStore.txt2img }
     val generationState by holder.state.collectAsState()
@@ -159,7 +165,7 @@ fun OnnxImageGenScreen(navController: NavController) {
     var seedText by rememberSaveable { mutableStateOf("") }
     var initImagePath by rememberSaveable { mutableStateOf<String?>(null) }
     var initImageName by rememberSaveable { mutableStateOf("") }
-    var strength by rememberSaveable { mutableStateOf(0.35f) }
+    var strength by rememberSaveable { mutableStateOf(ONNX_IMAGE_GEN_DEFAULT_STRENGTH) }
     var backend by rememberSaveable { mutableStateOf(OnnxRuntimeBackend.CPU) }
     var showAdvancedEssentials by rememberSaveable { mutableStateOf(false) }
     var showExpertPanel by rememberSaveable { mutableStateOf(false) }
@@ -182,6 +188,7 @@ fun OnnxImageGenScreen(navController: NavController) {
     var fullscreenImage by remember { mutableStateOf<File?>(null) }
     var pendingDeleteImage by remember { mutableStateOf<File?>(null) }
     var galleryFilterIndex by rememberSaveable { mutableStateOf(0) }
+    var gallerySourceFilterIndex by rememberSaveable { mutableStateOf(0) }
 
     val metadataCache = remember { mutableStateMapOf<String, OnnxGeneratedImageMetadata?>() }
     val selectedMode = OnnxImageGenMode.entries[selectedModeIndex.coerceIn(0, OnnxImageGenMode.entries.lastIndex)]
@@ -202,8 +209,14 @@ fun OnnxImageGenScreen(navController: NavController) {
             .distinctBy { it.absolutePath }
             .sortedByDescending { it.lastModified() }
     }
-    val filteredGalleryImages = remember(galleryImages, metadataCache, galleryFilterIndex) {
-        galleryImages.filter { imageFile ->
+    val filteredGalleryImages = remember(
+        galleryImages,
+        metadataCache,
+        galleryFilterIndex,
+        gallerySourceFilterIndex,
+        serverImagePathSet
+    ) {
+        val modeFiltered = galleryImages.filter { imageFile ->
             val mode = metadataCache[imageFile.absolutePath]?.mode?.let(OnnxImageGenMode::fromMetadataValue)
                 ?: OnnxImageGenMode.TXT2IMG
             when (galleryFilterIndex) {
@@ -211,6 +224,11 @@ fun OnnxImageGenScreen(navController: NavController) {
                 2 -> mode == OnnxImageGenMode.IMG2IMG
                 else -> true
             }
+        }
+        when (gallerySourceFilterIndex) {
+            1 -> modeFiltered.filterNot { it.absolutePath in serverImagePathSet }
+            2 -> modeFiltered.filter { it.absolutePath in serverImagePathSet }
+            else -> modeFiltered
         }
     }
     val isBusy = generationState is OnnxImageGenerationState.Preparing ||
@@ -1283,6 +1301,28 @@ fun OnnxImageGenScreen(navController: NavController) {
                             }
                         }
                     }
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        listOf(
+                            stringResource(R.string.ai_servers_gallery_source_all),
+                            stringResource(R.string.ai_servers_gallery_source_app),
+                            stringResource(R.string.ai_servers_gallery_source_server)
+                        ).forEachIndexed { index, label ->
+                            SegmentedButton(
+                                selected = gallerySourceFilterIndex == index,
+                                onClick = { gallerySourceFilterIndex = index },
+                                shape = androidx.compose.material3.SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = 3
+                                )
+                            ) {
+                                Text(label)
+                            }
+                        }
+                    }
                     if (filteredGalleryImages.isEmpty()) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Text(
@@ -2185,6 +2225,8 @@ private fun onnxProviderLabel(
             context.getString(R.string.onnx_models_provider_manuxd32)
         com.example.llamadroid.onnx.OnnxCatalogProvider.SUPERTONIC ->
             context.getString(R.string.onnx_models_provider_supertonic)
+        com.example.llamadroid.onnx.OnnxCatalogProvider.BACKGROUND_REMOVAL ->
+            context.getString(R.string.onnx_models_provider_bgr)
     }
 }
 

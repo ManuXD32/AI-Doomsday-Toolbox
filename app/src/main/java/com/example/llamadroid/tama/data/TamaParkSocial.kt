@@ -244,19 +244,26 @@ object TamaParkSocialCatalog {
     }
 
     fun localizedName(context: Context, npcId: String): String {
-        return npcById(npcId)?.name?.resolve(context.resources.configuration.locales[0])
+        val fallback = npcById(npcId)?.name?.resolve(context.resources.configuration.locales[0])
             ?: context.getString(R.string.tama_park_unknown_friend)
+        return TamaDialogTextCatalog.localizedText(context, "park_npc:$npcId:name", fallback)
     }
 
     fun localizedLine(context: Context, encounter: TamaParkEncounter): String {
         val locale = context.resources.configuration.locales[0]
         val npc = npcById(encounter.npcId) ?: return ""
-        return when (encounter.type) {
-            TamaParkEncounterType.REGULAR -> npc.lines.getOrNull(encounter.lineIndex)?.resolve(locale)
+        val lineIndex = if (encounter.type == TamaParkEncounterType.REGULAR) {
+            encounter.lineIndex.coerceAtLeast(0)
+        } else {
+            0
+        }
+        val fallback = when (encounter.type) {
+            TamaParkEncounterType.REGULAR -> npc.lines.getOrNull(lineIndex)?.resolve(locale)
                 ?: npc.lines.firstOrNull()?.resolve(locale).orEmpty()
             TamaParkEncounterType.RECYCLER,
             TamaParkEncounterType.SELLER -> npc.lines.firstOrNull()?.resolve(locale).orEmpty()
         }
+        return TamaDialogTextCatalog.localizedText(context, "park_npc:${encounter.npcId}:line:$lineIndex", fallback)
     }
 
     fun boostedSellerPrice(basePrice: Int): Long {

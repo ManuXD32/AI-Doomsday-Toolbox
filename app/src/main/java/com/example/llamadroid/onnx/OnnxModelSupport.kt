@@ -43,6 +43,7 @@ const val ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE = "custom_import_bundle"
 const val ONNX_INSTALL_KIND_FILE = "file"
 const val ONNX_INSTALL_KIND_ARCHIVE_BUNDLE = "archive_bundle"
 const val ONNX_INSTALL_KIND_HF_TREE_BUNDLE = "hf_tree_bundle"
+const val ONNX_IMAGE_GEN_DEFAULT_STRENGTH = 0.35f
 
 data class OnnxCatalogFile(
     val relativePath: String,

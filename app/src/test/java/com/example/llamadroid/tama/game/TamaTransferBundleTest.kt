@@ -14,7 +14,7 @@ class TamaTransferBundleTest {
 
     @Test
     fun `bundle round trip keeps full transfer sections`() {
-        val pet = TamaPet(id = "pet-1", name = "Peque")
+        val pet = TamaPet(id = "pet-1", name = "Peque", introspectionLevel = 18.5f)
         val bundle = TamaTransferBundle(
             version = 2,
             exportDate = 1234L,
@@ -182,6 +182,7 @@ class TamaTransferBundleTest {
         val parsed = parseTamaTransferBundle(json.encodeToString(bundle), json)
 
         assertEquals(pet.id, parsed.pet.id)
+        assertEquals(18.5f, parsed.pet.introspectionLevel, 0.001f)
         assertEquals(1, parsed.events.size)
         assertEquals(1, parsed.chatMessages.size)
         assertEquals(1, parsed.summaries.size)
@@ -276,6 +277,7 @@ class TamaTransferBundleTest {
 
         assertEquals(1, parsed.version)
         assertEquals("pet-legacy", parsed.pet.id)
+        assertEquals(0f, parsed.pet.introspectionLevel, 0.001f)
         assertEquals(1, parsed.events.size)
         assertEquals(1, parsed.summaries.size)
         assertTrue(parsed.chatMessages.isEmpty())

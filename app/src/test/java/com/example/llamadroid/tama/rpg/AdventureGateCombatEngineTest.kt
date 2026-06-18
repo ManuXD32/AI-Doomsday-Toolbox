@@ -416,7 +416,31 @@ class AdventureGateCombatEngineTest {
     }
 
     @Test
-    fun `two hundred study points unlock hidden mana recovery each battle turn`() {
+    fun `introspection points increase effective max hp every ten points`() {
+        val profile = AdventureGateProfile(petId = "pet")
+        val baseline = AdventureGateCombatEngine.normalizedProfile(profile, introspectionLevel = 0f)
+        val belowThreshold = AdventureGateCombatEngine.normalizedProfile(profile, introspectionLevel = 9.99f)
+        val firstBonus = AdventureGateCombatEngine.normalizedProfile(profile, introspectionLevel = 10f)
+        val secondBonus = AdventureGateCombatEngine.normalizedProfile(profile, introspectionLevel = 20f)
+
+        assertEquals(baseline.stats.maxHp, belowThreshold.stats.maxHp)
+        assertEquals(baseline.stats.maxHp + 3, firstBonus.stats.maxHp)
+        assertEquals(baseline.stats.maxHp + 6, secondBonus.stats.maxHp)
+    }
+
+    @Test
+    fun `exercise points increase effective attack like study increases magic`() {
+        val profile = AdventureGateProfile(petId = "pet")
+        val baseline = AdventureGateCombatEngine.normalizedProfile(profile, exerciseLevel = 0f)
+        val trained = AdventureGateCombatEngine.normalizedProfile(profile, exerciseLevel = 45f)
+        val trainedAgain = AdventureGateCombatEngine.normalizedProfile(trained)
+
+        assertEquals(baseline.stats.attack + 3, trained.stats.attack)
+        assertEquals(trained.stats.attack, trainedAgain.stats.attack)
+    }
+
+    @Test
+    fun `study mana recovery starts at one percent at two hundred study points`() {
         val phase = AdventureGateCatalog.world("sproutvale_gate").phases.first()
         val profile = AdventureGateCombatEngine.normalizedProfile(
             AdventureGateProfile(
@@ -439,8 +463,56 @@ class AdventureGateCombatEngineTest {
             targetInstanceId = battle.enemies.first().instanceId
         )
 
-        assertEquals(54, result.snapshot.pet.mana)
+        assertEquals(51, result.snapshot.pet.mana)
         assertFalse(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.EQUIPMENT_TRIGGERED })
+    }
+
+    @Test
+    fun `study mana recovery scales at four hundred and six hundred study points`() {
+        val phase = AdventureGateCatalog.world("sproutvale_gate").phases.first()
+
+        val fourHundredProfile = AdventureGateCombatEngine.normalizedProfile(
+            AdventureGateProfile(
+                petId = "pet",
+                currentMana = 50,
+                educationLevel = 400f
+            )
+        )
+        val fourHundredBattle = AdventureGateCombatEngine.startBattle(fourHundredProfile, phase, seed = 75L).copy(
+            pet = AdventureGateCombatEngine.startBattle(fourHundredProfile, phase, seed = 75L).pet.copy(mana = 50),
+            enemies = AdventureGateCombatEngine.startBattle(fourHundredProfile, phase, seed = 75L).enemies.map {
+                it.copy(maxHp = 999, hp = 999, attack = 1, magic = 1, speed = 1, mana = 0, maxMana = 0)
+            }
+        )
+        val fourHundredResult = AdventureGateCombatEngine.performSkill(
+            profile = fourHundredProfile,
+            snapshot = fourHundredBattle,
+            skillId = "paw_strike",
+            targetInstanceId = fourHundredBattle.enemies.first().instanceId
+        )
+
+        val sixHundredProfile = AdventureGateCombatEngine.normalizedProfile(
+            AdventureGateProfile(
+                petId = "pet",
+                currentMana = 50,
+                educationLevel = 600f
+            )
+        )
+        val sixHundredBattle = AdventureGateCombatEngine.startBattle(sixHundredProfile, phase, seed = 76L).copy(
+            pet = AdventureGateCombatEngine.startBattle(sixHundredProfile, phase, seed = 76L).pet.copy(mana = 50),
+            enemies = AdventureGateCombatEngine.startBattle(sixHundredProfile, phase, seed = 76L).enemies.map {
+                it.copy(maxHp = 999, hp = 999, attack = 1, magic = 1, speed = 1, mana = 0, maxMana = 0)
+            }
+        )
+        val sixHundredResult = AdventureGateCombatEngine.performSkill(
+            profile = sixHundredProfile,
+            snapshot = sixHundredBattle,
+            skillId = "paw_strike",
+            targetInstanceId = sixHundredBattle.enemies.first().instanceId
+        )
+
+        assertEquals(54, fourHundredResult.snapshot.pet.mana)
+        assertEquals(58, sixHundredResult.snapshot.pet.mana)
     }
 
     @Test
@@ -776,5 +848,52 @@ class AdventureGateCombatEngineTest {
         assertTrue(!result.snapshot.isCompleted)
         assertTrue("ag_relic_regent_dream_key" in result.snapshot.usedReviveEquipmentIds)
         assertTrue(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.EQUIPMENT_TRIGGERED })
+    }
+
+    @Test
+    fun `pet defeat completes before turn regeneration can revive it`() {
+        val profile = AdventureGateProfile(
+            petId = "pet",
+            equippedRelicId = AdventureGateCatalog.MYSTERY_RELIC_ID
+        )
+        val phase = AdventureGateCatalog.world("sproutvale_gate").phases.first()
+        val battle = AdventureGateCombatEngine.startBattle(profile, phase, seed = 12L)
+            .copy(pet = AdventureGateCombatEngine.startBattle(profile, phase, seed = 12L).pet.copy(hp = 0))
+
+        val result = AdventureGateCombatEngine.performSkill(profile, battle, "guard", battle.enemies.first().instanceId)
+
+        assertTrue(result.snapshot.isCompleted)
+        assertFalse(result.snapshot.isVictory)
+        assertEquals(AdventureGateTurn.COMPLETE, result.snapshot.turn)
+        assertEquals(0, result.snapshot.pet.hp)
+        assertTrue(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.PET_DEFEATED })
+        assertTrue(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.DEFEAT })
+    }
+
+    @Test
+    fun `pet self damage that reaches zero hp ends the battle immediately`() {
+        val profile = AdventureGateProfile(
+            petId = "pet",
+            level = 30,
+            purchasedSkillIds = AdventureGateCatalog.starterSkillIds + listOf("dream_mend", "mana_shell"),
+            learnedMagicIds = AdventureGateCatalog.startingMagicIds + listOf("dream_mend", "mana_shell"),
+            equippedMagicIds = listOf("mana_shell")
+        ).let(AdventureGateCombatEngine::normalizedProfile)
+        val phase = AdventureGateCatalog.world("sproutvale_gate").phases.first()
+        val baseBattle = AdventureGateCombatEngine.startBattle(profile, phase, seed = 13L)
+        val battle = baseBattle.copy(
+            pet = baseBattle.pet.copy(hp = 1, mana = 20, speed = 999),
+            enemies = baseBattle.enemies.map { it.copy(speed = 1) }
+        )
+
+        val result = AdventureGateCombatEngine.performSkill(profile, battle, "mana_shell", battle.pet.instanceId)
+
+        assertTrue(result.snapshot.isCompleted)
+        assertFalse(result.snapshot.isVictory)
+        assertEquals(AdventureGateTurn.COMPLETE, result.snapshot.turn)
+        assertEquals(0, result.snapshot.pet.hp)
+        assertTrue(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.MANA_SHELL_RECOIL })
+        assertTrue(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.PET_DEFEATED })
+        assertTrue(result.snapshot.log.any { it.messageKey == AdventureGateLogMessage.DEFEAT })
     }
 }

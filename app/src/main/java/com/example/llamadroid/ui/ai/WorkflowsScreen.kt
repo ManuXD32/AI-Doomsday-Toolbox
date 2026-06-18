@@ -4,16 +4,25 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.res.stringResource
+import androidx.core.content.FileProvider
 import com.example.llamadroid.R
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -32,6 +41,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -45,6 +55,8 @@ import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.onnx.resolveSupertonicVoices
+import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.service.*
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftLongTextField
@@ -52,7 +64,10 @@ import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.util.FormatUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import com.example.llamadroid.util.UpscalerAssetPackSupport
@@ -73,7 +88,7 @@ fun WorkflowsScreen(navController: NavController) {
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val pdfTranslationJobState by PDFTranslationJobService.state.collectAsState()
     
-    // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale, 3 = manga translation
+    // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale, 3 = manga translation, 4 = media dubbing, 5 = subtitle translation
     val scope = rememberCoroutineScope()
     var selectedWorkflow by remember { mutableIntStateOf(0) }
     var mangaCbzUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
@@ -82,6 +97,8 @@ fun WorkflowsScreen(navController: NavController) {
     var mangaProgress by remember { mutableFloatStateOf(0f) }
     var mangaResults by remember { mutableStateOf<List<MangaTranslationFileResult>>(emptyList()) }
     var mangaError by remember { mutableStateOf<String?>(null) }
+    var mangaExportPdf by remember { mutableStateOf(true) }
+    var mangaExportCbz by remember { mutableStateOf(true) }
 
     LaunchedEffect(
         pdfTranslationJobState.isRunning,
@@ -212,6 +229,9 @@ fun WorkflowsScreen(navController: NavController) {
     val persistedSummaryLlamaSwapUrl by settingsRepo.workflowSummaryLlamaSwapUrl.collectAsState()
     val persistedSummaryOllamaModel by settingsRepo.workflowSummaryOllamaModel.collectAsState()
     val persistedSummaryLlamaSwapModel by settingsRepo.workflowSummaryLlamaSwapModel.collectAsState()
+    val persistedSummaryLiteRtModelId by settingsRepo.workflowSummaryLiteRtModelId.collectAsState()
+    val persistedSummaryLiteRtBackend by settingsRepo.workflowSummaryLiteRtBackend.collectAsState()
+    val persistedSummaryLiteRtMtpEnabled by settingsRepo.workflowSummaryLiteRtMtpEnabled.collectAsState()
     val persistedSummaryTargetLanguage by settingsRepo.workflowSummaryTargetLanguage.collectAsState()
     val persistedSummaryContext by settingsRepo.workflowContext.collectAsState()
     val persistedSummaryMaxTokens by settingsRepo.workflowMaxTokens.collectAsState()
@@ -235,6 +255,9 @@ fun WorkflowsScreen(navController: NavController) {
     var summaryLlamaSwapUrl by remember(persistedSummaryLlamaSwapUrl) { mutableStateOf(persistedSummaryLlamaSwapUrl) }
     var summaryOllamaModel by remember(persistedSummaryOllamaModel) { mutableStateOf(persistedSummaryOllamaModel) }
     var summaryLlamaSwapModel by remember(persistedSummaryLlamaSwapModel) { mutableStateOf(persistedSummaryLlamaSwapModel) }
+    var summaryLiteRtModelId by remember(persistedSummaryLiteRtModelId) { mutableStateOf(persistedSummaryLiteRtModelId) }
+    var summaryLiteRtBackend by remember(persistedSummaryLiteRtBackend) { mutableStateOf(persistedSummaryLiteRtBackend) }
+    var summaryLiteRtMtpEnabled by remember(persistedSummaryLiteRtMtpEnabled) { mutableStateOf(persistedSummaryLiteRtMtpEnabled) }
     var summarySystemPrompt by remember(persistedWorkflowSummaryPrompt) {
         mutableStateOf(persistedWorkflowSummaryPrompt ?: SettingsRepository.DEFAULT_TRANSCRIPT_SUMMARY_PROMPT)
     }
@@ -261,6 +284,42 @@ fun WorkflowsScreen(navController: NavController) {
     val workflowProjectedChunkCount by WorkflowStateHolder.projectedChunkCount.collectAsState()
     val workflowCancelled by WorkflowStateHolder.cancelled.collectAsState()
     val transcribeError by WorkflowStateHolder.error.collectAsState()
+    val mediaTranslationState by MediaTranslationWorkflowStateHolder.state.collectAsState()
+    val defaultTranslationTargetLanguage = stringResource(R.string.pdf_translation_language_english)
+
+    // ===== Media dubbing/audio translation state =====
+    var mediaTranslationUri by remember { mutableStateOf<Uri?>(null) }
+    var mediaTranslationPath by remember { mutableStateOf<String?>(null) }
+    var mediaTranslationName by remember { mutableStateOf("") }
+    var mediaTranslationMimeType by remember { mutableStateOf<String?>(null) }
+    var mediaTranslationBatch by remember { mutableStateOf<List<WorkflowMediaInput>>(emptyList()) }
+    var mediaTranslationTargetLanguage by remember(defaultTranslationTargetLanguage) { mutableStateOf(defaultTranslationTargetLanguage) }
+    var mediaTranslationTtsModelPath by remember { mutableStateOf<String?>(null) }
+    var mediaTranslationTtsModelName by remember { mutableStateOf<String?>(null) }
+    var mediaTranslationTtsVoice by remember { mutableStateOf<String?>(null) }
+    var mediaTranslationTtsLanguage by remember { mutableStateOf("en") }
+    var mediaTranslationTtsSteps by remember { mutableIntStateOf(8) }
+    var mediaTranslationOutputMode by remember { mutableStateOf(MediaTranslationOutputMode.AUTO) }
+    var mediaTranslationReplaceAudio by remember { mutableStateOf(true) }
+    var activeMediaWorkflow by remember { mutableIntStateOf(4) }
+
+    // ===== Subtitle translation/subtitled video workflow state =====
+    var subtitleTranslationVideoUri by remember { mutableStateOf<Uri?>(null) }
+    var subtitleTranslationVideoPath by remember { mutableStateOf<String?>(null) }
+    var subtitleTranslationVideoName by remember { mutableStateOf("") }
+    var subtitleTranslationVideoBatch by remember { mutableStateOf<List<WorkflowMediaInput>>(emptyList()) }
+    var subtitleTranslationSrtUri by remember { mutableStateOf<Uri?>(null) }
+    var subtitleTranslationSrtPath by remember { mutableStateOf<String?>(null) }
+    var subtitleTranslationSrtName by remember { mutableStateOf("") }
+    var subtitleTranslationTargetLanguage by remember(defaultTranslationTargetLanguage) { mutableStateOf(defaultTranslationTargetLanguage) }
+    var subtitleTranslationTranslateSubtitles by remember { mutableStateOf(true) }
+    var subtitleTranslationBurnIntoVideo by remember { mutableStateOf(true) }
+    var subtitleTranslationFontSize by remember { mutableIntStateOf(24) }
+    var subtitleTranslationAlignment by remember { mutableIntStateOf(2) }
+    var subtitleTranslationMarginV by remember { mutableIntStateOf(20) }
+    var subtitleTranslationMarginL by remember { mutableIntStateOf(0) }
+    var subtitleTranslationColor by remember { mutableStateOf(Color.White) }
+    var subtitleTranslationFontName by remember { mutableStateOf("Default") }
     
     // ===== Recording state for workflow (persisted via StateHolder) =====
     val showRecordingDialog by WorkflowStateHolder.showRecordingDialog.collectAsState()
@@ -279,6 +338,12 @@ fun WorkflowsScreen(navController: NavController) {
     LaunchedEffect(transcribeIsRunning, audioUri, transcriptionText, summaryText) {
         if (transcribeIsRunning || audioUri != null || transcriptionText.isNotBlank() || summaryText.isNotBlank()) {
             selectedWorkflow = 1
+        }
+    }
+
+    LaunchedEffect(mediaTranslationState.isRunning, mediaTranslationState.finalOutputPath) {
+        if (mediaTranslationState.isRunning || mediaTranslationState.finalOutputPath != null) {
+            selectedWorkflow = activeMediaWorkflow
         }
     }
     
@@ -330,6 +395,9 @@ fun WorkflowsScreen(navController: NavController) {
     LaunchedEffect(summaryLlamaSwapUrl) { settingsRepo.setWorkflowSummaryLlamaSwapUrl(summaryLlamaSwapUrl) }
     LaunchedEffect(summaryOllamaModel) { settingsRepo.setWorkflowSummaryOllamaModel(summaryOllamaModel) }
     LaunchedEffect(summaryLlamaSwapModel) { settingsRepo.setWorkflowSummaryLlamaSwapModel(summaryLlamaSwapModel) }
+    LaunchedEffect(summaryLiteRtModelId) { settingsRepo.setWorkflowSummaryLiteRtModelId(summaryLiteRtModelId.takeIf { it > 0L }) }
+    LaunchedEffect(summaryLiteRtBackend) { settingsRepo.setWorkflowSummaryLiteRtBackend(summaryLiteRtBackend) }
+    LaunchedEffect(summaryLiteRtMtpEnabled) { settingsRepo.setWorkflowSummaryLiteRtMtpEnabled(summaryLiteRtMtpEnabled) }
     LaunchedEffect(summaryContext) { settingsRepo.setWorkflowContext(summaryContext) }
     LaunchedEffect(summaryMaxTokens) { settingsRepo.setWorkflowMaxTokens(summaryMaxTokens) }
     LaunchedEffect(summaryMergeContext) { settingsRepo.setWorkflowMergeContext(summaryMergeContext) }
@@ -438,11 +506,13 @@ fun WorkflowsScreen(navController: NavController) {
             }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
-            Text(
+                Text(
                 when (selectedWorkflow) {
                     1 -> stringResource(R.string.workflow_transcribe_summary)
                     2 -> stringResource(R.string.workflow_txt2img_upscale)
                     3 -> stringResource(R.string.workflow_manga_translation)
+                    4 -> stringResource(R.string.workflow_media_translate_title)
+                    5 -> stringResource(R.string.workflow_subtitle_translate_title)
                     else -> stringResource(R.string.workflow_title)
                 },
                 style = MaterialTheme.typography.headlineSmall.copy(
@@ -458,7 +528,23 @@ fun WorkflowsScreen(navController: NavController) {
                 .verticalScroll(rememberScrollState())
         ) {
             // Show running workflow indicator (visible on all tabs)
-            if (transcribeIsRunning || txt2imgIsRunning) {
+            if (transcribeIsRunning || txt2imgIsRunning || mediaTranslationState.isRunning) {
+                val runningTitle = when {
+                    transcribeIsRunning -> stringResource(R.string.workflow_running_transcribe)
+                    txt2imgIsRunning -> stringResource(R.string.workflow_running_txt2img)
+                    activeMediaWorkflow == 5 -> stringResource(R.string.workflow_subtitle_translate_running)
+                    else -> stringResource(R.string.workflow_media_translate_running)
+                }
+                val runningStep = when {
+                    transcribeIsRunning -> transcribeStep
+                    txt2imgIsRunning -> txt2imgStep
+                    else -> mediaTranslationState.status
+                }
+                val runningProgress = when {
+                    transcribeIsRunning -> transcribeProgress
+                    txt2imgIsRunning -> txt2imgProgress
+                    else -> mediaTranslationState.progress
+                }
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -466,6 +552,7 @@ fun WorkflowsScreen(navController: NavController) {
                             // Switch to the running workflow
                             if (transcribeIsRunning) selectedWorkflow = 1
                             else if (txt2imgIsRunning) selectedWorkflow = 2
+                            else if (mediaTranslationState.isRunning) selectedWorkflow = activeMediaWorkflow
                         },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                     shape = RoundedCornerShape(12.dp)
@@ -483,19 +570,18 @@ fun WorkflowsScreen(navController: NavController) {
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                if (transcribeIsRunning) stringResource(R.string.workflow_running_transcribe) 
-                                else stringResource(R.string.workflow_running_txt2img),
+                                runningTitle,
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                if (transcribeIsRunning) transcribeStep else txt2imgStep,
+                                runningStep,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                             )
                         }
                         Text(
-                            "${((if (transcribeIsRunning) transcribeProgress else txt2imgProgress) * 100).toInt()}%",
+                            "${(runningProgress * 100).toInt()}%",
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
@@ -558,6 +644,32 @@ fun WorkflowsScreen(navController: NavController) {
                         ),
                         onClick = { selectedWorkflow = 3 }
                     )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    WorkflowCard(
+                        emoji = "🎬→🗣️",
+                        title = stringResource(R.string.workflow_media_translate_title),
+                        description = stringResource(R.string.workflow_media_translate_desc),
+                        gradientColors = listOf(
+                            Color(0xFF009688).copy(alpha = 0.15f),
+                            Color(0xFFFF9800).copy(alpha = 0.28f)
+                        ),
+                        onClick = { selectedWorkflow = 4 }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    WorkflowCard(
+                        emoji = "🎬→💬",
+                        title = stringResource(R.string.workflow_subtitle_translate_title),
+                        description = stringResource(R.string.workflow_subtitle_translate_desc),
+                        gradientColors = listOf(
+                            Color(0xFF673AB7).copy(alpha = 0.14f),
+                            Color(0xFF03A9F4).copy(alpha = 0.26f)
+                        ),
+                        onClick = { selectedWorkflow = 5 }
+                    )
                 }
                 
                 1 -> {
@@ -582,6 +694,12 @@ fun WorkflowsScreen(navController: NavController) {
                         onSummaryOllamaModelChange = { summaryOllamaModel = it },
                         summaryLlamaSwapModel = summaryLlamaSwapModel,
                         onSummaryLlamaSwapModelChange = { summaryLlamaSwapModel = it },
+                        summaryLiteRtModelId = summaryLiteRtModelId,
+                        onSummaryLiteRtModelIdChange = { summaryLiteRtModelId = it ?: -1L },
+                        summaryLiteRtBackend = summaryLiteRtBackend,
+                        onSummaryLiteRtBackendChange = { summaryLiteRtBackend = it },
+                        summaryLiteRtMtpEnabled = summaryLiteRtMtpEnabled,
+                        onSummaryLiteRtMtpEnabledChange = { summaryLiteRtMtpEnabled = it },
                         summaryLlamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
                         summaryLlamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
                         summaryLlamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
@@ -622,6 +740,7 @@ fun WorkflowsScreen(navController: NavController) {
                             val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
                                 SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
                                 SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+                                SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
                                 else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
                             }
                             if (audioPath != null && whisperModelPath != null && backendReady) {
@@ -744,6 +863,10 @@ fun WorkflowsScreen(navController: NavController) {
                         progress = mangaProgress,
                         results = mangaResults,
                         errorMessage = mangaError,
+                        exportPdf = mangaExportPdf,
+                        exportCbz = mangaExportCbz,
+                        onExportPdfChange = { mangaExportPdf = it },
+                        onExportCbzChange = { mangaExportCbz = it },
                         onPickFiles = {
                             mangaCbzPicker.launch(
                                 arrayOf(
@@ -758,17 +881,331 @@ fun WorkflowsScreen(navController: NavController) {
                         onRun = {
                             if (mangaCbzUris.isEmpty()) {
                                 mangaError = context.getString(R.string.workflow_manga_select_first)
+                            } else if (!mangaExportPdf && !mangaExportCbz) {
+                                mangaError = context.getString(R.string.workflow_manga_select_output_first)
                             } else {
                                 mangaIsRunning = true
                                 mangaError = null
                                 mangaResults = emptyList()
                                 mangaStep = context.getString(R.string.workflow_step_starting)
                                 mangaProgress = 0f
-                                if (!PDFTranslationJobService.startMangaCbzBatchTranslation(context, mangaCbzUris)) {
+                                if (!PDFTranslationJobService.startMangaCbzBatchTranslation(
+                                        context = context,
+                                        cbzUris = mangaCbzUris,
+                                        exportPdf = mangaExportPdf,
+                                        exportCbz = mangaExportCbz
+                                    )
+                                ) {
                                     mangaIsRunning = false
                                     mangaError = context.getString(R.string.pdf_translation_already_running)
                                     mangaStep = ""
                                 }
+                            }
+                        }
+                    )
+                }
+
+                4 -> {
+                    MediaDubbingTranslationWorkflowContent(
+                        db = db,
+                        settingsRepo = settingsRepo,
+                        selectedUri = mediaTranslationUri,
+                        selectedPath = mediaTranslationPath,
+                        selectedName = mediaTranslationName,
+                        selectedMimeType = mediaTranslationMimeType,
+                        onMediaSelected = { uri, path, name, mimeType ->
+                            mediaTranslationUri = uri
+                            mediaTranslationPath = path
+                            mediaTranslationName = name
+                            mediaTranslationMimeType = mimeType
+                            mediaTranslationBatch = listOf(WorkflowMediaInput(uri, path, name, mimeType))
+                        },
+                        mediaBatch = mediaTranslationBatch,
+                        onMediaBatchSelected = { items ->
+                            mediaTranslationBatch = items
+                            val first = items.firstOrNull()
+                            mediaTranslationUri = first?.uri
+                            mediaTranslationPath = first?.path
+                            mediaTranslationName = first?.name.orEmpty()
+                            mediaTranslationMimeType = first?.mimeType
+                        },
+                        whisperModelPath = whisperModelPath,
+                        onWhisperModelChange = { whisperModelPath = it },
+                        whisperLanguage = whisperLanguage,
+                        onWhisperLanguageChange = { whisperLanguage = it },
+                        whisperThreads = whisperThreads,
+                        onWhisperThreadsChange = { whisperThreads = it },
+                        targetLanguage = mediaTranslationTargetLanguage,
+                        onTargetLanguageChange = { mediaTranslationTargetLanguage = it },
+                        backend = summaryBackend,
+                        onBackendChange = { summaryBackend = it },
+                        ollamaUrl = summaryOllamaUrl,
+                        onOllamaUrlChange = { summaryOllamaUrl = it },
+                        llamaServerUrl = summaryLlamaUrl,
+                        onLlamaServerUrlChange = { summaryLlamaUrl = it },
+                        llamaSwapUrl = summaryLlamaSwapUrl,
+                        onLlamaSwapUrlChange = { summaryLlamaSwapUrl = it },
+                        ollamaModel = summaryOllamaModel,
+                        onOllamaModelChange = { summaryOllamaModel = it },
+                        llamaSwapModel = summaryLlamaSwapModel,
+                        onLlamaSwapModelChange = { summaryLlamaSwapModel = it },
+                        llamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
+                        llamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
+                        llamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
+                        contextSize = summaryContext,
+                        maxTokens = summaryMaxTokens,
+                        temperature = summaryTemperature,
+                        timeoutMinutes = summaryTimeoutMinutes,
+                        thinkingEnabled = summaryThinkingEnabled,
+                        ttsModelPath = mediaTranslationTtsModelPath,
+                        ttsModelName = mediaTranslationTtsModelName,
+                        onTtsModelChange = { path, name ->
+                            mediaTranslationTtsModelPath = path
+                            mediaTranslationTtsModelName = name
+                        },
+                        ttsVoice = mediaTranslationTtsVoice,
+                        onTtsVoiceChange = { mediaTranslationTtsVoice = it },
+                        ttsLanguage = mediaTranslationTtsLanguage,
+                        onTtsLanguageChange = { mediaTranslationTtsLanguage = it },
+                        ttsSteps = mediaTranslationTtsSteps,
+                        onTtsStepsChange = { mediaTranslationTtsSteps = it },
+                        outputMode = mediaTranslationOutputMode,
+                        onOutputModeChange = { mediaTranslationOutputMode = it },
+                        replaceOriginalAudio = mediaTranslationReplaceAudio,
+                        onReplaceOriginalAudioChange = { mediaTranslationReplaceAudio = it },
+                        state = mediaTranslationState,
+                        onRun = {
+                            val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+                                SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
+                                else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
+                            }
+                            val sourceItems = mediaTranslationBatch.ifEmpty {
+                                val path = mediaTranslationPath
+                                val uri = mediaTranslationUri
+                                if (path != null && uri != null) listOf(WorkflowMediaInput(uri, path, mediaTranslationName, mediaTranslationMimeType)) else emptyList()
+                            }
+                            val ttsPath = mediaTranslationTtsModelPath
+                            val ttsName = mediaTranslationTtsModelName
+                            if (sourceItems.isNotEmpty() && whisperModelPath != null && ttsPath != null && ttsName != null && backendReady) {
+                                activeMediaWorkflow = 4
+                                val specs = sourceItems.map { item ->
+                                    MediaTranslationJobSpec(
+                                        sourcePath = item.path,
+                                        sourceName = item.name.ifBlank { context.getString(R.string.workflow_audio_video_placeholder) },
+                                        sourceMimeType = item.mimeType,
+                                        whisperModelPath = whisperModelPath!!,
+                                        whisperLanguage = whisperLanguage,
+                                        whisperThreads = whisperThreads,
+                                        targetLanguage = mediaTranslationTargetLanguage,
+                                        ttsModelPath = ttsPath,
+                                        ttsModelName = ttsName,
+                                        ttsLanguage = mediaTranslationTtsLanguage,
+                                        ttsVoiceName = mediaTranslationTtsVoice,
+                                        ttsSteps = mediaTranslationTtsSteps,
+                                        outputMode = mediaTranslationOutputMode,
+                                        replaceOriginalAudio = mediaTranslationReplaceAudio,
+                                        backendSnapshot = RemoteSummarySettingsSnapshot(
+                                            backend = summaryBackend,
+                                            ollamaUrl = summaryOllamaUrl,
+                                            llamaServerUrl = summaryLlamaUrl,
+                                            llamaSwapUrl = summaryLlamaSwapUrl,
+                                            ollamaModel = summaryOllamaModel,
+                                            llamaSwapModel = summaryLlamaSwapModel,
+                                            liteRtModelId = summaryLiteRtModelId.takeIf { it > 0L },
+                                            liteRtBackend = summaryLiteRtBackend,
+                                            liteRtMtpEnabled = summaryLiteRtMtpEnabled,
+                                            thinkingEnabled = summaryThinkingEnabled,
+                                            llamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
+                                            llamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
+                                            llamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
+                                            chunkContext = summaryContext,
+                                            chunkMaxTokens = summaryMaxTokens,
+                                            mergeContext = summaryMergeContext,
+                                            mergeMaxTokens = summaryMergeMaxTokens,
+                                            temperature = summaryTemperature,
+                                            timeoutMinutes = summaryTimeoutMinutes,
+                                            targetLanguage = mediaTranslationTargetLanguage,
+                                            summaryPrompt = null,
+                                            mergePrompt = null
+                                        )
+                                    )
+                                }
+                                MediaTranslationWorkflowService.startBatch(
+                                    context,
+                                    specs
+                                )
+                            }
+                        },
+                        onCancel = { MediaTranslationWorkflowService.cancel(context) },
+                        onPause = { MediaTranslationWorkflowService.pause(context) },
+                        onMetadataLoaded = { metadata ->
+                            if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+                                settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+                                settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+                                settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+                            }
+                        }
+                    )
+                }
+
+                5 -> {
+                    SubtitleTranslationWorkflowContent(
+                        db = db,
+                        settingsRepo = settingsRepo,
+                        videoUri = subtitleTranslationVideoUri,
+                        videoPath = subtitleTranslationVideoPath,
+                        videoName = subtitleTranslationVideoName,
+                        onVideoSelected = { uri, path, name ->
+                            subtitleTranslationVideoUri = uri
+                            subtitleTranslationVideoPath = path
+                            subtitleTranslationVideoName = name
+                            subtitleTranslationVideoBatch = listOf(WorkflowMediaInput(uri, path, name, "video/*"))
+                        },
+                        videoBatch = subtitleTranslationVideoBatch,
+                        onVideoBatchSelected = { items ->
+                            subtitleTranslationVideoBatch = items
+                            val first = items.firstOrNull()
+                            subtitleTranslationVideoUri = first?.uri
+                            subtitleTranslationVideoPath = first?.path
+                            subtitleTranslationVideoName = first?.name.orEmpty()
+                        },
+                        subtitleUri = subtitleTranslationSrtUri,
+                        subtitlePath = subtitleTranslationSrtPath,
+                        subtitleName = subtitleTranslationSrtName,
+                        onSubtitleSelected = { uri, path, name ->
+                            subtitleTranslationSrtUri = uri
+                            subtitleTranslationSrtPath = path
+                            subtitleTranslationSrtName = name
+                        },
+                        onClearSubtitle = {
+                            subtitleTranslationSrtUri = null
+                            subtitleTranslationSrtPath = null
+                            subtitleTranslationSrtName = ""
+                        },
+                        whisperModelPath = whisperModelPath,
+                        onWhisperModelChange = { whisperModelPath = it },
+                        whisperLanguage = whisperLanguage,
+                        onWhisperLanguageChange = { whisperLanguage = it },
+                        whisperThreads = whisperThreads,
+                        onWhisperThreadsChange = { whisperThreads = it },
+                        targetLanguage = subtitleTranslationTargetLanguage,
+                        onTargetLanguageChange = { subtitleTranslationTargetLanguage = it },
+                        translateSubtitles = subtitleTranslationTranslateSubtitles,
+                        onTranslateSubtitlesChange = { subtitleTranslationTranslateSubtitles = it },
+                        backend = summaryBackend,
+                        onBackendChange = { summaryBackend = it },
+                        ollamaUrl = summaryOllamaUrl,
+                        onOllamaUrlChange = { summaryOllamaUrl = it },
+                        llamaServerUrl = summaryLlamaUrl,
+                        onLlamaServerUrlChange = { summaryLlamaUrl = it },
+                        llamaSwapUrl = summaryLlamaSwapUrl,
+                        onLlamaSwapUrlChange = { summaryLlamaSwapUrl = it },
+                        ollamaModel = summaryOllamaModel,
+                        onOllamaModelChange = { summaryOllamaModel = it },
+                        llamaSwapModel = summaryLlamaSwapModel,
+                        onLlamaSwapModelChange = { summaryLlamaSwapModel = it },
+                        llamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
+                        llamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
+                        llamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
+                        contextSize = summaryContext,
+                        maxTokens = summaryMaxTokens,
+                        temperature = summaryTemperature,
+                        timeoutMinutes = summaryTimeoutMinutes,
+                        thinkingEnabled = summaryThinkingEnabled,
+                        burnIntoVideo = subtitleTranslationBurnIntoVideo,
+                        onBurnIntoVideoChange = { subtitleTranslationBurnIntoVideo = it },
+                        fontSize = subtitleTranslationFontSize,
+                        onFontSizeChange = { subtitleTranslationFontSize = it },
+                        alignment = subtitleTranslationAlignment,
+                        onAlignmentChange = { subtitleTranslationAlignment = it },
+                        marginV = subtitleTranslationMarginV,
+                        onMarginVChange = { subtitleTranslationMarginV = it },
+                        marginL = subtitleTranslationMarginL,
+                        onMarginLChange = { subtitleTranslationMarginL = it },
+                        primaryColor = subtitleTranslationColor,
+                        onPrimaryColorChange = { subtitleTranslationColor = it },
+                        fontName = subtitleTranslationFontName,
+                        onFontNameChange = { subtitleTranslationFontName = it },
+                        state = mediaTranslationState,
+                        onRun = {
+                            val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+                                SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
+                                else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
+                            }
+                            val videoItems = subtitleTranslationVideoBatch.ifEmpty {
+                                val path = subtitleTranslationVideoPath
+                                val uri = subtitleTranslationVideoUri
+                                if (path != null && uri != null) listOf(WorkflowMediaInput(uri, path, subtitleTranslationVideoName, "video/*")) else emptyList()
+                            }
+                            val translationReady = !subtitleTranslationTranslateSubtitles || backendReady
+                            val sourceReady = subtitleTranslationSrtPath != null || whisperModelPath != null
+                            if (videoItems.isNotEmpty() && sourceReady && translationReady && !(subtitleTranslationSrtPath != null && videoItems.size > 1)) {
+                                activeMediaWorkflow = 5
+                                val specs = videoItems.map { item ->
+                                    SubtitleTranslationJobSpec(
+                                        videoPath = item.path,
+                                        videoName = item.name.ifBlank { context.getString(R.string.workflow_subtitle_translate_video_placeholder) },
+                                        sourceSubtitlePath = subtitleTranslationSrtPath,
+                                        sourceSubtitleName = subtitleTranslationSrtName.ifBlank { null },
+                                        whisperModelPath = whisperModelPath,
+                                        whisperLanguage = whisperLanguage,
+                                        whisperThreads = whisperThreads,
+                                        targetLanguage = subtitleTranslationTargetLanguage,
+                                        translateSubtitles = subtitleTranslationTranslateSubtitles,
+                                        burnIntoVideo = subtitleTranslationBurnIntoVideo,
+                                        burnStyle = SubtitleBurnStyleSpec(
+                                            fontSize = subtitleTranslationFontSize,
+                                            alignment = subtitleTranslationAlignment,
+                                            marginV = subtitleTranslationMarginV,
+                                            marginL = subtitleTranslationMarginL,
+                                            primaryColorRed = subtitleTranslationColor.red,
+                                            primaryColorGreen = subtitleTranslationColor.green,
+                                            primaryColorBlue = subtitleTranslationColor.blue,
+                                            fontName = subtitleTranslationFontName
+                                        ),
+                                        backendSnapshot = RemoteSummarySettingsSnapshot(
+                                            backend = summaryBackend,
+                                            ollamaUrl = summaryOllamaUrl,
+                                            llamaServerUrl = summaryLlamaUrl,
+                                            llamaSwapUrl = summaryLlamaSwapUrl,
+                                            ollamaModel = summaryOllamaModel,
+                                            llamaSwapModel = summaryLlamaSwapModel,
+                                            liteRtModelId = summaryLiteRtModelId.takeIf { it > 0L },
+                                            liteRtBackend = summaryLiteRtBackend,
+                                            liteRtMtpEnabled = summaryLiteRtMtpEnabled,
+                                            thinkingEnabled = summaryThinkingEnabled,
+                                            llamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
+                                            llamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
+                                            llamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
+                                            chunkContext = summaryContext,
+                                            chunkMaxTokens = summaryMaxTokens,
+                                            mergeContext = summaryMergeContext,
+                                            mergeMaxTokens = summaryMergeMaxTokens,
+                                            temperature = summaryTemperature,
+                                            timeoutMinutes = summaryTimeoutMinutes,
+                                            targetLanguage = subtitleTranslationTargetLanguage,
+                                            summaryPrompt = null,
+                                            mergePrompt = null
+                                        )
+                                    )
+                                }
+                                MediaTranslationWorkflowService.startSubtitleTranslationBatch(
+                                    context,
+                                    specs
+                                )
+                            }
+                        },
+                        onCancel = { MediaTranslationWorkflowService.cancel(context) },
+                        onPause = { MediaTranslationWorkflowService.pause(context) },
+                        onMetadataLoaded = { metadata ->
+                            if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+                                settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+                                settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+                                settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
                             }
                         }
                     )
@@ -893,6 +1330,10 @@ private fun MangaTranslationWorkflowContent(
     progress: Float,
     results: List<MangaTranslationFileResult>,
     errorMessage: String?,
+    exportPdf: Boolean,
+    exportCbz: Boolean,
+    onExportPdfChange: (Boolean) -> Unit,
+    onExportCbzChange: (Boolean) -> Unit,
     onPickFiles: () -> Unit,
     onOpenSettings: () -> Unit,
     onRun: () -> Unit
@@ -925,6 +1366,32 @@ private fun MangaTranslationWorkflowContent(
                     Icon(Icons.Default.Settings, null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(stringResource(R.string.pdf_translation_settings_title))
+                }
+                Text(
+                    stringResource(R.string.workflow_manga_output_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                MangaOutputSwitchRow(
+                    title = stringResource(R.string.workflow_manga_output_pdf),
+                    description = stringResource(R.string.workflow_manga_output_pdf_desc),
+                    checked = exportPdf,
+                    enabled = !isRunning,
+                    onCheckedChange = onExportPdfChange
+                )
+                MangaOutputSwitchRow(
+                    title = stringResource(R.string.workflow_manga_output_cbz),
+                    description = stringResource(R.string.workflow_manga_output_cbz_desc),
+                    checked = exportCbz,
+                    enabled = !isRunning,
+                    onCheckedChange = onExportCbzChange
+                )
+                if (!exportPdf && !exportCbz) {
+                    Text(
+                        stringResource(R.string.workflow_manga_select_output_first),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
                 }
                 if (selectedUris.isNotEmpty()) {
                     Text(
@@ -978,7 +1445,7 @@ private fun MangaTranslationWorkflowContent(
                                 com.example.llamadroid.data.db.WorkflowTemplateEntity(
                                     name = templateName.ifBlank { "Manga Translation" },
                                     type = com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION,
-                                    configJson = """{"workflow":"manga_translation","version":1}"""
+                                    configJson = """{"workflow":"manga_translation","version":2,"exportPdf":$exportPdf,"exportCbz":$exportCbz}"""
                                 )
                             )
                             templateName = ""
@@ -1039,11 +1506,2150 @@ private fun MangaTranslationWorkflowContent(
 
         Button(
             onClick = onRun,
-            enabled = !isRunning && selectedUris.isNotEmpty(),
+            enabled = !isRunning && selectedUris.isNotEmpty() && (exportPdf || exportCbz),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(if (isRunning) stringResource(R.string.workflow_running_btn) else stringResource(R.string.workflow_manga_run_batch))
         }
+    }
+}
+
+@Composable
+private fun MangaOutputSwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Medium)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled
+        )
+    }
+}
+
+private data class WorkflowMediaInput(
+    val uri: Uri,
+    val path: String,
+    val name: String,
+    val mimeType: String?
+)
+
+private data class WorkflowOutputGalleryFile(
+    val file: File,
+    val title: String,
+    val kind: String,
+    val mimeType: String
+)
+
+private data class WorkflowOutputTiming(
+    val label: String,
+    val durationMs: Long
+)
+
+private data class WorkflowOutputGallerySet(
+    val directory: File,
+    val title: String,
+    val subtitle: String,
+    val outputKind: String,
+    val files: List<WorkflowOutputGalleryFile>,
+    val timings: List<WorkflowOutputTiming>,
+    val primaryFile: WorkflowOutputGalleryFile?,
+    val thumbnailFile: File?,
+    val totalSizeBytes: Long,
+    val segmentCount: Int,
+    val modifiedTimeMillis: Long
+)
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WorkflowOutputGalleryCard(
+    folderName: String,
+    refreshKey: Any?,
+    isWorkflowRunning: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var refreshTick by remember { mutableIntStateOf(0) }
+    var selectedSet by remember { mutableStateOf<WorkflowOutputGallerySet?>(null) }
+    var pendingDeleteSet by remember { mutableStateOf<WorkflowOutputGallerySet?>(null) }
+    var pendingDeleteFile by remember { mutableStateOf<WorkflowOutputGalleryFile?>(null) }
+    var selectedDirectories by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var hasRecoverableRuntime by remember(folderName) { mutableStateOf(false) }
+    val outputs = remember(folderName, refreshKey, refreshTick) {
+        scanWorkflowOutputGallery(context, folderName)
+    }
+    val isSelectionMode = selectedDirectories.isNotEmpty()
+    val resumeRequest: (() -> Unit)? = when (folderName) {
+        "workflow_media_translation" -> ({ MediaTranslationWorkflowService.requestResumeMedia(context) })
+        "workflow_subtitle_translation" -> ({ MediaTranslationWorkflowService.requestResumeSubtitle(context) })
+        else -> null
+    }
+
+    LaunchedEffect(folderName, refreshKey, refreshTick, isWorkflowRunning) {
+        hasRecoverableRuntime = withContext(Dispatchers.IO) {
+            when (folderName) {
+                "workflow_media_translation" -> MediaTranslationWorkflowService.hasRecoverableMediaRuntime(context)
+                "workflow_subtitle_translation" -> MediaTranslationWorkflowService.hasRecoverableSubtitleRuntime(context)
+                else -> false
+            }
+        }
+    }
+
+    fun refreshGallery() {
+        selectedDirectories = emptySet()
+        selectedSet = null
+        refreshTick++
+    }
+
+    Card(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (isSelectionMode) stringResource(R.string.workflow_output_gallery_selected_count, selectedDirectories.size)
+                        else stringResource(R.string.workflow_output_gallery_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (!isSelectionMode) {
+                        Text(
+                            stringResource(R.string.workflow_output_gallery_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (isSelectionMode) {
+                    IconButton(onClick = { selectedDirectories = emptySet() }) {
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_cancel))
+                    }
+                    IconButton(onClick = {
+                        outputs.firstOrNull { it.directory.absolutePath in selectedDirectories }?.let { pendingDeleteSet = it }
+                    }) {
+                        Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (hasRecoverableRuntime && resumeRequest != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    resumeRequest()
+                                    refreshTick++
+                                },
+                                enabled = !isWorkflowRunning,
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(stringResource(R.string.workflow_output_gallery_resume_button), maxLines = 1)
+                            }
+                        }
+                        TextButton(onClick = { refreshTick++ }) {
+                            Text(stringResource(R.string.action_refresh))
+                        }
+                    }
+                }
+            }
+            if (!isSelectionMode && hasRecoverableRuntime) {
+                Text(
+                    stringResource(R.string.workflow_output_gallery_resume_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (outputs.isEmpty()) {
+                Text(
+                    stringResource(R.string.workflow_output_gallery_empty),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(150.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 460.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(outputs, key = { it.directory.absolutePath }) { set ->
+                        val isSelected = set.directory.absolutePath in selectedDirectories
+                        WorkflowOutputGallerySetCard(
+                            set = set,
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected,
+                            onClick = {
+                                if (isSelectionMode) {
+                                    selectedDirectories = if (isSelected) selectedDirectories - set.directory.absolutePath
+                                    else selectedDirectories + set.directory.absolutePath
+                                } else {
+                                    selectedSet = set
+                                }
+                            },
+                            onLongClick = {
+                                selectedDirectories = selectedDirectories + set.directory.absolutePath
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    selectedSet?.let { set ->
+        AlertDialog(
+            onDismissRequest = { selectedSet = null },
+            title = { Text(set.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    WorkflowOutputThumbnail(
+                        file = set.thumbnailFile,
+                        mimeType = set.primaryFile?.mimeType.orEmpty(),
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 160.dp)
+                    )
+                    Text(set.subtitle, style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        stringResource(
+                            R.string.workflow_output_gallery_set_details,
+                            set.files.size,
+                            set.segmentCount,
+                            FormatUtils.Display.formatBytes(context, set.totalSizeBytes)
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (set.timings.isNotEmpty()) {
+                        Text(
+                            stringResource(R.string.workflow_output_gallery_process_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        set.timings.forEach { timing ->
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(timing.label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                                Text(formatWorkflowDuration(timing.durationMs), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(R.string.workflow_output_gallery_files_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    set.files.forEach { item ->
+                        WorkflowOutputFileRow(
+                            item = item,
+                            onOpen = { openWorkflowOutput(context, item) },
+                            onShare = { shareWorkflowOutput(context, item) },
+                            onDelete = { pendingDeleteFile = item }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { pendingDeleteSet = set }) {
+                    Text(stringResource(R.string.workflow_output_gallery_delete_set), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedSet = null }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            }
+        )
+    }
+
+    pendingDeleteFile?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteFile = null },
+            title = { Text(stringResource(R.string.workflow_output_gallery_delete_file_title)) },
+            text = { Text(stringResource(R.string.workflow_output_gallery_delete_file_message, item.title)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (item.file.delete()) {
+                        Toast.makeText(context, context.getString(R.string.workflow_output_gallery_deleted), Toast.LENGTH_SHORT).show()
+                    }
+                    pendingDeleteFile = null
+                    refreshGallery()
+                }) {
+                    Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteFile = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    pendingDeleteSet?.let { firstSet ->
+        val setsToDelete = if (isSelectionMode) outputs.filter { it.directory.absolutePath in selectedDirectories } else listOf(firstSet)
+        AlertDialog(
+            onDismissRequest = { pendingDeleteSet = null },
+            title = { Text(stringResource(R.string.workflow_output_gallery_delete_sets_title, setsToDelete.size)) },
+            text = { Text(stringResource(R.string.workflow_output_gallery_delete_sets_message, setsToDelete.size)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    setsToDelete.forEach { it.directory.deleteRecursively() }
+                    Toast.makeText(context, context.getString(R.string.workflow_output_gallery_deleted_sets, setsToDelete.size), Toast.LENGTH_SHORT).show()
+                    pendingDeleteSet = null
+                    refreshGallery()
+                }) {
+                    Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteSet = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WorkflowOutputGallerySetCard(
+    set: WorkflowOutputGallerySet,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .then(if (isSelected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp)) else Modifier),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column {
+            Box {
+                WorkflowOutputThumbnail(
+                    file = set.thumbnailFile,
+                    mimeType = set.primaryFile?.mimeType.orEmpty(),
+                    modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                )
+                if (isSelectionMode) {
+                    Icon(
+                        if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.White,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(8.dp)
+                            .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                            .padding(2.dp)
+                    )
+                }
+            }
+            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(set.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold)
+                Text(
+                    set.subtitle,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    stringResource(R.string.workflow_output_gallery_card_meta, set.outputKind, set.files.size, set.segmentCount),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowOutputThumbnail(
+    file: File?,
+    mimeType: String,
+    modifier: Modifier = Modifier
+) {
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, file?.absolutePath, mimeType) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                when {
+                    file == null || !file.isFile -> null
+                    mimeType.startsWith("video/") -> {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(file.absolutePath)
+                            retriever.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                        } finally {
+                            retriever.release()
+                        }
+                    }
+                    mimeType.startsWith("image/") -> BitmapFactory.decodeFile(file.absolutePath)
+                    else -> null
+                }
+            }.getOrNull()
+        }
+    }
+    Box(
+        modifier = modifier.background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Icon(
+                when {
+                    mimeType.startsWith("video/") -> Icons.Default.Movie
+                    mimeType.startsWith("audio/") -> Icons.Default.GraphicEq
+                    else -> Icons.AutoMirrored.Filled.List
+                },
+                contentDescription = null,
+                modifier = Modifier.size(44.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkflowOutputFileRow(
+    item: WorkflowOutputGalleryFile,
+    onOpen: () -> Unit,
+    onShare: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                when {
+                    item.mimeType.startsWith("video/") -> Icons.Default.Movie
+                    item.mimeType.startsWith("audio/") -> Icons.Default.GraphicEq
+                    else -> Icons.AutoMirrored.Filled.List
+                },
+                contentDescription = null
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.Medium)
+                Text(
+                    "${item.kind} • ${FormatUtils.Technical.formatBytes(item.file.length())}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            IconButton(onClick = onOpen) {
+                Icon(Icons.Default.OpenInNew, contentDescription = stringResource(R.string.action_open))
+            }
+            IconButton(onClick = onShare) {
+                Icon(Icons.Default.Share, contentDescription = stringResource(R.string.action_share))
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+private fun scanWorkflowOutputGallery(context: Context, folderName: String): List<WorkflowOutputGallerySet> {
+    val root = File(context.filesDir, folderName)
+    if (!root.isDirectory) return emptyList()
+    return root.listFiles()
+        ?.filter { it.isDirectory }
+        ?.mapNotNull { directory ->
+            val files = directory.listFiles()
+                ?.filter { it.isFile && it.extension.lowercase(Locale.US) in setOf("mp4", "m4a", "mp3", "wav", "srt", "txt", "json", "png", "jpg", "jpeg", "webp") }
+                ?.sortedWith(compareByDescending<File> { workflowGalleryFilePriority(it) }.thenBy { it.name })
+                ?.map { file ->
+                    WorkflowOutputGalleryFile(
+                        file = file,
+                        title = file.name,
+                        kind = workflowGalleryFileKind(context, file),
+                        mimeType = workflowOutputMimeType(file)
+                    )
+                }
+                .orEmpty()
+            if (files.isEmpty()) return@mapNotNull null
+            val primary = files.firstOrNull { it.mimeType.startsWith("video/") }
+                ?: files.firstOrNull { it.mimeType.startsWith("audio/") }
+                ?: files.firstOrNull { it.file.name == "translated.srt" }
+                ?: files.firstOrNull()
+            val metadata = readWorkflowGalleryMetadata(directory)
+            val translatedSrt = files.firstOrNull { it.file.name == "translated.srt" }?.file
+            val originalSrt = files.firstOrNull { it.file.name == "original.srt" }?.file
+            val segmentCount = metadata?.optInt("segments", 0)?.takeIf { it > 0 }
+                ?: (translatedSrt ?: originalSrt)?.let(::countWorkflowSrtSegments)
+                ?: 0
+            val title = metadata?.optString("sourceName")?.takeIf { it.isNotBlank() }
+                ?: primary?.file?.nameWithoutExtension?.replace('_', ' ')
+                ?: directory.name
+            val outputKind = when {
+                primary?.mimeType?.startsWith("video/") == true -> context.getString(R.string.workflow_output_gallery_kind_video)
+                primary?.mimeType?.startsWith("audio/") == true -> context.getString(R.string.workflow_output_gallery_kind_audio)
+                else -> context.getString(R.string.workflow_output_gallery_kind_subtitles)
+            }
+            WorkflowOutputGallerySet(
+                directory = directory,
+                title = title,
+                subtitle = context.getString(R.string.workflow_output_gallery_set_subtitle, outputKind, workflowGalleryDate(directory.lastModified())),
+                outputKind = outputKind,
+                files = files,
+                timings = workflowGalleryTimings(context, metadata),
+                primaryFile = primary,
+                thumbnailFile = primary?.file?.takeIf { primary.mimeType.startsWith("video/") || primary.mimeType.startsWith("image/") },
+                totalSizeBytes = files.sumOf { it.file.length() },
+                segmentCount = segmentCount,
+                modifiedTimeMillis = directory.lastModified()
+            )
+        }
+        ?.sortedByDescending { it.modifiedTimeMillis }
+        ?.take(40)
+        .orEmpty()
+}
+
+private fun readWorkflowGalleryMetadata(directory: File): org.json.JSONObject? =
+    runCatching {
+        File(directory, "workflow_metadata.json").takeIf { it.isFile }?.let { org.json.JSONObject(it.readText()) }
+    }.getOrNull()
+
+private fun workflowGalleryTimings(context: Context, metadata: org.json.JSONObject?): List<WorkflowOutputTiming> {
+    metadata ?: return emptyList()
+    val entries = listOf(
+        "totalDurationMs" to context.getString(R.string.workflow_output_gallery_time_total),
+        "extractAudioDurationMs" to context.getString(R.string.workflow_output_gallery_time_extract_audio),
+        "transcriptionDurationMs" to context.getString(R.string.workflow_output_gallery_time_transcription),
+        "translationDurationMs" to context.getString(R.string.workflow_output_gallery_time_translation),
+        "ttsDurationMs" to context.getString(R.string.workflow_output_gallery_time_tts),
+        "audioExportDurationMs" to context.getString(R.string.workflow_output_gallery_time_audio_export),
+        "muxOrExportDurationMs" to context.getString(R.string.workflow_output_gallery_time_mux_export),
+        "subtitleBurnDurationMs" to context.getString(R.string.workflow_output_gallery_time_subtitle_burn)
+    )
+    return entries.mapNotNull { (key, label) ->
+        val value = metadata.optLong(key, 0L)
+        if (value > 0L || key == "totalDurationMs") WorkflowOutputTiming(label, value) else null
+    }
+}
+
+private fun workflowGalleryFilePriority(file: File): Int =
+    when (file.extension.lowercase(Locale.US)) {
+        "mp4" -> 5
+        "m4a", "mp3", "wav" -> 4
+        "srt" -> if (file.name == "translated.srt") 3 else 2
+        "txt" -> 1
+        else -> 0
+    }
+
+private fun workflowGalleryFileKind(context: Context, file: File): String =
+    when (file.name) {
+        "workflow_metadata.json" -> context.getString(R.string.workflow_output_gallery_file_metadata)
+        "original.srt" -> context.getString(R.string.workflow_output_gallery_file_original_srt)
+        "translated.srt" -> context.getString(R.string.workflow_output_gallery_file_translated_srt)
+        "original_transcript.txt" -> context.getString(R.string.workflow_output_gallery_file_original_text)
+        "translated_audio.m4a" -> context.getString(R.string.workflow_output_gallery_file_translated_audio)
+        else -> when (file.extension.lowercase(Locale.US)) {
+            "mp4" -> context.getString(R.string.workflow_output_gallery_file_final_video)
+            "m4a", "mp3", "wav" -> context.getString(R.string.workflow_output_gallery_file_final_audio)
+            else -> context.getString(R.string.workflow_output_gallery_file_output)
+        }
+    }
+
+private fun workflowGalleryDate(modifiedTimeMillis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(modifiedTimeMillis))
+
+private fun countWorkflowSrtSegments(file: File): Int =
+    runCatching {
+        file.readText()
+            .replace("\r\n", "\n")
+            .split(Regex("""\n{2,}"""))
+            .count { block -> Regex("""\d{2}:\d{2}:\d{2},\d{3}\s*-->""").containsMatchIn(block) }
+    }.getOrDefault(0)
+
+private fun formatWorkflowDuration(durationMs: Long): String =
+    FormatUtils.Display.formatDuration(durationMs / 1000.0)
+
+private fun workflowOutputMimeType(file: File): String =
+    when (file.extension.lowercase(Locale.US)) {
+        "mp4" -> "video/mp4"
+        "m4a" -> "audio/mp4"
+        "mp3" -> "audio/mpeg"
+        "wav" -> "audio/wav"
+        "png" -> "image/png"
+        "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
+        "srt" -> "application/x-subrip"
+        "txt" -> "text/plain"
+        "json" -> "application/json"
+        else -> "application/octet-stream"
+    }
+
+private fun openWorkflowOutput(context: Context, item: WorkflowOutputGalleryFile) {
+    runCatching {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", item.file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, item.mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, context.getString(R.string.workflow_output_gallery_open_with)))
+    }.onFailure { error ->
+        Toast.makeText(
+            context,
+            context.getString(R.string.workflow_output_gallery_open_failed, error.message ?: context.getString(R.string.error_generic)),
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+}
+
+private fun shareWorkflowOutput(context: Context, item: WorkflowOutputGalleryFile) {
+    runCatching {
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", item.file)
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = item.mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, context.getString(R.string.action_share)))
+    }.onFailure { error ->
+        Toast.makeText(
+            context,
+            context.getString(R.string.workflow_output_gallery_open_failed, error.message ?: context.getString(R.string.error_generic)),
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+}
+
+private fun mediaWorkflowExtensionForMime(mimeType: String?): String =
+    when {
+        mimeType?.startsWith("video/") == true -> "mp4"
+        mimeType?.contains("mpeg") == true -> "mp3"
+        mimeType?.contains("wav") == true -> "wav"
+        mimeType?.contains("mp4") == true -> "m4a"
+        mimeType?.contains("ogg") == true -> "ogg"
+        mimeType?.contains("flac") == true -> "flac"
+        else -> "media"
+    }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SubtitleTranslationWorkflowContent(
+    db: AppDatabase,
+    settingsRepo: SettingsRepository,
+    videoUri: Uri?,
+    videoPath: String?,
+    videoName: String,
+    onVideoSelected: (Uri, String, String) -> Unit,
+    videoBatch: List<WorkflowMediaInput>,
+    onVideoBatchSelected: (List<WorkflowMediaInput>) -> Unit,
+    subtitleUri: Uri?,
+    subtitlePath: String?,
+    subtitleName: String,
+    onSubtitleSelected: (Uri, String, String) -> Unit,
+    onClearSubtitle: () -> Unit,
+    whisperModelPath: String?,
+    onWhisperModelChange: (String?) -> Unit,
+    whisperLanguage: String,
+    onWhisperLanguageChange: (String) -> Unit,
+    whisperThreads: Int,
+    onWhisperThreadsChange: (Int) -> Unit,
+    targetLanguage: String,
+    onTargetLanguageChange: (String) -> Unit,
+    translateSubtitles: Boolean,
+    onTranslateSubtitlesChange: (Boolean) -> Unit,
+    backend: String,
+    onBackendChange: (String) -> Unit,
+    ollamaUrl: String,
+    onOllamaUrlChange: (String) -> Unit,
+    llamaServerUrl: String,
+    onLlamaServerUrlChange: (String) -> Unit,
+    llamaSwapUrl: String,
+    onLlamaSwapUrlChange: (String) -> Unit,
+    ollamaModel: String?,
+    onOllamaModelChange: (String?) -> Unit,
+    llamaSwapModel: String?,
+    onLlamaSwapModelChange: (String?) -> Unit,
+    llamaServerModelLabel: String?,
+    llamaServerContextLabel: String?,
+    llamaServerContextTokens: Int,
+    contextSize: Int,
+    maxTokens: Int,
+    temperature: Float,
+    timeoutMinutes: Int,
+    thinkingEnabled: Boolean,
+    burnIntoVideo: Boolean,
+    onBurnIntoVideoChange: (Boolean) -> Unit,
+    fontSize: Int,
+    onFontSizeChange: (Int) -> Unit,
+    alignment: Int,
+    onAlignmentChange: (Int) -> Unit,
+    marginV: Int,
+    onMarginVChange: (Int) -> Unit,
+    marginL: Int,
+    onMarginLChange: (Int) -> Unit,
+    primaryColor: Color,
+    onPrimaryColorChange: (Color) -> Unit,
+    fontName: String,
+    onFontNameChange: (String) -> Unit,
+    state: MediaTranslationWorkflowState,
+    onRun: () -> Unit,
+    onCancel: () -> Unit,
+    onPause: () -> Unit,
+    onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
+    val templates by db.workflowTemplateDao()
+        .getByType(com.example.llamadroid.data.db.WorkflowType.SUBTITLE_TRANSLATION)
+        .collectAsState(initial = emptyList())
+    var showTemplateMenu by remember { mutableStateOf(false) }
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var showGalleryDialog by remember { mutableStateOf(false) }
+
+    val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {
+        }
+        try {
+            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_subtitle_translate_video_placeholder)
+            val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
+            val tempFile = File(inputDir, "workflow_subtitle_video_${System.currentTimeMillis()}.mp4")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            onVideoSelected(uri, tempFile.absolutePath, displayName)
+        } catch (error: Exception) {
+            MediaTranslationWorkflowStateHolder.update {
+                it.copy(errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic)))
+            }
+        }
+    }
+    val videoBatchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val items = uris.mapNotNull { uri ->
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+            runCatching {
+                val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_subtitle_translate_video_placeholder)
+                val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
+                val tempFile = File(inputDir, "workflow_subtitle_video_${System.currentTimeMillis()}_${displayName.hashCode()}.mp4")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                WorkflowMediaInput(uri, tempFile.absolutePath, displayName, context.contentResolver.getType(uri))
+            }.getOrNull()
+        }
+        if (items.isNotEmpty()) onVideoBatchSelected(items)
+    }
+    val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {
+        }
+        try {
+            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_subtitle_translate_srt_placeholder)
+            val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
+            val tempFile = File(inputDir, "workflow_source_subtitles_${System.currentTimeMillis()}.srt")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            onSubtitleSelected(uri, tempFile.absolutePath, displayName)
+        } catch (error: Exception) {
+            MediaTranslationWorkflowStateHolder.update {
+                it.copy(errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic)))
+            }
+        }
+    }
+
+    if (showGalleryDialog) {
+        AlertDialog(
+            onDismissRequest = { showGalleryDialog = false },
+            confirmButton = {
+                TextButton(onClick = { showGalleryDialog = false }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            },
+            text = {
+                WorkflowOutputGalleryCard(
+                    folderName = "workflow_subtitle_translation",
+                    refreshKey = state.finalOutputPath,
+                    isWorkflowRunning = state.isRunning
+                )
+            }
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                stringResource(R.string.workflow_subtitle_translate_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    OutlinedButton(
+                        onClick = { showTemplateMenu = true },
+                        enabled = !state.isRunning,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Settings, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.workflow_templates_btn, templates.size), maxLines = 1)
+                    }
+                    DropdownMenu(
+                        expanded = showTemplateMenu,
+                        onDismissRequest = { showTemplateMenu = false },
+                        modifier = Modifier.widthIn(min = 280.dp, max = 360.dp)
+                    ) {
+                        if (templates.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.workflow_no_templates), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                onClick = {}
+                            )
+                        } else {
+                            templates.forEach { template ->
+                                DropdownMenuItem(
+                                    text = { Text(template.name, maxLines = 1) },
+                                    onClick = {
+                                        runCatching {
+                                            val json = org.json.JSONObject(template.configJson)
+                                            onWhisperModelChange(json.optString("whisperModel").takeIf { it.isNotBlank() })
+                                            onWhisperLanguageChange(json.optString("whisperLanguage", whisperLanguage))
+                                            onWhisperThreadsChange(json.optInt("whisperThreads", whisperThreads))
+                                            onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
+                                            onTranslateSubtitlesChange(json.optBoolean("translateSubtitles", translateSubtitles))
+                                            onBurnIntoVideoChange(json.optBoolean("burnIntoVideo", burnIntoVideo))
+                                            onFontSizeChange(json.optInt("fontSize", fontSize))
+                                            onAlignmentChange(json.optInt("alignment", alignment))
+                                            onMarginVChange(json.optInt("marginV", marginV))
+                                            onMarginLChange(json.optInt("marginL", marginL))
+                                            onFontNameChange(json.optString("fontName", fontName))
+                                        }
+                                        showTemplateMenu = false
+                                    },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = { scope.launch { db.workflowTemplateDao().delete(template) } },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.workflow_save_current_template), fontWeight = FontWeight.Bold) },
+                            onClick = { showTemplateMenu = false; showSaveDialog = true },
+                            leadingIcon = { Icon(Icons.Default.Add, null) }
+                        )
+                    }
+                }
+                OutlinedButton(onClick = { showGalleryDialog = true }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Collections, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.imagegen_tab_gallery), maxLines = 1)
+                }
+            }
+        }
+
+        if (showSaveDialog) {
+            var saveName by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showSaveDialog = false },
+                title = { Text(stringResource(R.string.workflow_save_template)) },
+                text = {
+                    OutlinedTextField(
+                        value = saveName,
+                        onValueChange = { saveName = it },
+                        label = { Text(stringResource(R.string.workflow_template_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (saveName.isNotBlank()) {
+                            val config = org.json.JSONObject().apply {
+                                put("whisperModel", whisperModelPath ?: "")
+                                put("whisperLanguage", whisperLanguage)
+                                put("whisperThreads", whisperThreads)
+                                put("targetLanguage", targetLanguage)
+                                put("translateSubtitles", translateSubtitles)
+                                put("burnIntoVideo", burnIntoVideo)
+                                put("fontSize", fontSize)
+                                put("alignment", alignment)
+                                put("marginV", marginV)
+                                put("marginL", marginL)
+                                put("fontName", fontName)
+                            }.toString()
+                            val nameToSave = saveName
+                            scope.launch {
+                                db.workflowTemplateDao().insert(
+                                    com.example.llamadroid.data.db.WorkflowTemplateEntity(
+                                        name = nameToSave,
+                                        type = com.example.llamadroid.data.db.WorkflowType.SUBTITLE_TRANSLATION,
+                                        configJson = config
+                                    )
+                                )
+                            }
+                            showSaveDialog = false
+                        }
+                    }) { Text(stringResource(R.string.action_save)) }
+                },
+                dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text(stringResource(R.string.action_cancel)) } }
+            )
+        }
+
+        SubtitleTranslationSourceCard(
+            videoUri = videoUri,
+            videoName = videoName,
+            videoBatch = videoBatch,
+            subtitleUri = subtitleUri,
+            subtitleName = subtitleName,
+            isRunning = state.isRunning,
+            onPickVideo = { videoPicker.launch(arrayOf("video/*")) },
+            onPickVideoBatch = { videoBatchPicker.launch(arrayOf("video/*")) },
+            onPickSubtitle = { subtitlePicker.launch(arrayOf("application/x-subrip", "text/plain", "*/*")) },
+            onClearSubtitle = onClearSubtitle
+        )
+
+        if (subtitlePath == null) {
+            MediaTranslationWhisperCard(
+                whisperModels = whisperModels,
+                whisperModelPath = whisperModelPath,
+                onWhisperModelChange = onWhisperModelChange,
+                whisperLanguage = whisperLanguage,
+                onWhisperLanguageChange = onWhisperLanguageChange,
+                whisperThreads = whisperThreads,
+                onWhisperThreadsChange = onWhisperThreadsChange
+            )
+        }
+
+        SubtitleTranslationModeCard(
+            translateSubtitles = translateSubtitles,
+            onTranslateSubtitlesChange = onTranslateSubtitlesChange,
+            isRunning = state.isRunning
+        )
+
+        if (translateSubtitles) {
+            MediaTranslationBackendCard(
+                settingsRepo = settingsRepo,
+                targetLanguage = targetLanguage,
+                onTargetLanguageChange = onTargetLanguageChange,
+                backend = backend,
+                onBackendChange = onBackendChange,
+                ollamaUrl = ollamaUrl,
+                onOllamaUrlChange = onOllamaUrlChange,
+                llamaServerUrl = llamaServerUrl,
+                onLlamaServerUrlChange = onLlamaServerUrlChange,
+                llamaSwapUrl = llamaSwapUrl,
+                onLlamaSwapUrlChange = onLlamaSwapUrlChange,
+                ollamaModel = ollamaModel,
+                onOllamaModelChange = onOllamaModelChange,
+                llamaSwapModel = llamaSwapModel,
+                onLlamaSwapModelChange = onLlamaSwapModelChange,
+                llamaServerModelLabel = llamaServerModelLabel,
+                llamaServerContextLabel = llamaServerContextLabel,
+                llamaServerContextTokens = llamaServerContextTokens,
+                contextSize = contextSize,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                timeoutMinutes = timeoutMinutes,
+                thinkingEnabled = thinkingEnabled,
+                onMetadataLoaded = onMetadataLoaded
+            )
+        }
+
+        SubtitleBurnWorkflowSettingsCard(
+            burnIntoVideo = burnIntoVideo,
+            onBurnIntoVideoChange = onBurnIntoVideoChange,
+            fontSize = fontSize,
+            onFontSizeChange = onFontSizeChange,
+            alignment = alignment,
+            onAlignmentChange = onAlignmentChange,
+            marginV = marginV,
+            onMarginVChange = onMarginVChange,
+            marginL = marginL,
+            onMarginLChange = onMarginLChange,
+            primaryColor = primaryColor,
+            onPrimaryColorChange = onPrimaryColorChange,
+            fontName = fontName,
+            onFontNameChange = onFontNameChange,
+            isRunning = state.isRunning
+        )
+
+        MediaTranslationRuntimeCards(state = state)
+
+        WorkflowOutputGalleryCard(
+            folderName = "workflow_subtitle_translation",
+            refreshKey = state.finalOutputPath,
+            isWorkflowRunning = state.isRunning
+        )
+
+        val backendReady = !translateSubtitles || when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
+            else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
+        }
+        val srtBatchConflict = subtitlePath != null && videoBatch.size > 1
+        val canRun = !state.isRunning &&
+            (videoPath != null || videoBatch.isNotEmpty()) &&
+            (subtitlePath != null || whisperModelPath != null) &&
+            (!translateSubtitles || targetLanguage.isNotBlank()) &&
+            backendReady &&
+            !srtBatchConflict
+        if (srtBatchConflict) {
+            Text(
+                stringResource(R.string.workflow_subtitle_translate_srt_batch_warning),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        if (state.isRunning) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onPause,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Pause, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_pause), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        } else {
+            Button(onClick = onRun, enabled = canRun, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    stringResource(
+                        if (translateSubtitles) R.string.workflow_subtitle_translate_run
+                        else R.string.workflow_subtitle_generate_run
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleTranslationSourceCard(
+    videoUri: Uri?,
+    videoName: String,
+    videoBatch: List<WorkflowMediaInput>,
+    subtitleUri: Uri?,
+    subtitleName: String,
+    isRunning: Boolean,
+    onPickVideo: () -> Unit,
+    onPickVideoBatch: () -> Unit,
+    onPickSubtitle: () -> Unit,
+    onClearSubtitle: () -> Unit
+) {
+    val context = LocalContext.current
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_subtitle_translate_source_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(
+                stringResource(R.string.workflow_subtitle_translate_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onPickVideo, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(Modifier.width(8.dp))
+                Text(videoName.ifBlank { stringResource(R.string.workflow_subtitle_translate_pick_video) }, maxLines = 1)
+            }
+            OutlinedButton(onClick = onPickVideoBatch, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                Icon(Icons.AutoMirrored.Filled.List, null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.workflow_pick_batch_videos))
+            }
+            if (videoBatch.size > 1) {
+                Text(
+                    stringResource(R.string.workflow_batch_selected_count, videoBatch.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                videoBatch.take(4).forEach { item ->
+                    Text(
+                        item.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
+            videoUri?.let {
+                Text(
+                    it.toString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+            OutlinedButton(onClick = onPickSubtitle, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                Icon(Icons.AutoMirrored.Filled.List, null)
+                Spacer(Modifier.width(8.dp))
+                Text(subtitleName.ifBlank { stringResource(R.string.workflow_subtitle_translate_pick_srt) }, maxLines = 1)
+            }
+            if (subtitleUri != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        stringResource(R.string.workflow_subtitle_translate_using_existing_srt),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = onClearSubtitle, enabled = !isRunning) {
+                        Text(stringResource(R.string.action_clear))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleTranslationModeCard(
+    translateSubtitles: Boolean,
+    onTranslateSubtitlesChange: (Boolean) -> Unit,
+    isRunning: Boolean
+) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_subtitle_translate_mode_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.workflow_subtitle_translate_translate_toggle))
+                    Text(
+                        stringResource(R.string.workflow_subtitle_translate_translate_toggle_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = translateSubtitles,
+                    onCheckedChange = onTranslateSubtitlesChange,
+                    enabled = !isRunning
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubtitleBurnWorkflowSettingsCard(
+    burnIntoVideo: Boolean,
+    onBurnIntoVideoChange: (Boolean) -> Unit,
+    fontSize: Int,
+    onFontSizeChange: (Int) -> Unit,
+    alignment: Int,
+    onAlignmentChange: (Int) -> Unit,
+    marginV: Int,
+    onMarginVChange: (Int) -> Unit,
+    marginL: Int,
+    onMarginLChange: (Int) -> Unit,
+    primaryColor: Color,
+    onPrimaryColorChange: (Color) -> Unit,
+    fontName: String,
+    onFontNameChange: (String) -> Unit,
+    isRunning: Boolean
+) {
+    val fonts = remember { SubtitleBurnService.getSystemFonts() }
+    val colorOptions = listOf(Color.White, Color.Yellow, Color.Cyan, Color(0xFFFFD54F), Color(0xFFFF8A80))
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_subtitle_translate_burn_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.workflow_subtitle_translate_burn_video))
+                    Text(
+                        stringResource(R.string.workflow_subtitle_translate_burn_video_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(checked = burnIntoVideo, onCheckedChange = onBurnIntoVideoChange, enabled = !isRunning)
+            }
+            if (burnIntoVideo) {
+                IntSliderWithInput(
+                    value = fontSize,
+                    onValueChange = onFontSizeChange,
+                    valueRange = 12..72,
+                    label = stringResource(R.string.subtitle_burn_font_size)
+                )
+                SimpleDropdownField(
+                    label = stringResource(R.string.subtitle_burn_font_label),
+                    selected = fontName,
+                    values = fonts,
+                    enabled = !isRunning,
+                    onSelected = onFontNameChange
+                )
+                Text(stringResource(R.string.subtitle_burn_alignment), style = MaterialTheme.typography.bodyMedium)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (row in 0..2) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            for (col in 0..2) {
+                                val value = (2 - row) * 3 + col + 1
+                                FilterChip(
+                                    selected = alignment == value,
+                                    onClick = { onAlignmentChange(value) },
+                                    enabled = !isRunning,
+                                    label = { Text(value.toString()) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+                    }
+                }
+                IntSliderWithInput(
+                    value = marginV,
+                    onValueChange = onMarginVChange,
+                    valueRange = 0..120,
+                    label = stringResource(R.string.subtitle_burn_margin_vertical)
+                )
+                IntSliderWithInput(
+                    value = marginL,
+                    onValueChange = onMarginLChange,
+                    valueRange = 0..120,
+                    label = stringResource(R.string.subtitle_burn_margin_horizontal)
+                )
+                Text(stringResource(R.string.subtitle_burn_color), style = MaterialTheme.typography.bodyMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    colorOptions.forEach { color ->
+                        Surface(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clickable(enabled = !isRunning) { onPrimaryColorChange(color) },
+                            shape = RoundedCornerShape(18.dp),
+                            color = color,
+                            border = if (primaryColor == color) ButtonDefaults.outlinedButtonBorder else null
+                        ) {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MediaDubbingTranslationWorkflowContent(
+    db: AppDatabase,
+    settingsRepo: SettingsRepository,
+    selectedUri: Uri?,
+    selectedPath: String?,
+    selectedName: String,
+    selectedMimeType: String?,
+    onMediaSelected: (Uri, String, String, String?) -> Unit,
+    mediaBatch: List<WorkflowMediaInput>,
+    onMediaBatchSelected: (List<WorkflowMediaInput>) -> Unit,
+    whisperModelPath: String?,
+    onWhisperModelChange: (String?) -> Unit,
+    whisperLanguage: String,
+    onWhisperLanguageChange: (String) -> Unit,
+    whisperThreads: Int,
+    onWhisperThreadsChange: (Int) -> Unit,
+    targetLanguage: String,
+    onTargetLanguageChange: (String) -> Unit,
+    backend: String,
+    onBackendChange: (String) -> Unit,
+    ollamaUrl: String,
+    onOllamaUrlChange: (String) -> Unit,
+    llamaServerUrl: String,
+    onLlamaServerUrlChange: (String) -> Unit,
+    llamaSwapUrl: String,
+    onLlamaSwapUrlChange: (String) -> Unit,
+    ollamaModel: String?,
+    onOllamaModelChange: (String?) -> Unit,
+    llamaSwapModel: String?,
+    onLlamaSwapModelChange: (String?) -> Unit,
+    llamaServerModelLabel: String?,
+    llamaServerContextLabel: String?,
+    llamaServerContextTokens: Int,
+    contextSize: Int,
+    maxTokens: Int,
+    temperature: Float,
+    timeoutMinutes: Int,
+    thinkingEnabled: Boolean,
+    ttsModelPath: String?,
+    ttsModelName: String?,
+    onTtsModelChange: (String?, String?) -> Unit,
+    ttsVoice: String?,
+    onTtsVoiceChange: (String?) -> Unit,
+    ttsLanguage: String,
+    onTtsLanguageChange: (String) -> Unit,
+    ttsSteps: Int,
+    onTtsStepsChange: (Int) -> Unit,
+    outputMode: MediaTranslationOutputMode,
+    onOutputModeChange: (MediaTranslationOutputMode) -> Unit,
+    replaceOriginalAudio: Boolean,
+    onReplaceOriginalAudioChange: (Boolean) -> Unit,
+    state: MediaTranslationWorkflowState,
+    onRun: () -> Unit,
+    onCancel: () -> Unit,
+    onPause: () -> Unit,
+    onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
+    val ttsModels by db.modelDao().getModelsByType(ModelType.ONNX_TTS).collectAsState(initial = emptyList())
+    val selectedTtsModel = remember(ttsModels, ttsModelPath, ttsModelName) {
+        ttsModels.firstOrNull { it.path == ttsModelPath || it.filename == ttsModelName } ?: ttsModels.firstOrNull()
+    }
+    val voiceOptions = remember(selectedTtsModel?.path) {
+        selectedTtsModel?.let { resolveSupertonicVoices(File(it.path)) }.orEmpty()
+    }
+    val templates by db.workflowTemplateDao()
+        .getByType(com.example.llamadroid.data.db.WorkflowType.MEDIA_DUB_TRANSLATION)
+        .collectAsState(initial = emptyList())
+    var showTemplateMenu by remember { mutableStateOf(false) }
+    var showSaveDialog by remember { mutableStateOf(false) }
+    var showGalleryDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(ttsModels) {
+        if (ttsModelPath == null && ttsModels.isNotEmpty()) {
+            val first = ttsModels.first()
+            onTtsModelChange(first.path, first.filename)
+        }
+    }
+    LaunchedEffect(voiceOptions) {
+        if (voiceOptions.isNotEmpty() && ttsVoice !in voiceOptions) {
+            onTtsVoiceChange(voiceOptions.first())
+        }
+    }
+
+    val mediaPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: Exception) {
+        }
+        try {
+            val mimeType = context.contentResolver.getType(uri)
+            val extension = when {
+                mimeType?.startsWith("video/") == true -> "mp4"
+                mimeType?.contains("mpeg") == true -> "mp3"
+                mimeType?.contains("wav") == true -> "wav"
+                mimeType?.contains("mp4") == true -> "m4a"
+                mimeType?.contains("ogg") == true -> "ogg"
+                mimeType?.contains("flac") == true -> "flac"
+                else -> "media"
+            }
+            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_audio_video_placeholder)
+            val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
+            val tempFile = File(inputDir, "workflow_media_translate_${System.currentTimeMillis()}.$extension")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            onMediaSelected(uri, tempFile.absolutePath, displayName, mimeType)
+        } catch (error: Exception) {
+            MediaTranslationWorkflowStateHolder.update {
+                it.copy(errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic)))
+            }
+        }
+    }
+    val mediaBatchPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val items = uris.mapNotNull { uri ->
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+            runCatching {
+                val mimeType = context.contentResolver.getType(uri)
+                val extension = mediaWorkflowExtensionForMime(mimeType)
+                val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_audio_video_placeholder)
+                val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
+                val tempFile = File(inputDir, "workflow_media_translate_${System.currentTimeMillis()}_${displayName.hashCode()}.$extension")
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    tempFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                WorkflowMediaInput(uri, tempFile.absolutePath, displayName, mimeType)
+            }.getOrNull()
+        }
+        if (items.isNotEmpty()) onMediaBatchSelected(items)
+    }
+
+    if (showGalleryDialog) {
+        AlertDialog(
+            onDismissRequest = { showGalleryDialog = false },
+            confirmButton = {
+                TextButton(onClick = { showGalleryDialog = false }) {
+                    Text(stringResource(R.string.action_close))
+                }
+            },
+            text = {
+                WorkflowOutputGalleryCard(
+                    folderName = "workflow_media_translation",
+                    refreshKey = state.finalOutputPath,
+                    isWorkflowRunning = state.isRunning
+                )
+            }
+        )
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                stringResource(R.string.workflow_media_translate_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    OutlinedButton(
+                        onClick = { showTemplateMenu = true },
+                        enabled = !state.isRunning,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Settings, null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(stringResource(R.string.workflow_templates_btn, templates.size), maxLines = 1)
+                    }
+                    DropdownMenu(
+                        expanded = showTemplateMenu,
+                        onDismissRequest = { showTemplateMenu = false },
+                        modifier = Modifier.widthIn(min = 280.dp, max = 360.dp)
+                    ) {
+                        if (templates.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.workflow_no_templates), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                                onClick = {}
+                            )
+                        } else {
+                            templates.forEach { template ->
+                                DropdownMenuItem(
+                                    text = { Text(template.name, maxLines = 1) },
+                                    onClick = {
+                                        runCatching {
+                                            val json = org.json.JSONObject(template.configJson)
+                                            onWhisperModelChange(json.optString("whisperModel").takeIf { it.isNotBlank() })
+                                            onWhisperLanguageChange(json.optString("whisperLanguage", whisperLanguage))
+                                            onWhisperThreadsChange(json.optInt("whisperThreads", whisperThreads))
+                                            onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
+                                            onTtsModelChange(
+                                                json.optString("ttsModelPath").takeIf { it.isNotBlank() },
+                                                json.optString("ttsModelName").takeIf { it.isNotBlank() }
+                                            )
+                                            onTtsVoiceChange(json.optString("ttsVoice").takeIf { it.isNotBlank() })
+                                            onTtsLanguageChange(json.optString("ttsLanguage", ttsLanguage))
+                                            onTtsStepsChange(json.optInt("ttsSteps", ttsSteps))
+                                            onOutputModeChange(
+                                                runCatching {
+                                                    MediaTranslationOutputMode.valueOf(json.optString("outputMode", outputMode.name))
+                                                }.getOrDefault(MediaTranslationOutputMode.AUTO)
+                                            )
+                                            onReplaceOriginalAudioChange(json.optBoolean("replaceOriginalAudio", replaceOriginalAudio))
+                                        }
+                                        showTemplateMenu = false
+                                    },
+                                    trailingIcon = {
+                                        IconButton(
+                                            onClick = { scope.launch { db.workflowTemplateDao().delete(template) } },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.workflow_save_current_template), fontWeight = FontWeight.Bold) },
+                            onClick = { showTemplateMenu = false; showSaveDialog = true },
+                            leadingIcon = { Icon(Icons.Default.Add, null) }
+                        )
+                    }
+                }
+                OutlinedButton(onClick = { showGalleryDialog = true }, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Collections, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.imagegen_tab_gallery), maxLines = 1)
+                }
+            }
+        }
+
+        if (showSaveDialog) {
+            var saveName by remember { mutableStateOf("") }
+            AlertDialog(
+                onDismissRequest = { showSaveDialog = false },
+                title = { Text(stringResource(R.string.workflow_save_template)) },
+                text = {
+                    OutlinedTextField(
+                        value = saveName,
+                        onValueChange = { saveName = it },
+                        label = { Text(stringResource(R.string.workflow_template_name)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (saveName.isNotBlank()) {
+                            val config = org.json.JSONObject().apply {
+                                put("whisperModel", whisperModelPath ?: "")
+                                put("whisperLanguage", whisperLanguage)
+                                put("whisperThreads", whisperThreads)
+                                put("targetLanguage", targetLanguage)
+                                put("ttsModelPath", ttsModelPath ?: "")
+                                put("ttsModelName", ttsModelName ?: "")
+                                put("ttsVoice", ttsVoice ?: "")
+                                put("ttsLanguage", ttsLanguage)
+                                put("ttsSteps", ttsSteps)
+                                put("outputMode", outputMode.name)
+                                put("replaceOriginalAudio", replaceOriginalAudio)
+                            }.toString()
+                            val nameToSave = saveName
+                            scope.launch {
+                                db.workflowTemplateDao().insert(
+                                    com.example.llamadroid.data.db.WorkflowTemplateEntity(
+                                        name = nameToSave,
+                                        type = com.example.llamadroid.data.db.WorkflowType.MEDIA_DUB_TRANSLATION,
+                                        configJson = config
+                                    )
+                                )
+                            }
+                            showSaveDialog = false
+                        }
+                    }) { Text(stringResource(R.string.action_save)) }
+                },
+                dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text(stringResource(R.string.action_cancel)) } }
+            )
+        }
+
+        MediaTranslationSourceCard(
+            selectedUri = selectedUri,
+            selectedName = selectedName,
+            selectedMimeType = selectedMimeType,
+            batch = mediaBatch,
+            isRunning = state.isRunning,
+            onPick = { mediaPicker.launch(arrayOf("audio/*", "video/*")) },
+            onPickBatch = { mediaBatchPicker.launch(arrayOf("audio/*", "video/*")) }
+        )
+
+        MediaTranslationWhisperCard(
+            whisperModels = whisperModels,
+            whisperModelPath = whisperModelPath,
+            onWhisperModelChange = onWhisperModelChange,
+            whisperLanguage = whisperLanguage,
+            onWhisperLanguageChange = onWhisperLanguageChange,
+            whisperThreads = whisperThreads,
+            onWhisperThreadsChange = onWhisperThreadsChange
+        )
+
+        MediaTranslationBackendCard(
+            settingsRepo = settingsRepo,
+            targetLanguage = targetLanguage,
+            onTargetLanguageChange = onTargetLanguageChange,
+            backend = backend,
+            onBackendChange = onBackendChange,
+            ollamaUrl = ollamaUrl,
+            onOllamaUrlChange = onOllamaUrlChange,
+            llamaServerUrl = llamaServerUrl,
+            onLlamaServerUrlChange = onLlamaServerUrlChange,
+            llamaSwapUrl = llamaSwapUrl,
+            onLlamaSwapUrlChange = onLlamaSwapUrlChange,
+            ollamaModel = ollamaModel,
+            onOllamaModelChange = onOllamaModelChange,
+            llamaSwapModel = llamaSwapModel,
+            onLlamaSwapModelChange = onLlamaSwapModelChange,
+            llamaServerModelLabel = llamaServerModelLabel,
+            llamaServerContextLabel = llamaServerContextLabel,
+            llamaServerContextTokens = llamaServerContextTokens,
+            contextSize = contextSize,
+            maxTokens = maxTokens,
+            temperature = temperature,
+            timeoutMinutes = timeoutMinutes,
+            thinkingEnabled = thinkingEnabled,
+            onMetadataLoaded = onMetadataLoaded
+        )
+
+        MediaTranslationVoiceCard(
+            ttsModels = ttsModels,
+            selectedTtsModel = selectedTtsModel,
+            voiceOptions = voiceOptions,
+            ttsVoice = ttsVoice,
+            onTtsModelChange = onTtsModelChange,
+            onTtsVoiceChange = onTtsVoiceChange,
+            ttsLanguage = ttsLanguage,
+            onTtsLanguageChange = onTtsLanguageChange,
+            ttsSteps = ttsSteps,
+            onTtsStepsChange = onTtsStepsChange,
+            isRunning = state.isRunning
+        )
+
+        MediaTranslationOutputCard(
+            outputMode = outputMode,
+            onOutputModeChange = onOutputModeChange,
+            replaceOriginalAudio = replaceOriginalAudio,
+            onReplaceOriginalAudioChange = onReplaceOriginalAudioChange,
+            isRunning = state.isRunning
+        )
+
+        MediaTranslationRuntimeCards(state = state)
+
+        WorkflowOutputGalleryCard(
+            folderName = "workflow_media_translation",
+            refreshKey = state.finalOutputPath,
+            isWorkflowRunning = state.isRunning
+        )
+
+        val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
+            else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
+        }
+        val canRun = !state.isRunning &&
+            (selectedPath != null || mediaBatch.isNotEmpty()) &&
+            whisperModelPath != null &&
+            selectedTtsModel != null &&
+            targetLanguage.isNotBlank() &&
+            backendReady
+
+        if (state.isRunning) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onPause,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.Pause, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_pause), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        } else {
+            Button(onClick = onRun, enabled = canRun, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.workflow_media_translate_run))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaTranslationSourceCard(
+    selectedUri: Uri?,
+    selectedName: String,
+    selectedMimeType: String?,
+    batch: List<WorkflowMediaInput>,
+    isRunning: Boolean,
+    onPick: () -> Unit,
+    onPickBatch: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_media_translate_source_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(
+                stringResource(R.string.workflow_media_translate_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onPick, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                Icon(Icons.Default.FolderOpen, null)
+                Spacer(Modifier.width(8.dp))
+                Text(selectedName.ifBlank { stringResource(R.string.workflow_media_translate_pick_media) }, maxLines = 1)
+            }
+            OutlinedButton(onClick = onPickBatch, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                Icon(Icons.Default.Queue, null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.workflow_pick_batch_media))
+            }
+            if (batch.size > 1) {
+                Text(
+                    stringResource(R.string.workflow_batch_selected_count, batch.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                batch.take(4).forEach { item ->
+                    Text(
+                        item.name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1
+                    )
+                }
+            }
+            selectedUri?.let {
+                Text(
+                    selectedMimeType ?: it.toString(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MediaTranslationWhisperCard(
+    whisperModels: List<ModelEntity>,
+    whisperModelPath: String?,
+    onWhisperModelChange: (String?) -> Unit,
+    whisperLanguage: String,
+    onWhisperLanguageChange: (String) -> Unit,
+    whisperThreads: Int,
+    onWhisperThreadsChange: (Int) -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_step_transcribe), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            var whisperExpanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(expanded = whisperExpanded, onExpandedChange = { whisperExpanded = it }) {
+                OutlinedTextField(
+                    value = whisperModelPath?.substringAfterLast("/") ?: stringResource(R.string.workflow_select_whisper),
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text(stringResource(R.string.workflow_whisper_model_label)) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(whisperExpanded) },
+                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                )
+                ExposedDropdownMenu(expanded = whisperExpanded, onDismissRequest = { whisperExpanded = false }) {
+                    whisperModels.forEach { model ->
+                        DropdownMenuItem(text = { Text(model.filename) }, onClick = { onWhisperModelChange(model.path); whisperExpanded = false })
+                    }
+                }
+            }
+            var languageExpanded by remember { mutableStateOf(false) }
+            ExposedDropdownMenuBox(expanded = languageExpanded, onExpandedChange = { languageExpanded = it }) {
+                OutlinedTextField(
+                    value = WhisperLanguages.languages.find { it.first == whisperLanguage }?.second ?: stringResource(R.string.whisper_auto_detect),
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text(stringResource(R.string.workflow_language_label)) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(languageExpanded) },
+                    modifier = Modifier.fillMaxWidth().menuAnchor()
+                )
+                ExposedDropdownMenu(expanded = languageExpanded, onDismissRequest = { languageExpanded = false }) {
+                    WhisperLanguages.languages.take(30).forEach { (code, name) ->
+                        DropdownMenuItem(text = { Text(name) }, onClick = { onWhisperLanguageChange(code); languageExpanded = false })
+                    }
+                }
+            }
+            IntSliderWithInput(
+                value = whisperThreads,
+                onValueChange = onWhisperThreadsChange,
+                valueRange = 1..16,
+                label = stringResource(R.string.label_threads)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaTranslationBackendCard(
+    settingsRepo: SettingsRepository,
+    targetLanguage: String,
+    onTargetLanguageChange: (String) -> Unit,
+    backend: String,
+    onBackendChange: (String) -> Unit,
+    ollamaUrl: String,
+    onOllamaUrlChange: (String) -> Unit,
+    llamaServerUrl: String,
+    onLlamaServerUrlChange: (String) -> Unit,
+    llamaSwapUrl: String,
+    onLlamaSwapUrlChange: (String) -> Unit,
+    ollamaModel: String?,
+    onOllamaModelChange: (String?) -> Unit,
+    llamaSwapModel: String?,
+    onLlamaSwapModelChange: (String?) -> Unit,
+    llamaServerModelLabel: String?,
+    llamaServerContextLabel: String?,
+    llamaServerContextTokens: Int,
+    contextSize: Int,
+    maxTokens: Int,
+    temperature: Float,
+    timeoutMinutes: Int,
+    thinkingEnabled: Boolean,
+    onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
+) {
+    val context = LocalContext.current
+    val liteRtModelId by settingsRepo.workflowSummaryLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepo.workflowSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.workflowSummaryLiteRtMtpEnabled.collectAsState()
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_media_translate_translation_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            OutlinedTextField(
+                value = targetLanguage,
+                onValueChange = onTargetLanguageChange,
+                label = { Text(stringResource(R.string.pdf_target_language_label)) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            RemoteSummaryBackendEditor(
+                title = stringResource(R.string.video_summary_remote_settings_title),
+                backend = backend,
+                onBackendChange = onBackendChange,
+                ollamaUrl = ollamaUrl,
+                onOllamaUrlChange = onOllamaUrlChange,
+                llamaServerUrl = llamaServerUrl,
+                onLlamaServerUrlChange = onLlamaServerUrlChange,
+                llamaSwapUrl = llamaSwapUrl,
+                onLlamaSwapUrlChange = onLlamaSwapUrlChange,
+                ollamaModel = ollamaModel,
+                onOllamaModelSelected = onOllamaModelChange,
+                llamaSwapModel = llamaSwapModel,
+                onLlamaSwapModelSelected = onLlamaSwapModelChange,
+                llamaServerModelLabel = llamaServerModelLabel,
+                llamaServerContextLabel = llamaServerContextLabel,
+                llamaServerContextTokens = llamaServerContextTokens,
+                requestedContextForWarning = contextSize,
+                liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                onLiteRtModelSelected = settingsRepo::setWorkflowSummaryLiteRtModelId,
+                liteRtBackend = liteRtBackend,
+                onLiteRtBackendChange = settingsRepo::setWorkflowSummaryLiteRtBackend,
+                liteRtMtpEnabled = liteRtMtpEnabled,
+                onLiteRtMtpEnabledChange = settingsRepo::setWorkflowSummaryLiteRtMtpEnabled,
+                liteRtThinkingEnabled = thinkingEnabled,
+                onLiteRtThinkingEnabledChange = settingsRepo::setWorkflowSummaryThinkingEnabled,
+                fetchMetadata = {
+                    RemoteSummaryClientFactory.fromSnapshot(
+                        context,
+                        RemoteSummarySettingsSnapshot(
+                            backend = backend,
+                            ollamaUrl = ollamaUrl,
+                            llamaServerUrl = llamaServerUrl,
+                            llamaSwapUrl = llamaSwapUrl,
+                            ollamaModel = ollamaModel,
+                            llamaSwapModel = llamaSwapModel,
+                            liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                            liteRtBackend = liteRtBackend,
+                            liteRtMtpEnabled = liteRtMtpEnabled,
+                            thinkingEnabled = thinkingEnabled,
+                            llamaServerModelLabel = llamaServerModelLabel,
+                            llamaServerContextTokens = llamaServerContextTokens,
+                            llamaServerContextLabel = llamaServerContextLabel,
+                            chunkContext = contextSize,
+                            chunkMaxTokens = maxTokens,
+                            mergeContext = contextSize,
+                            mergeMaxTokens = maxTokens,
+                            temperature = temperature,
+                            timeoutMinutes = timeoutMinutes,
+                            targetLanguage = targetLanguage,
+                            summaryPrompt = null,
+                            mergePrompt = null
+                        )
+                    ).fetchMetadata()
+                },
+                onMetadataLoaded = { metadata ->
+                    onMetadataLoaded(metadata)
+                    if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+                        settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+                        settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+                        settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+                    }
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MediaTranslationVoiceCard(
+    ttsModels: List<ModelEntity>,
+    selectedTtsModel: ModelEntity?,
+    voiceOptions: List<String>,
+    ttsVoice: String?,
+    onTtsModelChange: (String?, String?) -> Unit,
+    onTtsVoiceChange: (String?) -> Unit,
+    ttsLanguage: String,
+    onTtsLanguageChange: (String) -> Unit,
+    ttsSteps: Int,
+    onTtsStepsChange: (Int) -> Unit,
+    isRunning: Boolean
+) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_media_translate_voice_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            if (ttsModels.isEmpty()) {
+                Text(stringResource(R.string.onnx_tts_no_model), color = MaterialTheme.colorScheme.error)
+            } else {
+                var ttsExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(expanded = ttsExpanded, onExpandedChange = { ttsExpanded = it }) {
+                    OutlinedTextField(
+                        value = selectedTtsModel?.filename ?: stringResource(R.string.onnx_tts_model_section),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(stringResource(R.string.onnx_tts_model_section)) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(ttsExpanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor()
+                    )
+                    ExposedDropdownMenu(expanded = ttsExpanded, onDismissRequest = { ttsExpanded = false }) {
+                        ttsModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = { Text(model.filename) },
+                                onClick = {
+                                    onTtsModelChange(model.path, model.filename)
+                                    ttsExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            SimpleDropdownField(
+                label = stringResource(R.string.onnx_tts_voice_label),
+                selected = ttsVoice.orEmpty(),
+                values = voiceOptions,
+                enabled = voiceOptions.isNotEmpty() && !isRunning,
+                onSelected = onTtsVoiceChange
+            )
+            SimpleDropdownField(
+                label = stringResource(R.string.onnx_tts_language_label),
+                selected = ttsLanguage,
+                values = supertonicLanguageCodes,
+                enabled = !isRunning,
+                onSelected = onTtsLanguageChange
+            )
+            IntSliderWithInput(
+                value = ttsSteps,
+                onValueChange = onTtsStepsChange,
+                valueRange = 1..32,
+                label = stringResource(R.string.workflow_media_translate_tts_steps)
+            )
+        }
+    }
+}
+
+@Composable
+private fun MediaTranslationOutputCard(
+    outputMode: MediaTranslationOutputMode,
+    onOutputModeChange: (MediaTranslationOutputMode) -> Unit,
+    replaceOriginalAudio: Boolean,
+    onReplaceOriginalAudioChange: (Boolean) -> Unit,
+    isRunning: Boolean
+) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.workflow_media_translate_output_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            SimpleDropdownField(
+                label = stringResource(R.string.workflow_media_translate_output_mode),
+                selected = outputMode.name,
+                values = MediaTranslationOutputMode.entries.map { it.name },
+                enabled = !isRunning,
+                onSelected = { raw -> onOutputModeChange(MediaTranslationOutputMode.valueOf(raw)) },
+                labelForValue = { raw ->
+                    when (MediaTranslationOutputMode.valueOf(raw)) {
+                        MediaTranslationOutputMode.AUTO -> stringResource(R.string.workflow_media_translate_output_auto)
+                        MediaTranslationOutputMode.DUB_VIDEO -> stringResource(R.string.workflow_media_translate_output_video)
+                        MediaTranslationOutputMode.AUDIO_ONLY -> stringResource(R.string.workflow_media_translate_output_audio)
+                    }
+                }
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.workflow_media_translate_replace_audio))
+                    Text(
+                        stringResource(R.string.workflow_media_translate_replace_audio_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = replaceOriginalAudio,
+                    onCheckedChange = onReplaceOriginalAudioChange,
+                    enabled = !isRunning
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaTranslationRuntimeCards(state: MediaTranslationWorkflowState) {
+    if (state.isRunning) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LinearProgressIndicator(progress = { state.progress }, modifier = Modifier.fillMaxWidth())
+                Text(state.status, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                state.toolProgressDetail?.let { detail ->
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                if (state.totalBatchItems > 1) {
+                    Text(
+                        stringResource(R.string.workflow_batch_progress, state.currentBatchItem.coerceAtLeast(1), state.totalBatchItems),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                if (state.totalChunks > 0) {
+                    Text(
+                        stringResource(R.string.workflow_media_translate_chunk_progress, state.currentChunk.coerceAtLeast(1), state.totalChunks),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+    state.errorMessage?.let { error ->
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+            Text(error, modifier = Modifier.padding(12.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+        }
+    }
+    if (state.cancelled && !state.isRunning && state.errorMessage == null) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f))) {
+            Text(
+                stringResource(R.string.summary_cancelled_message),
+                modifier = Modifier.padding(12.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+    if (state.paused && !state.isRunning && state.errorMessage == null) {
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f))) {
+            Text(
+                stringResource(R.string.workflow_media_paused_message),
+                modifier = Modifier.padding(12.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+    state.finalOutputPath?.let {
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.workflow_media_translate_results), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_final_output), it)
+                state.translatedAudioPath?.let { path -> WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_audio_output), path) }
+                state.originalSrtPath?.let { path -> WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_original_srt), path) }
+                state.translatedSrtPath?.let { path -> WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_translated_srt), path) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SimpleDropdownField(
+    label: String,
+    selected: String,
+    values: List<String>,
+    enabled: Boolean,
+    onSelected: (String) -> Unit,
+    labelForValue: @Composable (String) -> String = { it }
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { if (enabled) expanded = it }) {
+        OutlinedTextField(
+            value = values.firstOrNull { it == selected }?.let { labelForValue(it) } ?: selected,
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier.fillMaxWidth().menuAnchor()
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            values.forEach { value ->
+                DropdownMenuItem(
+                    text = { Text(labelForValue(value)) },
+                    onClick = {
+                        onSelected(value)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowOutputPathRow(label: String, path: String) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+        Text(
+            path,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 2
+        )
     }
 }
 
@@ -1148,7 +3754,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
-    
+
     // Models
     val sdCheckpoints by db.modelDao().getModelsByType(ModelType.SD_CHECKPOINT).collectAsState(initial = emptyList())
     val fluxDiffusionModels by db.modelDao().getModelsByType(ModelType.SD_DIFFUSION).collectAsState(initial = emptyList())
@@ -1459,7 +4065,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                     OutlinedTextField(
                         value = saveName,
                         onValueChange = { saveName = it },
-                        label = { Text("Template Name") },
+                        label = { Text(stringResource(R.string.workflow_template_name)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -1503,9 +4109,9 @@ private fun Txt2ImgUpscaleWorkflowContent(
                             }
                             showSaveDialog = false
                         }
-                    }) { Text("Save") }
+                    }) { Text(stringResource(R.string.action_save)) }
                 },
-                dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text("Cancel") } }
+                dismissButton = { TextButton(onClick = { showSaveDialog = false }) { Text(stringResource(R.string.action_cancel)) } }
             )
         }
         
@@ -2029,6 +4635,12 @@ private fun TranscribeSummaryWorkflowContent(
     onSummaryOllamaModelChange: (String?) -> Unit,
     summaryLlamaSwapModel: String?,
     onSummaryLlamaSwapModelChange: (String?) -> Unit,
+    summaryLiteRtModelId: Long,
+    onSummaryLiteRtModelIdChange: (Long?) -> Unit,
+    summaryLiteRtBackend: String,
+    onSummaryLiteRtBackendChange: (String) -> Unit,
+    summaryLiteRtMtpEnabled: Boolean,
+    onSummaryLiteRtMtpEnabledChange: (Boolean) -> Unit,
     summaryLlamaServerModelLabel: String?,
     summaryLlamaServerContextLabel: String?,
     summaryLlamaServerContextTokens: Int,
@@ -2391,8 +5003,17 @@ private fun TranscribeSummaryWorkflowContent(
                     llamaServerContextLabel = summaryLlamaServerContextLabel,
                     llamaServerContextTokens = summaryLlamaServerContextTokens,
                     requestedContextForWarning = mergeContext,
+                    liteRtModelId = summaryLiteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = onSummaryLiteRtModelIdChange,
+                    liteRtBackend = summaryLiteRtBackend,
+                    onLiteRtBackendChange = onSummaryLiteRtBackendChange,
+                    liteRtMtpEnabled = summaryLiteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = onSummaryLiteRtMtpEnabledChange,
+                    liteRtThinkingEnabled = thinkingEnabled,
+                    onLiteRtThinkingEnabledChange = onThinkingEnabledChange,
                     fetchMetadata = {
                         RemoteSummaryClientFactory.fromSnapshot(
+                            context,
                             RemoteSummarySettingsSnapshot(
                                 backend = summaryBackend,
                                 ollamaUrl = summaryOllamaUrl,
@@ -2400,6 +5021,9 @@ private fun TranscribeSummaryWorkflowContent(
                                 llamaSwapUrl = summaryLlamaSwapUrl,
                                 ollamaModel = summaryOllamaModel,
                                 llamaSwapModel = summaryLlamaSwapModel,
+                                liteRtModelId = summaryLiteRtModelId.takeIf { it > 0L },
+                                liteRtBackend = summaryLiteRtBackend,
+                                liteRtMtpEnabled = summaryLiteRtMtpEnabled,
                                 thinkingEnabled = thinkingEnabled,
                                 llamaServerModelLabel = summaryLlamaServerModelLabel,
                                 llamaServerContextTokens = summaryLlamaServerContextTokens,
@@ -2592,6 +5216,7 @@ private fun TranscribeSummaryWorkflowContent(
         val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
             SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
             SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+            SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
             else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
         }
         val canRun = whisperModelPath != null && audioUri != null && backendReady && !isRunning

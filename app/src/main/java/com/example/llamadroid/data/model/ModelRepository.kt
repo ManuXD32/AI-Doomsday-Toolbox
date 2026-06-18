@@ -691,7 +691,10 @@ data class PendingDownload(
     val liteRtSourceUri: String? = null,
     val liteRtBackendPreference: String? = null,
     val liteRtSupportsCpu: Boolean? = null,
-    val liteRtSupportsGpu: Boolean? = null
+    val liteRtSupportsGpu: Boolean? = null,
+    val liteRtSupportsVision: Boolean? = null,
+    val liteRtSupportsAudio: Boolean? = null,
+    val liteRtMaxContextTokens: Int? = null
 )
 
 object PendingDownloadHolder {
@@ -720,7 +723,10 @@ object PendingDownloadHolder {
         liteRtSourceUri: String? = null,
         liteRtBackendPreference: String? = null,
         liteRtSupportsCpu: Boolean? = null,
-        liteRtSupportsGpu: Boolean? = null
+        liteRtSupportsGpu: Boolean? = null,
+        liteRtSupportsVision: Boolean? = null,
+        liteRtSupportsAudio: Boolean? = null,
+        liteRtMaxContextTokens: Int? = null
     ) {
         pendingDownloads[filename] = PendingDownload(
             filename = filename,
@@ -745,7 +751,10 @@ object PendingDownloadHolder {
             liteRtSourceUri = liteRtSourceUri,
             liteRtBackendPreference = liteRtBackendPreference,
             liteRtSupportsCpu = liteRtSupportsCpu,
-            liteRtSupportsGpu = liteRtSupportsGpu
+            liteRtSupportsGpu = liteRtSupportsGpu,
+            liteRtSupportsVision = liteRtSupportsVision,
+            liteRtSupportsAudio = liteRtSupportsAudio,
+            liteRtMaxContextTokens = liteRtMaxContextTokens
         )
     }
     

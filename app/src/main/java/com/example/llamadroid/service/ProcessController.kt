@@ -9,9 +9,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStreamReader
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
+import kotlin.math.min
 
 data class ProcessRunResult(
     val exitCode: Int,
@@ -126,7 +128,9 @@ class ProcessController {
         if (config.parallel != null) {
             args.add("--parallel")
             args.add(config.parallel.toString())
-        } else if (config.mtpDecodingEnabled && !hasAnyCommandFlag(customFlagsText, setOf("--parallel", "-np"))) {
+        } else if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP &&
+            !hasAnyCommandFlag(customFlagsText, setOf("--parallel", "-np"))
+        ) {
             args.add("--parallel")
             args.add("1")
         }
@@ -210,11 +214,7 @@ class ProcessController {
     ): String {
         val customFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
         val speculativeArgs = buildSpeculativeArgs(config)
-        val mtpArgs = if (config.mtpDecodingEnabled) {
-            buildMtpSpeculativeArgs(config)
-        } else {
-            emptyList()
-        }
+        val mtpArgs = emptyList<String>()
         val kvCacheArgs = if (config.kvCacheEnabled) {
             buildList {
                 add("--cache-type-k")
@@ -266,23 +266,72 @@ class ProcessController {
     }
 
     private fun buildSpeculativeArgs(config: LlamaConfig): List<String> {
-        if (config.mtpDecodingEnabled) {
-            return buildMtpSpeculativeArgs(config)
+        return when (config.speculativeMode) {
+            null -> emptyList()
+            LlamaSpeculativeMode.DRAFT_SIMPLE -> {
+                val draftModel = config.draftModelPath ?: return emptyList()
+                listOf(
+                    "--spec-type", config.speculativeMode.flagValue,
+                    "--spec-draft-model", draftModel,
+                    "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString(),
+                    "--spec-draft-n-min", config.draftMin.coerceAtLeast(0).toString(),
+                    "--spec-draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin.coerceIn(0f, 1f))
+                )
+            }
+            LlamaSpeculativeMode.DRAFT_MTP -> buildList {
+                add("--spec-type")
+                add(config.speculativeMode.flagValue)
+                config.draftModelPath?.let { draftModel ->
+                    add("--spec-draft-model")
+                    add(draftModel)
+                }
+                add("--spec-draft-n-max")
+                add(config.mtpDraftMax.coerceAtLeast(1).toString())
+                add("--spec-draft-n-min")
+                add(config.mtpDraftMin.coerceAtLeast(0).toString())
+                add("--spec-draft-p-min")
+                add(String.format(java.util.Locale.US, "%.2f", config.mtpDraftPMin.coerceIn(0f, 1f)))
+            }
         }
-        val draftModel = config.draftModelPath ?: return emptyList()
-        return listOf(
-            "--model-draft", draftModel,
-            "--spec-draft-n-max", config.draftMax.toString(),
-            "--spec-draft-n-min", config.draftMin.toString(),
-            "--draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin)
-        )
     }
 
-    private fun buildMtpSpeculativeArgs(config: LlamaConfig): List<String> =
-        listOf(
-            "--spec-type", "draft-mtp",
-            "--spec-draft-n-max", config.mtpDraftMax.coerceAtLeast(1).toString()
-        )
+    fun binarySupportsMtpSpeculative(binaryFile: File): Boolean {
+        if (!binaryFile.isFile || !binaryFile.canRead()) return false
+        return binaryContainsMarker(binaryFile, MTP_SPEC_TYPE_MARKER)
+    }
+
+    private fun binaryContainsMarker(binaryFile: File, marker: ByteArray): Boolean {
+        if (marker.isEmpty()) return true
+        val buffer = ByteArray(DEFAULT_BINARY_SCAN_BUFFER_SIZE + marker.size)
+        var carry = 0
+        FileInputStream(binaryFile).use { input ->
+            while (true) {
+                val read = input.read(buffer, carry, DEFAULT_BINARY_SCAN_BUFFER_SIZE)
+                if (read <= 0) return false
+                val length = carry + read
+                if (indexOf(buffer, length, marker) >= 0) return true
+                carry = min(marker.size - 1, length)
+                if (carry > 0) {
+                    System.arraycopy(buffer, length - carry, buffer, 0, carry)
+                }
+            }
+        }
+    }
+
+    private fun indexOf(buffer: ByteArray, length: Int, marker: ByteArray): Int {
+        val lastStart = length - marker.size
+        for (start in 0..lastStart) {
+            var matched = true
+            for (offset in marker.indices) {
+                if (buffer[start + offset] != marker[offset]) {
+                    matched = false
+                    break
+                }
+            }
+            if (matched) return start
+        }
+        return -1
+    }
 
     private fun hasAnyCommandFlag(command: String, flags: Set<String>): Boolean =
         splitCommandLine(command).any { token ->
@@ -294,6 +343,11 @@ class ProcessController {
         val safeChars = "-_./:=,@+%".toSet()
         if (arg.all { it.isLetterOrDigit() || it in safeChars }) return arg
         return "'" + arg.replace("'", "'\"'\"'") + "'"
+    }
+
+    private companion object {
+        private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
+        private val MTP_SPEC_TYPE_MARKER = "draft-mtp".toByteArray(Charsets.US_ASCII)
     }
 
     suspend fun start(

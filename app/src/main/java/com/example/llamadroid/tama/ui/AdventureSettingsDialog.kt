@@ -68,6 +68,9 @@ fun AdventureSettingsDialog(
     val llamaServerModelLabel by settingsRepository.adventureLlamaServerModelLabel.collectAsState()
     val llamaServerContextTokens by settingsRepository.adventureLlamaServerContextTokens.collectAsState()
     val llamaServerContextLabel by settingsRepository.adventureLlamaServerContextLabel.collectAsState()
+    val liteRtModelId by settingsRepository.adventureLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepository.adventureLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepository.adventureLiteRtMtpEnabled.collectAsState()
     val adventureLanguage by settingsRepository.adventureLanguage.collectAsState()
     val worldImageEnabled by settingsRepository.adventureWorldImageEnabled.collectAsState()
     val stageImagesEnabled by settingsRepository.adventureStageImagesEnabled.collectAsState()
@@ -142,9 +145,16 @@ fun AdventureSettingsDialog(
                     llamaServerContextLabel = llamaServerContextLabel,
                     llamaServerContextTokens = llamaServerContextTokens,
                     requestedContextForWarning = null,
+                    liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = settingsRepository::setAdventureLiteRtModelId,
+                    liteRtBackend = liteRtBackend,
+                    onLiteRtBackendChange = settingsRepository::setAdventureLiteRtBackend,
+                    liteRtMtpEnabled = liteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = settingsRepository::setAdventureLiteRtMtpEnabled,
                     fetchMetadata = {
                         RemoteSummaryClientFactory.fromConfig(
                             RemoteSummaryBackendConfig(
+                                context = context,
                                 backend = backend,
                                 baseUrl = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
                                     SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.trim()
@@ -155,6 +165,9 @@ fun AdventureSettingsDialog(
                                     SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerModelLabel?.trim()?.ifBlank { null }
                                     else -> storyModel.trim().ifBlank { null }
                                 },
+                                liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                                liteRtBackend = liteRtBackend,
+                                liteRtMtpEnabled = liteRtMtpEnabled,
                                 timeoutMinutes = 1
                             )
                         ).fetchMetadata()

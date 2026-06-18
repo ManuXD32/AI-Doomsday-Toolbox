@@ -55,6 +55,21 @@ class SettingsRepositoryBackendTest {
     }
 
     @Test
+    fun `litert aliases normalize to litert backend`() {
+        val aliases = listOf("litert-lm", "litert", "litertlm", "lite-rt", "lite-rt-lm", " LITERT ")
+
+        aliases.forEach { backend ->
+            assertEquals(
+                SettingsRepository.PDF_BACKEND_LITERT,
+                SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
+            )
+            assertTrue(SettingsRepository.isLiteRtBackend(backend))
+            assertFalse(SettingsRepository.usesOpenAiChatBackend(backend))
+            assertFalse(SettingsRepository.requiresSelectedRemoteModel(backend))
+        }
+    }
+
+    @Test
     fun `acceleration mode aliases normalize to runtime choices`() {
         assertEquals(SettingsRepository.ACCELERATION_AUTO, SettingsRepository.normalizeAccelerationMode(null))
         assertEquals(SettingsRepository.ACCELERATION_CPU, SettingsRepository.normalizeAccelerationMode("cpu_only"))

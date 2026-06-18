@@ -157,6 +157,7 @@ class NativeChatToolsTest {
             imageGenerationEnabled = true,
             imageIterationEnabled = true,
             imageParams = NativeChatImageToolParams(
+                engine = NativeChatImageGenerationEngine.SD,
                 model = "sd15.onnx",
                 width = 768,
                 height = 512,
@@ -176,7 +177,25 @@ class NativeChatToolsTest {
                 memoryPatternOptimization = false,
                 cpuArenaAllocator = false,
                 nnapiCpuDisabled = false,
-                nnapiUseFp16 = true
+                nnapiUseFp16 = true,
+                sdParams = NativeChatSdImageToolParams(
+                    model = "flux1.gguf",
+                    vaePath = "ae.safetensors",
+                    clipLPath = "clip_l.safetensors",
+                    t5xxlPath = "t5xxl.gguf",
+                    width = 640,
+                    height = 768,
+                    steps = 18,
+                    cfgScale = 4.5f,
+                    sampler = SamplingMethod.DPM_PP_2M,
+                    seed = "1234",
+                    negativePrompt = "low quality",
+                    threads = 4,
+                    flowShift = "3.0",
+                    diffusionFa = true,
+                    mmap = true,
+                    vaeConvDirect = true
+                )
             ),
             maxToolRounds = 99
         )
@@ -201,6 +220,7 @@ class NativeChatToolsTest {
         assertEquals(NativeChatToolConfig.MIN_PAGE_CHARS, restored.webSearchMaxChars)
         assertEquals(NativeChatToolConfig.MAX_TOOL_ROUNDS, restored.maxToolRounds)
         assertEquals("http://127.0.0.1:8888", restored.kiwixServerUrl)
+        assertEquals(NativeChatImageGenerationEngine.SD, restored.imageParams.engine)
         assertEquals("sd15.onnx", restored.imageParams.model)
         assertEquals(768, restored.imageParams.width)
         assertEquals(512, restored.imageParams.height)
@@ -221,6 +241,22 @@ class NativeChatToolsTest {
         assertFalse(restored.imageParams.cpuArenaAllocator)
         assertFalse(restored.imageParams.nnapiCpuDisabled)
         assertTrue(restored.imageParams.nnapiUseFp16)
+        assertEquals("flux1.gguf", restored.imageParams.sdParams.model)
+        assertEquals("ae.safetensors", restored.imageParams.sdParams.vaePath)
+        assertEquals("clip_l.safetensors", restored.imageParams.sdParams.clipLPath)
+        assertEquals("t5xxl.gguf", restored.imageParams.sdParams.t5xxlPath)
+        assertEquals(640, restored.imageParams.sdParams.width)
+        assertEquals(768, restored.imageParams.sdParams.height)
+        assertEquals(18, restored.imageParams.sdParams.steps)
+        assertEquals(4.5f, restored.imageParams.sdParams.cfgScale, 0.0001f)
+        assertEquals(SamplingMethod.DPM_PP_2M, restored.imageParams.sdParams.sampler)
+        assertEquals("1234", restored.imageParams.sdParams.seed)
+        assertEquals("low quality", restored.imageParams.sdParams.negativePrompt)
+        assertEquals(4, restored.imageParams.sdParams.threads)
+        assertEquals("3.0", restored.imageParams.sdParams.flowShift)
+        assertTrue(restored.imageParams.sdParams.diffusionFa)
+        assertTrue(restored.imageParams.sdParams.mmap)
+        assertTrue(restored.imageParams.sdParams.vaeConvDirect)
     }
 
     @Test
@@ -420,7 +456,7 @@ class NativeChatToolsTest {
     @Test
     fun `available tools respect enabled config`() {
         val runtime = NativeChatToolRuntime()
-        val tools = runtime.availableTools(
+        val availableTools = runtime.availableTools(
             NativeChatToolConfig(
                 toolsEnabled = true,
                 webSearchEnabled = true,
@@ -431,7 +467,8 @@ class NativeChatToolsTest {
                 alarmToolsEnabled = true,
                 imageGenerationEnabled = true
             )
-        ).map { it.name }.toSet()
+        )
+        val tools = availableTools.map { it.name }.toSet()
 
         assertTrue(NativeChatToolRuntime.TOOL_WEB_SEARCH in tools)
         assertTrue(NativeChatToolRuntime.TOOL_SEARCH_PAGE in tools)
@@ -447,7 +484,33 @@ class NativeChatToolsTest {
         assertTrue(NativeChatToolRuntime.TOOL_LIST_ALARMS in tools)
         assertTrue(NativeChatToolRuntime.TOOL_CREATE_ALARM in tools)
         assertTrue(NativeChatToolRuntime.TOOL_GENERATE_IMAGE in tools)
+        assertEquals(1, availableTools.count { it.name == NativeChatToolRuntime.TOOL_GENERATE_IMAGE })
         assertFalse(NativeChatToolRuntime.TOOL_KIWIX_SEARCH in tools)
+    }
+
+    @Test
+    fun `generate image stays one advertised tool and hides when disabled`() {
+        val runtime = NativeChatToolRuntime()
+        val enabledTools = runtime.availableTools(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                imageGenerationEnabled = true
+            )
+        )
+        val imageTools = enabledTools.filter { it.name == NativeChatToolRuntime.TOOL_GENERATE_IMAGE }
+
+        assertEquals(1, imageTools.size)
+        assertEquals(setOf("prompt", "negative_prompt"), imageTools.single().parameters.keys)
+        assertEquals(listOf("prompt"), imageTools.single().requiredParams)
+
+        val disabledTools = runtime.availableTools(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                imageGenerationEnabled = false
+            )
+        ).map { it.name }
+
+        assertFalse(NativeChatToolRuntime.TOOL_GENERATE_IMAGE in disabledTools)
     }
 
     @Test

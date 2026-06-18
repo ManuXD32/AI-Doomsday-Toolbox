@@ -14,6 +14,9 @@ import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.PendingDownload
 import com.example.llamadroid.data.model.PendingDownloadHolder
+import com.example.llamadroid.data.model.liteRtAudioSupportFromText
+import com.example.llamadroid.data.model.liteRtEngineMaxTokensFromText
+import com.example.llamadroid.data.model.liteRtVisionSupportFromText
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.util.DebugLog
@@ -43,6 +46,15 @@ data class LiteRtCatalogEntry(
     val supportsCpu: Boolean = true,
     val supportsGpu: Boolean = true,
     val supportsNpu: Boolean = false,
+    val supportsVision: Boolean = liteRtVisionSupportFromText(
+        listOf(title, preferredFileName.orEmpty(), repoId).joinToString(" ")
+    ),
+    val supportsAudio: Boolean = liteRtAudioSupportFromText(
+        listOf(title, preferredFileName.orEmpty(), repoId).joinToString(" ")
+    ),
+    val maxContextTokens: Int? = liteRtEngineMaxTokensFromText(
+        listOf(title, preferredFileName.orEmpty(), repoId).joinToString(" ")
+    ),
     val category: LiteRtCatalogCategory = LiteRtCatalogCategory.GPU,
     val catalogId: String = "${category.name.lowercase(Locale.US)}|$repoId|${preferredFileName ?: "default"}"
 )
@@ -63,7 +75,8 @@ object LiteRtModelCatalog {
             repoId = "litert-community/Qwen3-0.6B",
             title = "Qwen3 0.6B",
             description = "Small Apache-2.0 chat model with a fast CPU/GPU LiteRT-LM package.",
-            preferredFileName = "Qwen3-0.6B.litertlm"
+            preferredFileName = "Qwen3-0.6B.litertlm",
+            maxContextTokens = 4096
         ),
         gpu(
             repoId = "litert-community/Qwen3-4B",
@@ -87,7 +100,8 @@ object LiteRtModelCatalog {
             repoId = "litert-community/Gemma3-1B-IT",
             title = "Gemma 3 1B IT",
             description = "Compact instruction model with published LiteRT Android variants.",
-            preferredFileName = "gemma3-1b-it-int4.litertlm"
+            preferredFileName = "gemma3-1b-it-int4.litertlm",
+            maxContextTokens = 2048
         ),
         gpu(
             repoId = "litert-community/gemma-4-E2B-it-litert-lm",
@@ -140,8 +154,8 @@ object LiteRtModelCatalog {
     )
 
     private fun cpuEntries() = listOf(
-        cpu("litert-community/Qwen3-0.6B", "Qwen3 0.6B CPU", "Qwen3-0.6B.litertlm"),
-        cpu("litert-community/Gemma3-1B-IT", "Gemma 3 1B IT CPU", "gemma3-1b-it-int4.litertlm"),
+        cpu("litert-community/Qwen3-0.6B", "Qwen3 0.6B CPU", "Qwen3-0.6B.litertlm", maxContextTokens = 4096),
+        cpu("litert-community/Gemma3-1B-IT", "Gemma 3 1B IT CPU", "gemma3-1b-it-int4.litertlm", maxContextTokens = 2048),
         cpu("litert-community/gemma-4-E2B-it-litert-lm", "Gemma 4 E2B IT CPU", "gemma-4-E2B-it.litertlm"),
         cpu("litert-community/gemma-4-E4B-it-litert-lm", "Gemma 4 E4B IT CPU", "gemma-4-E4B-it.litertlm"),
         cpu("google/gemma-3n-E2B-it-litert-lm", "Gemma 3n E2B IT CPU", "gemma-3n-E2B-it-int4.litertlm"),
@@ -156,19 +170,23 @@ object LiteRtModelCatalog {
         repoId: String,
         title: String,
         description: String,
-        preferredFileName: String
+        preferredFileName: String,
+        maxContextTokens: Int? = null
     ) = LiteRtCatalogEntry(
         repoId = repoId,
         title = title,
         description = description,
         preferredFileName = preferredFileName,
+        maxContextTokens = maxContextTokens
+            ?: liteRtEngineMaxTokensFromText(listOf(title, preferredFileName, repoId).joinToString(" ")),
         category = LiteRtCatalogCategory.GPU
     )
 
     private fun cpu(
         repoId: String,
         title: String,
-        preferredFileName: String
+        preferredFileName: String,
+        maxContextTokens: Int? = null
     ) = LiteRtCatalogEntry(
         repoId = repoId,
         title = title,
@@ -177,6 +195,8 @@ object LiteRtModelCatalog {
         defaultBackend = LITERT_BACKEND_CPU,
         supportsGpu = false,
         supportsNpu = false,
+        maxContextTokens = maxContextTokens
+            ?: liteRtEngineMaxTokensFromText(listOf(title, preferredFileName, repoId).joinToString(" ")),
         category = LiteRtCatalogCategory.CPU
     )
 }
@@ -244,7 +264,10 @@ class LiteRtModelRepository(
                 liteRtSourceUri = sourceUri,
                 liteRtBackendPreference = normalizeLiteRtBackend(entry.defaultBackend),
                 liteRtSupportsCpu = entry.supportsCpu,
-                liteRtSupportsGpu = entry.supportsGpu
+                liteRtSupportsGpu = entry.supportsGpu,
+                liteRtSupportsVision = entry.supportsVision,
+                liteRtSupportsAudio = entry.supportsAudio,
+                liteRtMaxContextTokens = entry.maxContextTokens
             )
             DownloadService.startDownload(
                 context = context,
@@ -291,7 +314,10 @@ class LiteRtModelRepository(
                 backendPreference = normalizeLiteRtBackend(entry.defaultBackend),
                 supportsCpu = entry.supportsCpu,
                 supportsGpu = entry.supportsGpu,
-                supportsNpu = entry.supportsNpu
+                supportsNpu = entry.supportsNpu,
+                supportsVision = entry.supportsVision,
+                supportsAudio = entry.supportsAudio,
+                maxContextTokens = entry.maxContextTokens
             )
         }.onFailure {
             DownloadProgressHolder.removeProgress("litert:${entry.catalogId}")
@@ -324,7 +350,13 @@ class LiteRtModelRepository(
             backendPreference = normalizeLiteRtBackend(pending.liteRtBackendPreference ?: LITERT_BACKEND_AUTO),
             supportsCpu = pending.liteRtSupportsCpu ?: inferCpuSupport(installedPath),
             supportsGpu = pending.liteRtSupportsGpu ?: inferGpuSupport(installedPath),
-            supportsNpu = false
+            supportsNpu = false,
+            supportsVision = pending.liteRtSupportsVision
+                ?: inferLiteRtVisionSupport(displayName, installedPath, pending.repoId),
+            supportsAudio = pending.liteRtSupportsAudio
+                ?: inferLiteRtAudioSupport(displayName, installedPath, pending.repoId),
+            maxContextTokens = pending.liteRtMaxContextTokens
+                ?: inferLiteRtMaxContextTokens(displayName, installedPath, pending.repoId)
         ).also {
             onProgress(1f, displayName)
         }
@@ -350,7 +382,13 @@ class LiteRtModelRepository(
                     backendPreference = normalizeLiteRtBackend(entry?.defaultBackend ?: LITERT_BACKEND_AUTO),
                     supportsCpu = entry?.supportsCpu ?: inferCpuSupport(candidate),
                     supportsGpu = entry?.supportsGpu ?: inferGpuSupport(candidate),
-                    supportsNpu = false
+                    supportsNpu = false,
+                    supportsVision = entry?.supportsVision
+                        ?: inferLiteRtVisionSupport(entry?.title ?: candidate.nameWithoutExtension, candidate, entry?.repoId),
+                    supportsAudio = entry?.supportsAudio
+                        ?: inferLiteRtAudioSupport(entry?.title ?: candidate.nameWithoutExtension, candidate, entry?.repoId),
+                    maxContextTokens = entry?.maxContextTokens
+                        ?: inferLiteRtMaxContextTokens(entry?.title ?: candidate.nameWithoutExtension, candidate, entry?.repoId)
                 )
                 inserted += 1
             }
@@ -361,7 +399,11 @@ class LiteRtModelRepository(
         inserted
     }
 
-    suspend fun importFromUri(uri: Uri): Result<LiteRtModelEntity> = withContext(Dispatchers.IO) {
+    suspend fun importFromUri(
+        uri: Uri,
+        supportsVisionOverride: Boolean? = null,
+        supportsAudioOverride: Boolean? = null
+    ): Result<LiteRtModelEntity> = withContext(Dispatchers.IO) {
         runCatching {
             val document = DocumentFile.fromSingleUri(context, uri)
             val sourceName = document?.name?.takeIf { it.isNotBlank() } ?: "imported_litert_model.litertlm"
@@ -388,7 +430,16 @@ class LiteRtModelRepository(
                 backendPreference = LITERT_BACKEND_AUTO,
                 supportsCpu = inferCpuSupport(installedPath),
                 supportsGpu = inferGpuSupport(installedPath),
-                supportsNpu = false
+                supportsNpu = false,
+                supportsVision = supportsVisionOverride
+                    ?: inferLiteRtVisionSupport(installedPath.nameWithoutExtension.ifBlank { sourceName }, installedPath, null),
+                supportsAudio = supportsAudioOverride
+                    ?: inferLiteRtAudioSupport(installedPath.nameWithoutExtension.ifBlank { sourceName }, installedPath, null),
+                maxContextTokens = inferLiteRtMaxContextTokens(
+                    displayName = installedPath.nameWithoutExtension.ifBlank { sourceName },
+                    file = installedPath,
+                    repoId = null
+                )
             )
         }
     }
@@ -415,6 +466,18 @@ class LiteRtModelRepository(
         modelDao.updateBackendPreference(model.id, normalizeLiteRtBackend(backend))
     }
 
+    suspend fun updateMaxContextTokens(model: LiteRtModelEntity, maxContextTokens: Int?) {
+        modelDao.updateMaxContextTokens(model.id, maxContextTokens?.takeIf { it > 0 })
+    }
+
+    suspend fun updateModalitySupport(
+        model: LiteRtModelEntity,
+        supportsVision: Boolean,
+        supportsAudio: Boolean
+    ) {
+        modelDao.updateModalitySupport(model.id, supportsVision, supportsAudio)
+    }
+
     suspend fun removeModel(model: LiteRtModelEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val file = File(model.path)
@@ -433,7 +496,10 @@ class LiteRtModelRepository(
         backendPreference: String,
         supportsCpu: Boolean,
         supportsGpu: Boolean,
-        supportsNpu: Boolean
+        supportsNpu: Boolean,
+        supportsVision: Boolean,
+        supportsAudio: Boolean,
+        maxContextTokens: Int?
     ): LiteRtModelEntity {
         val now = System.currentTimeMillis()
         val size = if (path.isDirectory) path.walkTopDown().filter { it.isFile }.sumOf { it.length() } else path.length()
@@ -448,6 +514,9 @@ class LiteRtModelRepository(
                 supportsCpu = supportsCpu,
                 supportsGpu = supportsGpu,
                 supportsNpu = supportsNpu,
+                supportsVision = supportsVision,
+                supportsAudio = supportsAudio,
+                maxContextTokens = maxContextTokens ?: existing.maxContextTokens,
                 updatedAt = now
             )
             modelDao.update(updated)
@@ -464,6 +533,9 @@ class LiteRtModelRepository(
             supportsCpu = supportsCpu,
             supportsGpu = supportsGpu,
             supportsNpu = supportsNpu,
+            supportsVision = supportsVision,
+            supportsAudio = supportsAudio,
+            maxContextTokens = maxContextTokens,
             createdAt = now,
             updatedAt = now
         )
@@ -583,6 +655,15 @@ class LiteRtModelRepository(
 
     private fun inferCpuSupport(path: File): Boolean =
         inferGpuSupport(path)
+
+    private fun inferLiteRtMaxContextTokens(displayName: String, file: File, repoId: String?): Int? =
+        liteRtEngineMaxTokensFromText(listOf(displayName, file.name, repoId.orEmpty()).joinToString(" "))
+
+    private fun inferLiteRtVisionSupport(displayName: String, file: File, repoId: String?): Boolean =
+        liteRtVisionSupportFromText(listOf(displayName, file.name, repoId.orEmpty()).joinToString(" "))
+
+    private fun inferLiteRtAudioSupport(displayName: String, file: File, repoId: String?): Boolean =
+        liteRtAudioSupportFromText(listOf(displayName, file.name, repoId.orEmpty()).joinToString(" "))
 
     private fun huggingFaceHttpError(code: Int): String =
         if (code == 401 || code == 403) {

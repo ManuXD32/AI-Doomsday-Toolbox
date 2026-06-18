@@ -37,4 +37,19 @@ interface LiteRtModelDao {
 
     @Query("UPDATE litert_models SET backendPreference = :backend, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateBackendPreference(id: Long, backend: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE litert_models SET maxContextTokens = :maxContextTokens, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateMaxContextTokens(
+        id: Long,
+        maxContextTokens: Int?,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
+    @Query("UPDATE litert_models SET supportsVision = :supportsVision, supportsAudio = :supportsAudio, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateModalitySupport(
+        id: Long,
+        supportsVision: Boolean,
+        supportsAudio: Boolean,
+        updatedAt: Long = System.currentTimeMillis()
+    )
 }

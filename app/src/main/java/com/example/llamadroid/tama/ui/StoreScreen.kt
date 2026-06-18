@@ -34,6 +34,8 @@ import com.example.llamadroid.tama.game.FARM_WELL_COST
 import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.data.FarmShopCatalog
+import com.example.llamadroid.ui.components.pressAndHoldRepeat
+import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -457,6 +459,20 @@ fun StoreItemRow(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var qty by remember { mutableIntStateOf(1) }
+    val decrementRepeatState = rememberPressAndHoldRepeatState()
+    val incrementRepeatState = rememberPressAndHoldRepeatState()
+
+    fun decrementQuantity(): Boolean {
+        if (qty <= 1) return false
+        qty -= 1
+        return true
+    }
+
+    fun incrementQuantity(): Boolean {
+        if (qty >= maxQty) return false
+        qty += 1
+        return true
+    }
 
     Surface(
         modifier = Modifier
@@ -526,7 +542,15 @@ fun StoreItemRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (showQuantityControls) {
-                    IconButton(onClick = { if (qty > 1) qty-- }, modifier = Modifier.size(36.dp)) {
+                    IconButton(
+                        onClick = { decrementRepeatState.handleClick { decrementQuantity() } },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .pressAndHoldRepeat(
+                                state = decrementRepeatState,
+                                enabled = qty > 1
+                            ) { decrementQuantity() }
+                    ) {
                         Icon(Icons.Default.Remove, null)
                     }
                     Column(
@@ -546,7 +570,15 @@ fun StoreItemRow(
                             )
                         }
                     }
-                    IconButton(onClick = { if (qty < maxQty) qty++ }, modifier = Modifier.size(36.dp)) {
+                    IconButton(
+                        onClick = { incrementRepeatState.handleClick { incrementQuantity() } },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .pressAndHoldRepeat(
+                                state = incrementRepeatState,
+                                enabled = qty < maxQty
+                            ) { incrementQuantity() }
+                    ) {
                         Icon(Icons.Default.Add, null)
                     }
                 }

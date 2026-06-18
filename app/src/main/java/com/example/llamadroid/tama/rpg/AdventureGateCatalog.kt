@@ -1,6 +1,8 @@
 package com.example.llamadroid.tama.rpg
 
 import com.example.llamadroid.R
+import com.example.llamadroid.tama.data.TAMA_INTROSPECTION_HP_PER_STEP
+import com.example.llamadroid.tama.data.TAMA_INTROSPECTION_HP_STEP
 
 object AdventureGateCatalog {
     const val WORLD_COUNT = 7
@@ -317,15 +319,23 @@ object AdventureGateCatalog {
             relic = profile.equippedRelicId?.let(equipmentById::get)?.takeIf { it.slot == AdventureGateEquipmentSlot.RELIC }
         )
 
-    fun effectiveStats(profile: AdventureGateProfile, educationLevel: Float = profile.educationLevel): AdventureGateStats {
+    fun effectiveStats(
+        profile: AdventureGateProfile,
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel,
+        exerciseLevel: Float = profile.exerciseLevel
+    ): AdventureGateStats {
         val base = AdventureGateCombatEngine.baseStatsForLevel(profile.level)
         val bonuses = loadoutForProfile(profile).equipment.map { it.effect.statBonus }
         val studyMagicBonus = (educationLevel.coerceAtLeast(0f) / 15f).toInt()
         val studyManaBonus = (educationLevel.coerceAtLeast(0f) / 10f).toInt() * 4
+        val exerciseAttackBonus = (exerciseLevel.coerceAtLeast(0f) / 15f).toInt()
+        val introspectionHpBonus =
+            (introspectionLevel.coerceAtLeast(0f) / TAMA_INTROSPECTION_HP_STEP).toInt() * TAMA_INTROSPECTION_HP_PER_STEP
         return AdventureGateStats(
-            maxHp = (base.maxHp + bonuses.sumOf { it.maxHp }).coerceAtLeast(1),
+            maxHp = (base.maxHp + bonuses.sumOf { it.maxHp } + introspectionHpBonus).coerceAtLeast(1),
             maxMana = (base.maxMana + bonuses.sumOf { it.maxMana } + studyManaBonus).coerceAtLeast(0),
-            attack = (base.attack + bonuses.sumOf { it.attack }).coerceAtLeast(1),
+            attack = (base.attack + bonuses.sumOf { it.attack } + exerciseAttackBonus).coerceAtLeast(1),
             magic = (base.magic + bonuses.sumOf { it.magic } + studyMagicBonus).coerceAtLeast(1),
             defense = (base.defense + bonuses.sumOf { it.defense }).coerceAtLeast(0),
             speed = (base.speed + bonuses.sumOf { it.speed }).coerceAtLeast(1),

@@ -13,7 +13,7 @@ class LiteRtGpuDiagnosticsTest {
 
         val cacheDir = liteRtLmEngineCacheDir(cacheRoot, modelId = 42L, backendLabel = "GPU")
 
-        assertEquals(File(cacheRoot, "litert_lm/42/GPU").absolutePath, cacheDir.absolutePath)
+        assertEquals(File(cacheRoot, "litert_lm/42/GPU/v2/ctx_default").absolutePath, cacheDir.absolutePath)
         assertTrue(cacheDir.isDirectory)
     }
 
@@ -23,8 +23,49 @@ class LiteRtGpuDiagnosticsTest {
 
         val cacheDir = liteRtLmEngineCacheDir(cacheRoot, modelId = 42L, backendLabel = "CPU")
 
-        assertEquals(File(cacheRoot, "litert_lm/42/CPU").absolutePath, cacheDir.absolutePath)
+        assertEquals(File(cacheRoot, "litert_lm/42/CPU/v2/ctx_default").absolutePath, cacheDir.absolutePath)
         assertTrue(cacheDir.isDirectory)
+    }
+
+    @Test
+    fun `MTP cache dir is isolated from normal backend cache`() {
+        val cacheRoot = createTempDirectory("litert-cache").toFile()
+
+        val cacheDir = liteRtLmEngineCacheDir(
+            cacheRoot,
+            modelId = 42L,
+            backendLabel = "GPU",
+            mtpEnabled = true
+        )
+
+        assertEquals(File(cacheRoot, "litert_lm/42/GPU_MTP/v2/ctx_default").absolutePath, cacheDir.absolutePath)
+        assertTrue(cacheDir.isDirectory)
+    }
+
+    @Test
+    fun `GPU cache dir is isolated by context and can be purged`() {
+        val cacheRoot = createTempDirectory("litert-cache").toFile()
+        val cacheDir = liteRtLmEngineCacheDir(
+            cacheRoot,
+            modelId = 42L,
+            backendLabel = "GPU",
+            mtpEnabled = false,
+            contextTokens = 16000
+        )
+        File(cacheDir, "compiled.bin").writeText("cached")
+
+        assertEquals(File(cacheRoot, "litert_lm/42/GPU/v2/ctx_16000").absolutePath, cacheDir.absolutePath)
+        assertTrue(cacheDir.exists())
+        assertTrue(
+            purgeLiteRtLmEngineCacheDir(
+                cacheRoot,
+                modelId = 42L,
+                backendLabel = "GPU",
+                mtpEnabled = false,
+                contextTokens = 16000
+            )
+        )
+        assertTrue(!cacheDir.exists())
     }
 
     @Test

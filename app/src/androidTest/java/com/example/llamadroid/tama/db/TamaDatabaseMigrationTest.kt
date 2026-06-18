@@ -249,6 +249,73 @@ class TamaDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate40To41_addsIntrospectionLevel() {
+        helper.createDatabase(TEST_DB, 40).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            41,
+            true,
+            TamaMigrations.MIGRATION_40_41
+        )
+
+        migratedDb.query("PRAGMA table_info(tama_pets)").use { cursor ->
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "introspectionLevel") {
+                    found = true
+                    assertEquals("REAL", cursor.getString(cursor.getColumnIndexOrThrow("type")))
+                    assertEquals(1, cursor.getInt(cursor.getColumnIndexOrThrow("notnull")))
+                    assertEquals("0", cursor.getString(cursor.getColumnIndexOrThrow("dflt_value")))
+                }
+            }
+            assertTrue("introspectionLevel column should exist", found)
+        }
+    }
+
+    @Test
+    fun migrate41To42_addsExerciseLevelAndMarketQuotes() {
+        helper.createDatabase(TEST_DB, 41).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            42,
+            true,
+            TamaMigrations.MIGRATION_41_42
+        )
+
+        migratedDb.query("PRAGMA table_info(tama_pets)").use { cursor ->
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "exerciseLevel") {
+                    found = true
+                    assertEquals("REAL", cursor.getString(cursor.getColumnIndexOrThrow("type")))
+                    assertEquals(1, cursor.getInt(cursor.getColumnIndexOrThrow("notnull")))
+                    assertEquals("0", cursor.getString(cursor.getColumnIndexOrThrow("dflt_value")))
+                }
+            }
+            assertTrue("exerciseLevel column should exist", found)
+        }
+        assertTableExists(migratedDb, "tama_market_quotes")
+        migratedDb.query("PRAGMA table_info(tama_market_quotes)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            }
+            assertTrue(columns.contains("petId"))
+            assertTrue(columns.contains("itemId"))
+            assertTrue(columns.contains("quoteWeekKey"))
+            assertTrue(columns.contains("currentPrice"))
+            assertTrue(columns.contains("unitsSoldSinceRefresh"))
+            assertTrue(columns.contains("updatedAt"))
+        }
+    }
+
     private fun assertTableExists(
         db: androidx.sqlite.db.SupportSQLiteDatabase,
         tableName: String

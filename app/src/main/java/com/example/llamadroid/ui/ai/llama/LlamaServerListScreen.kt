@@ -74,6 +74,8 @@ import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.model.supportsLiteRtAudio
+import com.example.llamadroid.data.model.supportsLiteRtVision
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.LiteRtModelRepository
@@ -221,6 +223,9 @@ private fun LlamaServerDialog(
         mutableStateOf(initialServer?.whisperLanguage?.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE }
             ?: LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE)
     }
+    var preferWhisperAudioTranscription by remember(dialogKey) {
+        mutableStateOf(initialServer?.preferWhisperAudioTranscription ?: false)
+    }
     var liteRtModelId by remember(dialogKey) { mutableStateOf(initialServer?.liteRtModelId) }
     var liteRtBackend by remember(dialogKey) {
         mutableStateOf(normalizeLiteRtBackend(initialServer?.liteRtBackend))
@@ -261,6 +266,7 @@ private fun LlamaServerDialog(
     var defaultKnowledgeBaseMaxResults by remember(dialogKey) { mutableStateOf(initialToolDefaults.knowledgeBaseMaxResults) }
     var defaultImageGenerationEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.imageGenerationEnabled) }
     var defaultImageIterationEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.imageIterationEnabled) }
+    var defaultBackgroundRemovalEnabled by remember(dialogKey) { mutableStateOf(initialToolDefaults.backgroundRemovalEnabled) }
     var defaultMaxToolRounds by remember(dialogKey) { mutableStateOf(initialToolDefaults.maxToolRounds) }
 
     val portInt = port.toIntOrNull() ?: 8080
@@ -273,6 +279,13 @@ private fun LlamaServerDialog(
     val selectedLiteRtModel = remember(liteRtModels, liteRtModelId) {
         liteRtModels.firstOrNull { it.id == liteRtModelId }
     }
+    val directAudioInputAvailable = remember(engine, supportsAudio) {
+        supportsAudio && (
+            engine == LlamaServerEntity.ENGINE_LLAMA_SERVER ||
+                engine == LlamaServerEntity.ENGINE_LLAMA_SWAP ||
+                engine == LlamaServerEntity.ENGINE_LITERT_LM
+            )
+    }
     LaunchedEffect(engine, liteRtModels, selectedLiteRtModel) {
         if (engine == LlamaServerEntity.ENGINE_LITERT_LM && selectedLiteRtModel == null) {
             val firstModel = liteRtModels.firstOrNull()
@@ -280,6 +293,12 @@ private fun LlamaServerDialog(
                 liteRtModelId = firstModel.id
                 if (name.isBlank()) name = firstModel.displayName
             }
+        }
+    }
+    LaunchedEffect(engine, selectedLiteRtModel?.id) {
+        if (engine == LlamaServerEntity.ENGINE_LITERT_LM) {
+            supportsVision = selectedLiteRtModel?.supportsLiteRtVision() == true
+            supportsAudio = selectedLiteRtModel?.supportsLiteRtAudio() == true
         }
     }
     val canSave = name.isNotBlank() && when (engine) {
@@ -504,8 +523,8 @@ private fun LlamaServerDialog(
                             engine = LlamaServerEntity.ENGINE_LITERT_LM
                             host = "local"
                             port = "0"
-                            supportsVision = false
-                            supportsAudio = false
+                            supportsVision = selectedLiteRtModel?.supportsLiteRtVision() == true
+                            supportsAudio = selectedLiteRtModel?.supportsLiteRtAudio() == true
                             if (liteRtModelId == null) {
                                 liteRtModelId = liteRtModels.firstOrNull()?.id
                             }
@@ -796,91 +815,116 @@ private fun LlamaServerDialog(
                     }
                 }
 
-                if (engine != LlamaServerEntity.ENGINE_LITERT_LM) {
-                    Text(
-                        text = stringResource(R.string.llama_whisper_fallback_title),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = whisperModelPath.ifBlank { stringResource(R.string.llama_whisper_model_auto) },
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text(stringResource(R.string.llama_whisper_model_label)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            trailingIcon = {
-                                IconButton(
-                                    onClick = { showWhisperModelMenu = !showWhisperModelMenu },
-                                    enabled = whisperModelPaths.isNotEmpty()
-                                ) {
-                                    Icon(
-                                        Icons.Default.KeyboardArrowDown,
-                                        contentDescription = stringResource(R.string.llama_whisper_model_label)
-                                    )
-                                }
-                            }
+                Text(
+                    text = stringResource(R.string.llama_whisper_fallback_title),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                if (directAudioInputAvailable) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = stringResource(R.string.llama_use_whisper_for_audio),
+                            style = MaterialTheme.typography.bodyMedium
                         )
-                        androidx.compose.material3.DropdownMenu(
-                            expanded = showWhisperModelMenu && whisperModelPaths.isNotEmpty(),
-                            onDismissRequest = { showWhisperModelMenu = false }
-                        ) {
-                            androidx.compose.material3.DropdownMenuItem(
-                                text = { Text(stringResource(R.string.llama_whisper_model_auto)) },
-                                onClick = {
-                                    whisperModelPath = ""
-                                    showWhisperModelMenu = false
-                                }
-                            )
-                            whisperModelPaths.forEach { path ->
-                                androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text(File(path).name) },
-                                    onClick = {
-                                        whisperModelPath = path
-                                        showWhisperModelMenu = false
-                                    }
+                        Switch(
+                            checked = preferWhisperAudioTranscription,
+                            onCheckedChange = { preferWhisperAudioTranscription = it }
+                        )
+                    }
+                    Text(
+                        text = stringResource(R.string.llama_use_whisper_for_audio_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Text(
+                        text = stringResource(R.string.llama_whisper_required_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = whisperModelPath.ifBlank { stringResource(R.string.llama_whisper_model_auto) },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(stringResource(R.string.llama_whisper_model_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { showWhisperModelMenu = !showWhisperModelMenu },
+                                enabled = whisperModelPaths.isNotEmpty()
+                            ) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowDown,
+                                    contentDescription = stringResource(R.string.llama_whisper_model_label)
                                 )
                             }
                         }
-                    }
-                    if (whisperModelPaths.isEmpty()) {
-                        Text(
-                            text = stringResource(R.string.llama_whisper_no_models),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        OutlinedTextField(
-                            value = WhisperLanguages.languages.firstOrNull { it.first == whisperLanguage }?.second
-                                ?: stringResource(R.string.whisper_auto_detect),
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text(stringResource(R.string.llama_whisper_language_label)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            trailingIcon = {
-                                IconButton(onClick = { showWhisperLanguageMenu = !showWhisperLanguageMenu }) {
-                                    Icon(
-                                        Icons.Default.KeyboardArrowDown,
-                                        contentDescription = stringResource(R.string.llama_whisper_language_label)
-                                    )
-                                }
+                    )
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = showWhisperModelMenu && whisperModelPaths.isNotEmpty(),
+                        onDismissRequest = { showWhisperModelMenu = false }
+                    ) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text(stringResource(R.string.llama_whisper_model_auto)) },
+                            onClick = {
+                                whisperModelPath = ""
+                                showWhisperModelMenu = false
                             }
                         )
-                        androidx.compose.material3.DropdownMenu(
-                            expanded = showWhisperLanguageMenu,
-                            onDismissRequest = { showWhisperLanguageMenu = false }
-                        ) {
-                            WhisperLanguages.languages.forEach { (code, label) ->
-                                androidx.compose.material3.DropdownMenuItem(
-                                    text = { Text(label) },
-                                    onClick = {
-                                        whisperLanguage = code
-                                        showWhisperLanguageMenu = false
-                                    }
+                        whisperModelPaths.forEach { path ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(File(path).name) },
+                                onClick = {
+                                    whisperModelPath = path
+                                    showWhisperModelMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+                if (whisperModelPaths.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.llama_whisper_no_models),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = WhisperLanguages.languages.firstOrNull { it.first == whisperLanguage }?.second
+                            ?: stringResource(R.string.whisper_auto_detect),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(stringResource(R.string.llama_whisper_language_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = {
+                            IconButton(onClick = { showWhisperLanguageMenu = !showWhisperLanguageMenu }) {
+                                Icon(
+                                    Icons.Default.KeyboardArrowDown,
+                                    contentDescription = stringResource(R.string.llama_whisper_language_label)
                                 )
                             }
+                        }
+                    )
+                    androidx.compose.material3.DropdownMenu(
+                        expanded = showWhisperLanguageMenu,
+                        onDismissRequest = { showWhisperLanguageMenu = false }
+                    ) {
+                        WhisperLanguages.languages.forEach { (code, label) ->
+                            androidx.compose.material3.DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    whisperLanguage = code
+                                    showWhisperLanguageMenu = false
+                                }
+                            )
                         }
                     }
                 }
@@ -934,6 +978,8 @@ private fun LlamaServerDialog(
                     onImageGenerationEnabledChange = { defaultImageGenerationEnabled = it },
                     imageIterationEnabled = defaultImageIterationEnabled,
                     onImageIterationEnabledChange = { defaultImageIterationEnabled = it },
+                    backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
+                    onBackgroundRemovalEnabledChange = { defaultBackgroundRemovalEnabled = it },
                     maxToolRounds = defaultMaxToolRounds,
                     onMaxToolRoundsChange = { defaultMaxToolRounds = it }
                 )
@@ -962,8 +1008,8 @@ private fun LlamaServerDialog(
                             host = if (isLiteRtEngine) "local" else host.trim(),
                             port = if (isLiteRtEngine) 0 else portInt,
                             engine = engine,
-                            supportsVision = if (isLiteRtEngine) false else supportsVision,
-                            supportsAudio = if (isLiteRtEngine) false else supportsAudio,
+                            supportsVision = if (isLiteRtEngine) selectedLiteRtModel?.supportsLiteRtVision() == true else supportsVision,
+                            supportsAudio = if (isLiteRtEngine) selectedLiteRtModel?.supportsLiteRtAudio() == true else supportsAudio,
                             modelName = when (engine) {
                                 LlamaServerEntity.ENGINE_OLLAMA,
                                 LlamaServerEntity.ENGINE_LLAMA_SWAP -> ollamaModelName.trim().ifBlank { null }
@@ -974,6 +1020,7 @@ private fun LlamaServerDialog(
                             liteRtBackend = if (isLiteRtEngine) normalizeLiteRtBackend(liteRtBackend) else LITERT_BACKEND_AUTO,
                             whisperModelPath = whisperModelPath.ifBlank { null },
                             whisperLanguage = whisperLanguage.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE },
+                            preferWhisperAudioTranscription = preferWhisperAudioTranscription && directAudioInputAvailable,
                             defaultApiParams = buildServerDefaultToolApiParams(
                                 toolsEnabled = defaultToolsEnabled,
                                 webSearchEnabled = defaultWebSearchEnabled,
@@ -995,6 +1042,7 @@ private fun LlamaServerDialog(
                                 alarmToolsEnabled = defaultAlarmToolsEnabled,
                                 imageGenerationEnabled = defaultImageGenerationEnabled,
                                 imageIterationEnabled = defaultImageIterationEnabled,
+                                backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
                                 maxToolRounds = defaultMaxToolRounds
                             )
                         )
@@ -1056,6 +1104,8 @@ private fun NativeServerToolDefaultsSection(
     onImageGenerationEnabledChange: (Boolean) -> Unit,
     imageIterationEnabled: Boolean,
     onImageIterationEnabledChange: (Boolean) -> Unit,
+    backgroundRemovalEnabled: Boolean,
+    onBackgroundRemovalEnabledChange: (Boolean) -> Unit,
     maxToolRounds: Int,
     onMaxToolRoundsChange: (Int) -> Unit
 ) {
@@ -1244,6 +1294,11 @@ private fun NativeServerToolDefaultsSection(
                         onCheckedChange = onImageIterationEnabledChange
                     )
                 }
+                ServerToolDefaultSwitchRow(
+                    title = stringResource(R.string.llama_tool_bgr),
+                    checked = backgroundRemovalEnabled,
+                    onCheckedChange = onBackgroundRemovalEnabledChange
+                )
                 DraftIntTextField(
                     value = maxToolRounds,
                     onValueChange = onMaxToolRoundsChange,
@@ -1310,6 +1365,7 @@ private fun buildServerDefaultToolApiParams(
     alarmToolsEnabled: Boolean,
     imageGenerationEnabled: Boolean,
     imageIterationEnabled: Boolean,
+    backgroundRemovalEnabled: Boolean,
     maxToolRounds: Int
 ): String {
     return Gson().toJson(
@@ -1334,6 +1390,7 @@ private fun buildServerDefaultToolApiParams(
             alarmToolsEnabled = alarmToolsEnabled,
             imageGenerationEnabled = imageGenerationEnabled,
             imageIterationEnabled = imageIterationEnabled,
+            backgroundRemovalEnabled = backgroundRemovalEnabled,
             maxToolRounds = maxToolRounds
         ).toParamMap()
     )
@@ -1456,7 +1513,7 @@ fun LlamaServerCard(
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
-                server.whisperModelPath?.takeIf { it.isNotBlank() }?.let {
+                if (server.preferWhisperAudioTranscription || !server.whisperModelPath.isNullOrBlank()) {
                     LlamaServerBadge(
                         label = stringResource(R.string.llama_badge_whisper),
                         containerColor = MaterialTheme.colorScheme.surfaceVariant,

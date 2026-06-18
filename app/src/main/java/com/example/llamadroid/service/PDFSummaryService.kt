@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.PowerManager
 import android.widget.Toast
 import com.example.llamadroid.R
+import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.NoteEntity
@@ -103,7 +104,7 @@ Chunk summaries to unify:"""
 
     suspend fun refreshBackendMetadata(context: Context): Result<RemoteSummaryMetadata> = withContext(Dispatchers.IO) {
         val settingsRepo = SettingsRepository(context)
-        val client = RemoteSummaryClientFactory.fromSnapshot(settingsRepo.pdfSummarySettings.snapshot())
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.pdfSummarySettings.snapshot())
         client.fetchMetadata().onSuccess { metadata ->
             persistMetadata(settingsRepo, metadata)
             PdfSummaryStateHolder.setMetadataMessage(
@@ -125,7 +126,7 @@ Chunk summaries to unify:"""
     suspend fun estimateChunkCount(context: Context, text: String): Result<RemoteSummaryPlanEstimate> = withContext(Dispatchers.IO) {
         val settingsRepo = SettingsRepository(context)
         val snapshot = settingsRepo.pdfSummarySettings.snapshot()
-        val client = RemoteSummaryClientFactory.fromSnapshot(snapshot)
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
         val orchestrator = RemoteSummaryOrchestrator(client)
         val summaryPrompt = snapshot.summaryPrompt ?: DEFAULT_SUMMARY_PROMPT
         runCatching {
@@ -144,7 +145,8 @@ Chunk summaries to unify:"""
     fun startSummarization(
         context: Context,
         text: String,
-        pdfFileName: String = "PDF"
+        pdfFileName: String = "PDF",
+        settingsOverride: RemoteSummarySettingsSnapshot? = null
     ) {
         currentJob?.cancel()
         isCancelled = false
@@ -166,8 +168,8 @@ Chunk summaries to unify:"""
 
         currentJob = serviceScope.launch {
             val settingsRepo = SettingsRepository(context)
-            val snapshot = settingsRepo.pdfSummarySettings.snapshot()
-            val client = RemoteSummaryClientFactory.fromSnapshot(snapshot)
+            val snapshot = settingsOverride ?: settingsRepo.pdfSummarySettings.snapshot()
+            val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
             val orchestrator = RemoteSummaryOrchestrator(client)
             currentClient = client
 

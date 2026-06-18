@@ -9,6 +9,30 @@ import org.junit.Test
 
 class LlamaServerChatServiceTest {
     @Test
+    fun `generationElapsedMs starts from first token when present`() {
+        assertEquals(
+            1_500L,
+            generationElapsedMs(
+                requestStartedAtMs = 1_000L,
+                firstTokenReceivedAtMs = 3_500L,
+                nowMs = 5_000L
+            )
+        )
+    }
+
+    @Test
+    fun `generationElapsedMs falls back to zero before first token`() {
+        assertEquals(
+            0L,
+            generationElapsedMs(
+                requestStartedAtMs = 1_000L,
+                firstTokenReceivedAtMs = null,
+                nowMs = 5_000L
+            )
+        )
+    }
+
+    @Test
     fun `buildLlamaServerChatRequestPayload disables reasoning when thinking is off`() {
         val payload = buildLlamaServerChatRequestPayload(
             messages = listOf(

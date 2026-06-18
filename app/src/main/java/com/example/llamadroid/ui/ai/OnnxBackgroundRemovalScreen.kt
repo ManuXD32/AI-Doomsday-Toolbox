@@ -89,6 +89,7 @@ import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.OnnxRuntimeOptions
 import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
+import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.OnnxBackgroundRemovalService
 import com.example.llamadroid.service.OnnxBackgroundRemovalState
 import com.example.llamadroid.service.OnnxBackgroundRemovalStateStore
@@ -96,6 +97,7 @@ import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -104,6 +106,11 @@ import java.util.Date
 import java.util.Locale
 
 private data class BgrInputImage(val path: String, val name: String)
+
+private const val BGR_WORKER_PROCESS_SUFFIX = ":onnx_bgr"
+private const val BGR_WORKER_EXIT_STALE_MS = 8_000L
+private const val BGR_WORKER_STALE_MS = 30_000L
+private val BGR_RESIZE_PRESETS = listOf(256, 384, 512, 768, 1024, 1536, 2048)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -127,9 +134,12 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
     var maskSoftness by rememberSaveable { mutableFloatStateOf(1f) }
     var maskContrast by rememberSaveable { mutableFloatStateOf(1f) }
     var exportMask by rememberSaveable { mutableStateOf(false) }
+    var resizeBeforeProcessing by rememberSaveable { mutableStateOf(true) }
+    var resizeMaxEdge by rememberSaveable { mutableIntStateOf(512) }
     var preserveNames by rememberSaveable { mutableStateOf(true) }
     var graphMenuExpanded by remember { mutableStateOf(false) }
     var modelMenuExpanded by remember { mutableStateOf(false) }
+    var resizeMenuExpanded by remember { mutableStateOf(false) }
     var galleryFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var fullscreenImage by remember { mutableStateOf<File?>(null) }
     var pendingDelete by remember { mutableStateOf<File?>(null) }
@@ -148,6 +158,87 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
 
     LaunchedEffect(Unit) {
         refreshGallery()
+        var lastCompleteAt = 0L
+        while (true) {
+            val runtimeState = withContext(Dispatchers.IO) {
+                OnnxBackgroundRemovalStorage.readRuntimeState(context)
+            }
+            if (runtimeState != null) {
+                val now = System.currentTimeMillis()
+                when (runtimeState.state) {
+                    "RUNNING" -> {
+                        val staleMs = now - runtimeState.updatedAtEpochMs
+                        val exitSummary = if (staleMs >= BGR_WORKER_EXIT_STALE_MS && runtimeState.startedAtEpochMs > 0L) {
+                            GenerationDiagnosticsStore.describeRecentProcessExit(
+                                processNameSuffix = BGR_WORKER_PROCESS_SUFFIX,
+                                sinceTimestamp = runtimeState.startedAtEpochMs
+                            )
+                        } else {
+                            null
+                        }
+                        when {
+                            exitSummary != null -> {
+                                val message = context.getString(R.string.bgr_worker_stopped, exitSummary)
+                                OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(message))
+                                withContext(Dispatchers.IO) {
+                                    OnnxBackgroundRemovalStorage.writeRuntimeState(
+                                        context,
+                                        runtimeState.copy(
+                                            state = "ERROR",
+                                            status = message,
+                                            message = message
+                                        )
+                                    )
+                                }
+                            }
+                            staleMs >= BGR_WORKER_STALE_MS -> {
+                                val message = context.getString(R.string.bgr_worker_stale)
+                                OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(message))
+                                withContext(Dispatchers.IO) {
+                                    OnnxBackgroundRemovalStorage.writeRuntimeState(
+                                        context,
+                                        runtimeState.copy(
+                                            state = "ERROR",
+                                            status = message,
+                                            message = message
+                                        )
+                                    )
+                                }
+                            }
+                            else -> {
+                                OnnxBackgroundRemovalStateStore.updateState(
+                                    OnnxBackgroundRemovalState.Running(
+                                        progress = runtimeState.progress,
+                                        status = runtimeState.status,
+                                        completed = runtimeState.completed,
+                                        total = runtimeState.total
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    "COMPLETE" -> if (runtimeState.updatedAtEpochMs != lastCompleteAt) {
+                        lastCompleteAt = runtimeState.updatedAtEpochMs
+                        OnnxBackgroundRemovalStateStore.updateState(
+                            OnnxBackgroundRemovalState.Complete(
+                                outputPaths = runtimeState.outputPaths,
+                                failed = runtimeState.failed,
+                                durationMs = runtimeState.durationMs
+                            )
+                        )
+                        refreshGallery()
+                    }
+                    "ERROR" -> {
+                        OnnxBackgroundRemovalStateStore.updateState(
+                            OnnxBackgroundRemovalState.Error(runtimeState.message ?: runtimeState.status)
+                        )
+                    }
+                }
+            } else if (OnnxBackgroundRemovalStateStore.state.value is OnnxBackgroundRemovalState.Running) {
+                OnnxBackgroundRemovalStateStore.reset()
+            }
+            delay(750)
+        }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -311,6 +402,42 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                             }
                                         }
                                     }
+                                    BgrSwitchRow(stringResource(R.string.bgr_resize_before_processing), resizeBeforeProcessing) {
+                                        resizeBeforeProcessing = it
+                                    }
+                                    Text(
+                                        stringResource(R.string.bgr_resize_before_processing_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    ExposedDropdownMenuBox(
+                                        expanded = resizeMenuExpanded && resizeBeforeProcessing,
+                                        onExpandedChange = { if (resizeBeforeProcessing) resizeMenuExpanded = it }
+                                    ) {
+                                        OutlinedTextField(
+                                            value = stringResource(R.string.bgr_resize_resolution_value, resizeMaxEdge),
+                                            onValueChange = {},
+                                            readOnly = true,
+                                            enabled = resizeBeforeProcessing,
+                                            label = { Text(stringResource(R.string.bgr_resize_resolution_label)) },
+                                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = resizeMenuExpanded) },
+                                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                                        )
+                                        ExposedDropdownMenu(
+                                            expanded = resizeMenuExpanded && resizeBeforeProcessing,
+                                            onDismissRequest = { resizeMenuExpanded = false }
+                                        ) {
+                                            BGR_RESIZE_PRESETS.forEach { preset ->
+                                                DropdownMenuItem(
+                                                    text = { Text(stringResource(R.string.bgr_resize_resolution_value, preset)) },
+                                                    onClick = {
+                                                        resizeMaxEdge = preset
+                                                        resizeMenuExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -330,9 +457,27 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                         item {
                             when (val runningState = state) {
                                 is OnnxBackgroundRemovalState.Running -> {
-                                    LinearProgressIndicator(progress = { runningState.progress }, modifier = Modifier.fillMaxWidth())
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(runningState.status, style = MaterialTheme.typography.bodySmall)
+                                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Text(
+                                                stringResource(R.string.bgr_progress_title),
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            LinearProgressIndicator(progress = { runningState.progress }, modifier = Modifier.fillMaxWidth())
+                                            Text(runningState.status, style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                stringResource(
+                                                    R.string.bgr_progress_summary,
+                                                    runningState.completed,
+                                                    runningState.total,
+                                                    (runningState.progress * 100f).toInt()
+                                                ),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
                                 }
                                 is OnnxBackgroundRemovalState.Error -> Text(runningState.message, color = MaterialTheme.colorScheme.error)
                                 is OnnxBackgroundRemovalState.Complete -> Text(stringResource(R.string.bgr_complete, runningState.outputPaths.size, runningState.failed))
@@ -361,6 +506,8 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                                 maskSoftness = maskSoftness,
                                                 maskContrast = maskContrast,
                                                 exportMask = exportMask,
+                                                resizeBeforeProcessing = resizeBeforeProcessing,
+                                                resizeMaxEdge = resizeMaxEdge,
                                                 preserveSourceNames = preserveNames
                                             )
                                         )
@@ -371,7 +518,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                     Text(stringResource(R.string.bgr_start))
                                 }
                                 if (isRunning) {
-                                    OutlinedButton(onClick = { context.startService(OnnxBackgroundRemovalService.cancelIntent(context)) }) {
+                                    OutlinedButton(onClick = { OnnxBackgroundRemovalService.cancel(context) }) {
                                         Text(stringResource(R.string.action_cancel))
                                     }
                                 }

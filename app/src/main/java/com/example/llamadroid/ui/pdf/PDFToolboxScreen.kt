@@ -923,7 +923,6 @@ fun PDFToolboxScreen(navController: NavController) {
                     }
                     
                     "translate_ocr_pdf" -> {
-                        val selectedPdf = selectedPdfs.firstOrNull()
                         Text(
                             stringResource(R.string.pdf_translate_ocr_header),
                             style = MaterialTheme.typography.titleLarge,
@@ -939,38 +938,47 @@ fun PDFToolboxScreen(navController: NavController) {
                         PDFTranslationEmbeddedSettings(settingsRepo = settingsRepo)
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        if (selectedPdf == null) {
-                            OutlinedButton(
-                                onClick = { singlePdfPicker.launch(arrayOf("application/pdf")) },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Icon(Icons.Default.PictureAsPdf, null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.pdf_select))
-                            }
-                        } else {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                        OutlinedButton(
+                            onClick = { pdfPicker.launch(arrayOf("application/pdf")) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.PictureAsPdf, null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.pdf_select_multiple))
+                        }
+
+                        if (selectedPdfs.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(stringResource(R.string.pdf_selected_count, selectedPdfs.size), fontWeight = FontWeight.Medium)
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            selectedPdfs.forEachIndexed { index, uri ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp),
+                                    shape = RoundedCornerShape(8.dp)
                                 ) {
-                                    Text("📄", style = MaterialTheme.typography.headlineSmall)
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Text(
-                                        selectedPdf.lastPathSegment ?: stringResource(R.string.pdf_selected_file),
-                                        modifier = Modifier.weight(1f),
-                                        maxLines = 1
-                                    )
-                                    IconButton(
-                                        onClick = {
-                                            selectedPdfStrings = emptyList()
-                                            ocrProgressMessage = ""
-                                        }
+                                    Row(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.Close, stringResource(R.string.action_remove))
+                                        Text("📄", style = MaterialTheme.typography.titleMedium)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            "${index + 1}. ${uri.lastPathSegment ?: stringResource(R.string.pdf_selected_file)}",
+                                            modifier = Modifier.weight(1f),
+                                            maxLines = 1
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                selectedPdfStrings = selectedPdfStrings.toMutableList().apply { removeAt(index) }
+                                                if (selectedPdfStrings.isEmpty()) ocrProgressMessage = ""
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, stringResource(R.string.action_remove), modifier = Modifier.size(18.dp))
+                                        }
                                     }
                                 }
                             }
@@ -989,12 +997,12 @@ fun PDFToolboxScreen(navController: NavController) {
                             Button(
                                 onClick = {
                                     ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
-                                    if (!PDFTranslationJobService.startTextLayerPdfTranslation(context, selectedPdf)) {
+                                    if (!PDFTranslationJobService.startTextLayerPdfTranslationBatch(context, selectedPdfs)) {
                                         Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
-                                enabled = !isProcessing && !pdfTranslationJobState.isRunning
+                                enabled = selectedPdfs.isNotEmpty() && !isProcessing && !pdfTranslationJobState.isRunning
                             ) {
                                 if (pdfTranslationJobState.isRunning) {
                                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)

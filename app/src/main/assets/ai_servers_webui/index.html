@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__SERVER_NAME__</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body data-server-type="__SERVER_TYPE__" data-server-name="__SERVER_NAME__" data-server-emoji="__SERVER_EMOJI__">
+  <div class="app-shell">
+    <header class="hero">
+      <div class="hero-badge" id="serverEmoji">__SERVER_EMOJI__</div>
+      <div>
+        <p class="eyebrow" data-i18n="eyebrow">AI Tool Server</p>
+        <h1 id="serverName">__SERVER_NAME__</h1>
+        <p class="subtitle" data-i18n="subtitle">Run this toolbox from your browser, phone, or laptop.</p>
+      </div>
+      <div class="hero-actions">
+        <select id="languageSelect" aria-label="Language">
+          <option value="en">English</option>
+          <option value="es">Español</option>
+        </select>
+        <button id="logoutButton" class="ghost hidden" type="button" data-i18n="logout">Log out</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="loginCard" class="panel hidden">
+        <div class="section-title">
+          <h2 data-i18n="loginTitle">Private access</h2>
+          <p data-i18n="loginBody">Sign in with a server user to continue.</p>
+        </div>
+        <form id="loginForm" class="form-grid">
+          <label>
+            <span data-i18n="username">Username</span>
+            <input id="username" autocomplete="username" />
+          </label>
+          <label>
+            <span data-i18n="password">Password</span>
+            <input id="password" type="password" autocomplete="current-password" />
+          </label>
+          <button class="primary" type="submit" data-i18n="signIn">Sign in</button>
+        </form>
+      </section>
+
+      <section class="panel controls-panel">
+        <div class="section-title">
+          <h2 data-i18n="controls">Controls</h2>
+          <p id="modeHint">Loading options...</p>
+        </div>
+        <form id="jobForm" class="form-grid">
+          <div class="field-row">
+            <label>
+              <span data-i18n="engine">Engine</span>
+              <select id="engine"></select>
+            </label>
+            <label>
+              <span data-i18n="mode">Mode</span>
+              <select id="mode"></select>
+            </label>
+          </div>
+          <div id="controlsHost" class="dynamic-fields"></div>
+          <button id="startButton" class="primary sticky-action" type="submit" data-i18n="startJob">Start task</button>
+        </form>
+      </section>
+
+      <section class="panel preview-panel">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="tasks" type="button" data-i18n="tasks">Tasks</button>
+          <button class="tab" data-tab="gallery" type="button" data-i18n="gallery">Gallery</button>
+          <button class="tab" data-tab="status" type="button" data-i18n="status">Status</button>
+        </div>
+
+        <div id="tasksTab" class="tab-panel active">
+          <div id="jobsList" class="list"></div>
+        </div>
+
+        <div id="galleryTab" class="tab-panel">
+          <div id="galleryList" class="gallery"></div>
+        </div>
+
+        <div id="statusTab" class="tab-panel">
+          <div class="status-grid">
+            <div class="status-pill">
+              <span data-i18n="server">Server</span>
+              <strong id="healthStatus">...</strong>
+            </div>
+            <div class="status-pill">
+              <span data-i18n="access">Access</span>
+              <strong id="accessMode">...</strong>
+            </div>
+          </div>
+          <div id="urlList" class="url-list"></div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

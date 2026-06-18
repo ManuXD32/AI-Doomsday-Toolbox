@@ -29,6 +29,9 @@ data class LiteRtModelEntity(
     val supportsCpu: Boolean = true,
     val supportsGpu: Boolean = true,
     val supportsNpu: Boolean = false,
+    val supportsVision: Boolean = false,
+    val supportsAudio: Boolean = false,
+    val maxContextTokens: Int? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -57,9 +60,61 @@ fun LiteRtModelEntity.isLikelyLiteRtGpuPackage(): Boolean {
 }
 
 fun LiteRtModelEntity.defaultLiteRtEngineMaxTokens(): Int? =
-    liteRtEngineMaxTokensFromText(
-        listOf(displayName, filename, repoId.orEmpty()).joinToString(" ")
-    )
+    advertisedLiteRtMaxContextTokens()
+
+fun LiteRtModelEntity.advertisedLiteRtMaxContextTokens(): Int? =
+    maxContextTokens?.takeIf { it > 0 }
+        ?: liteRtEngineMaxTokensFromText(
+            listOf(displayName, filename, repoId.orEmpty()).joinToString(" ")
+        )
+
+fun LiteRtModelEntity.defaultLiteRtChatContextTokens(): Int? {
+    val text = listOf(displayName, filename, repoId.orEmpty()).joinToString(" ")
+    return liteRtDefaultChatContextTokensFromText(text, advertisedLiteRtMaxContextTokens())
+}
+
+fun LiteRtModelEntity.supportsLiteRtVision(): Boolean =
+    supportsVision
+
+fun LiteRtModelEntity.supportsLiteRtAudio(): Boolean =
+    supportsAudio
+
+fun liteRtVisionSupportFromText(text: String): Boolean {
+    val lower = text.lowercase(Locale.US)
+    return "gemma-4" in lower ||
+        "gemma 4" in lower ||
+        "gemma-3n" in lower ||
+        "gemma 3n" in lower ||
+        "multimodal" in lower ||
+        "vision" in lower ||
+        "image" in lower ||
+        "vlm" in lower
+}
+
+fun liteRtAudioSupportFromText(text: String): Boolean {
+    val lower = text.lowercase(Locale.US)
+    val isGemma4Edge = ("gemma-4" in lower || "gemma 4" in lower) &&
+        ("e2b" in lower || "e4b" in lower)
+    return isGemma4Edge ||
+        "gemma-3n" in lower ||
+        "gemma 3n" in lower ||
+        "audio" in lower ||
+        "speech" in lower
+}
+
+fun liteRtDefaultChatContextTokensFromText(
+    text: String,
+    advertisedMaxContextTokens: Int? = liteRtEngineMaxTokensFromText(text)
+): Int? {
+    val lower = text.lowercase(Locale.US)
+    return when {
+        "gemma-4" in lower || "gemma 4" in lower -> minOf(
+            advertisedMaxContextTokens ?: LITERT_GEMMA4_ADVERTISED_CONTEXT_TOKENS,
+            LITERT_GEMMA4_DEFAULT_CHAT_CONTEXT_TOKENS
+        )
+        else -> advertisedMaxContextTokens
+    }
+}
 
 fun liteRtEngineMaxTokensFromText(text: String): Int? {
     val lower = text.lowercase(Locale.US)
@@ -72,9 +127,9 @@ fun liteRtEngineMaxTokensFromText(text: String): Int? {
         ?.let { return it }
 
     return when {
-        "gemma-4" in lower || "gemma 4" in lower -> 4000
+        "gemma-4" in lower || "gemma 4" in lower -> LITERT_GEMMA4_ADVERTISED_CONTEXT_TOKENS
         "gemma-3n" in lower || "gemma 3n" in lower -> 4096
-        "gemma3-1b" in lower || "gemma 3 1b" in lower -> 1024
+        "gemma3-1b" in lower || "gemma 3 1b" in lower -> 2048
         "mobile-actions" in lower || "functiongemma" in lower -> 1024
         else -> null
     }
@@ -168,3 +223,6 @@ private val liteRtDeviceAliases = mapOf(
 
 fun liteRtPackageTargetDisplay(target: String?): String =
     target?.uppercase(Locale.US).orEmpty()
+
+private const val LITERT_GEMMA4_ADVERTISED_CONTEXT_TOKENS = 32768
+private const val LITERT_GEMMA4_DEFAULT_CHAT_CONTEXT_TOKENS = 8192

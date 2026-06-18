@@ -221,7 +221,7 @@ private fun runHarvesterDroneTick(
     val updatedTiles = tiles.toMutableList()
     val harvestedIds = mutableListOf<Int>()
 
-    for (index in updatedTiles.indices) {
+    for (index in farmDroneTileWorkOrder(updatedTiles)) {
         if (current.fuel < FARM_HARVESTING_DRONE_FUEL_COST) {
             current = current.copy(enabled = false, statusKey = "fuel_empty")
             break
@@ -266,7 +266,7 @@ private fun runPlantingDroneTick(
         }
     }
 
-    for (index in updatedTiles.indices) {
+    for (index in farmDroneTileWorkOrder(updatedTiles)) {
         val tile = updatedTiles[index]
         if (tile.crop != null) continue
         val emptySinceAt = emptySince[tile.id] ?: now
@@ -321,6 +321,17 @@ private fun runPlantingDroneTick(
 
     return PlantingTickResult(updatedTiles, current.copy(emptySinceByTile = emptySince))
 }
+
+private fun farmDroneTileWorkOrder(tiles: List<FarmTile>): List<Int> =
+    tiles.indices.sortedWith(
+        compareBy<Int>(
+            { tiles[it].id.floorMod(FARM_TILES_PER_PAGE) },
+            { farmPageForTileId(tiles[it].id) },
+            { tiles[it].id }
+        )
+    )
+
+private fun Int.floorMod(other: Int): Int = ((this % other) + other) % other
 
 private fun harvesterAllowsCrop(harvester: HarvesterDroneState, cropId: String): Boolean {
     val listed = cropId in harvester.cropFilter

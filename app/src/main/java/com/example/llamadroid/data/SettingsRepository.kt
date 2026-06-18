@@ -2,11 +2,14 @@ package com.example.llamadroid.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
+import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxCatalogProvider
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
+import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.tama.data.TamaPicGenDefaults
 import com.example.llamadroid.util.AIConstants
 import com.example.llamadroid.util.PromptUtils
@@ -21,6 +24,9 @@ data class RemoteSummarySettingsSnapshot(
     val llamaSwapUrl: String,
     val ollamaModel: String?,
     val llamaSwapModel: String?,
+    val liteRtModelId: Long? = null,
+    val liteRtBackend: String = LITERT_BACKEND_AUTO,
+    val liteRtMtpEnabled: Boolean = false,
     val thinkingEnabled: Boolean,
     val llamaServerModelLabel: String?,
     val llamaServerContextTokens: Int,
@@ -166,6 +172,21 @@ class SettingsRepository(private val context: Context) {
             prefs.edit().putBoolean("${keyPrefix}_$suffix", value).apply()
         }
 
+        private fun longFlow(suffix: String, default: Long = -1L): MutableStateFlow<Long> {
+            val key = "${keyPrefix}_$suffix"
+            return MutableStateFlow(prefs.getLong(key, default))
+        }
+
+        private fun putLongValue(suffix: String, value: Long?) {
+            prefs.edit().apply {
+                if (value == null || value <= 0L) {
+                    remove("${keyPrefix}_$suffix")
+                } else {
+                    putLong("${keyPrefix}_$suffix", value)
+                }
+            }.apply()
+        }
+
         private val _backend = stringFlow("backend", PDF_BACKEND_OLLAMA).let {
             MutableStateFlow(normalizeOllamaOrLlamaBackend(it.value))
         }
@@ -215,6 +236,30 @@ class SettingsRepository(private val context: Context) {
         fun setLlamaSwapModel(value: String?) {
             putStringValue("llama_swap_model", value)
             _llamaSwapModel.value = value
+        }
+
+        private val _liteRtModelId = longFlow("litert_model_id")
+        val liteRtModelId = _liteRtModelId.asStateFlow()
+        fun setLiteRtModelId(value: Long?) {
+            putLongValue("litert_model_id", value)
+            _liteRtModelId.value = value?.takeIf { it > 0L } ?: -1L
+        }
+
+        private val _liteRtBackend = stringFlow("litert_backend", LITERT_BACKEND_AUTO).let {
+            MutableStateFlow(normalizeLiteRtBackend(it.value))
+        }
+        val liteRtBackend = _liteRtBackend.asStateFlow()
+        fun setLiteRtBackend(value: String) {
+            val normalized = normalizeLiteRtBackend(value)
+            putStringValue("litert_backend", normalized)
+            _liteRtBackend.value = normalized
+        }
+
+        private val _liteRtMtpEnabled = boolFlow("litert_mtp_enabled", false)
+        val liteRtMtpEnabled = _liteRtMtpEnabled.asStateFlow()
+        fun setLiteRtMtpEnabled(value: Boolean) {
+            putBooleanValue("litert_mtp_enabled", value)
+            _liteRtMtpEnabled.value = value
         }
 
         private val _thinkingEnabled = boolFlow("thinking_enabled", false, fallbackThinkingEnabledKey)
@@ -357,6 +402,9 @@ class SettingsRepository(private val context: Context) {
                 llamaSwapUrl = llamaSwapUrl.value,
                 ollamaModel = ollamaModel.value,
                 llamaSwapModel = llamaSwapModel.value,
+                liteRtModelId = liteRtModelId.value.takeIf { it > 0L },
+                liteRtBackend = liteRtBackend.value,
+                liteRtMtpEnabled = liteRtMtpEnabled.value,
                 thinkingEnabled = thinkingEnabled.value,
                 llamaServerModelLabel = llamaServerModelLabel.value,
                 llamaServerContextTokens = llamaServerContextTokens.value,
@@ -627,6 +675,30 @@ class SettingsRepository(private val context: Context) {
     fun setAgentLlamaServerContextLabel(value: String?) {
         prefs.edit().putString("agent_llama_server_context_label", value).apply()
         _agentLlamaServerContextLabel.value = value
+    }
+
+    private val _agentLiteRtModelId = MutableStateFlow(prefs.getLong("agent_litert_model_id", -1L))
+    val agentLiteRtModelId = _agentLiteRtModelId.asStateFlow()
+    fun setAgentLiteRtModelId(modelId: Long?) {
+        prefs.edit().apply {
+            if (modelId == null || modelId <= 0L) remove("agent_litert_model_id") else putLong("agent_litert_model_id", modelId)
+        }.apply()
+        _agentLiteRtModelId.value = modelId?.takeIf { it > 0L } ?: -1L
+    }
+
+    private val _agentLiteRtBackend = MutableStateFlow(normalizeLiteRtBackend(prefs.getString("agent_litert_backend", LITERT_BACKEND_AUTO)))
+    val agentLiteRtBackend = _agentLiteRtBackend.asStateFlow()
+    fun setAgentLiteRtBackend(backend: String) {
+        val normalized = normalizeLiteRtBackend(backend)
+        prefs.edit().putString("agent_litert_backend", normalized).apply()
+        _agentLiteRtBackend.value = normalized
+    }
+
+    private val _agentLiteRtMtpEnabled = MutableStateFlow(prefs.getBoolean("agent_litert_mtp_enabled", false))
+    val agentLiteRtMtpEnabled = _agentLiteRtMtpEnabled.asStateFlow()
+    fun setAgentLiteRtMtpEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_litert_mtp_enabled", enabled).apply()
+        _agentLiteRtMtpEnabled.value = enabled
     }
 
     // Show Extra Output (thinking, tool calls, etc.)
@@ -900,6 +972,76 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putString("custom_command_template", template).apply()
         _customCommandTemplate.value = template
     }
+
+    // Generated llama-server runtime parameters for the general launcher.
+    private val _serverPort = MutableStateFlow(prefs.getInt("server_port", 8080).coerceIn(1, 65535))
+    val serverPort = _serverPort.asStateFlow()
+
+    fun setServerPort(port: Int) {
+        val normalized = port.coerceIn(1, 65535)
+        prefs.edit().putInt("server_port", normalized).apply()
+        _serverPort.value = normalized
+    }
+
+    private val _serverBatchSize = MutableStateFlow(prefs.getInt("server_batch_size", 512).coerceIn(1, 131072))
+    val serverBatchSize = _serverBatchSize.asStateFlow()
+
+    fun setServerBatchSize(size: Int) {
+        val normalized = size.coerceIn(1, 131072)
+        prefs.edit().putInt("server_batch_size", normalized).apply()
+        _serverBatchSize.value = normalized
+    }
+
+    private val _serverPhysicalBatchSize = MutableStateFlow(
+        if (prefs.contains("server_physical_batch_size")) {
+            prefs.getInt("server_physical_batch_size", 512).coerceIn(1, 131072)
+        } else {
+            null
+        }
+    )
+    val serverPhysicalBatchSize = _serverPhysicalBatchSize.asStateFlow()
+
+    fun setServerPhysicalBatchSize(size: Int?) {
+        val normalized = size?.coerceIn(1, 131072)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_physical_batch_size") else putInt("server_physical_batch_size", normalized)
+        }.apply()
+        _serverPhysicalBatchSize.value = normalized
+    }
+
+    private val _serverParallel = MutableStateFlow(
+        if (prefs.contains("server_parallel")) {
+            prefs.getInt("server_parallel", 1).coerceIn(1, 512)
+        } else {
+            null
+        }
+    )
+    val serverParallel = _serverParallel.asStateFlow()
+
+    fun setServerParallel(parallel: Int?) {
+        val normalized = parallel?.coerceIn(1, 512)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_parallel") else putInt("server_parallel", normalized)
+        }.apply()
+        _serverParallel.value = normalized
+    }
+
+    private val _serverCacheRam = MutableStateFlow(
+        if (prefs.contains("server_cache_ram")) {
+            prefs.getInt("server_cache_ram", 0).coerceIn(0, 262144)
+        } else {
+            null
+        }
+    )
+    val serverCacheRam = _serverCacheRam.asStateFlow()
+
+    fun setServerCacheRam(cacheRamMb: Int?) {
+        val normalized = cacheRamMb?.coerceIn(0, 262144)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_cache_ram") else putInt("server_cache_ram", normalized)
+        }.apply()
+        _serverCacheRam.value = normalized
+    }
     
     // Ollama num_thread option (number of threads for inference)
     private val _ollamaThreads = MutableStateFlow(prefs.getInt("ollama_threads", 4))
@@ -1063,6 +1205,15 @@ class SettingsRepository(private val context: Context) {
     val pdfSummaryLlamaSwapModel = pdfSummarySettings.llamaSwapModel
     fun setPdfSummaryLlamaSwapModel(model: String?) = pdfSummarySettings.setLlamaSwapModel(model)
 
+    val pdfSummaryLiteRtModelId = pdfSummarySettings.liteRtModelId
+    fun setPdfSummaryLiteRtModelId(modelId: Long?) = pdfSummarySettings.setLiteRtModelId(modelId)
+
+    val pdfSummaryLiteRtBackend = pdfSummarySettings.liteRtBackend
+    fun setPdfSummaryLiteRtBackend(backend: String) = pdfSummarySettings.setLiteRtBackend(backend)
+
+    val pdfSummaryLiteRtMtpEnabled = pdfSummarySettings.liteRtMtpEnabled
+    fun setPdfSummaryLiteRtMtpEnabled(enabled: Boolean) = pdfSummarySettings.setLiteRtMtpEnabled(enabled)
+
     val pdfSummaryThinkingEnabled = pdfSummarySettings.thinkingEnabled
     fun setPdfSummaryThinkingEnabled(enabled: Boolean) = pdfSummarySettings.setThinkingEnabled(enabled)
 
@@ -1155,6 +1306,15 @@ class SettingsRepository(private val context: Context) {
     val pdfTranslationLlamaSwapModel = pdfTranslationSettings.llamaSwapModel
     fun setPdfTranslationLlamaSwapModel(model: String?) = pdfTranslationSettings.setLlamaSwapModel(model)
 
+    val pdfTranslationLiteRtModelId = pdfTranslationSettings.liteRtModelId
+    fun setPdfTranslationLiteRtModelId(modelId: Long?) = pdfTranslationSettings.setLiteRtModelId(modelId)
+
+    val pdfTranslationLiteRtBackend = pdfTranslationSettings.liteRtBackend
+    fun setPdfTranslationLiteRtBackend(backend: String) = pdfTranslationSettings.setLiteRtBackend(backend)
+
+    val pdfTranslationLiteRtMtpEnabled = pdfTranslationSettings.liteRtMtpEnabled
+    fun setPdfTranslationLiteRtMtpEnabled(enabled: Boolean) = pdfTranslationSettings.setLiteRtMtpEnabled(enabled)
+
     val pdfTranslationLlamaServerModelLabel = pdfTranslationSettings.llamaServerModelLabel
     fun setPdfTranslationLlamaServerModelLabel(label: String?) = pdfTranslationSettings.setLlamaServerModelLabel(label)
 
@@ -1163,6 +1323,9 @@ class SettingsRepository(private val context: Context) {
 
     val pdfTranslationLlamaServerContextLabel = pdfTranslationSettings.llamaServerContextLabel
     fun setPdfTranslationLlamaServerContextLabel(label: String?) = pdfTranslationSettings.setLlamaServerContextLabel(label)
+
+    val pdfTranslationThinkingEnabled = pdfTranslationSettings.thinkingEnabled
+    fun setPdfTranslationThinkingEnabled(enabled: Boolean) = pdfTranslationSettings.setThinkingEnabled(enabled)
 
     val pdfTranslationContextSize = pdfTranslationSettings.chunkContext
     fun setPdfTranslationContextSize(size: Int) = pdfTranslationSettings.setChunkContext(size)
@@ -1327,6 +1490,21 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putBoolean("speculative_enabled", enabled).apply()
         _speculativeEnabled.value = enabled
     }
+
+    private val _speculativeMode = MutableStateFlow(
+        if (prefs.contains("speculative_mode")) {
+            LlamaSpeculativeMode.fromFlagValue(prefs.getString("speculative_mode", null))
+        } else if (prefs.getBoolean("mtp_decoding_enabled", false)) {
+            LlamaSpeculativeMode.DRAFT_MTP
+        } else {
+            LlamaSpeculativeMode.DRAFT_SIMPLE
+        }
+    )
+    val speculativeMode = _speculativeMode.asStateFlow()
+    fun setSpeculativeMode(mode: LlamaSpeculativeMode) {
+        prefs.edit().putString("speculative_mode", mode.flagValue).apply()
+        _speculativeMode.value = mode
+    }
     
     // Draft model path for global setting
     private val _draftModelPath = MutableStateFlow(prefs.getString("draft_model_path", null))
@@ -1337,7 +1515,7 @@ class SettingsRepository(private val context: Context) {
     }
     
     // Draft max tokens
-    private val _draftMaxTokens = MutableStateFlow(prefs.getInt("draft_max_tokens", 16))
+    private val _draftMaxTokens = MutableStateFlow(prefs.getInt("draft_max_tokens", 3))
     val draftMaxTokens = _draftMaxTokens.asStateFlow()
     fun setDraftMaxTokens(max: Int) {
         prefs.edit().putInt("draft_max_tokens", max).apply()
@@ -1353,11 +1531,12 @@ class SettingsRepository(private val context: Context) {
     }
     
     // Draft p-min threshold
-    private val _draftPMin = MutableStateFlow(prefs.getFloat("draft_p_min", 0.75f))
+    private val _draftPMin = MutableStateFlow(prefs.getFloat("draft_p_min", 0.0f))
     val draftPMin = _draftPMin.asStateFlow()
     fun setDraftPMin(pMin: Float) {
-        prefs.edit().putFloat("draft_p_min", pMin).apply()
-        _draftPMin.value = pMin
+        val normalized = pMin.coerceIn(0f, 1f)
+        prefs.edit().putFloat("draft_p_min", normalized).apply()
+        _draftPMin.value = normalized
     }
 
     // Enable embedded MTP decoding for llama.cpp models with MTP heads
@@ -1374,6 +1553,29 @@ class SettingsRepository(private val context: Context) {
         val normalized = max.coerceIn(1, 16)
         prefs.edit().putInt("mtp_draft_max_tokens", normalized).apply()
         _mtpDraftMaxTokens.value = normalized
+    }
+
+    private val _mtpDraftMinTokens = MutableStateFlow(prefs.getInt("mtp_draft_min_tokens", 0).coerceAtLeast(0))
+    val mtpDraftMinTokens = _mtpDraftMinTokens.asStateFlow()
+    fun setMtpDraftMinTokens(min: Int) {
+        val normalized = min.coerceAtLeast(0)
+        prefs.edit().putInt("mtp_draft_min_tokens", normalized).apply()
+        _mtpDraftMinTokens.value = normalized
+    }
+
+    private val _mtpDraftPMin = MutableStateFlow(prefs.getFloat("mtp_draft_p_min", 0.0f).coerceIn(0f, 1f))
+    val mtpDraftPMin = _mtpDraftPMin.asStateFlow()
+    fun setMtpDraftPMin(pMin: Float) {
+        val normalized = pMin.coerceIn(0f, 1f)
+        prefs.edit().putFloat("mtp_draft_p_min", normalized).apply()
+        _mtpDraftPMin.value = normalized
+    }
+
+    private val _mtpUseDraftModel = MutableStateFlow(prefs.getBoolean("mtp_use_draft_model", false))
+    val mtpUseDraftModel = _mtpUseDraftModel.asStateFlow()
+    fun setMtpUseDraftModel(enabled: Boolean) {
+        prefs.edit().putBoolean("mtp_use_draft_model", enabled).apply()
+        _mtpUseDraftModel.value = enabled
     }
     
     // Flash Attention global flag
@@ -1577,6 +1779,15 @@ class SettingsRepository(private val context: Context) {
     val videoSummaryLlamaSwapModel = videoSummarySettings.llamaSwapModel
     fun setVideoSummaryLlamaSwapModel(model: String?) = videoSummarySettings.setLlamaSwapModel(model)
 
+    val videoSummaryLiteRtModelId = videoSummarySettings.liteRtModelId
+    fun setVideoSummaryLiteRtModelId(modelId: Long?) = videoSummarySettings.setLiteRtModelId(modelId)
+
+    val videoSummaryLiteRtBackend = videoSummarySettings.liteRtBackend
+    fun setVideoSummaryLiteRtBackend(backend: String) = videoSummarySettings.setLiteRtBackend(backend)
+
+    val videoSummaryLiteRtMtpEnabled = videoSummarySettings.liteRtMtpEnabled
+    fun setVideoSummaryLiteRtMtpEnabled(enabled: Boolean) = videoSummarySettings.setLiteRtMtpEnabled(enabled)
+
     val videoSummaryThinkingEnabled = videoSummarySettings.thinkingEnabled
     fun setVideoSummaryThinkingEnabled(enabled: Boolean) = videoSummarySettings.setThinkingEnabled(enabled)
 
@@ -1703,6 +1914,15 @@ class SettingsRepository(private val context: Context) {
 
     val workflowSummaryLlamaSwapModel = workflowSummarySettings.llamaSwapModel
     fun setWorkflowSummaryLlamaSwapModel(model: String?) = workflowSummarySettings.setLlamaSwapModel(model)
+
+    val workflowSummaryLiteRtModelId = workflowSummarySettings.liteRtModelId
+    fun setWorkflowSummaryLiteRtModelId(modelId: Long?) = workflowSummarySettings.setLiteRtModelId(modelId)
+
+    val workflowSummaryLiteRtBackend = workflowSummarySettings.liteRtBackend
+    fun setWorkflowSummaryLiteRtBackend(backend: String) = workflowSummarySettings.setLiteRtBackend(backend)
+
+    val workflowSummaryLiteRtMtpEnabled = workflowSummarySettings.liteRtMtpEnabled
+    fun setWorkflowSummaryLiteRtMtpEnabled(enabled: Boolean) = workflowSummarySettings.setLiteRtMtpEnabled(enabled)
 
     val workflowSummaryThinkingEnabled = workflowSummarySettings.thinkingEnabled
     fun setWorkflowSummaryThinkingEnabled(enabled: Boolean) = workflowSummarySettings.setThinkingEnabled(enabled)
@@ -1936,6 +2156,19 @@ class SettingsRepository(private val context: Context) {
         _agentImageGenerationToolEnabled.value = enabled
     }
 
+    private val _agentImageGenerationEngine = MutableStateFlow(
+        prefs.getString("agent_image_generation_engine", "ONNX") ?: "ONNX"
+    )
+    val agentImageGenerationEngine = _agentImageGenerationEngine.asStateFlow()
+    fun setAgentImageGenerationEngine(engine: String) {
+        val normalized = when (engine.trim().uppercase(Locale.US)) {
+            "SD" -> "SD"
+            else -> "ONNX"
+        }
+        prefs.edit().putString("agent_image_generation_engine", normalized).apply()
+        _agentImageGenerationEngine.value = normalized
+    }
+
     private val _agentImageGenerationModel = MutableStateFlow(prefs.getString("agent_image_generation_model", null))
     val agentImageGenerationModel = _agentImageGenerationModel.asStateFlow()
     fun setAgentImageGenerationModel(model: String?) {
@@ -1967,6 +2200,305 @@ class SettingsRepository(private val context: Context) {
         val normalized = resolution.ifBlank { "512x512" }
         prefs.edit().putString("agent_image_generation_resolution", normalized).apply()
         _agentImageGenerationResolution.value = normalized
+    }
+
+    private val _agentSdImageGenerationModel = MutableStateFlow(prefs.getString("agent_sd_image_generation_model", null))
+    val agentSdImageGenerationModel = _agentSdImageGenerationModel.asStateFlow()
+    fun setAgentSdImageGenerationModel(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_model", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationModel.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationVae = MutableStateFlow(prefs.getString("agent_sd_image_generation_vae", null))
+    val agentSdImageGenerationVae = _agentSdImageGenerationVae.asStateFlow()
+    fun setAgentSdImageGenerationVae(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_vae", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationVae.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationTae = MutableStateFlow(prefs.getString("agent_sd_image_generation_tae", null))
+    val agentSdImageGenerationTae = _agentSdImageGenerationTae.asStateFlow()
+    fun setAgentSdImageGenerationTae(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_tae", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationTae.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationClipL = MutableStateFlow(prefs.getString("agent_sd_image_generation_clip_l", null))
+    val agentSdImageGenerationClipL = _agentSdImageGenerationClipL.asStateFlow()
+    fun setAgentSdImageGenerationClipL(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_clip_l", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationClipL.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationClipG = MutableStateFlow(prefs.getString("agent_sd_image_generation_clip_g", null))
+    val agentSdImageGenerationClipG = _agentSdImageGenerationClipG.asStateFlow()
+    fun setAgentSdImageGenerationClipG(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_clip_g", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationClipG.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationT5xxl = MutableStateFlow(prefs.getString("agent_sd_image_generation_t5xxl", null))
+    val agentSdImageGenerationT5xxl = _agentSdImageGenerationT5xxl.asStateFlow()
+    fun setAgentSdImageGenerationT5xxl(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_t5xxl", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationT5xxl.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationLlm = MutableStateFlow(prefs.getString("agent_sd_image_generation_llm", null))
+    val agentSdImageGenerationLlm = _agentSdImageGenerationLlm.asStateFlow()
+    fun setAgentSdImageGenerationLlm(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_llm", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationLlm.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationLlmVision = MutableStateFlow(prefs.getString("agent_sd_image_generation_llm_vision", null))
+    val agentSdImageGenerationLlmVision = _agentSdImageGenerationLlmVision.asStateFlow()
+    fun setAgentSdImageGenerationLlmVision(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_llm_vision", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationLlmVision.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationPhotoMaker = MutableStateFlow(prefs.getString("agent_sd_image_generation_photomaker", null))
+    val agentSdImageGenerationPhotoMaker = _agentSdImageGenerationPhotoMaker.asStateFlow()
+    fun setAgentSdImageGenerationPhotoMaker(model: String?) {
+        prefs.edit().putString("agent_sd_image_generation_photomaker", model?.takeIf { it.isNotBlank() }).apply()
+        _agentSdImageGenerationPhotoMaker.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentSdImageGenerationWidth = MutableStateFlow(prefs.getInt("agent_sd_image_generation_width", 512))
+    val agentSdImageGenerationWidth = _agentSdImageGenerationWidth.asStateFlow()
+    fun setAgentSdImageGenerationWidth(width: Int) {
+        val normalized = width.coerceIn(256, 1024)
+        prefs.edit().putInt("agent_sd_image_generation_width", normalized).apply()
+        _agentSdImageGenerationWidth.value = normalized
+    }
+
+    private val _agentSdImageGenerationHeight = MutableStateFlow(prefs.getInt("agent_sd_image_generation_height", 512))
+    val agentSdImageGenerationHeight = _agentSdImageGenerationHeight.asStateFlow()
+    fun setAgentSdImageGenerationHeight(height: Int) {
+        val normalized = height.coerceIn(256, 1024)
+        prefs.edit().putInt("agent_sd_image_generation_height", normalized).apply()
+        _agentSdImageGenerationHeight.value = normalized
+    }
+
+    private val _agentSdImageGenerationSteps = MutableStateFlow(prefs.getInt("agent_sd_image_generation_steps", 20))
+    val agentSdImageGenerationSteps = _agentSdImageGenerationSteps.asStateFlow()
+    fun setAgentSdImageGenerationSteps(steps: Int) {
+        val normalized = steps.coerceIn(1, 50)
+        prefs.edit().putInt("agent_sd_image_generation_steps", normalized).apply()
+        _agentSdImageGenerationSteps.value = normalized
+    }
+
+    private val _agentSdImageGenerationCfg = MutableStateFlow(prefs.getFloat("agent_sd_image_generation_cfg", 7.0f))
+    val agentSdImageGenerationCfg = _agentSdImageGenerationCfg.asStateFlow()
+    fun setAgentSdImageGenerationCfg(cfg: Float) {
+        val normalized = cfg.coerceIn(1f, 20f)
+        prefs.edit().putFloat("agent_sd_image_generation_cfg", normalized).apply()
+        _agentSdImageGenerationCfg.value = normalized
+    }
+
+    private val _agentSdImageGenerationSampler = MutableStateFlow(
+        prefs.getString("agent_sd_image_generation_sampler", "EULER_A") ?: "EULER_A"
+    )
+    val agentSdImageGenerationSampler = _agentSdImageGenerationSampler.asStateFlow()
+    fun setAgentSdImageGenerationSampler(sampler: String) {
+        val normalized = sampler.trim().ifBlank { "EULER_A" }
+        prefs.edit().putString("agent_sd_image_generation_sampler", normalized).apply()
+        _agentSdImageGenerationSampler.value = normalized
+    }
+
+    private val _agentSdImageGenerationSeed = MutableStateFlow(
+        prefs.getString("agent_sd_image_generation_seed", "") ?: ""
+    )
+    val agentSdImageGenerationSeed = _agentSdImageGenerationSeed.asStateFlow()
+    fun setAgentSdImageGenerationSeed(seed: String) {
+        val normalized = seed.trim()
+        prefs.edit().putString("agent_sd_image_generation_seed", normalized).apply()
+        _agentSdImageGenerationSeed.value = normalized
+    }
+
+    private val _agentSdImageGenerationNegativePrompt = MutableStateFlow(
+        prefs.getString("agent_sd_image_generation_negative_prompt", "") ?: ""
+    )
+    val agentSdImageGenerationNegativePrompt = _agentSdImageGenerationNegativePrompt.asStateFlow()
+    fun setAgentSdImageGenerationNegativePrompt(prompt: String) {
+        prefs.edit().putString("agent_sd_image_generation_negative_prompt", prompt).apply()
+        _agentSdImageGenerationNegativePrompt.value = prompt
+    }
+
+    private val _agentSdImageGenerationThreads = MutableStateFlow(prefs.getInt("agent_sd_image_generation_threads", -1))
+    val agentSdImageGenerationThreads = _agentSdImageGenerationThreads.asStateFlow()
+    fun setAgentSdImageGenerationThreads(threads: Int) {
+        val normalized = threads.coerceIn(-1, 16)
+        prefs.edit().putInt("agent_sd_image_generation_threads", normalized).apply()
+        _agentSdImageGenerationThreads.value = normalized
+    }
+
+    private val _agentSdImageGenerationFlowShift = MutableStateFlow(
+        prefs.getString("agent_sd_image_generation_flow_shift", "") ?: ""
+    )
+    val agentSdImageGenerationFlowShift = _agentSdImageGenerationFlowShift.asStateFlow()
+    fun setAgentSdImageGenerationFlowShift(value: String) {
+        prefs.edit().putString("agent_sd_image_generation_flow_shift", value.trim()).apply()
+        _agentSdImageGenerationFlowShift.value = value.trim()
+    }
+
+    private val _agentSdImageGenerationDiffusionFa = MutableStateFlow(
+        prefs.getBoolean("agent_sd_image_generation_diffusion_fa", false)
+    )
+    val agentSdImageGenerationDiffusionFa = _agentSdImageGenerationDiffusionFa.asStateFlow()
+    fun setAgentSdImageGenerationDiffusionFa(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_sd_image_generation_diffusion_fa", enabled).apply()
+        _agentSdImageGenerationDiffusionFa.value = enabled
+    }
+
+    private val _agentSdImageGenerationMmap = MutableStateFlow(
+        prefs.getBoolean("agent_sd_image_generation_mmap", false)
+    )
+    val agentSdImageGenerationMmap = _agentSdImageGenerationMmap.asStateFlow()
+    fun setAgentSdImageGenerationMmap(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_sd_image_generation_mmap", enabled).apply()
+        _agentSdImageGenerationMmap.value = enabled
+    }
+
+    private val _agentSdImageGenerationVaeConvDirect = MutableStateFlow(
+        prefs.getBoolean("agent_sd_image_generation_vae_conv_direct", false)
+    )
+    val agentSdImageGenerationVaeConvDirect = _agentSdImageGenerationVaeConvDirect.asStateFlow()
+    fun setAgentSdImageGenerationVaeConvDirect(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_sd_image_generation_vae_conv_direct", enabled).apply()
+        _agentSdImageGenerationVaeConvDirect.value = enabled
+    }
+
+    private val _agentSdImageGenerationQwenZeroCondT = MutableStateFlow(
+        prefs.getBoolean("agent_sd_image_generation_qwen_zero_cond_t", false)
+    )
+    val agentSdImageGenerationQwenZeroCondT = _agentSdImageGenerationQwenZeroCondT.asStateFlow()
+    fun setAgentSdImageGenerationQwenZeroCondT(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_sd_image_generation_qwen_zero_cond_t", enabled).apply()
+        _agentSdImageGenerationQwenZeroCondT.value = enabled
+    }
+
+    private val _agentSdImageGenerationChromaDisableDitMask = MutableStateFlow(
+        prefs.getBoolean("agent_sd_image_generation_chroma_disable_dit_mask", false)
+    )
+    val agentSdImageGenerationChromaDisableDitMask = _agentSdImageGenerationChromaDisableDitMask.asStateFlow()
+    fun setAgentSdImageGenerationChromaDisableDitMask(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_sd_image_generation_chroma_disable_dit_mask", enabled).apply()
+        _agentSdImageGenerationChromaDisableDitMask.value = enabled
+    }
+
+    // Shared agent background-removal tool settings
+    private val _agentBackgroundRemovalToolEnabled = MutableStateFlow(prefs.getBoolean("agent_background_removal_tool_enabled", true))
+    val agentBackgroundRemovalToolEnabled = _agentBackgroundRemovalToolEnabled.asStateFlow()
+    fun setAgentBackgroundRemovalToolEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_background_removal_tool_enabled", enabled).apply()
+        _agentBackgroundRemovalToolEnabled.value = enabled
+    }
+
+    private val _agentBackgroundRemovalModel = MutableStateFlow(prefs.getString("agent_background_removal_model", null))
+    val agentBackgroundRemovalModel = _agentBackgroundRemovalModel.asStateFlow()
+    fun setAgentBackgroundRemovalModel(model: String?) {
+        prefs.edit().putString("agent_background_removal_model", model?.takeIf { it.isNotBlank() }).apply()
+        _agentBackgroundRemovalModel.value = model?.takeIf { it.isNotBlank() }
+    }
+
+    private val _agentBackgroundRemovalBackend = MutableStateFlow(
+        prefs.getString("agent_background_removal_backend", "CPU") ?: "CPU"
+    )
+    val agentBackgroundRemovalBackend = _agentBackgroundRemovalBackend.asStateFlow()
+    fun setAgentBackgroundRemovalBackend(backend: String) {
+        val normalized = backend.ifBlank { "CPU" }
+        prefs.edit().putString("agent_background_removal_backend", normalized).apply()
+        _agentBackgroundRemovalBackend.value = normalized
+    }
+
+    private val _agentBackgroundRemovalRuntimeThreads = MutableStateFlow(
+        prefs.getInt("agent_background_removal_runtime_threads", 0)
+    )
+    val agentBackgroundRemovalRuntimeThreads = _agentBackgroundRemovalRuntimeThreads.asStateFlow()
+    fun setAgentBackgroundRemovalRuntimeThreads(value: Int) {
+        val normalized = value.coerceIn(0, 16)
+        prefs.edit().putInt("agent_background_removal_runtime_threads", normalized).apply()
+        _agentBackgroundRemovalRuntimeThreads.value = normalized
+    }
+
+    private val _agentBackgroundRemovalGraphOptimization = MutableStateFlow(
+        prefs.getString("agent_background_removal_graph_optimization", "ALL") ?: "ALL"
+    )
+    val agentBackgroundRemovalGraphOptimization = _agentBackgroundRemovalGraphOptimization.asStateFlow()
+    fun setAgentBackgroundRemovalGraphOptimization(value: String) {
+        val normalized = value.ifBlank { "ALL" }
+        prefs.edit().putString("agent_background_removal_graph_optimization", normalized).apply()
+        _agentBackgroundRemovalGraphOptimization.value = normalized
+    }
+
+    private val _agentBackgroundRemovalResizeBeforeProcessing = MutableStateFlow(
+        prefs.getBoolean("agent_background_removal_resize_before_processing", true)
+    )
+    val agentBackgroundRemovalResizeBeforeProcessing = _agentBackgroundRemovalResizeBeforeProcessing.asStateFlow()
+    fun setAgentBackgroundRemovalResizeBeforeProcessing(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_background_removal_resize_before_processing", enabled).apply()
+        _agentBackgroundRemovalResizeBeforeProcessing.value = enabled
+    }
+
+    private val _agentBackgroundRemovalResizeMaxEdge = MutableStateFlow(
+        prefs.getInt("agent_background_removal_resize_max_edge", 512)
+    )
+    val agentBackgroundRemovalResizeMaxEdge = _agentBackgroundRemovalResizeMaxEdge.asStateFlow()
+    fun setAgentBackgroundRemovalResizeMaxEdge(value: Int) {
+        val normalized = value.coerceIn(128, 2048)
+        prefs.edit().putInt("agent_background_removal_resize_max_edge", normalized).apply()
+        _agentBackgroundRemovalResizeMaxEdge.value = normalized
+    }
+
+    private val _agentBackgroundRemovalAlphaThreshold = MutableStateFlow(
+        prefs.getFloat("agent_background_removal_alpha_threshold", 0.5f)
+    )
+    val agentBackgroundRemovalAlphaThreshold = _agentBackgroundRemovalAlphaThreshold.asStateFlow()
+    fun setAgentBackgroundRemovalAlphaThreshold(value: Float) {
+        val normalized = value.coerceIn(0f, 1f)
+        prefs.edit().putFloat("agent_background_removal_alpha_threshold", normalized).apply()
+        _agentBackgroundRemovalAlphaThreshold.value = normalized
+    }
+
+    private val _agentBackgroundRemovalFeatherRadius = MutableStateFlow(
+        prefs.getInt("agent_background_removal_feather_radius", 1)
+    )
+    val agentBackgroundRemovalFeatherRadius = _agentBackgroundRemovalFeatherRadius.asStateFlow()
+    fun setAgentBackgroundRemovalFeatherRadius(value: Int) {
+        val normalized = value.coerceIn(0, 16)
+        prefs.edit().putInt("agent_background_removal_feather_radius", normalized).apply()
+        _agentBackgroundRemovalFeatherRadius.value = normalized
+    }
+
+    private val _agentBackgroundRemovalMaskSoftness = MutableStateFlow(
+        prefs.getFloat("agent_background_removal_mask_softness", 1f)
+    )
+    val agentBackgroundRemovalMaskSoftness = _agentBackgroundRemovalMaskSoftness.asStateFlow()
+    fun setAgentBackgroundRemovalMaskSoftness(value: Float) {
+        val normalized = value.coerceIn(0f, 1f)
+        prefs.edit().putFloat("agent_background_removal_mask_softness", normalized).apply()
+        _agentBackgroundRemovalMaskSoftness.value = normalized
+    }
+
+    private val _agentBackgroundRemovalMaskContrast = MutableStateFlow(
+        prefs.getFloat("agent_background_removal_mask_contrast", 1f)
+    )
+    val agentBackgroundRemovalMaskContrast = _agentBackgroundRemovalMaskContrast.asStateFlow()
+    fun setAgentBackgroundRemovalMaskContrast(value: Float) {
+        val normalized = value.coerceIn(0.25f, 4f)
+        prefs.edit().putFloat("agent_background_removal_mask_contrast", normalized).apply()
+        _agentBackgroundRemovalMaskContrast.value = normalized
+    }
+
+    private val _agentBackgroundRemovalExportMask = MutableStateFlow(
+        prefs.getBoolean("agent_background_removal_export_mask", false)
+    )
+    val agentBackgroundRemovalExportMask = _agentBackgroundRemovalExportMask.asStateFlow()
+    fun setAgentBackgroundRemovalExportMask(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_background_removal_export_mask", enabled).apply()
+        _agentBackgroundRemovalExportMask.value = enabled
     }
 
     // Native chat image-generation tool settings. These intentionally do not reuse
@@ -2430,6 +2962,7 @@ class SettingsRepository(private val context: Context) {
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"
         const val PDF_BACKEND_LLAMA_SWAP = "llama-swap"
+        const val PDF_BACKEND_LITERT = "litert-lm"
         const val KB_EMBED_BACKEND_LOCAL = "local-llama"
         const val KB_EMBED_BACKEND_LLAMA_SERVER = "llama-server"
         const val KB_EMBED_BACKEND_OLLAMA = "ollama"
@@ -2498,6 +3031,11 @@ class SettingsRepository(private val context: Context) {
                 "llamacpp" -> PDF_BACKEND_LLAMA_SERVER
                 PDF_BACKEND_LLAMA_SWAP,
                 "llamaswap" -> PDF_BACKEND_LLAMA_SWAP
+                PDF_BACKEND_LITERT,
+                "litert",
+                "litertlm",
+                "lite-rt",
+                "lite-rt-lm" -> PDF_BACKEND_LITERT
                 else -> PDF_BACKEND_OLLAMA
             }
         }
@@ -2560,6 +3098,9 @@ class SettingsRepository(private val context: Context) {
 
         fun isLlamaSwapBackend(backend: String?): Boolean =
             normalizeOllamaOrLlamaBackend(backend) == PDF_BACKEND_LLAMA_SWAP
+
+        fun isLiteRtBackend(backend: String?): Boolean =
+            normalizeOllamaOrLlamaBackend(backend) == PDF_BACKEND_LITERT
 
         fun usesOpenAiChatBackend(backend: String?): Boolean =
             normalizeOllamaOrLlamaBackend(backend).let {
@@ -2774,6 +3315,30 @@ Keep it brief but capture essential details."""
         _tamaLlamaServerContextLabel.value = value
     }
 
+    private val _tamaLiteRtModelId = MutableStateFlow(prefs.getLong("tama_litert_model_id", -1L))
+    val tamaLiteRtModelId = _tamaLiteRtModelId.asStateFlow()
+    fun setTamaLiteRtModelId(modelId: Long?) {
+        prefs.edit().apply {
+            if (modelId == null || modelId <= 0L) remove("tama_litert_model_id") else putLong("tama_litert_model_id", modelId)
+        }.apply()
+        _tamaLiteRtModelId.value = modelId?.takeIf { it > 0L } ?: -1L
+    }
+
+    private val _tamaLiteRtBackend = MutableStateFlow(normalizeLiteRtBackend(prefs.getString("tama_litert_backend", LITERT_BACKEND_AUTO)))
+    val tamaLiteRtBackend = _tamaLiteRtBackend.asStateFlow()
+    fun setTamaLiteRtBackend(backend: String) {
+        val normalized = normalizeLiteRtBackend(backend)
+        prefs.edit().putString("tama_litert_backend", normalized).apply()
+        _tamaLiteRtBackend.value = normalized
+    }
+
+    private val _tamaLiteRtMtpEnabled = MutableStateFlow(prefs.getBoolean("tama_litert_mtp_enabled", false))
+    val tamaLiteRtMtpEnabled = _tamaLiteRtMtpEnabled.asStateFlow()
+    fun setTamaLiteRtMtpEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("tama_litert_mtp_enabled", enabled).apply()
+        _tamaLiteRtMtpEnabled.value = enabled
+    }
+
     // Tama Pet LLM Model
     private val _tamaPetModel = MutableStateFlow(prefs.getString("tama_pet_model", "qwen3.5:9b") ?: "qwen3.5:9b")
     val tamaPetModel = _tamaPetModel.asStateFlow()
@@ -2964,6 +3529,30 @@ Keep it brief but capture essential details."""
     fun setAdventureLlamaServerContextLabel(label: String?) {
         prefs.edit().putString("adventure_llama_server_context_label", label).apply()
         _adventureLlamaServerContextLabel.value = label
+    }
+
+    private val _adventureLiteRtModelId = MutableStateFlow(prefs.getLong("adventure_litert_model_id", -1L))
+    val adventureLiteRtModelId = _adventureLiteRtModelId.asStateFlow()
+    fun setAdventureLiteRtModelId(modelId: Long?) {
+        prefs.edit().apply {
+            if (modelId == null || modelId <= 0L) remove("adventure_litert_model_id") else putLong("adventure_litert_model_id", modelId)
+        }.apply()
+        _adventureLiteRtModelId.value = modelId?.takeIf { it > 0L } ?: -1L
+    }
+
+    private val _adventureLiteRtBackend = MutableStateFlow(normalizeLiteRtBackend(prefs.getString("adventure_litert_backend", LITERT_BACKEND_AUTO)))
+    val adventureLiteRtBackend = _adventureLiteRtBackend.asStateFlow()
+    fun setAdventureLiteRtBackend(backend: String) {
+        val normalized = normalizeLiteRtBackend(backend)
+        prefs.edit().putString("adventure_litert_backend", normalized).apply()
+        _adventureLiteRtBackend.value = normalized
+    }
+
+    private val _adventureLiteRtMtpEnabled = MutableStateFlow(prefs.getBoolean("adventure_litert_mtp_enabled", false))
+    val adventureLiteRtMtpEnabled = _adventureLiteRtMtpEnabled.asStateFlow()
+    fun setAdventureLiteRtMtpEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("adventure_litert_mtp_enabled", enabled).apply()
+        _adventureLiteRtMtpEnabled.value = enabled
     }
 
     private val _adventureWorldImageEnabled = MutableStateFlow(

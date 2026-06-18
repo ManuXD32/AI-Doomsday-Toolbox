@@ -13,6 +13,8 @@ sealed class Screen(val route: String) {
     object OnnxImageGen : Screen("onnx_image_gen") // ONNX Runtime image generation
     object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech
+    object OnnxTtsGallery : Screen("onnx_tts_gallery") // ONNX TTS generated audio gallery
+    object LiveTranslator : Screen("live_translator") // Turn-based bilingual voice translator
     object VideoGen : Screen("video_gen")        // Stable Diffusion video generation
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP
     object VideoUpscaler : Screen("video_upscaler")           // Real-ESRGAN video upscaling
@@ -28,6 +30,7 @@ sealed class Screen(val route: String) {
         }
     }
     object Workflows : Screen("workflows")                     // AI Workflows (Sequential operations)
+    object AiServersHub : Screen("ai_servers_hub")             // Local web servers for AI tools
     // Model screens
     object ModelHub : Screen("model_hub")        // Landing page for model management
     object LLMModels : Screen("llm_models")      // LlamaCpp model management

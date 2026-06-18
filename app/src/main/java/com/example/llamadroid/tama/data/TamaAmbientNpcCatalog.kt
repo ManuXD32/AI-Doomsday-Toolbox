@@ -33,6 +33,18 @@ object TamaAmbientNpcCatalog {
             )
         ),
         TamaAmbientNpcDefinition(
+            id = "boxing_coach",
+            assetPath = "tama/npcs/boxing_coach.png",
+            name = TamaLocalizedText("Coach Mira", "Entrenadora Mira"),
+            lines = listOf(
+                TamaLocalizedText("Strong paws, soft heart. That is the trick.", "Patitas fuertes, corazón suave. Ese es el truco."),
+                TamaLocalizedText("A little training turns nerves into rhythm.", "Un poco de entrenamiento convierte los nervios en ritmo."),
+                TamaLocalizedText("Keep your guard up, but keep your joy higher.", "Mantén la guardia alta, pero la alegría más alta."),
+                TamaLocalizedText("Every round is easier when you breathe first.", "Cada asalto es más fácil si respiras primero."),
+                TamaLocalizedText("Power grows best when it still knows how to play.", "La fuerza crece mejor cuando aún sabe jugar.")
+            )
+        ),
+        TamaAmbientNpcDefinition(
             id = "shop_seller",
             assetPath = "tama/npcs/shop_seller.png",
             name = TamaLocalizedText("Mimi", "Mimi"),
@@ -106,6 +118,7 @@ object TamaAmbientNpcCatalog {
         LocationType.FARM -> byId["farm_farmer"]
         LocationType.SHOP -> byId["shop_seller"]
         LocationType.SCHOOL -> byId["school_teacher"]
+        LocationType.BOXING_RING -> byId["boxing_coach"]
         LocationType.HOSPITAL -> byId["hospital_doctor"]
         LocationType.DUNGEON -> byId["dungeon_adventurer"]
         LocationType.ARCADE -> byId["arcade_host"]
@@ -117,15 +130,18 @@ object TamaAmbientNpcCatalog {
 
     fun resolveName(context: Context, npcId: String): String {
         val locale = context.resources.configuration.locales[0]
-        return byId(npcId)?.name?.resolve(locale) ?: context.getString(R.string.tama_unknown_place)
+        val fallback = byId(npcId)?.name?.resolve(locale) ?: context.getString(R.string.tama_unknown_place)
+        return TamaDialogTextCatalog.localizedText(context, "ambient_npc:$npcId:name", fallback)
     }
 
     fun resolveLine(context: Context, state: TamaAmbientNpcState): String {
         val locale = context.resources.configuration.locales[0]
         val definition = byId(state.npcId) ?: return ""
-        return definition.lines.getOrElse(state.lineIndex.coerceAtLeast(0)) {
+        val lineIndex = state.lineIndex.coerceAtLeast(0)
+        val fallback = definition.lines.getOrElse(lineIndex) {
             definition.lines.first()
         }.resolve(locale)
+        return TamaDialogTextCatalog.localizedText(context, "ambient_npc:${state.npcId}:line:$lineIndex", fallback)
     }
 
     fun createState(type: LocationType, now: Long = System.currentTimeMillis()): TamaAmbientNpcState? {

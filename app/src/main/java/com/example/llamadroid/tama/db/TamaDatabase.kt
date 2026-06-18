@@ -19,6 +19,7 @@ import com.example.llamadroid.util.DebugLog
         TamaDeepDreamRunEntity::class,
         TamaStudyLabelEntity::class,
         TamaStudySessionEntity::class,
+        TamaMarketQuoteEntity::class,
         TamaLocationEntity::class,
         TamaNpcEntity::class,
         TamaSummaryEntity::class,
@@ -35,7 +36,7 @@ import com.example.llamadroid.util.DebugLog
         AdventureGateNightArenaRunEntity::class,
         TamaArtworkEntity::class
     ],
-    version = 40,
+    version = 42,
     exportSchema = true
 )
 abstract class TamaDatabase : RoomDatabase() {

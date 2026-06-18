@@ -60,7 +60,87 @@ object PDFTranslationJobService {
         }
     }
 
-    fun startMangaCbzBatchTranslation(context: Context, cbzUris: List<Uri>): Boolean {
+    fun startTextLayerPdfTranslationBatch(context: Context, pdfUris: List<Uri>): Boolean {
+        val pendingPdfs = pdfUris.distinct()
+        if (pendingPdfs.isEmpty()) return false
+        if (pendingPdfs.size == 1) return startTextLayerPdfTranslation(context, pendingPdfs.first())
+        if (currentJob?.isActive == true) return false
+
+        val appContext = context.applicationContext
+        _state.value = PdfTranslationJobState(
+            isRunning = true,
+            kind = PdfTranslationJobKind.TEXT_LAYER_PDF,
+            progressMessage = appContext.getString(R.string.pdf_translation_background_started)
+        )
+        RemoteSummaryProtection.acquire(appContext)
+
+        currentJob = serviceScope.launch {
+            val service = PDFService(appContext)
+            var completed = 0
+            var failed = 0
+
+            pendingPdfs.forEachIndexed { index, pdfUri ->
+                val result = try {
+                    service.exportTranslatedTextLayerPdf(pdfUri) { progress ->
+                        val fileProgress = progressFraction(progress)
+                        _state.update {
+                            it.copy(
+                                isRunning = true,
+                                progressMessage = appContext.getString(
+                                    R.string.pdf_translation_batch_progress,
+                                    index + 1,
+                                    pendingPdfs.size,
+                                    formatTranslationProgress(appContext, progress)
+                                ),
+                                progressFraction = ((index.toFloat() + fileProgress) / pendingPdfs.size.toFloat()).coerceIn(0f, 1f),
+                                successMessage = null,
+                                errorMessage = null
+                            )
+                        }
+                    }
+                } catch (error: Exception) {
+                    Result.failure(error)
+                }
+
+                if (result.isSuccess) {
+                    completed++
+                } else {
+                    failed++
+                }
+            }
+
+            _state.value = if (completed > 0) {
+                val message = if (failed == 0) {
+                    appContext.getString(R.string.pdf_translation_batch_complete, completed)
+                } else {
+                    appContext.getString(R.string.pdf_translation_batch_partial, completed, failed)
+                }
+                PdfTranslationJobState(
+                    isRunning = false,
+                    kind = PdfTranslationJobKind.TEXT_LAYER_PDF,
+                    progressFraction = 1f,
+                    successMessage = message
+                )
+            } else {
+                PdfTranslationJobState(
+                    isRunning = false,
+                    kind = PdfTranslationJobKind.TEXT_LAYER_PDF,
+                    errorMessage = appContext.getString(R.string.pdf_translation_batch_failed, failed)
+                )
+            }
+            RemoteSummaryProtection.release()
+            currentJob = null
+        }
+
+        return true
+    }
+
+    fun startMangaCbzBatchTranslation(
+        context: Context,
+        cbzUris: List<Uri>,
+        exportPdf: Boolean = true,
+        exportCbz: Boolean = true
+    ): Boolean {
         if (currentJob?.isActive == true) return false
 
         val appContext = context.applicationContext
@@ -73,9 +153,13 @@ object PDFTranslationJobService {
 
         currentJob = serviceScope.launch {
             val result = try {
-                PDFService(appContext).translateMangaCbzBatch(cbzUris) { progress ->
-                    publishProgress(appContext, progress)
-                }
+                PDFService(appContext).translateMangaCbzBatch(
+                    cbzUris = cbzUris,
+                    exportPdf = exportPdf,
+                    exportCbz = exportCbz
+                ) { progress ->
+                        publishProgress(appContext, progress)
+                    }
             } catch (error: Exception) {
                 Result.failure(error)
             }

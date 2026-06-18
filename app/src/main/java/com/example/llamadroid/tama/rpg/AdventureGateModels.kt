@@ -97,6 +97,8 @@ data class AdventureGateProfile(
     val equippedRingId: String? = null,
     val equippedRelicId: String? = null,
     val educationLevel: Float = 0f,
+    val exerciseLevel: Float = 0f,
+    val introspectionLevel: Float = 0f,
     val lastRecoveryAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

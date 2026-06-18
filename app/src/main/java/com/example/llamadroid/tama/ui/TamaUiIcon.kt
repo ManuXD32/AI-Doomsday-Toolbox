@@ -45,6 +45,7 @@ internal object TamaUiIconCatalog {
         "🧼" to "soap_hygiene.png",
         "💰" to "money_bag.png",
         "📚" to "books_education.png",
+        "🪞" to "introspection_spiral.png",
         "💬" to "chat_bubble.png",
         "🎒" to "inventory_backpack.png",
         "✅" to "checklist.png",

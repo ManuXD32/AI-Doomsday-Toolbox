@@ -1502,6 +1502,397 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate66To67_addsLiveTranslatorTables() {
+        helper.createDatabase(TEST_DB, 66).close()
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            67,
+            true,
+            Migrations.MIGRATION_66_67
+        )
+
+        listOf(
+            "live_translator_templates",
+            "live_translator_sessions",
+            "live_translator_turns"
+        ).forEach { table ->
+            migratedDb.query(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '$table'"
+            ).use { cursor ->
+                assertTrue("Missing $table", cursor.moveToFirst())
+            }
+        }
+
+        migratedDb.query("PRAGMA table_info(live_translator_templates)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("speaker1Language"))
+            assertTrue(columns.contains("speaker2Language"))
+            assertTrue(columns.contains("whisperModelPath"))
+            assertTrue(columns.contains("backendEngine"))
+            assertTrue(columns.contains("startSpeakingTimeoutSeconds"))
+            assertTrue(columns.contains("finishedTalkingTimeoutSeconds"))
+        }
+    }
+
+    @Test
+    fun migrate67To68_addsLiveTranslatorSpeakerTtsLanguages() {
+        helper.createDatabase(TEST_DB, 67).apply {
+            execSQL(
+                """
+                INSERT INTO live_translator_templates (
+                    name,
+                    speaker1Language,
+                    speaker2Language,
+                    whisperModelPath,
+                    whisperThreads,
+                    ttsModelPath,
+                    ttsModelName,
+                    ttsLanguage,
+                    ttsVoiceName,
+                    ttsSteps,
+                    ttsSpeed,
+                    backendEngine,
+                    llamaHost,
+                    llamaPort,
+                    llamaModelName,
+                    ollamaHost,
+                    ollamaPort,
+                    ollamaModelName,
+                    liteRtModelId,
+                    liteRtBackend,
+                    contextSize,
+                    maxTokens,
+                    temperature,
+                    timeoutSeconds,
+                    startSpeakingTimeoutSeconds,
+                    finishedTalkingTimeoutSeconds,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    'Clinic',
+                    'English',
+                    'Spanish',
+                    NULL,
+                    4,
+                    NULL,
+                    NULL,
+                    'fr',
+                    NULL,
+                    8,
+                    1.0,
+                    'llama-server',
+                    '127.0.0.1',
+                    8080,
+                    NULL,
+                    '127.0.0.1',
+                    11434,
+                    NULL,
+                    NULL,
+                    'auto',
+                    4096,
+                    512,
+                    0.2,
+                    120,
+                    10,
+                    5,
+                    1,
+                    1
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            68,
+            true,
+            Migrations.MIGRATION_67_68
+        )
+
+        migratedDb.query("PRAGMA table_info(live_translator_templates)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("speaker1TtsLanguage"))
+            assertTrue(columns.contains("speaker2TtsLanguage"))
+        }
+
+        migratedDb.query(
+            "SELECT speaker1TtsLanguage, speaker2TtsLanguage FROM live_translator_templates WHERE name = 'Clinic'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("fr", cursor.getString(0))
+            assertEquals("fr", cursor.getString(1))
+        }
+    }
+
+    @Test
+    fun migrate69To70_addsLiveTranslatorLiteRtMtpToggle() {
+        helper.createDatabase(TEST_DB, 69).close()
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            70,
+            true,
+            Migrations.MIGRATION_69_70
+        )
+
+        migratedDb.query("PRAGMA table_info(live_translator_templates)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("liteRtMtpEnabled"))
+        }
+    }
+
+    @Test
+    fun migrate70To71_addsLiveTranslatorLiteRtThinkingToggle() {
+        helper.createDatabase(TEST_DB, 70).close()
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            71,
+            true,
+            Migrations.MIGRATION_70_71
+        )
+
+        migratedDb.query("PRAGMA table_info(live_translator_templates)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("liteRtThinkingEnabled"))
+        }
+    }
+
+    @Test
+    fun migrate74To75_addsAiServerHubTablesAndDefaults() {
+        helper.createDatabase(TEST_DB, 74).close()
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            75,
+            true,
+            Migrations.MIGRATION_74_75
+        )
+
+        migratedDb.query("SELECT serverType, port, accessMode, lanVisible FROM ai_server_configs ORDER BY port ASC").use { cursor ->
+            val rows = mutableListOf<Pair<String, Int>>()
+            while (cursor.moveToNext()) {
+                rows += cursor.getString(0) to cursor.getInt(1)
+                assertEquals("PUBLIC", cursor.getString(2))
+                assertEquals(0, cursor.getInt(3))
+            }
+            assertEquals(
+                listOf(
+                    "image" to 10101,
+                    "video" to 10102,
+                    "workflows" to 10103,
+                    "tts" to 10104,
+                    "video_upscale" to 10105,
+                    "docs_datasets" to 10106,
+                    "llama_chat" to 10107
+                ),
+                rows
+            )
+        }
+
+        migratedDb.query("PRAGMA table_info(ai_server_artifacts)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("ownerUserId"))
+            assertTrue(columns.contains("origin"))
+            assertTrue(columns.contains("serverType"))
+            assertTrue(columns.contains("jobId"))
+        }
+    }
+
+    @Test
+    fun migrate75To76_addsAiServerWebChatTables() {
+        helper.createDatabase(TEST_DB, 75).close()
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            76,
+            true,
+            Migrations.MIGRATION_75_76
+        )
+
+        migratedDb.query("PRAGMA table_info(ai_server_web_providers)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("engine"))
+            assertTrue(columns.contains("baseUrl"))
+            assertTrue(columns.contains("supportsVision"))
+            assertTrue(columns.contains("supportsAudio"))
+        }
+
+        migratedDb.query("PRAGMA table_info(ai_server_web_chats)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("providerId"))
+            assertTrue(columns.contains("systemPrompt"))
+        }
+
+        migratedDb.query("PRAGMA table_info(ai_server_web_messages)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("imagePath"))
+            assertTrue(columns.contains("audioPath"))
+            assertTrue(columns.contains("documentPath"))
+            assertTrue(columns.contains("toolActivity"))
+        }
+    }
+
+    @Test
+    fun migrate76To77_addsAiServerWebChatAttachmentTable() {
+        helper.createDatabase(TEST_DB, 76).close()
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            77,
+            true,
+            Migrations.MIGRATION_76_77
+        )
+
+        migratedDb.query("PRAGMA table_info(ai_server_web_message_attachments)").use { cursor ->
+            val nameIndex = cursor.getColumnIndex("name")
+            val columns = mutableSetOf<String>()
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("messageId"))
+            assertTrue(columns.contains("attachmentType"))
+            assertTrue(columns.contains("path"))
+            assertTrue(columns.contains("mimeType"))
+            assertTrue(columns.contains("sizeBytes"))
+        }
+    }
+
+    @Test
+    fun migrate80To81_backfillsLiveTranslatorFullUrls() {
+        helper.createDatabase(TEST_DB, 80).apply {
+            execSQL(
+                """
+                INSERT INTO live_translator_templates (
+                    id,
+                    name,
+                    speaker1Language,
+                    speaker2Language,
+                    whisperModelPath,
+                    whisperThreads,
+                    ttsModelPath,
+                    ttsModelName,
+                    ttsLanguage,
+                    speaker1TtsLanguage,
+                    speaker2TtsLanguage,
+                    ttsVoiceName,
+                    ttsSteps,
+                    ttsSpeed,
+                    backendEngine,
+                    llamaHost,
+                    llamaPort,
+                    llamaModelName,
+                    ollamaHost,
+                    ollamaPort,
+                    ollamaModelName,
+                    liteRtModelId,
+                    liteRtBackend,
+                    liteRtMtpEnabled,
+                    liteRtThinkingEnabled,
+                    contextSize,
+                    maxTokens,
+                    temperature,
+                    timeoutSeconds,
+                    startSpeakingTimeoutSeconds,
+                    finishedTalkingTimeoutSeconds,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    1,
+                    'Travel',
+                    'English',
+                    'Spanish',
+                    NULL,
+                    4,
+                    NULL,
+                    NULL,
+                    'en',
+                    'en',
+                    'es',
+                    NULL,
+                    8,
+                    1.05,
+                    'llama-swap',
+                    'legacy-llama.local',
+                    8088,
+                    NULL,
+                    'legacy-ollama.local',
+                    11555,
+                    NULL,
+                    NULL,
+                    'auto',
+                    0,
+                    0,
+                    4096,
+                    512,
+                    0.2,
+                    120,
+                    10,
+                    5,
+                    123456789,
+                    123456799
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            81,
+            true,
+            Migrations.MIGRATION_80_81
+        )
+
+        migratedDb.query(
+            """
+            SELECT llamaServerUrl, llamaSwapUrl, ollamaUrl
+            FROM live_translator_templates
+            WHERE id = 1
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("http://legacy-llama.local:8088", cursor.getString(0))
+            assertEquals("http://legacy-llama.local:8088", cursor.getString(1))
+            assertEquals("http://legacy-ollama.local:11555", cursor.getString(2))
+        }
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
     }

@@ -1,6 +1,8 @@
 package com.example.llamadroid.onnx
 
 import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OnnxValue
+import ai.onnxruntime.TensorInfo
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -42,6 +44,8 @@ data class OnnxBackgroundRemovalConfig(
     val maskSoftness: Float = 1f,
     val maskContrast: Float = 1f,
     val exportMask: Boolean = false,
+    val resizeBeforeProcessing: Boolean = true,
+    val resizeMaxEdge: Int = 512,
     val preserveSourceNames: Boolean = true
 ) : Parcelable
 
@@ -50,6 +54,32 @@ data class OnnxBackgroundRemovalResult(
     val maskFile: File?,
     val metadata: OnnxBackgroundRemovalMetadata,
     val runtimeSummary: OnnxRuntimeComponentSummary
+)
+
+enum class OnnxBackgroundRemovalStage {
+    DECODING_IMAGE,
+    LOADING_MODEL,
+    PREPARING_TENSOR,
+    RUNNING_MODEL,
+    READING_MASK,
+    POSTPROCESSING_MASK,
+    SAVING_OUTPUT,
+    COMPLETE
+}
+
+@Serializable
+data class OnnxBackgroundRemovalRuntimeState(
+    val state: String,
+    val progress: Float = 0f,
+    val status: String = "",
+    val completed: Int = 0,
+    val total: Int = 0,
+    val outputPaths: List<String> = emptyList(),
+    val failed: Int = 0,
+    val durationMs: Long = 0L,
+    val message: String? = null,
+    val startedAtEpochMs: Long = 0L,
+    val updatedAtEpochMs: Long = System.currentTimeMillis()
 )
 
 @Serializable
@@ -69,6 +99,10 @@ data class OnnxBackgroundRemovalMetadata(
     val exportMask: Boolean,
     val width: Int,
     val height: Int,
+    val originalWidth: Int = width,
+    val originalHeight: Int = height,
+    val resizeBeforeProcessing: Boolean = false,
+    val resizeMaxEdge: Int? = null,
     val createdAtEpochMs: Long,
     val durationMs: Long,
     val sharedOutputRelativePath: String? = null,
@@ -91,6 +125,8 @@ object OnnxBackgroundRemovalStorage {
     }
 
     fun outputDir(context: Context): File = File(context.filesDir, "bgr_output")
+
+    fun runtimeStateFile(context: Context): File = File(outputDir(context), "runtime_state.json")
 
     fun buildOutputFile(context: Context, sourceName: String, preserveSourceName: Boolean): File {
         val dir = outputDir(context).apply { mkdirs() }
@@ -132,6 +168,22 @@ object OnnxBackgroundRemovalStorage {
             ?.sortedByDescending { it.lastModified() }
             ?: emptyList()
     }
+
+    fun writeRuntimeState(context: Context, state: OnnxBackgroundRemovalRuntimeState) {
+        val file = runtimeStateFile(context)
+        file.parentFile?.mkdirs()
+        file.writeText(json.encodeToString(state.copy(updatedAtEpochMs = System.currentTimeMillis())))
+    }
+
+    fun readRuntimeState(context: Context): OnnxBackgroundRemovalRuntimeState? {
+        val file = runtimeStateFile(context)
+        if (!file.isFile) return null
+        return runCatching { json.decodeFromString<OnnxBackgroundRemovalRuntimeState>(file.readText()) }.getOrNull()
+    }
+
+    fun clearRuntimeState(context: Context) {
+        runtimeStateFile(context).delete()
+    }
 }
 
 class OnnxBackgroundRemovalPipeline {
@@ -140,95 +192,153 @@ class OnnxBackgroundRemovalPipeline {
         config: OnnxBackgroundRemovalConfig,
         inputFile: File,
         sourceName: String,
-        onDiagnostic: (String) -> Unit = {}
+        onDiagnostic: (String) -> Unit = {},
+        onProgress: (OnnxBackgroundRemovalStage, Float) -> Unit = { _, _ -> }
     ): OnnxBackgroundRemovalResult {
         val start = System.currentTimeMillis()
-        val sourceBitmap = BitmapFactory.decodeFile(inputFile.absolutePath)
-            ?: error("Could not decode ${inputFile.name}")
+        onProgress(OnnxBackgroundRemovalStage.DECODING_IMAGE, 0.02f)
+        val decodedSource = decodeSourceBitmap(inputFile, config)
+        val sourceBitmap = decodedSource.bitmap
+        if (decodedSource.resized) {
+            onDiagnostic(
+                "resized source ${decodedSource.originalWidth}x${decodedSource.originalHeight} -> " +
+                    "${sourceBitmap.width}x${sourceBitmap.height} maxEdge=${config.resizeMaxEdge.coerceAtLeast(1)}"
+            )
+        }
         val outputFile = OnnxBackgroundRemovalStorage.buildOutputFile(
             context = context,
             sourceName = sourceName,
             preserveSourceName = config.preserveSourceNames
         )
         val environment = OrtEnvironmentProvider.environment
-        createOnnxSessionWithBackend(
-            environment = environment,
-            modelFile = File(config.modelPath),
-            requestedBackend = config.backend,
-            runtimeOptions = config.runtimeOptions,
-            componentLabel = "background_removal"
-        ).use { sessionResult ->
-            val input = prepareInput(sourceBitmap)
-            val inputName = sessionResult.session.inputNames.first()
-            OnnxTensor.createTensor(
-                environment,
-                FloatBuffer.wrap(input.tensor),
-                longArrayOf(1, 3, BGR_INPUT_SIZE.toLong(), BGR_INPUT_SIZE.toLong())
-            ).use { tensor ->
-                sessionResult.session.run(mapOf(inputName to tensor)).use { result ->
-                    val outputValue = result[0].value
-                    val rawMask = extractMask(outputValue)
-                    val normalizedMask = normalizeMask(rawMask.values)
-                    val croppedMask = cropMask(
-                        mask = normalizedMask,
-                        maskWidth = rawMask.width,
-                        maskHeight = rawMask.height,
-                        rect = input.fittedRect
-                    )
-                    val fittedMask = resizeMaskBilinear(
-                        mask = croppedMask.values,
-                        sourceWidth = croppedMask.width,
-                        sourceHeight = croppedMask.height,
-                        targetWidth = sourceBitmap.width,
-                        targetHeight = sourceBitmap.height
-                    )
-                    val alpha = postProcessAlpha(
-                        mask = fittedMask,
-                        width = sourceBitmap.width,
-                        height = sourceBitmap.height,
-                        threshold = config.alphaThreshold,
-                        featherRadius = config.featherRadius,
-                        softness = config.maskSoftness,
-                        contrast = config.maskContrast
-                    )
-                    writeTransparentPng(sourceBitmap, alpha, outputFile)
-                    val maskFile = if (config.exportMask) {
-                        OnnxBackgroundRemovalStorage.maskFileFor(outputFile).also {
-                            writeMaskPng(alpha, sourceBitmap.width, sourceBitmap.height, it)
+        try {
+            onProgress(OnnxBackgroundRemovalStage.LOADING_MODEL, 0.10f)
+            createOnnxSessionWithBackend(
+                environment = environment,
+                modelFile = File(config.modelPath),
+                requestedBackend = config.backend,
+                runtimeOptions = config.runtimeOptions,
+                componentLabel = "background_removal",
+                loadOrtFormat = false
+            ).use { sessionResult ->
+                onDiagnostic(
+                    "session loaded model=${config.modelName} requested=${config.backend.name} " +
+                        "resolved=${sessionResult.summary.resolvedBackend} warning=${sessionResult.summary.warningMessage.orEmpty()}"
+                )
+                onProgress(OnnxBackgroundRemovalStage.PREPARING_TENSOR, 0.22f)
+                val input = prepareInput(sourceBitmap)
+                val inputName = sessionResult.session.inputNames.first()
+                OnnxTensor.createTensor(
+                    environment,
+                    FloatBuffer.wrap(input.tensor),
+                    longArrayOf(1, 3, BGR_INPUT_SIZE.toLong(), BGR_INPUT_SIZE.toLong())
+                ).use { tensor ->
+                    onDiagnostic("running input=$inputName source=${sourceBitmap.width}x${sourceBitmap.height}")
+                    onProgress(OnnxBackgroundRemovalStage.RUNNING_MODEL, 0.38f)
+                    sessionResult.session.run(mapOf(inputName to tensor)).use { result ->
+                        onProgress(OnnxBackgroundRemovalStage.READING_MASK, 0.72f)
+                        val outputInfos = result.mapIndexed { index, entry ->
+                            BgrOutputInfo(
+                                index = index,
+                                name = entry.key,
+                                shape = tensorShape(entry.value),
+                                type = entry.value.info?.javaClass?.simpleName.orEmpty()
+                            )
                         }
-                    } else {
-                        null
+                        val selectedOutput = selectMaskOutput(outputInfos)
+                        onDiagnostic(
+                            "outputs=${outputInfos.joinToString { it.toDiagnosticString() }} " +
+                                "selected=#${selectedOutput.index}:${selectedOutput.name}"
+                        )
+                        val rawMask = extractMask(result[selectedOutput.index])
+                        val rawStats = rawMask.values.statsString()
+                        val normalizedMask = normalizeMask(rawMask.values, config.modelName)
+                        onDiagnostic(
+                            "mask output=${rawMask.width}x${rawMask.height} values=${rawMask.values.size} " +
+                                "raw=$rawStats normalized=${normalizedMask.statsString()}"
+                        )
+                        val croppedMask = cropMask(
+                            mask = normalizedMask,
+                            maskWidth = rawMask.width,
+                            maskHeight = rawMask.height,
+                            rect = input.fittedRect
+                        )
+                        val fittedMask = resizeMaskBilinear(
+                            mask = croppedMask.values,
+                            sourceWidth = croppedMask.width,
+                            sourceHeight = croppedMask.height,
+                            targetWidth = sourceBitmap.width,
+                            targetHeight = sourceBitmap.height
+                        )
+                        onProgress(OnnxBackgroundRemovalStage.POSTPROCESSING_MASK, 0.82f)
+                        val alpha = postProcessAlpha(
+                            mask = fittedMask,
+                            width = sourceBitmap.width,
+                            height = sourceBitmap.height,
+                            threshold = config.alphaThreshold,
+                            featherRadius = config.featherRadius,
+                            softness = config.maskSoftness,
+                            contrast = config.maskContrast
+                        )
+                        onProgress(OnnxBackgroundRemovalStage.SAVING_OUTPUT, 0.92f)
+                        writeTransparentPng(sourceBitmap, alpha, outputFile)
+                        val maskFile = if (config.exportMask) {
+                            OnnxBackgroundRemovalStorage.maskFileFor(outputFile).also {
+                                writeMaskPng(alpha, sourceBitmap.width, sourceBitmap.height, it)
+                            }
+                        } else {
+                            null
+                        }
+                        val durationMs = System.currentTimeMillis() - start
+                        val metadata = OnnxBackgroundRemovalMetadata(
+                            outputPath = outputFile.absolutePath,
+                            maskPath = maskFile?.absolutePath,
+                            sourceName = sourceName,
+                            sourcePath = inputFile.absolutePath,
+                            modelName = config.modelName,
+                            backend = config.backend.name,
+                            resolvedBackend = sessionResult.summary.resolvedBackend,
+                            runtimeWarning = sessionResult.summary.warningMessage,
+                            alphaThreshold = config.alphaThreshold,
+                            featherRadius = config.featherRadius,
+                            maskSoftness = config.maskSoftness,
+                            maskContrast = config.maskContrast,
+                            exportMask = config.exportMask,
+                            width = sourceBitmap.width,
+                            height = sourceBitmap.height,
+                            originalWidth = decodedSource.originalWidth,
+                            originalHeight = decodedSource.originalHeight,
+                            resizeBeforeProcessing = config.resizeBeforeProcessing,
+                            resizeMaxEdge = config.resizeMaxEdge.takeIf { config.resizeBeforeProcessing },
+                            createdAtEpochMs = System.currentTimeMillis(),
+                            durationMs = durationMs
+                        )
+                        OnnxBackgroundRemovalStorage.writeMetadata(outputFile, metadata)
+                        onDiagnostic("background_removal output=${outputFile.name} size=${sourceBitmap.width}x${sourceBitmap.height}")
+                        onProgress(OnnxBackgroundRemovalStage.COMPLETE, 1f)
+                        return OnnxBackgroundRemovalResult(outputFile, maskFile, metadata, sessionResult.summary)
                     }
-                    val durationMs = System.currentTimeMillis() - start
-                    val metadata = OnnxBackgroundRemovalMetadata(
-                        outputPath = outputFile.absolutePath,
-                        maskPath = maskFile?.absolutePath,
-                        sourceName = sourceName,
-                        sourcePath = inputFile.absolutePath,
-                        modelName = config.modelName,
-                        backend = config.backend.name,
-                        resolvedBackend = sessionResult.summary.resolvedBackend,
-                        runtimeWarning = sessionResult.summary.warningMessage,
-                        alphaThreshold = config.alphaThreshold,
-                        featherRadius = config.featherRadius,
-                        maskSoftness = config.maskSoftness,
-                        maskContrast = config.maskContrast,
-                        exportMask = config.exportMask,
-                        width = sourceBitmap.width,
-                        height = sourceBitmap.height,
-                        createdAtEpochMs = System.currentTimeMillis(),
-                        durationMs = durationMs
-                    )
-                    OnnxBackgroundRemovalStorage.writeMetadata(outputFile, metadata)
-                    onDiagnostic("background_removal output=${outputFile.name} size=${sourceBitmap.width}x${sourceBitmap.height}")
-                    return OnnxBackgroundRemovalResult(outputFile, maskFile, metadata, sessionResult.summary)
                 }
             }
+        } finally {
+            if (!sourceBitmap.isRecycled) sourceBitmap.recycle()
         }
     }
 }
 
 data class OnnxBgrMask(val values: FloatArray, val width: Int, val height: Int)
+
+private data class BgrOutputInfo(
+    val index: Int,
+    val name: String,
+    val shape: List<Int>,
+    val type: String
+) {
+    fun toDiagnosticString(): String {
+        val shapeText = shape.joinToString("x").ifBlank { "unknown" }
+        return "#$index:$name:$shapeText:$type"
+    }
+}
 
 fun postProcessAlpha(
     mask: FloatArray,
@@ -255,7 +365,68 @@ private data class PreparedInput(
     val fittedRect: FittedRect
 )
 
+private data class DecodedSourceBitmap(
+    val bitmap: Bitmap,
+    val originalWidth: Int,
+    val originalHeight: Int,
+    val resized: Boolean
+)
+
 private data class FittedRect(val left: Int, val top: Int, val width: Int, val height: Int)
+
+private fun decodeSourceBitmap(inputFile: File, config: OnnxBackgroundRemovalConfig): DecodedSourceBitmap {
+    if (!config.resizeBeforeProcessing) {
+        val bitmap = BitmapFactory.decodeFile(inputFile.absolutePath)
+            ?: error("Could not decode ${inputFile.name}")
+        return DecodedSourceBitmap(bitmap, bitmap.width, bitmap.height, resized = false)
+    }
+
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(inputFile.absolutePath, bounds)
+    val originalWidth = bounds.outWidth.takeIf { it > 0 } ?: 0
+    val originalHeight = bounds.outHeight.takeIf { it > 0 } ?: 0
+    if (originalWidth <= 0 || originalHeight <= 0) {
+        val bitmap = BitmapFactory.decodeFile(inputFile.absolutePath)
+            ?: error("Could not decode ${inputFile.name}")
+        return DecodedSourceBitmap(bitmap, bitmap.width, bitmap.height, resized = false)
+    }
+
+    val targetMaxEdge = config.resizeMaxEdge.coerceAtLeast(1)
+    val originalMaxEdge = max(originalWidth, originalHeight)
+    if (originalMaxEdge <= targetMaxEdge) {
+        val bitmap = BitmapFactory.decodeFile(inputFile.absolutePath)
+            ?: error("Could not decode ${inputFile.name}")
+        return DecodedSourceBitmap(bitmap, originalWidth, originalHeight, resized = false)
+    }
+
+    val sampled = BitmapFactory.decodeFile(
+        inputFile.absolutePath,
+        BitmapFactory.Options().apply {
+            inSampleSize = calculateDecodeSampleSize(originalWidth, originalHeight, targetMaxEdge)
+        }
+    ) ?: error("Could not decode ${inputFile.name}")
+    val sampledMaxEdge = max(sampled.width, sampled.height)
+    if (sampledMaxEdge <= targetMaxEdge) {
+        return DecodedSourceBitmap(sampled, originalWidth, originalHeight, resized = sampled.width != originalWidth || sampled.height != originalHeight)
+    }
+
+    val scale = targetMaxEdge.toFloat() / sampledMaxEdge.toFloat()
+    val targetWidth = max(1, (sampled.width * scale).roundToInt())
+    val targetHeight = max(1, (sampled.height * scale).roundToInt())
+    val resized = Bitmap.createScaledBitmap(sampled, targetWidth, targetHeight, true)
+    if (resized !== sampled) sampled.recycle()
+    return DecodedSourceBitmap(resized, originalWidth, originalHeight, resized = true)
+}
+
+private fun calculateDecodeSampleSize(width: Int, height: Int, targetMaxEdge: Int): Int {
+    var sampleSize = 1
+    var sampledMaxEdge = max(width, height)
+    while (sampledMaxEdge / 2 >= targetMaxEdge) {
+        sampleSize *= 2
+        sampledMaxEdge /= 2
+    }
+    return sampleSize.coerceAtLeast(1)
+}
 
 private fun prepareInput(source: Bitmap): PreparedInput {
     val inputBitmap = Bitmap.createBitmap(BGR_INPUT_SIZE, BGR_INPUT_SIZE, Bitmap.Config.ARGB_8888)
@@ -282,13 +453,117 @@ private fun prepareInput(source: Bitmap): PreparedInput {
     return PreparedInput(tensor, FittedRect(left, top, fittedWidth, fittedHeight))
 }
 
-private fun extractMask(value: Any?): OnnxBgrMask {
-    val values = extractFloatTensor(value)
-    val shape = (value as? OnnxTensor)?.info?.shape?.map { it.toInt() } ?: emptyList()
+private fun tensorShape(value: OnnxValue): List<Int> {
+    val tensorInfo = value.info as? TensorInfo ?: return emptyList()
+    return tensorInfo.shape.map { it.toInt() }
+}
+
+private fun selectMaskOutput(outputs: List<BgrOutputInfo>): BgrOutputInfo {
+    require(outputs.isNotEmpty()) { "Model did not return any outputs" }
+    return outputs.lastOrNull { it.hasPlausibleMaskShape() } ?: outputs.last()
+}
+
+private fun BgrOutputInfo.hasPlausibleMaskShape(): Boolean {
+    val dims = shape.filter { it > 0 }
+    if (dims.size >= 4) {
+        val d1 = dims[dims.size - 3]
+        val d2 = dims[dims.size - 2]
+        val d3 = dims[dims.size - 1]
+        if (d1 in 1..4 && d2 >= 16 && d3 >= 16) return true
+        if (d1 >= 16 && d2 >= 16 && d3 in 1..4) return true
+    }
+    if (dims.size >= 3) {
+        val d0 = dims[dims.size - 3]
+        val d1 = dims[dims.size - 2]
+        val d2 = dims[dims.size - 1]
+        if (d0 in 1..4 && d1 >= 16 && d2 >= 16) return true
+        if (d0 >= 16 && d1 >= 16 && d2 in 1..4) return true
+    }
+    val spatial = dims.takeLast(2)
+    return spatial.size == 2 && spatial[0] >= 16 && spatial[1] >= 16
+}
+
+private fun extractMask(value: OnnxValue): OnnxBgrMask {
+    val values = extractFloatTensor(value.value)
+    val shape = tensorShape(value)
+    return extractMaskFromValues(values, shape)
+}
+
+internal fun extractMaskFromValues(values: FloatArray, shape: List<Int>): OnnxBgrMask {
+    val dims = shape.filter { it > 0 }
+    if (dims.size >= 4) {
+        val batch = dims[dims.size - 4]
+        val d1 = dims[dims.size - 3]
+        val d2 = dims[dims.size - 2]
+        val d3 = dims[dims.size - 1]
+        if (batch >= 1 && d1 in 1..4 && d2 > 4 && d3 > 4) {
+            return extractNchwMask(values, channels = d1, height = d2, width = d3)
+        }
+        if (batch >= 1 && d1 > 4 && d2 > 4 && d3 in 1..4) {
+            return extractNhwcMask(values, height = d1, width = d2, channels = d3)
+        }
+    }
+    if (dims.size >= 3) {
+        val d0 = dims[dims.size - 3]
+        val d1 = dims[dims.size - 2]
+        val d2 = dims[dims.size - 1]
+        if (d0 in 1..4 && d1 > 4 && d2 > 4) {
+            return extractNchwMask(values, channels = d0, height = d1, width = d2)
+        }
+        if (d0 > 4 && d1 > 4 && d2 in 1..4) {
+            return extractNhwcMask(values, height = d0, width = d1, channels = d2)
+        }
+    }
+    if (dims.size >= 2) {
+        val height = dims[dims.size - 2]
+        val width = dims[dims.size - 1]
+        val pixels = height * width
+        if (pixels > 0 && values.size >= pixels) {
+            return OnnxBgrMask(values.copyOfRange(0, pixels), width, height)
+        }
+    }
     val inferredSide = sqrt(values.size.toDouble()).roundToInt().takeIf { it * it == values.size }
-    val height = shape.takeLast(2).firstOrNull()?.takeIf { it > 0 } ?: inferredSide ?: BGR_INPUT_SIZE
-    val width = shape.takeLast(1).firstOrNull()?.takeIf { it > 0 } ?: inferredSide ?: (values.size / height).coerceAtLeast(1)
-    return OnnxBgrMask(values.takeLast(width * height).toFloatArray(), width, height)
+    val height = inferredSide ?: BGR_INPUT_SIZE
+    val width = inferredSide ?: (values.size / height).coerceAtLeast(1)
+    val pixels = (width * height).coerceAtMost(values.size)
+    return OnnxBgrMask(values.copyOfRange(0, pixels), width, height)
+}
+
+private fun extractNchwMask(values: FloatArray, channels: Int, height: Int, width: Int): OnnxBgrMask {
+    val pixels = width * height
+    require(values.size >= pixels) { "Tensor output does not contain a full mask plane" }
+    if (channels == 1) {
+        return OnnxBgrMask(values.copyOfRange(0, pixels), width, height)
+    }
+    if (channels >= 4) {
+        val offset = (3 * pixels).coerceAtMost(values.size - pixels)
+        return OnnxBgrMask(values.copyOfRange(offset, offset + pixels), width, height)
+    }
+    val mask = FloatArray(pixels) { index ->
+        var sum = 0f
+        for (channel in 0 until channels) {
+            sum += values[channel * pixels + index]
+        }
+        sum / channels.toFloat()
+    }
+    return OnnxBgrMask(mask, width, height)
+}
+
+private fun extractNhwcMask(values: FloatArray, height: Int, width: Int, channels: Int): OnnxBgrMask {
+    val pixels = width * height
+    require(values.size >= pixels * channels) { "Tensor output does not contain a full interleaved mask" }
+    val mask = FloatArray(pixels) { index ->
+        if (channels >= 4) {
+            values[index * channels + 3]
+        } else {
+            var sum = 0f
+            for (channel in 0 until channels) {
+                sum += values[index * channels + channel]
+            }
+            sum / channels.toFloat()
+        }
+    }
+    return OnnxBgrMask(mask, width, height)
 }
 
 private fun extractFloatTensor(value: Any?): FloatArray {
@@ -302,14 +577,42 @@ private fun extractFloatTensor(value: Any?): FloatArray {
     }
 }
 
-private fun normalizeMask(mask: FloatArray): FloatArray {
+internal fun normalizeMask(mask: FloatArray, modelName: String = ""): FloatArray {
     val minValue = mask.minOrNull() ?: 0f
     val maxValue = mask.maxOrNull() ?: 1f
-    return if (minValue < 0f || maxValue > 1f) {
+    val activated = if (minValue < 0f || maxValue > 1f) {
         FloatArray(mask.size) { index -> (1f / (1f + exp(-mask[index]))).coerceIn(0f, 1f) }
     } else {
         FloatArray(mask.size) { index -> mask[index].coerceIn(0f, 1f) }
     }
+    return if (requiresMinMaxMaskNormalization(modelName)) {
+        minMaxNormalizeMask(activated)
+    } else {
+        activated
+    }
+}
+
+private fun requiresMinMaxMaskNormalization(modelName: String): Boolean {
+    return modelName.contains("ben2", ignoreCase = true) ||
+        modelName.contains("background_removal__ben", ignoreCase = true)
+}
+
+private fun minMaxNormalizeMask(mask: FloatArray): FloatArray {
+    val minValue = mask.minOrNull() ?: 0f
+    val maxValue = mask.maxOrNull() ?: 1f
+    val range = maxValue - minValue
+    if (range <= 1e-6f) return mask
+    return FloatArray(mask.size) { index ->
+        ((mask[index] - minValue) / range).coerceIn(0f, 1f)
+    }
+}
+
+private fun FloatArray.statsString(): String {
+    if (isEmpty()) return "empty"
+    val minValue = minOrNull() ?: 0f
+    val maxValue = maxOrNull() ?: 0f
+    val mean = sum() / size.toFloat()
+    return "min=${"%.4f".format(Locale.US, minValue)} max=${"%.4f".format(Locale.US, maxValue)} mean=${"%.4f".format(Locale.US, mean)}"
 }
 
 private fun cropMask(mask: FloatArray, maskWidth: Int, maskHeight: Int, rect: FittedRect): OnnxBgrMask {

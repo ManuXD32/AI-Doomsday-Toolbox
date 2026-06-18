@@ -18,7 +18,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -72,6 +71,7 @@ import com.example.llamadroid.service.OnnxTtsGenerationService
 import com.example.llamadroid.service.OnnxTtsGenerationState
 import com.example.llamadroid.service.OnnxTtsGenerationStateStore
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,6 +103,7 @@ fun OnnxTtsScreen(navController: NavController) {
     var lastAudio by remember { mutableStateOf<File?>(null) }
     var historyRefresh by remember { mutableIntStateOf(0) }
     val history = remember(historyRefresh) { OnnxTtsStorage.listGeneratedAudio(context) }
+    val latestAudio = lastAudio?.takeIf { it.isFile } ?: history.firstOrNull()
     val generationState by OnnxTtsGenerationStateStore.state.collectAsState()
     var lastCompletedPath by remember { mutableStateOf<String?>(null) }
 
@@ -340,17 +341,91 @@ fun OnnxTtsScreen(navController: NavController) {
                         }
                     }
                 }
-                lastAudio?.let { file ->
+                latestAudio?.let { file ->
                     item { OnnxTtsAudioCard(file = file, title = stringResource(R.string.onnx_tts_latest_audio)) }
                 }
-                if (history.isNotEmpty()) {
-                    item {
-                        Text(stringResource(R.string.onnx_tts_history), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    }
-                    items(history, key = { it.absolutePath }) { file ->
-                        OnnxTtsAudioCard(file = file, title = file.name)
+                item {
+                    OnnxTtsGalleryEntryCard(
+                        audioCount = history.size,
+                        onOpen = { navController.navigate(Screen.OnnxTtsGallery.route) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OnnxTtsGalleryEntryCard(audioCount: Int, onOpen: () -> Unit) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                stringResource(R.string.onnx_tts_generated_audio_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                stringResource(R.string.onnx_tts_generated_audio_desc, audioCount),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.FolderOpen, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.onnx_tts_open_gallery))
+            }
+        }
+    }
+}
+
+@Composable
+internal fun OnnxTtsAudioCard(file: File, title: String) {
+    var player by remember(file.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
+    var isPlaying by remember(file.absolutePath) { mutableStateOf(false) }
+    DisposableEffect(file.absolutePath) {
+        onDispose {
+            runCatching { player?.release() }
+        }
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(
+                onClick = {
+                    val current = player
+                    if (current?.isPlaying == true) {
+                        current.pause()
+                        isPlaying = false
+                    } else {
+                        current?.release()
+                        player = MediaPlayer().apply {
+                            setDataSource(file.absolutePath)
+                            prepare()
+                            setOnCompletionListener {
+                                isPlaying = false
+                                runCatching { it.release() }
+                                player = null
+                            }
+                            start()
+                        }
+                        isPlaying = true
                     }
                 }
+            ) {
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(file.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -409,63 +484,6 @@ private fun OnnxTtsModelPicker(models: List<ModelEntity>, selected: String, onSe
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
-@Composable
-private fun OnnxTtsAudioCard(file: File, title: String) {
-    var player by remember(file.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
-    var isPlaying by remember(file.absolutePath) { mutableStateOf(false) }
-    DisposableEffect(file.absolutePath) {
-        onDispose {
-            runCatching { player?.release() }
-        }
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = {
-                    val current = player
-                    if (current?.isPlaying == true) {
-                        current.pause()
-                        isPlaying = false
-                    } else {
-                        current?.release()
-                        player = MediaPlayer().apply {
-                            setDataSource(file.absolutePath)
-                            prepare()
-                            setOnCompletionListener {
-                                isPlaying = false
-                                runCatching { it.release() }
-                                player = null
-                            }
-                            start()
-                        }
-                        isPlaying = true
-                    }
-                }
-            ) {
-                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(file.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(
-                onClick = {
-                    runCatching { player?.release() }
-                    player = null
-                    isPlaying = false
-                }
-            ) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.notes_audio_stop))
             }
         }
     }

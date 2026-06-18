@@ -19,6 +19,7 @@ data class LlamaServerEntity(
     val liteRtBackend: String = LITERT_BACKEND_AUTO,
     val whisperModelPath: String? = null,
     val whisperLanguage: String = DEFAULT_WHISPER_LANGUAGE,
+    val preferWhisperAudioTranscription: Boolean = false,
     val defaultApiParams: String? = null,
     val lastUsed: Long = System.currentTimeMillis()
 ) {
@@ -34,7 +35,11 @@ data class LlamaServerEntity(
 
     fun usesOpenAiCompatibleEngine(): Boolean = isLlamaServerEngine() || isLlamaSwapEngine()
 
-    fun supportsDirectAudioInput(): Boolean = usesOpenAiCompatibleEngine() && supportsAudio
+    fun hasDirectAudioInputCapability(): Boolean =
+        (usesOpenAiCompatibleEngine() || isLiteRtEngine()) && supportsAudio
+
+    fun supportsDirectAudioInput(): Boolean =
+        hasDirectAudioInputCapability() && !preferWhisperAudioTranscription
 
     fun requiresAudioTranscriptionFallback(): Boolean = !supportsDirectAudioInput()
 

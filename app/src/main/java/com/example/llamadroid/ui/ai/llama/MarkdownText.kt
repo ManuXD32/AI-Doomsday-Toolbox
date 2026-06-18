@@ -1,7 +1,5 @@
 package com.example.llamadroid.ui.ai.llama
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.background
@@ -22,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
@@ -79,25 +78,42 @@ private sealed class MdBlock {
 
 private fun parseIntoBlocks(raw: String): List<MdBlock> {
     val blocks = mutableListOf<MdBlock>()
-    val codeBlockRegex = Regex("```(\\w*)?\\s*\\n([\\s\\S]*?)```")
-    var lastEnd = 0
+    var cursor = 0
 
-    for (match in codeBlockRegex.findAll(raw)) {
-        // Text before this code block
-        if (match.range.first > lastEnd) {
-            val textBefore = raw.substring(lastEnd, match.range.first).trim()
-            appendTextAndTableBlocks(blocks, textBefore)
+    while (cursor < raw.length) {
+        val fenceStart = raw.indexOf("```", startIndex = cursor)
+        if (fenceStart < 0) {
+            appendTextAndTableBlocks(blocks, raw.substring(cursor).trim())
+            break
         }
-        val lang = match.groupValues[1].ifEmpty { "" }
-        val code = match.groupValues[2].trimEnd()
-        blocks.add(MdBlock.CodeBlock(lang, code))
-        lastEnd = match.range.last + 1
-    }
 
-    // Remaining text after last code block
-    if (lastEnd < raw.length) {
-        val remaining = raw.substring(lastEnd).trim()
-        appendTextAndTableBlocks(blocks, remaining)
+        if (fenceStart > cursor) {
+            appendTextAndTableBlocks(blocks, raw.substring(cursor, fenceStart).trim())
+        }
+
+        val afterFence = fenceStart + 3
+        val headerEnd = raw.indexOf('\n', startIndex = afterFence)
+        if (headerEnd < 0) {
+            val language = raw.substring(afterFence).trim()
+            blocks.add(MdBlock.CodeBlock(language, ""))
+            break
+        }
+
+        val language = raw.substring(afterFence, headerEnd).trim()
+        val codeStart = headerEnd + 1
+        val closingFence = raw.indexOf("```", startIndex = codeStart)
+        if (closingFence < 0) {
+            blocks.add(MdBlock.CodeBlock(language, raw.substring(codeStart).trimEnd()))
+            break
+        }
+
+        blocks.add(
+            MdBlock.CodeBlock(
+                language = language,
+                code = raw.substring(codeStart, closingFence).trimEnd()
+            )
+        )
+        cursor = closingFence + 3
     }
 
     if (blocks.isEmpty() && raw.isNotBlank()) {
@@ -226,6 +242,7 @@ private fun isTableSeparator(line: String): Boolean {
 @Composable
 private fun CodeBlockView(block: MdBlock.CodeBlock) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
 
     Surface(
@@ -249,15 +266,14 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable {
-                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText("Code", block.code))
-                            Toast.makeText(context, context.getString(R.string.llama_code_copied), Toast.LENGTH_SHORT).show()
-                        }
-                        .padding(4.dp),
+                TextButton(
+                    onClick = {
+                        clipboardManager.setText(AnnotatedString(block.code))
+                        Toast.makeText(context, context.getString(R.string.llama_code_copied), Toast.LENGTH_SHORT).show()
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
@@ -272,6 +288,7 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
                 }
             }
 
@@ -842,6 +859,9 @@ internal fun markdownTableShapeForText(text: String): Pair<Int, Int>? {
     val table = parseIntoBlocks(text).filterIsInstance<MdBlock.TableBlock>().firstOrNull() ?: return null
     return tableColumnCount(table) to table.rows.size
 }
+
+internal fun markdownCodeBlockForText(text: String): Pair<String, String>? =
+    parseIntoBlocks(text).filterIsInstance<MdBlock.CodeBlock>().firstOrNull()?.let { it.language to it.code }
 
 internal fun markdownHeadingLevelForLine(line: String): Int? =
     headingForLine(line)?.level

@@ -1,0 +1,2124 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 42,
+    "identityHash": "2233e391c0d9297939af16c5a5c98647",
+    "entities": [
+      {
+        "tableName": "tama_pets",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `species` TEXT NOT NULL, `birthTimestamp` INTEGER NOT NULL, `stageProgressStartTime` INTEGER NOT NULL, `lastDecayTime` INTEGER NOT NULL, `stage` TEXT NOT NULL, `hunger` REAL NOT NULL, `happiness` REAL NOT NULL, `health` REAL NOT NULL, `energy` REAL NOT NULL, `hygiene` REAL NOT NULL, `mood` TEXT NOT NULL, `personality` TEXT NOT NULL, `eyeStyle` INTEGER NOT NULL, `earStyle` INTEGER NOT NULL, `mouthStyle` INTEGER NOT NULL, `headShape` INTEGER NOT NULL, `bodyStyle` INTEGER NOT NULL, `armStyle` INTEGER NOT NULL, `legStyle` INTEGER NOT NULL, `colorTint` INTEGER NOT NULL, `ownerBondLevel` REAL NOT NULL, `educationLevel` REAL NOT NULL, `exerciseLevel` REAL NOT NULL, `introspectionLevel` REAL NOT NULL, `currentLocationId` TEXT NOT NULL, `homeRoomId` TEXT NOT NULL, `leftDecorationId` TEXT, `rightDecorationId` TEXT, `growthLocked` INTEGER NOT NULL, `growthLockStartedAt` INTEGER, `money` INTEGER NOT NULL, `inventoryJson` TEXT NOT NULL, `currentActivity` TEXT NOT NULL, `currentWorkJobId` TEXT, `activityStartTime` INTEGER, `isSleeping` INTEGER NOT NULL, `sleepStartTime` INTEGER, `lastDailyDreamDate` TEXT, `pendingDreamAlbumId` TEXT, `currentParkEncounterJson` TEXT, `currentAmbientNpcJson` TEXT, `lastRecyclerEncounterDate` TEXT, `nextPoopAt` INTEGER, `poopCreatedAt` INTEGER, `poopCount` INTEGER NOT NULL, `lastPoopMiscareAt` INTEGER, `lastSleepWarningTime` INTEGER, `overnightAwakeDateKey` TEXT, `overnightAwakeAccumulatedMs` INTEGER NOT NULL, `miscareCount` INTEGER NOT NULL, `isMad` INTEGER NOT NULL, `relationshipsJson` TEXT NOT NULL, `discoveredLocationIdsJson` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "species",
+            "columnName": "species",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "birthTimestamp",
+            "columnName": "birthTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stageProgressStartTime",
+            "columnName": "stageProgressStartTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastDecayTime",
+            "columnName": "lastDecayTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hunger",
+            "columnName": "hunger",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "happiness",
+            "columnName": "happiness",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "health",
+            "columnName": "health",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "energy",
+            "columnName": "energy",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hygiene",
+            "columnName": "hygiene",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mood",
+            "columnName": "mood",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "personality",
+            "columnName": "personality",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eyeStyle",
+            "columnName": "eyeStyle",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "earStyle",
+            "columnName": "earStyle",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mouthStyle",
+            "columnName": "mouthStyle",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "headShape",
+            "columnName": "headShape",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bodyStyle",
+            "columnName": "bodyStyle",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "armStyle",
+            "columnName": "armStyle",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "legStyle",
+            "columnName": "legStyle",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "colorTint",
+            "columnName": "colorTint",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ownerBondLevel",
+            "columnName": "ownerBondLevel",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "educationLevel",
+            "columnName": "educationLevel",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "exerciseLevel",
+            "columnName": "exerciseLevel",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "introspectionLevel",
+            "columnName": "introspectionLevel",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentLocationId",
+            "columnName": "currentLocationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "homeRoomId",
+            "columnName": "homeRoomId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "leftDecorationId",
+            "columnName": "leftDecorationId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "rightDecorationId",
+            "columnName": "rightDecorationId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "growthLocked",
+            "columnName": "growthLocked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "growthLockStartedAt",
+            "columnName": "growthLockStartedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "money",
+            "columnName": "money",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inventoryJson",
+            "columnName": "inventoryJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentActivity",
+            "columnName": "currentActivity",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentWorkJobId",
+            "columnName": "currentWorkJobId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "activityStartTime",
+            "columnName": "activityStartTime",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "isSleeping",
+            "columnName": "isSleeping",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sleepStartTime",
+            "columnName": "sleepStartTime",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastDailyDreamDate",
+            "columnName": "lastDailyDreamDate",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "pendingDreamAlbumId",
+            "columnName": "pendingDreamAlbumId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "currentParkEncounterJson",
+            "columnName": "currentParkEncounterJson",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "currentAmbientNpcJson",
+            "columnName": "currentAmbientNpcJson",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastRecyclerEncounterDate",
+            "columnName": "lastRecyclerEncounterDate",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "nextPoopAt",
+            "columnName": "nextPoopAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "poopCreatedAt",
+            "columnName": "poopCreatedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "poopCount",
+            "columnName": "poopCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPoopMiscareAt",
+            "columnName": "lastPoopMiscareAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastSleepWarningTime",
+            "columnName": "lastSleepWarningTime",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "overnightAwakeDateKey",
+            "columnName": "overnightAwakeDateKey",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "overnightAwakeAccumulatedMs",
+            "columnName": "overnightAwakeAccumulatedMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "miscareCount",
+            "columnName": "miscareCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isMad",
+            "columnName": "isMad",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "relationshipsJson",
+            "columnName": "relationshipsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "discoveredLocationIdsJson",
+            "columnName": "discoveredLocationIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `petId` TEXT NOT NULL, `eventType` TEXT NOT NULL, `details` TEXT NOT NULL, `locationId` TEXT, `npcId` TEXT, `statsChangeJson` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventType",
+            "columnName": "eventType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "details",
+            "columnName": "details",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "locationId",
+            "columnName": "locationId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "npcId",
+            "columnName": "npcId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "statsChangeJson",
+            "columnName": "statsChangeJson",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_quests",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `status` TEXT NOT NULL, `generatedDateKey` TEXT NOT NULL, `acceptedAt` INTEGER, `expiresAt` INTEGER, `completedAt` INTEGER, `npcId` TEXT NOT NULL, `requestsJson` TEXT NOT NULL, `rewardCoins` INTEGER NOT NULL, `summaryJson` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generatedDateKey",
+            "columnName": "generatedDateKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "acceptedAt",
+            "columnName": "acceptedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "expiresAt",
+            "columnName": "expiresAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "completedAt",
+            "columnName": "completedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "npcId",
+            "columnName": "npcId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestsJson",
+            "columnName": "requestsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rewardCoins",
+            "columnName": "rewardCoins",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "summaryJson",
+            "columnName": "summaryJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_quest_checklist_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `itemId` TEXT NOT NULL, `quantity` INTEGER NOT NULL, `checked` INTEGER NOT NULL, `sourceQuestIdsJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quantity",
+            "columnName": "quantity",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checked",
+            "columnName": "checked",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sourceQuestIdsJson",
+            "columnName": "sourceQuestIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tama_quest_checklist_items_petId_itemId",
+            "unique": true,
+            "columnNames": [
+              "petId",
+              "itemId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tama_quest_checklist_items_petId_itemId` ON `${TABLE_NAME}` (`petId`, `itemId`)"
+          },
+          {
+            "name": "index_tama_quest_checklist_items_petId_checked",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "checked"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_quest_checklist_items_petId_checked` ON `${TABLE_NAME}` (`petId`, `checked`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_deep_dream_runs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `signature` TEXT NOT NULL, `dreamDate` TEXT NOT NULL, `status` TEXT NOT NULL, `stage` TEXT NOT NULL, `albumId` TEXT, `ownsLocalLlama` INTEGER NOT NULL, `startedAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, `lastHeartbeatAt` INTEGER NOT NULL, `errorMessage` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "signature",
+            "columnName": "signature",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dreamDate",
+            "columnName": "dreamDate",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stage",
+            "columnName": "stage",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "albumId",
+            "columnName": "albumId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "ownsLocalLlama",
+            "columnName": "ownsLocalLlama",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastHeartbeatAt",
+            "columnName": "lastHeartbeatAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "errorMessage",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tama_deep_dream_runs_petId_signature",
+            "unique": true,
+            "columnNames": [
+              "petId",
+              "signature"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tama_deep_dream_runs_petId_signature` ON `${TABLE_NAME}` (`petId`, `signature`)"
+          },
+          {
+            "name": "index_tama_deep_dream_runs_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_deep_dream_runs_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_tama_deep_dream_runs_albumId",
+            "unique": false,
+            "columnNames": [
+              "albumId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_deep_dream_runs_albumId` ON `${TABLE_NAME}` (`albumId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_study_labels",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `name` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastUsedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastUsedAt",
+            "columnName": "lastUsedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tama_study_labels_petId_name",
+            "unique": true,
+            "columnNames": [
+              "petId",
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_tama_study_labels_petId_name` ON `${TABLE_NAME}` (`petId`, `name`)"
+          },
+          {
+            "name": "index_tama_study_labels_petId_lastUsedAt",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "lastUsedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_study_labels_petId_lastUsedAt` ON `${TABLE_NAME}` (`petId`, `lastUsedAt`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_study_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `mode` TEXT NOT NULL, `status` TEXT NOT NULL, `labelIdsJson` TEXT NOT NULL, `labelNamesSnapshotJson` TEXT NOT NULL, `focusMinutes` INTEGER NOT NULL, `shortBreakMinutes` INTEGER NOT NULL, `longBreakMinutes` INTEGER NOT NULL, `roundsPlanned` INTEGER NOT NULL, `currentRound` INTEGER NOT NULL, `currentPhase` TEXT NOT NULL, `phaseStartedAt` INTEGER, `phaseEndsAt` INTEGER, `focusAccumulatedMs` INTEGER NOT NULL, `restAccumulatedMs` INTEGER NOT NULL, `educationAwarded` REAL NOT NULL, `startedAt` INTEGER NOT NULL, `completedAt` INTEGER, `stoppedAt` INTEGER, `lastUpdatedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "labelIdsJson",
+            "columnName": "labelIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "labelNamesSnapshotJson",
+            "columnName": "labelNamesSnapshotJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "focusMinutes",
+            "columnName": "focusMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shortBreakMinutes",
+            "columnName": "shortBreakMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longBreakMinutes",
+            "columnName": "longBreakMinutes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "roundsPlanned",
+            "columnName": "roundsPlanned",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentRound",
+            "columnName": "currentRound",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentPhase",
+            "columnName": "currentPhase",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phaseStartedAt",
+            "columnName": "phaseStartedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "phaseEndsAt",
+            "columnName": "phaseEndsAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "focusAccumulatedMs",
+            "columnName": "focusAccumulatedMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "restAccumulatedMs",
+            "columnName": "restAccumulatedMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "educationAwarded",
+            "columnName": "educationAwarded",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedAt",
+            "columnName": "completedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stoppedAt",
+            "columnName": "stoppedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastUpdatedAt",
+            "columnName": "lastUpdatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tama_study_sessions_petId_status",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_study_sessions_petId_status` ON `${TABLE_NAME}` (`petId`, `status`)"
+          },
+          {
+            "name": "index_tama_study_sessions_petId_startedAt",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "startedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_study_sessions_petId_startedAt` ON `${TABLE_NAME}` (`petId`, `startedAt`)"
+          },
+          {
+            "name": "index_tama_study_sessions_petId_completedAt",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "completedAt"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_study_sessions_petId_completedAt` ON `${TABLE_NAME}` (`petId`, `completedAt`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_market_quotes",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `itemId` TEXT NOT NULL, `quoteWeekKey` TEXT NOT NULL, `currentPrice` INTEGER NOT NULL, `unitsSoldSinceRefresh` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`petId`, `itemId`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quoteWeekKey",
+            "columnName": "quoteWeekKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentPrice",
+            "columnName": "currentPrice",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unitsSoldSinceRefresh",
+            "columnName": "unitsSoldSinceRefresh",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId",
+            "itemId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_tama_market_quotes_petId_quoteWeekKey",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "quoteWeekKey"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_tama_market_quotes_petId_quoteWeekKey` ON `${TABLE_NAME}` (`petId`, `quoteWeekKey`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_locations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `type` TEXT NOT NULL, `description` TEXT NOT NULL, `cityId` TEXT NOT NULL, `x` INTEGER NOT NULL, `y` INTEGER NOT NULL, `isDiscovered` INTEGER NOT NULL, `npcIdsJson` TEXT NOT NULL, `shopInventoryJson` TEXT, `jobsJson` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cityId",
+            "columnName": "cityId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "x",
+            "columnName": "x",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "y",
+            "columnName": "y",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDiscovered",
+            "columnName": "isDiscovered",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "npcIdsJson",
+            "columnName": "npcIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shopInventoryJson",
+            "columnName": "shopInventoryJson",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "jobsJson",
+            "columnName": "jobsJson",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_npcs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `species` TEXT NOT NULL, `personality` TEXT NOT NULL, `geneticsJson` TEXT NOT NULL, `homeLocationId` TEXT NOT NULL, `currentLocationId` TEXT NOT NULL, `job` TEXT, `age` INTEGER NOT NULL, `marriedToPetId` TEXT, `childrenIdsJson` TEXT NOT NULL, `likesJson` TEXT NOT NULL, `dislikesJson` TEXT NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "species",
+            "columnName": "species",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "personality",
+            "columnName": "personality",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "geneticsJson",
+            "columnName": "geneticsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "homeLocationId",
+            "columnName": "homeLocationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentLocationId",
+            "columnName": "currentLocationId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "job",
+            "columnName": "job",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "age",
+            "columnName": "age",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "marriedToPetId",
+            "columnName": "marriedToPetId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "childrenIdsJson",
+            "columnName": "childrenIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "likesJson",
+            "columnName": "likesJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dislikesJson",
+            "columnName": "dislikesJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_summaries",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `date` TEXT NOT NULL, `summary` TEXT NOT NULL, `shortTermSummary` TEXT NOT NULL, `longTermSummary` TEXT NOT NULL, `retrievalNotesJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastEventTimestamp` INTEGER NOT NULL, `lastChatMessageTimestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "date",
+            "columnName": "date",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "summary",
+            "columnName": "summary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shortTermSummary",
+            "columnName": "shortTermSummary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "longTermSummary",
+            "columnName": "longTermSummary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "retrievalNotesJson",
+            "columnName": "retrievalNotesJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastEventTimestamp",
+            "columnName": "lastEventTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastChatMessageTimestamp",
+            "columnName": "lastChatMessageTimestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_chat_messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `role` TEXT NOT NULL, `content` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `thinking` TEXT, `audioPath` TEXT, `audioDurationMs` INTEGER, `imagePath` TEXT, `transcriptionStatus` TEXT, `transcribedText` TEXT, `transcriptionError` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "role",
+            "columnName": "role",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thinking",
+            "columnName": "thinking",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "audioPath",
+            "columnName": "audioPath",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "audioDurationMs",
+            "columnName": "audioDurationMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "imagePath",
+            "columnName": "imagePath",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "transcriptionStatus",
+            "columnName": "transcriptionStatus",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "transcribedText",
+            "columnName": "transcribedText",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "transcriptionError",
+            "columnName": "transcriptionError",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_farm_tiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `petId` TEXT NOT NULL, `status` TEXT NOT NULL, `cropJson` TEXT, `lastWateredTime` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cropJson",
+            "columnName": "cropJson",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastWateredTime",
+            "columnName": "lastWateredTime",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_farm_upgrades",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`type` TEXT NOT NULL, `petId` TEXT NOT NULL, `isPurchased` INTEGER NOT NULL, `level` INTEGER NOT NULL, `lastProductionTime` INTEGER NOT NULL, `storedOutput` INTEGER NOT NULL, `extraDataJson` TEXT, PRIMARY KEY(`type`))",
+        "fields": [
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isPurchased",
+            "columnName": "isPurchased",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "level",
+            "columnName": "level",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastProductionTime",
+            "columnName": "lastProductionTime",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storedOutput",
+            "columnName": "storedOutput",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "extraDataJson",
+            "columnName": "extraDataJson",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "type"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_farm_livestock",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `type` TEXT NOT NULL, `slotsJson` TEXT NOT NULL, PRIMARY KEY(`petId`, `type`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "slotsJson",
+            "columnName": "slotsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId",
+            "type"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "adventure_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `dungeonType` TEXT NOT NULL, `schematicJson` TEXT NOT NULL, `currentStage` INTEGER NOT NULL, `isCompleted` INTEGER NOT NULL, `cumulativeSummary` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastPlayedAt` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dungeonType",
+            "columnName": "dungeonType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schematicJson",
+            "columnName": "schematicJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentStage",
+            "columnName": "currentStage",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isCompleted",
+            "columnName": "isCompleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cumulativeSummary",
+            "columnName": "cumulativeSummary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPlayedAt",
+            "columnName": "lastPlayedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "adventure_stages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `sessionId` TEXT NOT NULL, `stageNumber` INTEGER NOT NULL, `storyContent` TEXT NOT NULL, `userResponse` TEXT, `stageSummary` TEXT, `imagePath` TEXT, `imagePrompt` TEXT, `imageNegativePrompt` TEXT, `timestamp` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sessionId",
+            "columnName": "sessionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stageNumber",
+            "columnName": "stageNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storyContent",
+            "columnName": "storyContent",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "userResponse",
+            "columnName": "userResponse",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "stageSummary",
+            "columnName": "stageSummary",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "imagePath",
+            "columnName": "imagePath",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "imagePrompt",
+            "columnName": "imagePrompt",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "imageNegativePrompt",
+            "columnName": "imageNegativePrompt",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "dungeon_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `completedDungeonCount` INTEGER NOT NULL, `lastCompletedDungeonType` TEXT, PRIMARY KEY(`petId`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completedDungeonCount",
+            "columnName": "completedDungeonCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastCompletedDungeonType",
+            "columnName": "lastCompletedDungeonType",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "adventure_gate_profiles",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `level` INTEGER NOT NULL, `xp` INTEGER NOT NULL, `maxHp` INTEGER NOT NULL, `maxMana` INTEGER NOT NULL, `attack` INTEGER NOT NULL, `magic` INTEGER NOT NULL, `defense` INTEGER NOT NULL, `speed` INTEGER NOT NULL, `accuracy` INTEGER NOT NULL, `evasion` INTEGER NOT NULL, `currentHp` INTEGER NOT NULL, `currentMana` INTEGER NOT NULL, `skillPoints` INTEGER NOT NULL, `purchasedSkillIdsJson` TEXT NOT NULL, `learnedAttackIdsJson` TEXT NOT NULL, `equippedAttackIdsJson` TEXT NOT NULL, `learnedMagicIdsJson` TEXT NOT NULL, `equippedMagicIdsJson` TEXT NOT NULL, `equippedWeaponId` TEXT, `equippedShieldId` TEXT, `equippedRingId` TEXT, `equippedRelicId` TEXT, `lastRecoveryAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`petId`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "level",
+            "columnName": "level",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "xp",
+            "columnName": "xp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxHp",
+            "columnName": "maxHp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxMana",
+            "columnName": "maxMana",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attack",
+            "columnName": "attack",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "magic",
+            "columnName": "magic",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "defense",
+            "columnName": "defense",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "speed",
+            "columnName": "speed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accuracy",
+            "columnName": "accuracy",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "evasion",
+            "columnName": "evasion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentHp",
+            "columnName": "currentHp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentMana",
+            "columnName": "currentMana",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "skillPoints",
+            "columnName": "skillPoints",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "purchasedSkillIdsJson",
+            "columnName": "purchasedSkillIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "learnedAttackIdsJson",
+            "columnName": "learnedAttackIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "equippedAttackIdsJson",
+            "columnName": "equippedAttackIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "learnedMagicIdsJson",
+            "columnName": "learnedMagicIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "equippedMagicIdsJson",
+            "columnName": "equippedMagicIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "equippedWeaponId",
+            "columnName": "equippedWeaponId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "equippedShieldId",
+            "columnName": "equippedShieldId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "equippedRingId",
+            "columnName": "equippedRingId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "equippedRelicId",
+            "columnName": "equippedRelicId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "lastRecoveryAt",
+            "columnName": "lastRecoveryAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "adventure_gate_world_progress",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `worldId` TEXT NOT NULL, `highestClearedPhase` INTEGER NOT NULL, `midBossCleared` INTEGER NOT NULL, `finalBossCleared` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`petId`, `worldId`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "worldId",
+            "columnName": "worldId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "highestClearedPhase",
+            "columnName": "highestClearedPhase",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "midBossCleared",
+            "columnName": "midBossCleared",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "finalBossCleared",
+            "columnName": "finalBossCleared",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId",
+            "worldId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_adventure_gate_world_progress_petId",
+            "unique": false,
+            "columnNames": [
+              "petId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_adventure_gate_world_progress_petId` ON `${TABLE_NAME}` (`petId`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "adventure_gate_battle_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `worldId` TEXT NOT NULL, `phaseNumber` INTEGER NOT NULL, `stateJson` TEXT NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`petId`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "worldId",
+            "columnName": "worldId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "phaseNumber",
+            "columnName": "phaseNumber",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "stateJson",
+            "columnName": "stateJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_adventure_gate_battle_state_petId_worldId_phaseNumber",
+            "unique": false,
+            "columnNames": [
+              "petId",
+              "worldId",
+              "phaseNumber"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_adventure_gate_battle_state_petId_worldId_phaseNumber` ON `${TABLE_NAME}` (`petId`, `worldId`, `phaseNumber`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "adventure_gate_night_arena_runs",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`petId` TEXT NOT NULL, `nightKey` TEXT NOT NULL, `levelsJson` TEXT NOT NULL, `clearedLevelIdsJson` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, PRIMARY KEY(`petId`))",
+        "fields": [
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nightKey",
+            "columnName": "nightKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "levelsJson",
+            "columnName": "levelsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "clearedLevelIdsJson",
+            "columnName": "clearedLevelIdsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updatedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "petId"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "tama_artworks",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `petId` TEXT NOT NULL, `kind` TEXT NOT NULL, `status` TEXT NOT NULL, `title` TEXT NOT NULL, `prompt` TEXT NOT NULL, `negativePrompt` TEXT NOT NULL, `modelFilename` TEXT NOT NULL, `modelLabel` TEXT NOT NULL, `width` INTEGER NOT NULL, `height` INTEGER NOT NULL, `steps` INTEGER NOT NULL, `cfgScale` REAL NOT NULL, `seed` INTEGER, `sourceActivity` TEXT, `albumId` TEXT, `albumIndex` INTEGER NOT NULL, `albumDate` TEXT, `albumSummary` TEXT, `filePath` TEXT, `errorMessage` TEXT, `createdAt` INTEGER NOT NULL, `startedAt` INTEGER, `completedAt` INTEGER, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "petId",
+            "columnName": "petId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prompt",
+            "columnName": "prompt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "negativePrompt",
+            "columnName": "negativePrompt",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelFilename",
+            "columnName": "modelFilename",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelLabel",
+            "columnName": "modelLabel",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "width",
+            "columnName": "width",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "height",
+            "columnName": "height",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "steps",
+            "columnName": "steps",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cfgScale",
+            "columnName": "cfgScale",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "seed",
+            "columnName": "seed",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceActivity",
+            "columnName": "sourceActivity",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "albumId",
+            "columnName": "albumId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "albumIndex",
+            "columnName": "albumIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "albumDate",
+            "columnName": "albumDate",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "albumSummary",
+            "columnName": "albumSummary",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "filePath",
+            "columnName": "filePath",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "errorMessage",
+            "columnName": "errorMessage",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startedAt",
+            "columnName": "startedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "completedAt",
+            "columnName": "completedAt",
+            "affinity": "INTEGER",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '2233e391c0d9297939af16c5a5c98647')"
+    ]
+  }
+}

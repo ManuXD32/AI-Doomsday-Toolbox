@@ -1,9 +1,11 @@
 package com.example.llamadroid.ui.models
 
+import android.net.Uri
 import android.os.StatFs
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.documentfile.provider.DocumentFile
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,10 +31,9 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
@@ -45,6 +46,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -74,18 +76,19 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.DownloadProgressHolder
-import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
-import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.currentLiteRtDeviceTargetInfo
-import com.example.llamadroid.data.model.isLikelyLiteRtGpuPackage
+import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
+import com.example.llamadroid.data.model.liteRtAudioSupportFromText
+import com.example.llamadroid.data.model.liteRtVisionSupportFromText
+import com.example.llamadroid.data.model.supportsLiteRtAudio
+import com.example.llamadroid.data.model.supportsLiteRtVision
 import com.example.llamadroid.data.repository.LiteRtCatalogCategory
 import com.example.llamadroid.data.repository.LiteRtCatalogEntry
 import com.example.llamadroid.data.repository.LiteRtModelCatalog
 import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.service.LiteRtBackendDoctorResult
 import com.example.llamadroid.service.LiteRtBackendDoctorStore
-import com.example.llamadroid.service.LiteRtLmWorkerClient
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
@@ -96,6 +99,8 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 private const val LITERT_PROGRESS_PREFIX = "litert:"
+private const val LITERT_CONTEXT_USER_MIN = 512
+private const val LITERT_CONTEXT_USER_MAX = 131_072
 
 @Composable
 @Suppress("UNUSED_PARAMETER")
@@ -116,14 +121,20 @@ fun LiteRtModelsScreen(navController: NavController) {
     var selectedTab by remember { mutableIntStateOf(0) }
     var pendingRename by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var renameValue by remember { mutableStateOf("") }
+    var pendingContextModel by remember { mutableStateOf<LiteRtModelEntity?>(null) }
+    var contextTokenValue by remember { mutableStateOf("") }
+    var pendingModalityModel by remember { mutableStateOf<LiteRtModelEntity?>(null) }
+    var modalityVisionValue by remember { mutableStateOf(false) }
+    var modalityAudioValue by remember { mutableStateOf(false) }
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingImportName by remember { mutableStateOf("") }
+    var importSupportsVision by remember { mutableStateOf(false) }
+    var importSupportsAudio by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var pendingExport by remember { mutableStateOf<LiteRtModelEntity?>(null) }
-    var pendingParityDoctor by remember { mutableStateOf<LiteRtModelEntity?>(null) }
-    var doctorRunningModelId by remember { mutableStateOf<Long?>(null) }
     var doctorDetails by remember { mutableStateOf<LiteRtBackendDoctorResult?>(null) }
     var huggingFaceToken by remember { mutableStateOf(repository.huggingFaceToken()) }
     val doctorResults = remember { mutableStateMapOf<Long, List<LiteRtBackendDoctorResult>>() }
-    val doctorClient = remember { LiteRtLmWorkerClient(context.applicationContext) }
 
     LaunchedEffect(models) {
         models.forEach { model ->
@@ -142,15 +153,12 @@ fun LiteRtModelsScreen(navController: NavController) {
         ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri ?: return@rememberLauncherForActivityResult
-        scope.launch {
-            val result = repository.importFromUri(uri)
-            toast(
-                result.fold(
-                    onSuccess = { context.getString(R.string.litert_models_imported) },
-                    onFailure = { it.message ?: context.getString(R.string.error_generic) }
-                )
-            )
-        }
+        val fileName = DocumentFile.fromSingleUri(context, uri)?.name.orEmpty()
+        val inferenceText = fileName.ifBlank { uri.lastPathSegment.orEmpty() }
+        pendingImportUri = uri
+        pendingImportName = fileName.ifBlank { context.getString(R.string.litert_models_import) }
+        importSupportsVision = liteRtVisionSupportFromText(inferenceText)
+        importSupportsAudio = liteRtAudioSupportFromText(inferenceText)
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -179,47 +187,6 @@ fun LiteRtModelsScreen(navController: NavController) {
                     onFailure = { it.message ?: context.getString(R.string.error_generic) }
                 )
             )
-        }
-    }
-
-    fun runDoctor(model: LiteRtModelEntity) {
-        if (doctorRunningModelId != null) return
-        doctorRunningModelId = model.id
-        scope.launch {
-            try {
-                val results = mutableListOf<LiteRtBackendDoctorResult>()
-                model.doctorBackends().forEach { backend ->
-                    val result = doctorClient.runBackendDoctor(model, backend)
-                    LiteRtBackendDoctorStore.save(context, result)
-                    results += result
-                    doctorResults[model.id] = results.toList()
-                }
-                toast(context.getString(R.string.litert_doctor_finished))
-            } catch (error: Throwable) {
-                toast(error.message ?: context.getString(R.string.error_generic))
-            } finally {
-                doctorRunningModelId = null
-            }
-        }
-    }
-
-    fun runInAppGpuParityDoctor(model: LiteRtModelEntity) {
-        if (doctorRunningModelId != null) return
-        doctorRunningModelId = model.id
-        scope.launch {
-            try {
-                toast(context.getString(R.string.litert_doctor_parity_started))
-                val result = doctorClient.runInAppGpuParityDoctor(model)
-                LiteRtBackendDoctorStore.save(context, result)
-                val updated = (doctorResults[model.id].orEmpty() + result)
-                    .sortedByDescending { it.startedAt }
-                doctorResults[model.id] = updated
-                doctorDetails = result
-            } catch (error: Throwable) {
-                toast(error.message ?: context.getString(R.string.error_generic))
-            } finally {
-                doctorRunningModelId = null
-            }
         }
     }
 
@@ -282,7 +249,6 @@ fun LiteRtModelsScreen(navController: NavController) {
                         models = models,
                         managedRoot = managedRoot,
                         doctorResults = doctorResults,
-                        doctorRunningModelId = doctorRunningModelId,
                         onRename = {
                             pendingRename = it
                             renameValue = it.displayName
@@ -291,9 +257,16 @@ fun LiteRtModelsScreen(navController: NavController) {
                             pendingExport = it
                             exportLauncher.launch(defaultExportName(it))
                         },
+                        onEditContext = {
+                            pendingContextModel = it
+                            contextTokenValue = it.maxContextTokens?.toString().orEmpty()
+                        },
+                        onEditModalities = {
+                            pendingModalityModel = it
+                            modalityVisionValue = it.supportsLiteRtVision()
+                            modalityAudioValue = it.supportsLiteRtAudio()
+                        },
                         onRemove = { pendingDelete = it },
-                        onDoctor = ::runDoctor,
-                        onParityDoctor = { pendingParityDoctor = it },
                         onDoctorDetails = { doctorDetails = it }
                     )
                     1 -> LiteRtDownloadingTab(
@@ -358,6 +331,161 @@ fun LiteRtModelsScreen(navController: NavController) {
         )
     }
 
+    pendingContextModel?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingContextModel = null },
+            title = { Text(stringResource(R.string.litert_models_context_edit)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        stringResource(
+                            R.string.litert_models_context_desc,
+                            model.defaultLiteRtEngineMaxTokens()
+                                ?.toString()
+                                ?: stringResource(R.string.litert_models_context_unknown_short)
+                        ),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OutlinedTextField(
+                        value = contextTokenValue,
+                        onValueChange = { value -> contextTokenValue = value.filter { it.isDigit() } },
+                        label = { Text(stringResource(R.string.litert_models_context_label)) },
+                        placeholder = { Text(stringResource(R.string.litert_models_context_placeholder)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val trimmed = contextTokenValue.trim()
+                        val parsed = trimmed.takeIf { it.isNotBlank() }?.toIntOrNull()
+                        if (trimmed.isNotBlank() && (parsed == null || parsed !in LITERT_CONTEXT_USER_MIN..LITERT_CONTEXT_USER_MAX)) {
+                            toast(context.getString(R.string.litert_models_context_invalid))
+                            return@TextButton
+                        }
+                        scope.launch {
+                            repository.updateMaxContextTokens(model, parsed)
+                            toast(context.getString(R.string.litert_models_context_saved))
+                        }
+                        pendingContextModel = null
+                    }
+                ) { Text(stringResource(R.string.action_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingContextModel = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    pendingModalityModel?.let { model ->
+        AlertDialog(
+            onDismissRequest = { pendingModalityModel = null },
+            title = { Text(stringResource(R.string.litert_models_modalities_edit)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    LiteRtModalitySwitch(
+                        title = stringResource(R.string.litert_models_modality_vision),
+                        description = stringResource(R.string.litert_models_supports_vision_desc),
+                        checked = modalityVisionValue,
+                        onCheckedChange = { modalityVisionValue = it }
+                    )
+                    LiteRtModalitySwitch(
+                        title = stringResource(R.string.litert_models_modality_audio),
+                        description = stringResource(R.string.litert_models_supports_audio_desc),
+                        checked = modalityAudioValue,
+                        onCheckedChange = { modalityAudioValue = it }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            repository.updateModalitySupport(
+                                model = model,
+                                supportsVision = modalityVisionValue,
+                                supportsAudio = modalityAudioValue
+                            )
+                            toast(context.getString(R.string.litert_models_modalities_saved))
+                        }
+                        pendingModalityModel = null
+                    }
+                ) { Text(stringResource(R.string.action_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingModalityModel = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    pendingImportUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingImportUri = null },
+            title = { Text(stringResource(R.string.litert_models_import_options_title)) },
+            text = {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.litert_models_import_options_desc, pendingImportName),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    LiteRtModalitySwitch(
+                        title = stringResource(R.string.litert_models_modality_vision),
+                        description = stringResource(R.string.litert_models_supports_vision_desc),
+                        checked = importSupportsVision,
+                        onCheckedChange = { importSupportsVision = it }
+                    )
+                    LiteRtModalitySwitch(
+                        title = stringResource(R.string.litert_models_modality_audio),
+                        description = stringResource(R.string.litert_models_supports_audio_desc),
+                        checked = importSupportsAudio,
+                        onCheckedChange = { importSupportsAudio = it }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedUri = uri
+                        pendingImportUri = null
+                        scope.launch {
+                            val result = repository.importFromUri(
+                                selectedUri,
+                                supportsVisionOverride = importSupportsVision,
+                                supportsAudioOverride = importSupportsAudio
+                            )
+                            toast(
+                                result.fold(
+                                    onSuccess = { context.getString(R.string.litert_models_imported) },
+                                    onFailure = { it.message ?: context.getString(R.string.error_generic) }
+                                )
+                            )
+                        }
+                    }
+                ) { Text(stringResource(R.string.action_import)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingImportUri = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
     pendingDelete?.let { model ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
@@ -381,34 +509,6 @@ fun LiteRtModelsScreen(navController: NavController) {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-        )
-    }
-
-    pendingParityDoctor?.let { model ->
-        AlertDialog(
-            onDismissRequest = { pendingParityDoctor = null },
-            title = { Text(stringResource(R.string.litert_doctor_parity_warning_title)) },
-            text = {
-                Column(
-                    modifier = Modifier.verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(stringResource(R.string.litert_doctor_parity_warning_desc, model.displayName))
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingParityDoctor = null
-                        runInAppGpuParityDoctor(model)
-                    }
-                ) { Text(stringResource(R.string.litert_doctor_parity_confirm)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingParityDoctor = null }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -453,12 +553,11 @@ private fun LiteRtInstalledTab(
     models: List<LiteRtModelEntity>,
     managedRoot: File,
     doctorResults: Map<Long, List<LiteRtBackendDoctorResult>>,
-    doctorRunningModelId: Long?,
     onRename: (LiteRtModelEntity) -> Unit,
     onExport: (LiteRtModelEntity) -> Unit,
+    onEditContext: (LiteRtModelEntity) -> Unit,
+    onEditModalities: (LiteRtModelEntity) -> Unit,
     onRemove: (LiteRtModelEntity) -> Unit,
-    onDoctor: (LiteRtModelEntity) -> Unit,
-    onParityDoctor: (LiteRtModelEntity) -> Unit,
     onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit
 ) {
     val storageSnapshot = remember(models, managedRoot.absolutePath) {
@@ -487,19 +586,24 @@ private fun LiteRtInstalledTab(
             }
         } else {
             items(models, key = { it.id }) { model ->
+                val contextText = model.defaultLiteRtEngineMaxTokens()?.let {
+                    stringResource(R.string.litert_models_context_value, it)
+                } ?: stringResource(R.string.litert_models_context_user_selected)
+                val modalityText = listOfNotNull(
+                    if (model.supportsLiteRtVision()) stringResource(R.string.litert_models_modality_vision) else null,
+                    if (model.supportsLiteRtAudio()) stringResource(R.string.litert_models_modality_audio) else null
+                ).ifEmpty {
+                    listOf(stringResource(R.string.litert_models_modality_text_only))
+                }.joinToString(" / ")
                 LiteRtCompactModelCard(
                     model = model,
+                    contextText = "$contextText • $modalityText",
                     doctorResults = doctorResults[model.id].orEmpty(),
-                    isDoctorRunning = doctorRunningModelId == model.id,
                     onRename = { onRename(model) },
                     onExport = { onExport(model) },
+                    onEditContext = { onEditContext(model) },
+                    onEditModalities = { onEditModalities(model) },
                     onRemove = { onRemove(model) },
-                    onDoctor = { onDoctor(model) },
-                    onParityDoctor = if (model.supportsGpu && model.isLikelyLiteRtGpuPackage()) {
-                        { onParityDoctor(model) }
-                    } else {
-                        null
-                    },
                     onDoctorDetails = onDoctorDetails
                 )
             }
@@ -707,27 +811,27 @@ private fun LiteRtCatalogGroupHeader(
 @Composable
 private fun LiteRtCompactModelCard(
     model: LiteRtModelEntity,
+    contextText: String,
     doctorResults: List<LiteRtBackendDoctorResult>,
-    isDoctorRunning: Boolean,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onEditContext: () -> Unit,
+    onEditModalities: () -> Unit,
     onRemove: () -> Unit,
-    onDoctor: () -> Unit,
-    onParityDoctor: (() -> Unit)?,
     onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit
 ) {
     ModelStyleCard(
         title = model.displayName,
         subtitle = model.repoId ?: stringResource(R.string.litert_models_local_import),
         sizeText = FormatUtils.formatFileSize(model.sizeBytes),
+        contextText = contextText,
         actionIcon = Icons.Default.Delete,
         actionColor = MaterialTheme.colorScheme.error,
         onAction = onRemove,
         onExport = onExport,
         onRename = onRename,
-        onDoctor = onDoctor,
-        onParityDoctor = onParityDoctor,
-        doctorRunning = isDoctorRunning,
+        onEditContext = onEditContext,
+        onEditModalities = onEditModalities,
         doctorResults = doctorResults,
         onDoctorDetails = onDoctorDetails
     )
@@ -800,6 +904,19 @@ private fun LiteRtCatalogCard(
                         },
                         enabled = false
                     )
+                    AssistChip(
+                        onClick = {},
+                        label = {
+                            Text(
+                                entry.maxContextTokens?.let {
+                                    stringResource(R.string.litert_models_context_value, it)
+                                } ?: stringResource(R.string.litert_models_context_user_selected),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        enabled = false
+                    )
                     Text(
                         description,
                         style = MaterialTheme.typography.bodySmall,
@@ -863,12 +980,6 @@ private fun LiteRtCatalogEntry.catalogCompatibility(): LiteRtCatalogCompatibilit
 
 private fun liteRtCatalogComparator(): Comparator<LiteRtCatalogEntry> = compareBy<LiteRtCatalogEntry> { entry ->
     entry.title.lowercase()
-}
-
-private fun LiteRtModelEntity.doctorBackends(): List<String> = buildList {
-    if (supportsGpu && isLikelyLiteRtGpuPackage()) add(LITERT_BACKEND_GPU)
-    if (supportsCpu) add(LITERT_BACKEND_CPU)
-    if (isEmpty()) add(LITERT_BACKEND_CPU)
 }
 
 @Composable
@@ -941,18 +1052,49 @@ private fun LiteRtDownloadProgressCard(
 }
 
 @Composable
+private fun LiteRtModalitySwitch(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
+}
+
+@Composable
 private fun ModelStyleCard(
     title: String,
     subtitle: String,
     sizeText: String,
+    contextText: String? = null,
     actionIcon: ImageVector,
     actionColor: Color,
     onAction: () -> Unit,
     onExport: (() -> Unit)? = null,
     onRename: (() -> Unit)? = null,
-    onDoctor: (() -> Unit)? = null,
-    onParityDoctor: (() -> Unit)? = null,
-    doctorRunning: Boolean = false,
+    onEditContext: (() -> Unit)? = null,
+    onEditModalities: (() -> Unit)? = null,
     doctorResults: List<LiteRtBackendDoctorResult> = emptyList(),
     onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit = {}
 ) {
@@ -985,7 +1127,7 @@ private fun ModelStyleCard(
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
                     Text(
-                        "$subtitle • $sizeText",
+                        listOfNotNull(subtitle, sizeText, contextText).joinToString(" • "),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 4,
@@ -1015,24 +1157,6 @@ private fun ModelStyleCard(
                 horizontalArrangement = Arrangement.End,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                onDoctor?.let {
-                    IconButton(onClick = it, enabled = !doctorRunning) {
-                        Icon(
-                            Icons.Default.PlayArrow,
-                            contentDescription = stringResource(R.string.litert_doctor_run),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-                onParityDoctor?.let {
-                    IconButton(onClick = it, enabled = !doctorRunning) {
-                        Icon(
-                            Icons.Default.Warning,
-                            contentDescription = stringResource(R.string.litert_doctor_parity_run),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
                 doctorResults.firstOrNull()?.let { result ->
                     IconButton(onClick = { onDoctorDetails(result) }) {
                         Icon(
@@ -1047,6 +1171,24 @@ private fun ModelStyleCard(
                         Icon(
                             Icons.Default.Edit,
                             contentDescription = stringResource(R.string.models_rename_title),
+                            tint = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+                onEditContext?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.litert_models_context_edit),
+                            tint = MaterialTheme.colorScheme.secondary
+                        )
+                    }
+                }
+                onEditModalities?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = stringResource(R.string.litert_models_modalities_edit),
                             tint = MaterialTheme.colorScheme.secondary
                         )
                     }

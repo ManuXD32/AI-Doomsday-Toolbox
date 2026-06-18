@@ -13,6 +13,8 @@ import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
+import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_SPEED
+import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_TOTAL_STEPS
 import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.util.AIConstants
 import kotlinx.coroutines.CancellationException
@@ -44,7 +46,81 @@ import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 
+enum class NativeChatImageGenerationEngine {
+    ONNX,
+    SD
+}
+
+data class NativeChatSdImageToolParams(
+    val model: String? = null,
+    val vaePath: String? = null,
+    val taePath: String? = null,
+    val clipLPath: String? = null,
+    val clipGPath: String? = null,
+    val t5xxlPath: String? = null,
+    val llmPath: String? = null,
+    val llmVisionPath: String? = null,
+    val photoMakerPath: String? = null,
+    val width: Int = DEFAULT_WIDTH,
+    val height: Int = DEFAULT_HEIGHT,
+    val steps: Int = DEFAULT_STEPS,
+    val cfgScale: Float = DEFAULT_CFG,
+    val sampler: SamplingMethod = SamplingMethod.EULER_A,
+    val seed: String = "",
+    val negativePrompt: String = "",
+    val threads: Int = DEFAULT_THREADS,
+    val flowShift: String = "",
+    val diffusionFa: Boolean = false,
+    val mmap: Boolean = false,
+    val vaeConvDirect: Boolean = false,
+    val qwenImageZeroCondT: Boolean = false,
+    val chromaDisableDitMask: Boolean = false
+) {
+    fun toParamMap(): Map<String, Any?> = linkedMapOf(
+        NativeChatToolConfig.KEY_IMAGE_SD_MODEL to model.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_VAE to vaePath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_TAE to taePath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_CLIP_L to clipLPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_CLIP_G to clipGPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_T5XXL to t5xxlPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_LLM to llmPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_LLM_VISION to llmVisionPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_PHOTOMAKER to photoMakerPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_WIDTH to width.coerceIn(MIN_SIZE, MAX_SIZE),
+        NativeChatToolConfig.KEY_IMAGE_SD_HEIGHT to height.coerceIn(MIN_SIZE, MAX_SIZE),
+        NativeChatToolConfig.KEY_IMAGE_SD_STEPS to steps.coerceIn(MIN_STEPS, MAX_STEPS),
+        NativeChatToolConfig.KEY_IMAGE_SD_CFG to cfgScale.coerceIn(MIN_CFG, MAX_CFG),
+        NativeChatToolConfig.KEY_IMAGE_SD_SAMPLER to sampler.name,
+        NativeChatToolConfig.KEY_IMAGE_SD_SEED to seed,
+        NativeChatToolConfig.KEY_IMAGE_SD_NEGATIVE_PROMPT to negativePrompt,
+        NativeChatToolConfig.KEY_IMAGE_SD_THREADS to threads.coerceIn(MIN_THREADS, MAX_THREADS),
+        NativeChatToolConfig.KEY_IMAGE_SD_FLOW_SHIFT to flowShift,
+        NativeChatToolConfig.KEY_IMAGE_SD_DIFFUSION_FA to diffusionFa,
+        NativeChatToolConfig.KEY_IMAGE_SD_MMAP to mmap,
+        NativeChatToolConfig.KEY_IMAGE_SD_VAE_CONV_DIRECT to vaeConvDirect,
+        NativeChatToolConfig.KEY_IMAGE_SD_QWEN_ZERO_COND_T to qwenImageZeroCondT,
+        NativeChatToolConfig.KEY_IMAGE_SD_CHROMA_DISABLE_DIT_MASK to chromaDisableDitMask
+    )
+
+    companion object {
+        const val DEFAULT_WIDTH = 512
+        const val DEFAULT_HEIGHT = 512
+        const val DEFAULT_STEPS = 20
+        const val DEFAULT_CFG = 7.0f
+        const val DEFAULT_THREADS = -1
+        const val MIN_SIZE = 256
+        const val MAX_SIZE = 1024
+        const val MIN_STEPS = 1
+        const val MAX_STEPS = 50
+        const val MIN_CFG = 1f
+        const val MAX_CFG = 20f
+        const val MIN_THREADS = -1
+        const val MAX_THREADS = 16
+    }
+}
+
 data class NativeChatImageToolParams(
+    val engine: NativeChatImageGenerationEngine = NativeChatImageGenerationEngine.ONNX,
     val model: String? = null,
     val width: Int = DEFAULT_WIDTH,
     val height: Int = DEFAULT_HEIGHT,
@@ -64,9 +140,11 @@ data class NativeChatImageToolParams(
     val memoryPatternOptimization: Boolean = true,
     val cpuArenaAllocator: Boolean = true,
     val nnapiCpuDisabled: Boolean = true,
-    val nnapiUseFp16: Boolean = false
+    val nnapiUseFp16: Boolean = false,
+    val sdParams: NativeChatSdImageToolParams = NativeChatSdImageToolParams()
 ) {
     fun toParamMap(): Map<String, Any?> = linkedMapOf(
+        NativeChatToolConfig.KEY_IMAGE_ENGINE to engine.name,
         NativeChatToolConfig.KEY_IMAGE_MODEL to model.orEmpty(),
         NativeChatToolConfig.KEY_IMAGE_WIDTH to width.coerceIn(MIN_SIZE, MAX_SIZE),
         NativeChatToolConfig.KEY_IMAGE_HEIGHT to height.coerceIn(MIN_SIZE, MAX_SIZE),
@@ -87,7 +165,7 @@ data class NativeChatImageToolParams(
         NativeChatToolConfig.KEY_IMAGE_CPU_ARENA to cpuArenaAllocator,
         NativeChatToolConfig.KEY_IMAGE_NNAPI_CPU_DISABLED to nnapiCpuDisabled,
         NativeChatToolConfig.KEY_IMAGE_NNAPI_FP16 to nnapiUseFp16
-    ).filterValues { it != null }
+    ).plus(sdParams.toParamMap()).filterValues { it != null }
 
     companion object {
         const val DEFAULT_WIDTH = 512
@@ -100,6 +178,52 @@ data class NativeChatImageToolParams(
         const val MAX_STEPS = 150
         const val MIN_CFG = 0.1f
         const val MAX_CFG = 30f
+    }
+}
+
+data class NativeChatBackgroundRemovalToolParams(
+    val model: String? = null,
+    val backend: OnnxRuntimeBackend = OnnxRuntimeBackend.CPU,
+    val runtimeThreads: Int? = null,
+    val graphOptimizationLevel: OnnxGraphOptimizationLevel = OnnxGraphOptimizationLevel.ALL,
+    val alphaThreshold: Float = DEFAULT_ALPHA_THRESHOLD,
+    val featherRadius: Int = DEFAULT_FEATHER_RADIUS,
+    val maskSoftness: Float = DEFAULT_MASK_SOFTNESS,
+    val maskContrast: Float = DEFAULT_MASK_CONTRAST,
+    val exportMask: Boolean = false,
+    val resizeBeforeProcessing: Boolean = true,
+    val resizeMaxEdge: Int = DEFAULT_RESIZE_MAX_EDGE
+) {
+    fun toParamMap(): Map<String, Any?> = linkedMapOf(
+        NativeChatToolConfig.KEY_BGR_MODEL to model.orEmpty(),
+        NativeChatToolConfig.KEY_BGR_BACKEND to backend.name,
+        NativeChatToolConfig.KEY_BGR_RUNTIME_THREADS to runtimeThreads,
+        NativeChatToolConfig.KEY_BGR_GRAPH_OPT to graphOptimizationLevel.name,
+        NativeChatToolConfig.KEY_BGR_ALPHA_THRESHOLD to alphaThreshold.coerceIn(MIN_ALPHA_THRESHOLD, MAX_ALPHA_THRESHOLD),
+        NativeChatToolConfig.KEY_BGR_FEATHER_RADIUS to featherRadius.coerceIn(MIN_FEATHER_RADIUS, MAX_FEATHER_RADIUS),
+        NativeChatToolConfig.KEY_BGR_MASK_SOFTNESS to maskSoftness.coerceIn(MIN_MASK_SOFTNESS, MAX_MASK_SOFTNESS),
+        NativeChatToolConfig.KEY_BGR_MASK_CONTRAST to maskContrast.coerceIn(MIN_MASK_CONTRAST, MAX_MASK_CONTRAST),
+        NativeChatToolConfig.KEY_BGR_EXPORT_MASK to exportMask,
+        NativeChatToolConfig.KEY_BGR_RESIZE_BEFORE_PROCESSING to resizeBeforeProcessing,
+        NativeChatToolConfig.KEY_BGR_RESIZE_MAX_EDGE to resizeMaxEdge.coerceIn(MIN_RESIZE_MAX_EDGE, MAX_RESIZE_MAX_EDGE)
+    ).filterValues { it != null }
+
+    companion object {
+        const val DEFAULT_ALPHA_THRESHOLD = 0.5f
+        const val DEFAULT_FEATHER_RADIUS = 1
+        const val DEFAULT_MASK_SOFTNESS = 1f
+        const val DEFAULT_MASK_CONTRAST = 1f
+        const val DEFAULT_RESIZE_MAX_EDGE = 512
+        const val MIN_ALPHA_THRESHOLD = 0f
+        const val MAX_ALPHA_THRESHOLD = 1f
+        const val MIN_FEATHER_RADIUS = 0
+        const val MAX_FEATHER_RADIUS = 16
+        const val MIN_MASK_SOFTNESS = 0f
+        const val MAX_MASK_SOFTNESS = 1f
+        const val MIN_MASK_CONTRAST = 0.25f
+        const val MAX_MASK_CONTRAST = 4f
+        const val MIN_RESIZE_MAX_EDGE = 128
+        const val MAX_RESIZE_MAX_EDGE = 2048
     }
 }
 
@@ -131,9 +255,15 @@ data class NativeChatToolConfig(
     val imageGenerationEnabled: Boolean = false,
     val imageIterationEnabled: Boolean = false,
     val imageParams: NativeChatImageToolParams = NativeChatImageToolParams(),
+    val backgroundRemovalEnabled: Boolean = false,
+    val backgroundRemovalParams: NativeChatBackgroundRemovalToolParams = NativeChatBackgroundRemovalToolParams(),
     val assistantTtsEnabled: Boolean = false,
     val assistantTtsLanguage: String = SUPERTONIC_DEFAULT_LANGUAGE,
     val assistantTtsVoiceName: String? = null,
+    val assistantTtsTotalSteps: Int = SUPERTONIC_DEFAULT_TOTAL_STEPS,
+    val assistantTtsSpeed: Float = SUPERTONIC_DEFAULT_SPEED,
+    val callSilenceAfterSpeechSeconds: Int = DEFAULT_CALL_SILENCE_AFTER_SPEECH_SECONDS,
+    val callNoSpeechTimeoutSeconds: Int = DEFAULT_CALL_NO_SPEECH_TIMEOUT_SECONDS,
     val maxToolRounds: Int = DEFAULT_TOOL_ROUNDS
 ) {
     fun hasEnabledTools(): Boolean = toolsEnabled && (
@@ -148,7 +278,8 @@ data class NativeChatToolConfig(
             calendarToolsEnabled ||
             alarmToolsEnabled ||
             knowledgeBaseEnabled ||
-            imageGenerationEnabled
+            imageGenerationEnabled ||
+            backgroundRemovalEnabled
         )
 
     fun knowledgeBaseScopeIds(): List<Long> {
@@ -203,9 +334,16 @@ data class NativeChatToolConfig(
                 serverDefaults.imageGenerationEnabled &&
                 imageIterationEnabled &&
                 serverDefaults.imageIterationEnabled,
+            backgroundRemovalEnabled = effectiveChatToolsEnabled &&
+                backgroundRemovalEnabled &&
+                serverDefaults.backgroundRemovalEnabled,
             assistantTtsEnabled = assistantTtsEnabled,
             assistantTtsLanguage = assistantTtsLanguage,
-            assistantTtsVoiceName = assistantTtsVoiceName
+            assistantTtsVoiceName = assistantTtsVoiceName,
+            assistantTtsTotalSteps = assistantTtsTotalSteps,
+            assistantTtsSpeed = assistantTtsSpeed,
+            callSilenceAfterSpeechSeconds = callSilenceAfterSpeechSeconds,
+            callNoSpeechTimeoutSeconds = callNoSpeechTimeoutSeconds
         )
     }
 
@@ -236,10 +374,18 @@ data class NativeChatToolConfig(
         put(KEY_KNOWLEDGE_MAX_RESULTS, knowledgeBaseMaxResults.coerceIn(MIN_KB_RESULTS, MAX_KB_RESULTS))
         put(KEY_IMAGE_GENERATION_ENABLED, imageGenerationEnabled)
         put(KEY_IMAGE_ITERATION_ENABLED, imageIterationEnabled)
+        put(KEY_BGR_ENABLED, backgroundRemovalEnabled)
         put(KEY_ASSISTANT_TTS_ENABLED, assistantTtsEnabled)
         put(KEY_ASSISTANT_TTS_LANGUAGE, normalizedAssistantTtsLanguage())
         assistantTtsVoiceName?.trim()?.takeIf { it.isNotBlank() }?.let { put(KEY_ASSISTANT_TTS_VOICE, it) }
+        put(KEY_ASSISTANT_TTS_STEPS, assistantTtsTotalSteps.coerceIn(MIN_ASSISTANT_TTS_STEPS, MAX_ASSISTANT_TTS_STEPS))
+        put(KEY_ASSISTANT_TTS_SPEED, assistantTtsSpeed.coerceIn(MIN_ASSISTANT_TTS_SPEED, MAX_ASSISTANT_TTS_SPEED))
+        put(KEY_CALL_SILENCE_AFTER_SPEECH_SECONDS, callSilenceAfterSpeechSeconds.coerceIn(MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS, MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS))
+        put(KEY_CALL_NO_SPEECH_TIMEOUT_SECONDS, callNoSpeechTimeoutSeconds.coerceIn(MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS, MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS))
         imageParams.toParamMap().forEach { (key, value) ->
+            if (value != null) put(key, value)
+        }
+        backgroundRemovalParams.toParamMap().forEach { (key, value) ->
             if (value != null) put(key, value)
         }
         put(KEY_MAX_TOOL_ROUNDS, maxToolRounds.coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS))
@@ -277,9 +423,15 @@ data class NativeChatToolConfig(
         const val KEY_KNOWLEDGE_MAX_RESULTS = "tool_knowledge_max_results"
         const val KEY_IMAGE_GENERATION_ENABLED = "tool_image_generation_enabled"
         const val KEY_IMAGE_ITERATION_ENABLED = "tool_image_iteration_enabled"
+        const val KEY_BGR_ENABLED = "tool_background_removal_enabled"
         const val KEY_ASSISTANT_TTS_ENABLED = "assistant_tts_enabled"
         const val KEY_ASSISTANT_TTS_LANGUAGE = "assistant_tts_language"
         const val KEY_ASSISTANT_TTS_VOICE = "assistant_tts_voice"
+        const val KEY_ASSISTANT_TTS_STEPS = "assistant_tts_steps"
+        const val KEY_ASSISTANT_TTS_SPEED = "assistant_tts_speed"
+        const val KEY_CALL_SILENCE_AFTER_SPEECH_SECONDS = "call_silence_after_speech_seconds"
+        const val KEY_CALL_NO_SPEECH_TIMEOUT_SECONDS = "call_no_speech_timeout_seconds"
+        const val KEY_IMAGE_ENGINE = "tool_image_engine"
         const val KEY_IMAGE_MODEL = "tool_image_model"
         const val KEY_IMAGE_WIDTH = "tool_image_width"
         const val KEY_IMAGE_HEIGHT = "tool_image_height"
@@ -300,6 +452,40 @@ data class NativeChatToolConfig(
         const val KEY_IMAGE_CPU_ARENA = "tool_image_cpu_arena"
         const val KEY_IMAGE_NNAPI_CPU_DISABLED = "tool_image_nnapi_cpu_disabled"
         const val KEY_IMAGE_NNAPI_FP16 = "tool_image_nnapi_fp16"
+        const val KEY_IMAGE_SD_MODEL = "tool_image_sd_model"
+        const val KEY_IMAGE_SD_VAE = "tool_image_sd_vae"
+        const val KEY_IMAGE_SD_TAE = "tool_image_sd_tae"
+        const val KEY_IMAGE_SD_CLIP_L = "tool_image_sd_clip_l"
+        const val KEY_IMAGE_SD_CLIP_G = "tool_image_sd_clip_g"
+        const val KEY_IMAGE_SD_T5XXL = "tool_image_sd_t5xxl"
+        const val KEY_IMAGE_SD_LLM = "tool_image_sd_llm"
+        const val KEY_IMAGE_SD_LLM_VISION = "tool_image_sd_llm_vision"
+        const val KEY_IMAGE_SD_PHOTOMAKER = "tool_image_sd_photomaker"
+        const val KEY_IMAGE_SD_WIDTH = "tool_image_sd_width"
+        const val KEY_IMAGE_SD_HEIGHT = "tool_image_sd_height"
+        const val KEY_IMAGE_SD_STEPS = "tool_image_sd_steps"
+        const val KEY_IMAGE_SD_CFG = "tool_image_sd_cfg"
+        const val KEY_IMAGE_SD_SAMPLER = "tool_image_sd_sampler"
+        const val KEY_IMAGE_SD_SEED = "tool_image_sd_seed"
+        const val KEY_IMAGE_SD_NEGATIVE_PROMPT = "tool_image_sd_negative_prompt"
+        const val KEY_IMAGE_SD_THREADS = "tool_image_sd_threads"
+        const val KEY_IMAGE_SD_FLOW_SHIFT = "tool_image_sd_flow_shift"
+        const val KEY_IMAGE_SD_DIFFUSION_FA = "tool_image_sd_diffusion_fa"
+        const val KEY_IMAGE_SD_MMAP = "tool_image_sd_mmap"
+        const val KEY_IMAGE_SD_VAE_CONV_DIRECT = "tool_image_sd_vae_conv_direct"
+        const val KEY_IMAGE_SD_QWEN_ZERO_COND_T = "tool_image_sd_qwen_zero_cond_t"
+        const val KEY_IMAGE_SD_CHROMA_DISABLE_DIT_MASK = "tool_image_sd_chroma_disable_dit_mask"
+        const val KEY_BGR_MODEL = "tool_background_removal_model"
+        const val KEY_BGR_BACKEND = "tool_background_removal_backend"
+        const val KEY_BGR_RUNTIME_THREADS = "tool_background_removal_runtime_threads"
+        const val KEY_BGR_GRAPH_OPT = "tool_background_removal_graph_optimization"
+        const val KEY_BGR_ALPHA_THRESHOLD = "tool_background_removal_alpha_threshold"
+        const val KEY_BGR_FEATHER_RADIUS = "tool_background_removal_feather_radius"
+        const val KEY_BGR_MASK_SOFTNESS = "tool_background_removal_mask_softness"
+        const val KEY_BGR_MASK_CONTRAST = "tool_background_removal_mask_contrast"
+        const val KEY_BGR_EXPORT_MASK = "tool_background_removal_export_mask"
+        const val KEY_BGR_RESIZE_BEFORE_PROCESSING = "tool_background_removal_resize_before_processing"
+        const val KEY_BGR_RESIZE_MAX_EDGE = "tool_background_removal_resize_max_edge"
         const val KEY_MAX_TOOL_ROUNDS = "tool_max_rounds"
 
         const val DEFAULT_SEARCH_PAGES = 3
@@ -319,7 +505,37 @@ data class NativeChatToolConfig(
         const val MAX_TOOL_ROUNDS = 24
         const val MIN_KB_RESULTS = 1
         const val MAX_KB_RESULTS = 20
+        const val MIN_ASSISTANT_TTS_STEPS = 1
+        const val MAX_ASSISTANT_TTS_STEPS = 32
+        const val MIN_ASSISTANT_TTS_SPEED = 0.5f
+        const val MAX_ASSISTANT_TTS_SPEED = 2.0f
+        const val DEFAULT_CALL_SILENCE_AFTER_SPEECH_SECONDS = 5
+        const val DEFAULT_CALL_NO_SPEECH_TIMEOUT_SECONDS = 10
+        const val MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS = 1
+        const val MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS = 15
+        const val MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS = 3
+        const val MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS = 60
         const val DEFAULT_KIWIX_URL = "http://127.0.0.1:${AIConstants.Ports.KIWIX}"
+
+        fun liteRtToolDefaults(): NativeChatToolConfig = NativeChatToolConfig(
+            toolsEnabled = true,
+            webSearchEnabled = true,
+            kiwixSearchEnabled = true,
+            fetchUrlEnabled = true,
+            deepResearchEnabled = true,
+            deepResearchImportIntoSelectedKbEnabled = true,
+            dateTimeEnabled = true,
+            calculatorEnabled = true,
+            noteToolsEnabled = true,
+            todoToolsEnabled = true,
+            calendarToolsEnabled = true,
+            alarmToolsEnabled = true,
+            knowledgeBaseEnabled = true,
+            knowledgeBaseAutoContextEnabled = true,
+            imageGenerationEnabled = true,
+            imageIterationEnabled = true,
+            backgroundRemovalEnabled = true
+        )
 
         fun fromApiParams(apiParams: String?): NativeChatToolConfig {
             if (apiParams.isNullOrBlank()) return NativeChatToolConfig()
@@ -371,18 +587,29 @@ data class NativeChatToolConfig(
             imageGenerationEnabled = booleanParam(params, KEY_IMAGE_GENERATION_ENABLED, false),
             imageIterationEnabled = booleanParam(params, KEY_IMAGE_ITERATION_ENABLED, false),
             imageParams = imageParamsFromParams(params),
+            backgroundRemovalEnabled = booleanParam(params, KEY_BGR_ENABLED, false),
+            backgroundRemovalParams = backgroundRemovalParamsFromParams(params),
             assistantTtsEnabled = booleanParam(params, KEY_ASSISTANT_TTS_ENABLED, false),
             assistantTtsLanguage = stringParam(params, KEY_ASSISTANT_TTS_LANGUAGE, SUPERTONIC_DEFAULT_LANGUAGE)
                 .trim()
                 .takeIf { it in supertonicLanguageCodes }
                 ?: SUPERTONIC_DEFAULT_LANGUAGE,
             assistantTtsVoiceName = stringParam(params, KEY_ASSISTANT_TTS_VOICE, "").trim().takeIf { it.isNotBlank() },
+            assistantTtsTotalSteps = intParam(params, KEY_ASSISTANT_TTS_STEPS, SUPERTONIC_DEFAULT_TOTAL_STEPS)
+                .coerceIn(MIN_ASSISTANT_TTS_STEPS, MAX_ASSISTANT_TTS_STEPS),
+            assistantTtsSpeed = floatParam(params, KEY_ASSISTANT_TTS_SPEED, SUPERTONIC_DEFAULT_SPEED)
+                .coerceIn(MIN_ASSISTANT_TTS_SPEED, MAX_ASSISTANT_TTS_SPEED),
+            callSilenceAfterSpeechSeconds = intParam(params, KEY_CALL_SILENCE_AFTER_SPEECH_SECONDS, DEFAULT_CALL_SILENCE_AFTER_SPEECH_SECONDS)
+                .coerceIn(MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS, MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS),
+            callNoSpeechTimeoutSeconds = intParam(params, KEY_CALL_NO_SPEECH_TIMEOUT_SECONDS, DEFAULT_CALL_NO_SPEECH_TIMEOUT_SECONDS)
+                .coerceIn(MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS, MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS),
             maxToolRounds = intParam(params, KEY_MAX_TOOL_ROUNDS, DEFAULT_TOOL_ROUNDS)
                 .coerceIn(MIN_TOOL_ROUNDS, MAX_TOOL_ROUNDS)
         )
 
         private fun imageParamsFromParams(params: Map<String, Any?>): NativeChatImageToolParams =
             NativeChatImageToolParams(
+                engine = enumParam(params, KEY_IMAGE_ENGINE, NativeChatImageGenerationEngine.ONNX),
                 model = stringParam(params, KEY_IMAGE_MODEL, "").takeIf { it.isNotBlank() },
                 width = intParam(params, KEY_IMAGE_WIDTH, NativeChatImageToolParams.DEFAULT_WIDTH)
                     .coerceIn(NativeChatImageToolParams.MIN_SIZE, NativeChatImageToolParams.MAX_SIZE),
@@ -406,7 +633,60 @@ data class NativeChatToolConfig(
                 memoryPatternOptimization = booleanParam(params, KEY_IMAGE_MEMORY_PATTERN, true),
                 cpuArenaAllocator = booleanParam(params, KEY_IMAGE_CPU_ARENA, true),
                 nnapiCpuDisabled = booleanParam(params, KEY_IMAGE_NNAPI_CPU_DISABLED, true),
-                nnapiUseFp16 = booleanParam(params, KEY_IMAGE_NNAPI_FP16, false)
+                nnapiUseFp16 = booleanParam(params, KEY_IMAGE_NNAPI_FP16, false),
+                sdParams = sdImageParamsFromParams(params)
+            )
+
+        private fun sdImageParamsFromParams(params: Map<String, Any?>): NativeChatSdImageToolParams =
+            NativeChatSdImageToolParams(
+                model = stringParam(params, KEY_IMAGE_SD_MODEL, "").takeIf { it.isNotBlank() },
+                vaePath = stringParam(params, KEY_IMAGE_SD_VAE, "").takeIf { it.isNotBlank() },
+                taePath = stringParam(params, KEY_IMAGE_SD_TAE, "").takeIf { it.isNotBlank() },
+                clipLPath = stringParam(params, KEY_IMAGE_SD_CLIP_L, "").takeIf { it.isNotBlank() },
+                clipGPath = stringParam(params, KEY_IMAGE_SD_CLIP_G, "").takeIf { it.isNotBlank() },
+                t5xxlPath = stringParam(params, KEY_IMAGE_SD_T5XXL, "").takeIf { it.isNotBlank() },
+                llmPath = stringParam(params, KEY_IMAGE_SD_LLM, "").takeIf { it.isNotBlank() },
+                llmVisionPath = stringParam(params, KEY_IMAGE_SD_LLM_VISION, "").takeIf { it.isNotBlank() },
+                photoMakerPath = stringParam(params, KEY_IMAGE_SD_PHOTOMAKER, "").takeIf { it.isNotBlank() },
+                width = intParam(params, KEY_IMAGE_SD_WIDTH, NativeChatSdImageToolParams.DEFAULT_WIDTH)
+                    .coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE),
+                height = intParam(params, KEY_IMAGE_SD_HEIGHT, NativeChatSdImageToolParams.DEFAULT_HEIGHT)
+                    .coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE),
+                steps = intParam(params, KEY_IMAGE_SD_STEPS, NativeChatSdImageToolParams.DEFAULT_STEPS)
+                    .coerceIn(NativeChatSdImageToolParams.MIN_STEPS, NativeChatSdImageToolParams.MAX_STEPS),
+                cfgScale = floatParam(params, KEY_IMAGE_SD_CFG, NativeChatSdImageToolParams.DEFAULT_CFG)
+                    .coerceIn(NativeChatSdImageToolParams.MIN_CFG, NativeChatSdImageToolParams.MAX_CFG),
+                sampler = enumParam(params, KEY_IMAGE_SD_SAMPLER, SamplingMethod.EULER_A),
+                seed = stringParam(params, KEY_IMAGE_SD_SEED, ""),
+                negativePrompt = stringParam(params, KEY_IMAGE_SD_NEGATIVE_PROMPT, ""),
+                threads = intParam(params, KEY_IMAGE_SD_THREADS, NativeChatSdImageToolParams.DEFAULT_THREADS)
+                    .coerceIn(NativeChatSdImageToolParams.MIN_THREADS, NativeChatSdImageToolParams.MAX_THREADS),
+                flowShift = stringParam(params, KEY_IMAGE_SD_FLOW_SHIFT, ""),
+                diffusionFa = booleanParam(params, KEY_IMAGE_SD_DIFFUSION_FA, false),
+                mmap = booleanParam(params, KEY_IMAGE_SD_MMAP, false),
+                vaeConvDirect = booleanParam(params, KEY_IMAGE_SD_VAE_CONV_DIRECT, false),
+                qwenImageZeroCondT = booleanParam(params, KEY_IMAGE_SD_QWEN_ZERO_COND_T, false),
+                chromaDisableDitMask = booleanParam(params, KEY_IMAGE_SD_CHROMA_DISABLE_DIT_MASK, false)
+            )
+
+        private fun backgroundRemovalParamsFromParams(params: Map<String, Any?>): NativeChatBackgroundRemovalToolParams =
+            NativeChatBackgroundRemovalToolParams(
+                model = stringParam(params, KEY_BGR_MODEL, "").takeIf { it.isNotBlank() },
+                backend = enumParam(params, KEY_BGR_BACKEND, OnnxRuntimeBackend.CPU),
+                runtimeThreads = optionalIntParam(params, KEY_BGR_RUNTIME_THREADS),
+                graphOptimizationLevel = enumParam(params, KEY_BGR_GRAPH_OPT, OnnxGraphOptimizationLevel.ALL),
+                alphaThreshold = floatParam(params, KEY_BGR_ALPHA_THRESHOLD, NativeChatBackgroundRemovalToolParams.DEFAULT_ALPHA_THRESHOLD)
+                    .coerceIn(NativeChatBackgroundRemovalToolParams.MIN_ALPHA_THRESHOLD, NativeChatBackgroundRemovalToolParams.MAX_ALPHA_THRESHOLD),
+                featherRadius = intParam(params, KEY_BGR_FEATHER_RADIUS, NativeChatBackgroundRemovalToolParams.DEFAULT_FEATHER_RADIUS)
+                    .coerceIn(NativeChatBackgroundRemovalToolParams.MIN_FEATHER_RADIUS, NativeChatBackgroundRemovalToolParams.MAX_FEATHER_RADIUS),
+                maskSoftness = floatParam(params, KEY_BGR_MASK_SOFTNESS, NativeChatBackgroundRemovalToolParams.DEFAULT_MASK_SOFTNESS)
+                    .coerceIn(NativeChatBackgroundRemovalToolParams.MIN_MASK_SOFTNESS, NativeChatBackgroundRemovalToolParams.MAX_MASK_SOFTNESS),
+                maskContrast = floatParam(params, KEY_BGR_MASK_CONTRAST, NativeChatBackgroundRemovalToolParams.DEFAULT_MASK_CONTRAST)
+                    .coerceIn(NativeChatBackgroundRemovalToolParams.MIN_MASK_CONTRAST, NativeChatBackgroundRemovalToolParams.MAX_MASK_CONTRAST),
+                exportMask = booleanParam(params, KEY_BGR_EXPORT_MASK, false),
+                resizeBeforeProcessing = booleanParam(params, KEY_BGR_RESIZE_BEFORE_PROCESSING, true),
+                resizeMaxEdge = intParam(params, KEY_BGR_RESIZE_MAX_EDGE, NativeChatBackgroundRemovalToolParams.DEFAULT_RESIZE_MAX_EDGE)
+                    .coerceIn(NativeChatBackgroundRemovalToolParams.MIN_RESIZE_MAX_EDGE, NativeChatBackgroundRemovalToolParams.MAX_RESIZE_MAX_EDGE)
             )
 
         private fun booleanParam(params: Map<String, Any?>, key: String, default: Boolean): Boolean {
@@ -548,6 +828,11 @@ data class NativeChatGeneratedImage(
     val imagePath: String
 )
 
+data class NativeChatBackgroundRemovalImage(
+    val content: String,
+    val imagePath: String
+)
+
 class NativeChatToolRuntime(
     private val context: android.content.Context? = null,
     private val noteDao: NoteDao? = null,
@@ -558,6 +843,7 @@ class NativeChatToolRuntime(
     private val notesChanged: (() -> Unit)? = null,
     private val knowledgeBaseRepository: KnowledgeBaseRepository? = null,
     private val imageGenerator: NativeChatImageGenerator? = null,
+    private val backgroundRemover: NativeChatBackgroundRemover? = null,
     private val pdfTextExtractor: (ByteArray, Int) -> String = ::extractNativePdfTextFromBytes,
     private val clientFactory: () -> OkHttpClient = { defaultNativeChatToolClient() }
 ) {
@@ -580,7 +866,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_WEB_SEARCH,
-                        description = "Search the public web with a compact search worker. Returns result titles, URLs, short page summaries, and Markdown citation links. Cite claims from these results with the returned citation links. For serious research, follow up by calling search_page to inspect links inside an interesting page, then fetch_url on authoritative or promising URLs to read full content before drawing conclusions. If note tools are enabled and the user wants saved research, create or update a note with source citations before the final answer.",
+                        description = "Search the public web with a compact search worker. Returns result titles, URLs, short page summaries, and Markdown citation links. If selected KB guidance says a KB is relevant, prefer kb_search/kb_read_source before web_search unless the user needs current or external information. Cite claims from these results with the returned citation links. For serious research, follow up by calling search_page to inspect links inside an interesting page, then fetch_url on authoritative or promising URLs to read full content before drawing conclusions. If note tools are enabled and the user wants saved research, create or update a note with source citations before the final answer.",
                         parameters = mapOf("query" to "Search query string"),
                         requiredParams = listOf("query")
                     )
@@ -605,7 +891,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_KIWIX_SEARCH,
-                        description = "Search the configured local Kiwix offline library and return article titles, URLs, short summaries, and Markdown citation links. Cite claims from these offline results with the returned citation links.",
+                        description = "Search the configured local Kiwix offline library and return article titles, URLs, short summaries, and Markdown citation links. If selected KB guidance says a KB is relevant, prefer kb_search/kb_read_source before Kiwix. Cite claims from these offline results with the returned citation links.",
                         parameters = mapOf("query" to "Search query string"),
                         requiredParams = listOf("query")
                     )
@@ -635,11 +921,12 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_DEEP_RESEARCH,
-                        description = "Run a long Deep Research job and wait until it finishes. Use this when the user asks for broad, multi-source research that should become a reusable knowledge base. Provide a refined research query, optional title/focus, and optional source_limit as a maximum import count, not a required count. The job searches the web, downloads readable webpages/PDFs, extracts their text, imports the best sources into a normal visible knowledge base, vectorizes them, and selects that knowledge base for this chat.$selectedKbImportGuidance This tool is for source ingestion, not for writing a note. Do not send a final answer until this tool returns.",
+                        description = "Run a long Deep Research job and wait until it finishes. Use this when the user asks for broad, multi-source research that should become a reusable knowledge base. Provide a refined research query, optional title/focus, a brief content_summary describing what the KB will contain, and optional source_limit as a maximum import count, not a required count. The job runs multiple search variants when useful, tracks visited URLs, scores candidates, skips uninteresting/low-quality results, downloads readable webpages/PDFs, extracts their text, imports the best sources into a normal visible knowledge base, vectorizes them, and selects that knowledge base for this chat.$selectedKbImportGuidance This tool is for source ingestion, not for writing a note. Do not send a final answer until this tool returns.",
                         parameters = mapOf(
                             "query" to "Refined research query",
                             "title" to "Optional short topic title for the generated knowledge base",
                             "focus" to "Optional extra focus, population, domain, or constraints",
+                            "content_summary" to "Brief summary of what information this generated KB should contain, used later to decide when to prefer it before web or Kiwix",
                             "source_limit" to "Optional maximum number of sources to import; minimum 1 and no maximum",
                             "target_knowledge_base_id" to "Optional selected KB id to add new sources into. Only works when selected-KB imports are enabled for this chat and server."
                         ),
@@ -976,7 +1263,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_GENERATE_IMAGE,
-                        description = "Generate a PNG image with the native-chat ONNX image preset. Before calling this tool, rewrite the user's idea into a stronger optimized image prompt with clear subject, composition, style, lighting, colors, and constraints so the result is better. Return the saved app-local path plus a note_markdown line that can be inserted into a note.",
+                        description = "Generate a PNG image with the native-chat configured image engine. Before calling this tool, rewrite the user's idea into a stronger optimized image prompt with clear subject, composition, style, lighting, colors, and constraints so the result is better. Return the saved app-local path plus a note_markdown line that can be inserted into a note.",
                         parameters = mapOf(
                             "prompt" to "Optimized positive prompt describing the image to generate. Improve sparse user wording instead of passing it through unchanged.",
                             "negative_prompt" to "Optional negative prompt for defects, unwanted styles, or objects to avoid"
@@ -985,7 +1272,27 @@ class NativeChatToolRuntime(
                     )
                 )
             }
+            if (config.backgroundRemovalEnabled) {
+                add(
+                    AgentTool(
+                        name = TOOL_REMOVE_IMAGE_BACKGROUND,
+                        description = "Remove the background from an existing image with the native-chat ONNX background-removal preset. Use the user-selected model and settings; only provide the image path returned by another tool or shown in the chat context. Returns a transparent PNG path plus a note_markdown line.",
+                        parameters = mapOf(
+                            "image_path" to "Path to the source image to process"
+                        ),
+                        requiredParams = listOf("image_path")
+                    )
+                )
+            }
         }
+    }
+
+    suspend fun buildKnowledgeBaseSelectionGuidance(config: NativeChatToolConfig): String? {
+        if (!config.toolsEnabled || !config.knowledgeBaseEnabled) return null
+        val scopeIds = config.knowledgeBaseScopeIds()
+        if (scopeIds.isEmpty()) return null
+        val repo = knowledgeBaseRepository ?: return null
+        return repo.buildKnowledgeBaseSelectionGuidance(scopeIds)
     }
 
     suspend fun buildAutoKnowledgeContext(query: String, config: NativeChatToolConfig): String? {
@@ -1016,11 +1323,15 @@ class NativeChatToolRuntime(
             maxResults = config.knowledgeBaseMaxResults
         )
         if (results.isEmpty()) return null
+        val routingGuide = repo.buildKnowledgeBaseSelectionGuidance(scopeIds)
         return buildString {
             if (hasChatDocumentScope) {
                 appendLine("The user has uploaded document(s) to this chat. The following retrieved chunks are from those chat documents. Use them to answer document-referential questions and do not claim that no document was attached. Cite KB-derived claims by copying the provided Markdown citation links exactly, for example [AL.pdf chunk 9](kb://chunk/123). Do not shorten them to bare labels like [AL.pdf chunk 9].")
             } else {
                 appendLine("Knowledge base context selected for this chat. Use it only when relevant. Cite KB-derived claims by copying the provided Markdown citation links exactly, not bare citation labels.")
+            }
+            routingGuide?.let {
+                appendLine(it)
             }
             results.forEachIndexed { index, result ->
                 appendLine()
@@ -1192,6 +1503,15 @@ class NativeChatToolRuntime(
                     val safeChatId = chatId?.takeIf { it > 0L } ?: error("Deep Research requires a chat id.")
                     val sourceLimit = parseOptionalInt(toolArg(toolCall.arguments, "source_limit", "sourceLimit", "limit"))
                         ?: config.deepResearchSourceLimit
+                    val contentSummary = toolArg(
+                        toolCall.arguments,
+                        "content_summary",
+                        "contentSummary",
+                        "kb_summary",
+                        "kbSummary",
+                        "knowledge_base_summary",
+                        "knowledgeBaseSummary"
+                    )
                     val selectedTargets = config.selectedKnowledgeBaseIds.filter { it > 0L }.distinct()
                     val requestedTarget = parseOptionalLong(
                         toolArg(
@@ -1226,6 +1546,7 @@ class NativeChatToolRuntime(
                         query = cleanQuery,
                         title = toolArg(toolCall.arguments, "title", "topic"),
                         focus = toolArg(toolCall.arguments, "focus", "scope"),
+                        contentSummary = contentSummary,
                         sourceLimit = DeepResearchSupport.normalizeSourceLimit(sourceLimit),
                         targetKnowledgeBaseId = targetKnowledgeBaseId
                     )
@@ -1442,6 +1763,21 @@ class NativeChatToolRuntime(
                     generateImage(
                         prompt = toolCall.arguments["prompt"].orEmpty(),
                         negativePrompt = toolCall.arguments["negative_prompt"].orEmpty(),
+                        config = config
+                    )
+                }
+                TOOL_REMOVE_IMAGE_BACKGROUND -> {
+                    require(config.toolsEnabled && config.backgroundRemovalEnabled) { "remove_image_background is disabled for this chat." }
+                    val imagePath = toolArg(toolCall.arguments, "image_path", "path", "source_image_path").orEmpty()
+                    onProgress(
+                        NativeChatToolProgress(
+                            status = "Removing image background",
+                            phase = NativeChatToolProgressPhase.GENERATING,
+                            title = imagePath.takeLast(120)
+                        )
+                    )
+                    removeImageBackground(
+                        imagePath = imagePath,
                         config = config
                     )
                 }
@@ -2275,8 +2611,22 @@ class NativeChatToolRuntime(
     ): NativeChatToolResult {
         val cleanPrompt = prompt.trim()
         require(cleanPrompt.isNotBlank()) { "Image prompt is required." }
-        val generator = imageGenerator ?: throw IllegalStateException("ONNX image generation is unavailable.")
+        val generator = imageGenerator ?: throw IllegalStateException("Image generation is unavailable.")
         val generated = generator.generateImage(cleanPrompt, negativePrompt.trim(), config).getOrThrow()
+        return NativeChatToolResult(
+            content = generated.content,
+            generatedImagePath = generated.imagePath
+        )
+    }
+
+    private suspend fun removeImageBackground(
+        imagePath: String,
+        config: NativeChatToolConfig
+    ): NativeChatToolResult {
+        val cleanPath = imagePath.trim()
+        require(cleanPath.isNotBlank()) { "Image path is required." }
+        val remover = backgroundRemover ?: throw IllegalStateException("ONNX background removal is unavailable.")
+        val generated = remover.removeBackground(cleanPath, config).getOrThrow()
         return NativeChatToolResult(
             content = generated.content,
             generatedImagePath = generated.imagePath
@@ -2836,6 +3186,7 @@ class NativeChatToolRuntime(
         const val TOOL_KB_READ_SOURCE = "kb_read_source"
         const val TOOL_KB_LIST_SOURCES = "kb_list_sources"
         const val TOOL_GENERATE_IMAGE = "generate_image"
+        const val TOOL_REMOVE_IMAGE_BACKGROUND = "remove_image_background"
 
         private const val USER_AGENT_HEADER = "User-Agent"
         private const val DEFAULT_USER_AGENT =
@@ -3048,6 +3399,13 @@ interface NativeChatImageGenerator {
         negativePrompt: String,
         config: NativeChatToolConfig
     ): Result<NativeChatGeneratedImage>
+}
+
+interface NativeChatBackgroundRemover {
+    suspend fun removeBackground(
+        imagePath: String,
+        config: NativeChatToolConfig
+    ): Result<NativeChatBackgroundRemovalImage>
 }
 
 internal data class NativeTodoItem(

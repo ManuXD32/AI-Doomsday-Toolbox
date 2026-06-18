@@ -20,23 +20,45 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.service.RemoteSummaryMetadata
 import kotlinx.coroutines.launch
+
+private const val LITERT_BACKEND_AUTO = "auto"
+private const val LITERT_BACKEND_CPU = "cpu"
+private const val LITERT_BACKEND_GPU = "gpu"
+
+private fun normalizeLiteRtBackend(value: String?): String {
+    val normalized = value?.trim()?.lowercase().orEmpty()
+    return when (normalized) {
+        LITERT_BACKEND_CPU, "cpu-only" -> LITERT_BACKEND_CPU
+        LITERT_BACKEND_GPU, "gpu-only", "opencl", "vulkan" -> LITERT_BACKEND_GPU
+        else -> LITERT_BACKEND_AUTO
+    }
+}
+
+private fun com.example.llamadroid.data.model.LiteRtModelEntity.advertisedLiteRtMaxContextTokens(): Int? =
+    maxContextTokens?.takeIf { it > 0 }
 
 @Composable
 fun RemoteSummaryBackendEditor(
@@ -57,18 +79,26 @@ fun RemoteSummaryBackendEditor(
     llamaServerContextLabel: String?,
     llamaServerContextTokens: Int,
     requestedContextForWarning: Int?,
+    liteRtModelId: Long? = null,
+    onLiteRtModelSelected: (Long?) -> Unit = {},
+    liteRtBackend: String = LITERT_BACKEND_AUTO,
+    onLiteRtBackendChange: (String) -> Unit = {},
+    liteRtMtpEnabled: Boolean = false,
+    onLiteRtMtpEnabledChange: (Boolean) -> Unit = {},
+    liteRtThinkingEnabled: Boolean = false,
+    onLiteRtThinkingEnabledChange: ((Boolean) -> Unit)? = null,
+    allowBlankUrlRefresh: Boolean = false,
     fetchMetadata: suspend () -> Result<RemoteSummaryMetadata>,
     onMetadataLoaded: (RemoteSummaryMetadata) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val liteRtModels by remember(context) {
+        AppDatabase.getDatabase(context).liteRtModelDao().observeAll()
+    }.collectAsState(initial = emptyList())
     val normalizedBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
-    val currentUrl = when (normalizedBackend) {
-        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl
-        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl
-        else -> ollamaUrl
-    }
+    val isLiteRt = SettingsRepository.isLiteRtBackend(normalizedBackend)
     val selectedRemoteModel = if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {
         llamaSwapModel
     } else {
@@ -80,8 +110,38 @@ fun RemoteSummaryBackendEditor(
         mutableStateOf(selectedRemoteModel?.let(::listOf) ?: emptyList())
     }
     var showModelMenu by rememberSaveable { mutableStateOf(false) }
+    var showLiteRtModelMenu by rememberSaveable { mutableStateOf(false) }
     var isRefreshingMetadata by rememberSaveable { mutableStateOf(false) }
     var metadataMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var ollamaUrlDraft by rememberSaveable { mutableStateOf(ollamaUrl) }
+    var llamaServerUrlDraft by rememberSaveable { mutableStateOf(llamaServerUrl) }
+    var llamaSwapUrlDraft by rememberSaveable { mutableStateOf(llamaSwapUrl) }
+    var isEditingOllamaUrl by rememberSaveable { mutableStateOf(false) }
+    var isEditingLlamaServerUrl by rememberSaveable { mutableStateOf(false) }
+    var isEditingLlamaSwapUrl by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(ollamaUrl) {
+        if (!isEditingOllamaUrl) {
+            ollamaUrlDraft = ollamaUrl
+        }
+    }
+    LaunchedEffect(llamaServerUrl) {
+        if (!isEditingLlamaServerUrl) {
+            llamaServerUrlDraft = llamaServerUrl
+        }
+    }
+    LaunchedEffect(llamaSwapUrl) {
+        if (!isEditingLlamaSwapUrl) {
+            llamaSwapUrlDraft = llamaSwapUrl
+        }
+    }
+
+    val currentUrl = when (normalizedBackend) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrlDraft
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrlDraft
+        SettingsRepository.PDF_BACKEND_LITERT -> "local"
+        else -> ollamaUrlDraft
+    }
     fun mergeSelectedModel(models: List<String>): List<String> {
         val selected = selectedRemoteModel?.takeIf { it.isNotBlank() }
         if (selected == null || models.contains(selected)) return models
@@ -90,6 +150,14 @@ fun RemoteSummaryBackendEditor(
 
     fun applyMetadata(metadata: RemoteSummaryMetadata) {
         when (SettingsRepository.normalizeOllamaOrLlamaBackend(metadata.backend)) {
+            SettingsRepository.PDF_BACKEND_LITERT -> {
+                metadataMessage = context.getString(
+                    R.string.pdf_metadata_litert_loaded,
+                    metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable),
+                    metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                )
+            }
+
             SettingsRepository.PDF_BACKEND_OLLAMA -> {
                 availableRemoteModels = mergeSelectedModel(metadata.availableModels)
                 metadataMessage = context.getString(
@@ -118,7 +186,7 @@ fun RemoteSummaryBackendEditor(
     }
 
     fun refreshMetadata() {
-        if (currentUrl.isBlank()) return
+        if (!isLiteRt && !allowBlankUrlRefresh && currentUrl.isBlank()) return
         scope.launch {
             isRefreshingMetadata = true
             metadataMessage = null
@@ -164,25 +232,47 @@ fun RemoteSummaryBackendEditor(
                 ) {
                     Text(stringResource(R.string.pdf_backend_llama_server))
                 }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedButton(
                     onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_LLAMA_SWAP) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(stringResource(R.string.pdf_backend_llama_swap))
                 }
+                OutlinedButton(
+                    onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_LITERT) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.pdf_backend_litert))
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            if (!isLiteRt) {
                 OutlinedTextField(
                     value = currentUrl,
                     onValueChange = {
                         when (normalizedBackend) {
-                            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> onLlamaServerUrlChange(it)
-                            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> onLlamaSwapUrlChange(it)
-                            else -> onOllamaUrlChange(it)
+                            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> {
+                                llamaServerUrlDraft = it
+                                onLlamaServerUrlChange(it)
+                            }
+                            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> {
+                                llamaSwapUrlDraft = it
+                                onLlamaSwapUrlChange(it)
+                            }
+                            else -> {
+                                ollamaUrlDraft = it
+                                onOllamaUrlChange(it)
+                            }
                         }
-                },
+                    },
                     label = {
                         Text(
                             when (normalizedBackend) {
@@ -192,16 +282,32 @@ fun RemoteSummaryBackendEditor(
                             }
                         )
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("remote_summary_url_field")
+                        .onFocusChanged { focusState ->
+                            when (normalizedBackend) {
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> {
+                                    isEditingLlamaServerUrl = focusState.isFocused
+                                }
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> {
+                                    isEditingLlamaSwapUrl = focusState.isFocused
+                                }
+                                else -> {
+                                    isEditingOllamaUrl = focusState.isFocused
+                                }
+                            }
+                        },
                     singleLine = true
                 )
+            }
 
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedButton(
                 onClick = ::refreshMetadata,
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !isRefreshingMetadata && currentUrl.isNotBlank()
+                enabled = !isRefreshingMetadata && (isLiteRt || allowBlankUrlRefresh || currentUrl.isNotBlank())
             ) {
                 Icon(Icons.Default.Refresh, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
@@ -225,7 +331,102 @@ fun RemoteSummaryBackendEditor(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            if (requiresSelectableModel) {
+            if (isLiteRt) {
+                val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == liteRtModelId }
+                    ?: liteRtModels.firstOrNull()
+                Text(
+                    stringResource(R.string.litert_model_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Box {
+                    OutlinedButton(
+                        onClick = { showLiteRtModelMenu = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = liteRtModels.isNotEmpty()
+                    ) {
+                        Text(selectedLiteRtModel?.displayName ?: stringResource(R.string.litert_error_model_missing))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null)
+                    }
+                    DropdownMenu(
+                        expanded = showLiteRtModelMenu,
+                        onDismissRequest = { showLiteRtModelMenu = false }
+                    ) {
+                        if (liteRtModels.isEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.litert_error_model_missing)) },
+                                onClick = { showLiteRtModelMenu = false }
+                            )
+                        } else {
+                            liteRtModels.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model.displayName) },
+                                    onClick = {
+                                        onLiteRtModelSelected(model.id)
+                                        showLiteRtModelMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    stringResource(R.string.litert_gallery_accelerator),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    listOf(
+                        LITERT_BACKEND_AUTO to R.string.general_acceleration_mode_auto,
+                        LITERT_BACKEND_CPU to R.string.general_acceleration_mode_cpu,
+                        LITERT_BACKEND_GPU to R.string.litert_backend_gpu
+                    ).forEach { (mode, label) ->
+                        OutlinedButton(
+                            onClick = { onLiteRtBackendChange(mode) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(stringResource(label))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.litert_gallery_mtp_title), style = MaterialTheme.typography.labelLarge)
+                        Text(stringResource(R.string.litert_gallery_mtp_desc), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(checked = liteRtMtpEnabled, onCheckedChange = onLiteRtMtpEnabledChange)
+                }
+                onLiteRtThinkingEnabledChange?.let { onThinkingChange ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.litert_thinking_title), style = MaterialTheme.typography.labelLarge)
+                            Text(stringResource(R.string.litert_thinking_desc), style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(checked = liteRtThinkingEnabled, onCheckedChange = onThinkingChange)
+                    }
+                }
+                val requested = requestedContextForWarning
+                val advertised = selectedLiteRtModel?.advertisedLiteRtMaxContextTokens()
+                if (requested != null && requested > 16_384 && normalizeLiteRtBackend(liteRtBackend) == LITERT_BACKEND_GPU) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.litert_gallery_high_gpu_context_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else if (requested != null && advertised != null && requested > advertised) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.pdf_context_warning, requested, advertised),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            } else if (requiresSelectableModel) {
                 Text(
                     stringResource(
                         if (normalizedBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP) {

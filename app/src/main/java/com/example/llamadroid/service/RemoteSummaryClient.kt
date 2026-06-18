@@ -1,8 +1,21 @@
 package com.example.llamadroid.service
 
+import android.content.Context
+import android.util.Base64
+import com.example.llamadroid.R
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
+import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.advertisedLiteRtMaxContextTokens
+import com.example.llamadroid.data.model.defaultLiteRtChatContextTokens
+import com.example.llamadroid.data.model.estimateNativeChatTextTokens
+import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.model.supportsLiteRtVision
+import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
@@ -11,6 +24,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit
 
@@ -18,7 +32,11 @@ data class RemoteSummaryBackendConfig(
     val backend: String,
     val baseUrl: String,
     val model: String?,
-    val timeoutMinutes: Int
+    val timeoutMinutes: Int,
+    val context: Context? = null,
+    val liteRtModelId: Long? = null,
+    val liteRtBackend: String = LITERT_BACKEND_AUTO,
+    val liteRtMtpEnabled: Boolean = false
 )
 
 data class RemoteSummaryRequest(
@@ -74,21 +92,34 @@ interface RemoteSummaryClient {
 }
 
 object RemoteSummaryClientFactory {
+    fun fromSnapshot(context: Context, snapshot: RemoteSummarySettingsSnapshot): RemoteSummaryClient =
+        fromSnapshot(snapshot, context)
+
     fun fromSnapshot(snapshot: RemoteSummarySettingsSnapshot): RemoteSummaryClient {
+        return fromSnapshot(snapshot, context = null)
+    }
+
+    private fun fromSnapshot(snapshot: RemoteSummarySettingsSnapshot, context: Context?): RemoteSummaryClient {
         val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)
         val config = RemoteSummaryBackendConfig(
             backend = backend,
             baseUrl = when (backend) {
                 SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> snapshot.llamaServerUrl
                 SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapUrl
+                SettingsRepository.PDF_BACKEND_LITERT -> "local"
                 else -> snapshot.ollamaUrl
             }.trim().trimEnd('/'),
             model = when (backend) {
                 SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> snapshot.llamaServerModelLabel
                 SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> snapshot.llamaSwapModel
+                SettingsRepository.PDF_BACKEND_LITERT -> snapshot.liteRtModelId?.let { "litert:$it" }
                 else -> snapshot.ollamaModel
             }?.trim()?.ifBlank { null },
-            timeoutMinutes = snapshot.timeoutMinutes
+            timeoutMinutes = snapshot.timeoutMinutes,
+            context = context,
+            liteRtModelId = snapshot.liteRtModelId,
+            liteRtBackend = snapshot.liteRtBackend,
+            liteRtMtpEnabled = snapshot.liteRtMtpEnabled
         )
         return fromConfig(config)
     }
@@ -97,8 +128,117 @@ object RemoteSummaryClientFactory {
         return when (SettingsRepository.normalizeOllamaOrLlamaBackend(config.backend)) {
             SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> LlamaServerRemoteSummaryClient(config)
             SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> LlamaSwapRemoteSummaryClient(config)
+            SettingsRepository.PDF_BACKEND_LITERT -> LiteRtRemoteSummaryClient(config)
             else -> OllamaRemoteSummaryClient(config)
         }
+    }
+}
+
+class LiteRtRemoteSummaryClient(private val config: RemoteSummaryBackendConfig) : RemoteSummaryClient {
+    private val appContext: Context = requireNotNull(config.context) {
+        "LiteRT summary backend requires an Android context"
+    }.applicationContext
+    private val database: AppDatabase by lazy { AppDatabase.getDatabase(appContext) }
+
+    override suspend fun fetchMetadata(): Result<RemoteSummaryMetadata> = runCatching {
+        val models = database.liteRtModelDao().observeAll().first()
+        val selected = resolveModel(models)
+        RemoteSummaryMetadata(
+            backend = SettingsRepository.PDF_BACKEND_LITERT,
+            baseUrl = "local",
+            availableModels = models.map { it.displayName },
+            selectedModel = selected.displayName,
+            serverModelLabel = selected.displayName,
+            serverContextTokens = selected.advertisedLiteRtMaxContextTokens(),
+            serverContextLabel = selected.advertisedLiteRtMaxContextTokens()?.let { "$it tokens" },
+            tokenCountMode = TokenCountMode.APPROXIMATE
+        )
+    }
+
+    override suspend fun countRenderedPromptTokens(
+        systemPrompt: String,
+        userPrompt: String
+    ): RemoteSummaryTokenCount =
+        RemoteSummaryTokenCount(
+            totalTokens = estimateNativeChatTextTokens("$systemPrompt\n$userPrompt"),
+            mode = TokenCountMode.APPROXIMATE
+        )
+
+    override suspend fun summarize(request: RemoteSummaryRequest): RemoteSummaryResponse {
+        val model = resolveModel()
+        val imageFiles = request.imageAttachments
+            .takeIf { model.supportsLiteRtVision() }
+            .orEmpty()
+            .mapIndexedNotNull { index, attachment ->
+                writeLiteRtSummaryImageAttachment(attachment, index)
+            }
+        if (request.imageAttachments.isNotEmpty() && imageFiles.isEmpty()) {
+            DebugLog.log(
+                "LiteRtRemoteSummaryClient: image attachments ignored because " +
+                    "model=${model.displayName} vision=${model.supportsLiteRtVision()}"
+            )
+        } else if (imageFiles.size < request.imageAttachments.size) {
+            DebugLog.log(
+                "LiteRtRemoteSummaryClient: using ${imageFiles.size}/${request.imageAttachments.size} " +
+                    "image attachments for ${model.displayName}"
+            )
+        }
+        return try {
+            val result = LiteRtTextGenerationClient(appContext).generate(
+                model = model,
+                title = "Remote summary",
+                systemPrompt = request.systemPrompt,
+                messages = emptyList(),
+                userPrompt = request.userPrompt,
+                contextSize = request.contextSize.takeIf { it > 0 }
+                    ?: model.defaultLiteRtChatContextTokens()
+                    ?: 4_000,
+                maxTokens = request.maxTokens,
+                temperature = request.temperature,
+                thinkingEnabled = request.thinkingEnabled,
+                backendMode = normalizeLiteRtBackend(config.liteRtBackend),
+                mtpEnabled = config.liteRtMtpEnabled,
+                userImagePath = imageFiles.firstOrNull()?.absolutePath
+            )
+            RemoteSummaryResponse(
+                output = result.output,
+                rawOutput = result.rawOutput,
+                promptTokens = result.stats.promptTokens,
+                completionTokens = result.stats.completionTokens
+            )
+        } finally {
+            imageFiles.forEach { file -> runCatching { file.delete() } }
+        }
+    }
+
+    override fun cancelActiveCall() = Unit
+
+    private suspend fun resolveModel(models: List<LiteRtModelEntity>? = null): LiteRtModelEntity {
+        val available = models ?: database.liteRtModelDao().observeAll().first()
+        val selectedId = config.liteRtModelId
+            ?: config.model?.removePrefix("litert:")?.toLongOrNull()
+        return selectedId
+            ?.let { id -> available.firstOrNull { it.id == id } }
+            ?: available.firstOrNull()
+            ?: throw IllegalStateException(appContext.getString(R.string.litert_error_model_missing))
+    }
+
+    private fun writeLiteRtSummaryImageAttachment(
+        attachment: RemoteSummaryImageAttachment,
+        index: Int
+    ): File? = runCatching {
+        val bytes = Base64.decode(attachment.base64, Base64.DEFAULT)
+        val extension = when {
+            attachment.mimeType.contains("png", ignoreCase = true) -> "png"
+            attachment.mimeType.contains("webp", ignoreCase = true) -> "webp"
+            else -> "jpg"
+        }
+        val mediaDir = File(appContext.cacheDir, "litert_remote_summary_media").apply { mkdirs() }
+        File(mediaDir, "summary_${System.currentTimeMillis()}_${index}.$extension")
+            .apply { writeBytes(bytes) }
+    }.getOrElse { error ->
+        DebugLog.log("LiteRtRemoteSummaryClient: failed to stage image attachment: ${error.message}")
+        null
     }
 }
 

@@ -9,12 +9,18 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalPipeline
+import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxImageGenConfig
 import com.example.llamadroid.onnx.OnnxImageGenMode
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.OnnxRuntimeOptions
 import com.example.llamadroid.onnx.OnnxTxt2ImgPipeline
+import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
+import com.example.llamadroid.sd.isSdImageMainModel
+import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.service.containsTraversalSegments
 import com.example.llamadroid.service.isSequentialBatchBlockedTool
@@ -986,6 +992,9 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             if (!settingsRepo.agentImageGenerationToolEnabled.value) {
                 return@withContext Result.failure(Exception(context.getString(R.string.agent_generate_image_tool_disabled)))
             }
+            if (settingsRepo.agentImageGenerationEngine.value.equals("SD", ignoreCase = true)) {
+                return@withContext generateSdAgentImage(prompt, negativePrompt, outputPath, settingsRepo)
+            }
             val db = AppDatabase.getDatabase(context.applicationContext)
             val selectedModelId = settingsRepo.agentImageGenerationModel.value?.trim().orEmpty()
             if (selectedModelId.isBlank()) {
@@ -1031,16 +1040,261 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
             Result.success(
                 buildString {
-                    appendLine("Saved image: ${toProjectRelativePath(safeOutputPath)}")
-                    appendLine("Model: ${model.filename}")
-                    appendLine("Resolution: ${width}x${height}")
-                    appendLine("Steps: ${settingsRepo.agentImageGenerationSteps.value}")
-                    append("CFG: ${String.format(java.util.Locale.US, "%.1f", settingsRepo.agentImageGenerationCfg.value)}")
+                    appendLine(context.getString(R.string.agent_generate_image_result_saved, toProjectRelativePath(safeOutputPath)))
+                    appendLine(context.getString(R.string.model_filename_label, model.filename))
+                    appendLine(context.getString(R.string.agent_generate_image_result_resolution, "${width}x${height}"))
+                    appendLine(context.getString(R.string.agent_generate_image_result_steps, settingsRepo.agentImageGenerationSteps.value))
+                    append(context.getString(R.string.agent_generate_image_result_cfg, String.format(java.util.Locale.US, "%.1f", settingsRepo.agentImageGenerationCfg.value)))
                 }
             )
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    private suspend fun generateSdAgentImage(
+        prompt: String,
+        negativePrompt: String,
+        outputPath: String,
+        settingsRepo: SettingsRepository
+    ): Result<String> {
+        val db = AppDatabase.getDatabase(context.applicationContext)
+        val selectedModelId = settingsRepo.agentSdImageGenerationModel.value?.trim().orEmpty()
+        if (selectedModelId.isBlank()) {
+            return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
+        }
+        val mainModels = db.modelDao()
+            .getModelsByTypesSync(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
+            .filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() }
+        val model = mainModels.find { it.filename == selectedModelId || it.path == selectedModelId }
+            ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
+        val (family, variant) = model.resolvedSdFamily()
+        val spec = family?.let { com.example.llamadroid.sd.resolveSdFamilySpec(it, variant) }
+            ?: return Result.failure(Exception(context.getString(R.string.agent_generate_image_sd_model_missing)))
+        val supportModels = db.modelDao().getModelsByTypesSync(
+            listOf(
+                ModelType.SD_VAE,
+                ModelType.SD_TAE,
+                ModelType.SD_CLIP_L,
+                ModelType.SD_CLIP_G,
+                ModelType.SD_T5XXL,
+                ModelType.LLM,
+                ModelType.VISION_PROJECTOR,
+                ModelType.SD_PHOTOMAKER
+            )
+        )
+        val sampler = SamplingMethod.entries.firstOrNull {
+            it.name.equals(settingsRepo.agentSdImageGenerationSampler.value, ignoreCase = true) ||
+                it.cliName.equals(settingsRepo.agentSdImageGenerationSampler.value, ignoreCase = true)
+        } ?: SamplingMethod.EULER_A
+        val sdParams = NativeChatSdImageToolParams(
+            model = model.filename,
+            vaePath = settingsRepo.agentSdImageGenerationVae.value,
+            taePath = settingsRepo.agentSdImageGenerationTae.value,
+            clipLPath = settingsRepo.agentSdImageGenerationClipL.value,
+            clipGPath = settingsRepo.agentSdImageGenerationClipG.value,
+            t5xxlPath = settingsRepo.agentSdImageGenerationT5xxl.value,
+            llmPath = settingsRepo.agentSdImageGenerationLlm.value,
+            llmVisionPath = settingsRepo.agentSdImageGenerationLlmVision.value,
+            photoMakerPath = settingsRepo.agentSdImageGenerationPhotoMaker.value,
+            width = settingsRepo.agentSdImageGenerationWidth.value,
+            height = settingsRepo.agentSdImageGenerationHeight.value,
+            steps = settingsRepo.agentSdImageGenerationSteps.value,
+            cfgScale = settingsRepo.agentSdImageGenerationCfg.value,
+            sampler = sampler,
+            seed = settingsRepo.agentSdImageGenerationSeed.value,
+            negativePrompt = settingsRepo.agentSdImageGenerationNegativePrompt.value,
+            threads = settingsRepo.agentSdImageGenerationThreads.value,
+            flowShift = settingsRepo.agentSdImageGenerationFlowShift.value,
+            diffusionFa = settingsRepo.agentSdImageGenerationDiffusionFa.value,
+            mmap = settingsRepo.agentSdImageGenerationMmap.value,
+            vaeConvDirect = settingsRepo.agentSdImageGenerationVaeConvDirect.value,
+            qwenImageZeroCondT = settingsRepo.agentSdImageGenerationQwenZeroCondT.value,
+            chromaDisableDitMask = settingsRepo.agentSdImageGenerationChromaDisableDitMask.value
+        )
+        val components = resolveSdToolComponents(supportModels, sdParams, model)
+        val missingRequired = spec.requiredRoles.filter { components.pathForRole(it).isNullOrBlank() }
+        if (missingRequired.isNotEmpty()) {
+            return Result.failure(
+                Exception(
+                    context.getString(
+                        R.string.agent_generate_image_sd_components_missing,
+                        missingRequired.joinToString(", ") { it.name }
+                    )
+                )
+            )
+        }
+        val normalizedOutputPath = if (File(outputPath).extension.isBlank()) "$outputPath.png" else outputPath
+        val safeOutputPath = sanitizePath(normalizedOutputPath)
+        val localTempDir = File(context.cacheDir, "agent_image_generation").apply { mkdirs() }
+        val localTempFile = File.createTempFile("generated_sd_", ".png", localTempDir)
+        val resolvedNegativePrompt = negativePrompt.takeIf { it.isNotBlank() } ?: sdParams.negativePrompt
+        val seed = sdParams.seed.trim().toLongOrNull() ?: -1L
+
+        val resultFile = SdToolGenerationRunner(context).generateTxt2Img(
+            config = SDConfig(
+                modelPath = model.path,
+                prompt = prompt,
+                negativePrompt = resolvedNegativePrompt,
+                width = sdParams.width,
+                height = sdParams.height,
+                steps = sdParams.steps,
+                cfgScale = sdParams.cfgScale,
+                seed = seed,
+                samplingMethod = sampler,
+                outputPath = localTempFile.absolutePath,
+                mode = SDMode.TXT2IMG,
+                threads = sdParams.threads,
+                isFluxModel = spec.usesDiffusionModelFlag,
+                modelFamily = family.storedValue,
+                modelVariant = variant,
+                vaePath = components.vaePath,
+                taePath = components.taePath,
+                clipLPath = components.clipLPath,
+                clipGPath = components.clipGPath,
+                t5xxlPath = components.t5xxlPath,
+                llmPath = components.llmPath,
+                llmVisionPath = components.llmVisionPath,
+                photoMakerPath = components.photoMakerPath,
+                flowShift = sdParams.flowShift.toFloatOrNull(),
+                diffusionFa = sdParams.diffusionFa && spec.supportsDiffusionFa,
+                mmap = sdParams.mmap && spec.supportsMmap,
+                vaeConvDirect = sdParams.vaeConvDirect && spec.supportsVaeConvDirect,
+                qwenImageZeroCondT = sdParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
+                chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask
+            ),
+            onProgress = { snapshot ->
+                setStatusText(context.getString(R.string.agent_generating_image_status, "${snapshot.currentStep}/${snapshot.totalSteps}"))
+            },
+            onStatus = { status ->
+                if (status.isNotBlank()) {
+                    setStatusText(context.getString(R.string.agent_generating_image_status, status.take(80)))
+                }
+            }
+        )
+
+        writeFileBytes(safeOutputPath, resultFile.readBytes(), trackChange = true).getOrThrow()
+        runCatching { resultFile.delete() }
+
+        return Result.success(
+            buildString {
+                appendLine(context.getString(R.string.agent_generate_image_result_saved, toProjectRelativePath(safeOutputPath)))
+                appendLine(context.getString(R.string.agent_generate_image_result_engine, "SD"))
+                appendLine(context.getString(R.string.model_filename_label, model.filename))
+                appendLine(context.getString(R.string.agent_generate_image_result_family, family.storedValue))
+                appendLine(context.getString(R.string.agent_generate_image_result_resolution, "${sdParams.width}x${sdParams.height}"))
+                appendLine(context.getString(R.string.agent_generate_image_result_steps, sdParams.steps))
+                appendLine(context.getString(R.string.agent_generate_image_result_sampler, sampler.cliName))
+                append(context.getString(R.string.agent_generate_image_result_cfg, String.format(java.util.Locale.US, "%.1f", sdParams.cfgScale)))
+            }
+        )
+    }
+
+    suspend fun removeImageBackground(
+        imagePath: String,
+        outputPath: String?,
+        settingsRepo: com.example.llamadroid.data.SettingsRepository
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            if (!settingsRepo.agentBackgroundRemovalToolEnabled.value) {
+                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_tool_disabled)))
+            }
+            val safeInputPath = sanitizePath(imagePath)
+            val inputFile = File(safeInputPath)
+            if (!inputFile.isFile) {
+                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_input_missing)))
+            }
+            if (!isSupportedImagePath(safeInputPath)) {
+                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_input_unsupported)))
+            }
+            val db = AppDatabase.getDatabase(context.applicationContext)
+            val selectedModelId = settingsRepo.agentBackgroundRemovalModel.value?.trim().orEmpty()
+            if (selectedModelId.isBlank()) {
+                return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_model_missing)))
+            }
+            val model = db.modelDao()
+                .getModelsByTypesSync(listOf(ModelType.ONNX_BACKGROUND_REMOVAL))
+                .filter { it.isOnnxBackgroundRemovalModel() }
+                .find { it.filename == selectedModelId || it.path == selectedModelId }
+                ?: return@withContext Result.failure(Exception(context.getString(R.string.agent_bgr_model_missing)))
+            val backend = runCatching {
+                OnnxRuntimeBackend.valueOf(settingsRepo.agentBackgroundRemovalBackend.value)
+            }.getOrDefault(OnnxRuntimeBackend.CPU)
+            val graphOptimization = runCatching {
+                OnnxGraphOptimizationLevel.valueOf(settingsRepo.agentBackgroundRemovalGraphOptimization.value)
+            }.getOrDefault(OnnxGraphOptimizationLevel.ALL)
+            val resolvedOutputPath = outputPath?.takeIf { it.isNotBlank() }
+                ?: defaultBackgroundRemovalOutputPath(inputFile)
+            val normalizedOutputPath = if (File(resolvedOutputPath).extension.isBlank()) {
+                "$resolvedOutputPath.png"
+            } else {
+                resolvedOutputPath
+            }
+            val safeOutputPath = sanitizePath(normalizedOutputPath)
+            setStatusText(context.getString(R.string.agent_bgr_status_starting))
+            val result = OnnxBackgroundRemovalPipeline().removeBackground(
+                context = context,
+                config = OnnxBackgroundRemovalConfig(
+                    modelPath = model.path,
+                    modelName = model.filename,
+                    inputPaths = listOf(inputFile.absolutePath),
+                    inputNames = listOf(inputFile.name),
+                    backend = backend,
+                    runtimeOptions = OnnxRuntimeOptions(
+                        runtimeThreadCount = settingsRepo.agentBackgroundRemovalRuntimeThreads.value.takeIf { it > 0 },
+                        graphOptimizationLevel = graphOptimization
+                    ),
+                    alphaThreshold = settingsRepo.agentBackgroundRemovalAlphaThreshold.value,
+                    featherRadius = settingsRepo.agentBackgroundRemovalFeatherRadius.value,
+                    maskSoftness = settingsRepo.agentBackgroundRemovalMaskSoftness.value,
+                    maskContrast = settingsRepo.agentBackgroundRemovalMaskContrast.value,
+                    exportMask = settingsRepo.agentBackgroundRemovalExportMask.value,
+                    resizeBeforeProcessing = settingsRepo.agentBackgroundRemovalResizeBeforeProcessing.value,
+                    resizeMaxEdge = settingsRepo.agentBackgroundRemovalResizeMaxEdge.value,
+                    preserveSourceNames = true
+                ),
+                inputFile = inputFile,
+                sourceName = inputFile.name,
+                onDiagnostic = { DebugLog.log("[AgentBgR] $it") },
+                onProgress = { stage, _ ->
+                    setStatusText(context.getString(R.string.agent_bgr_status_phase, stage.name.lowercase()))
+                }
+            )
+
+            writeFileBytes(safeOutputPath, result.outputFile.readBytes(), trackChange = true).getOrThrow()
+            val maskWorkspacePath = if (settingsRepo.agentBackgroundRemovalExportMask.value) {
+                result.maskFile?.let { maskFile ->
+                    val maskPath = safeOutputPath.substringBeforeLast(".") + "_mask.png"
+                    writeFileBytes(maskPath, maskFile.readBytes(), trackChange = true).getOrThrow()
+                    toProjectRelativePath(maskPath)
+                }
+            } else {
+                null
+            }
+            runCatching { result.outputFile.delete() }
+            runCatching { result.maskFile?.delete() }
+
+            Result.success(
+                buildString {
+                    appendLine(context.getString(R.string.agent_bgr_result_removed, toProjectRelativePath(safeOutputPath)))
+                    appendLine(context.getString(R.string.agent_bgr_result_source, toProjectRelativePath(safeInputPath)))
+                    appendLine(context.getString(R.string.model_filename_label, model.filename))
+                    appendLine(context.getString(R.string.agent_bgr_result_backend, backend.name))
+                    appendLine(context.getString(R.string.agent_bgr_result_resize_before, settingsRepo.agentBackgroundRemovalResizeBeforeProcessing.value))
+                    appendLine(context.getString(R.string.agent_bgr_result_resize_max_edge, settingsRepo.agentBackgroundRemovalResizeMaxEdge.value))
+                    maskWorkspacePath?.let { appendLine(context.getString(R.string.agent_bgr_result_mask, it)) }
+                }.trimEnd()
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun defaultBackgroundRemovalOutputPath(inputFile: File): String {
+        val baseName = inputFile.nameWithoutExtension
+            .replace(Regex("""[^A-Za-z0-9._-]+"""), "_")
+            .ifBlank { "image" }
+        return "generated/background-removal/${baseName}_bgr.png"
     }
 
     suspend fun checkCommand(id: String, lines: Int = 10): Result<String> {
@@ -3817,7 +4071,20 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     val useLlamaServer = SettingsRepository.isLlamaServerBackend(backend)
                     val useLlamaSwap = SettingsRepository.isLlamaSwapBackend(backend)
                     val useOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(backend)
-                    val model = if (useLlamaServer) {
+                    val useLiteRtBackend = SettingsRepository.isLiteRtBackend(backend)
+                    val liteRtModel = if (useLiteRtBackend) {
+                        val selectedId = settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
+                            ?: return@launch addDebugLog("❌ LLM Error: Select a LiteRT model before running the agent.")
+                        AppDatabase.getDatabase(context.applicationContext)
+                            .liteRtModelDao()
+                            .getById(selectedId)
+                            ?: return@launch addDebugLog("❌ LLM Error: Selected LiteRT model was not found.")
+                    } else {
+                        null
+                    }
+                    val model = if (useLiteRtBackend) {
+                        liteRtModel?.displayName ?: configuredModel
+                    } else if (useLlamaServer) {
                         agentService.refreshLlamaServerRuntimeState(settingsRepo).getOrNull()?.modelLabel
                             ?: settingsRepo.agentLlamaServerModelLabel.value
                             ?: configuredModel
@@ -4059,7 +4326,67 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     _streamingContent.value = ""
                     _streamingThinking.value = ""
 
-                    val response = if (useOpenAiBackend) {
+                    val response = if (useLiteRtBackend && liteRtModel != null) {
+                        val visibleMessages = packedContext.messages.map { message ->
+                            LiteRtConversationMessage(
+                                role = message.role,
+                                content = message.content
+                            )
+                        }
+                        val lastUserIndex = visibleMessages.indexOfLast { it.role == "user" }
+                        val initialLiteRtMessages = if (lastUserIndex >= 0) {
+                            visibleMessages.take(lastUserIndex)
+                        } else {
+                            visibleMessages.dropLast(1)
+                        }
+                        val liteRtUserPrompt = if (lastUserIndex >= 0) {
+                            visibleMessages[lastUserIndex].content
+                        } else {
+                            visibleMessages.lastOrNull()?.content.orEmpty()
+                        }
+                        LiteRtTextGenerationClient(context).generate(
+                            model = liteRtModel,
+                            title = "Agent ${activeAgentRole.name}",
+                            systemPrompt = fullSystemPrompt,
+                            messages = initialLiteRtMessages,
+                            userPrompt = liteRtUserPrompt,
+                            contextSize = contextSize,
+                            maxTokens = null,
+                            temperature = 0.7f,
+                            thinkingEnabled = thinkingEnabled,
+                            backendMode = settingsRepo.agentLiteRtBackend.value,
+                            mtpEnabled = settingsRepo.agentLiteRtMtpEnabled.value,
+                            onChunk = { chunk ->
+                                if (isAgentRunActive(runEpoch)) {
+                                    fullContent += chunk
+                                    _streamingContent.value = fullContent
+                                }
+                            },
+                            onThinkingChunk = { thinkingChunk ->
+                                if (isAgentRunActive(runEpoch) && thinkingEnabled) {
+                                    fullThinking += thinkingChunk
+                                    _streamingThinking.value = fullThinking
+                                }
+                            }
+                        ).let { result ->
+                            Result.success(
+                                OllamaService.ChatResponse(
+                                    message = OllamaService.ChatMessage(
+                                        role = "assistant",
+                                        content = result.output,
+                                        thinking = fullThinking.takeIf { it.isNotBlank() }
+                                    ),
+                                    done = true,
+                                    usage = OllamaService.ChatUsage(
+                                        promptTokens = result.stats.promptTokens,
+                                        completionTokens = result.stats.completionTokens,
+                                        totalTokens = result.stats.promptTokens + result.stats.completionTokens,
+                                        backend = SettingsRepository.PDF_BACKEND_LITERT
+                                    )
+                                )
+                            )
+                        }
+                    } else if (useOpenAiBackend) {
                         // Use OpenAI-compatible API (llama-server or llama-swap)
                         val llamaUrl = if (useLlamaSwap) {
                             settingsRepo.agentLlamaSwapUrl.value
@@ -4922,6 +5249,36 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 }
                                 agentService.generateImage(prompt, negativePrompt, outputPath, settingsRepo).getOrThrow().also {
                                     markMemoryDirty("Generated image at $outputPath.")
+                                }
+                            }
+                            "remove_image_background" -> {
+                                val imagePath = effectiveToolCall.arguments["image_path"] ?: ""
+                                val outputPath = effectiveToolCall.arguments["output_path"]
+                                val requestedPath = outputPath?.takeIf { it.isNotBlank() } ?: imagePath
+                                if (!settingsRepo.autoMode.value && !isForced) {
+                                    addMessage(ChatMessage(
+                                        role = "assistant",
+                                        content = context.getString(R.string.agent_request_bgr, requestedPath),
+                                        toolName = toolCall.name,
+                                        toolArgs = effectiveToolCall.arguments,
+                                        needsApproval = true,
+                                        pendingToolCall = effectiveToolCall,
+                                        agentRole = assistantAgentRole,
+                                        customAgentName = assistantCustomAgentName
+                                    ))
+                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                    agentService.buildAttentionPreview(toolCall.name, validatedToolCall).let { (title, body) ->
+                                        agentService.notifyAgentAttention(
+                                            UnifiedNotificationManager.AgentAttentionReason.APPROVAL_REQUIRED,
+                                            title,
+                                            body
+                                        )
+                                    }
+                                    agentService.persistVisibleRuntimeStateNow("Background-removal approval requested for $requestedPath.")
+                                    return@launch
+                                }
+                                agentService.removeImageBackground(imagePath, outputPath, settingsRepo).getOrThrow().also {
+                                    markMemoryDirty("Removed image background for $imagePath.")
                                 }
                             }
                             "get_datetime" -> {
@@ -5805,7 +6162,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         private fun extractWorkspaceFileReferences(messages: List<ChatMessage>, mutatingOnly: Boolean): List<String> {
-            val mutatingTools = setOf("write_file", "edit_lines", "apply_patch", "create_folder", "generate_image")
+            val mutatingTools = setOf("write_file", "edit_lines", "apply_patch", "create_folder", "generate_image", "remove_image_background")
             val readTools = setOf("read_file", "read_file_lines", "search_code", "list_directory", "view_image", "fetch_url", "web_search")
             val pathKeys = setOf("path", "output_path", "file", "directory", "target")
             val pathPattern = Regex("""(?:^|[\s`'"])([A-Za-z0-9._@+/\-]+(?:\.[A-Za-z0-9]{1,12})?)(?=$|[\s`'",:)])""")
@@ -6498,6 +6855,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "create_folder" -> "Create the requested folder inside the project workspace."
                 "view_image" -> "Inspect the requested workspace image on the next model turn."
                 "generate_image" -> "Generate and save an image artifact inside the project workspace."
+                "remove_image_background" -> "Remove a background from a workspace image and save the transparent PNG artifact."
                 "reflection" -> "Critically compare the completed work against the approved plan before finalizing."
                 "write_memory" -> "Record what changed and why in project memory."
                 "rewrite_memory" -> "Consolidate memory after it has grown too large."
@@ -7007,6 +7365,21 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         return Result.failure(IllegalArgumentException("Tool `generate_image` output_path must stay inside the current workspace."))
                     }
                 }
+                "remove_image_background" -> {
+                    val imagePath = normalizedArgs["image_path"].orEmpty()
+                    if (!isPathSafe(imagePath)) {
+                        return Result.failure(IllegalArgumentException("Tool `remove_image_background` image_path must stay inside the current workspace."))
+                    }
+                    val absolutePath = sanitizePath(imagePath)
+                    if (!isSupportedImagePath(absolutePath)) {
+                        return Result.failure(IllegalArgumentException("Tool `remove_image_background` only supports PNG, JPG, JPEG, WEBP, BMP, and GIF files."))
+                    }
+                    normalizedArgs["output_path"]?.takeIf { it.isNotBlank() }?.let { outputPath ->
+                        if (!isPathSafe(outputPath)) {
+                            return Result.failure(IllegalArgumentException("Tool `remove_image_background` output_path must stay inside the current workspace."))
+                        }
+                    }
+                }
             }
 
             if (toolCall.name == "call_agent" && activeCustom != null && !activeCustom.canDelegateToOthers) {
@@ -7048,7 +7421,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val riskLevel = when {
                 customTool != null && customMode == CustomToolExecutionMode.SHELL -> ToolRiskLevel.CRITICAL
                 toolCall.name in setOf("run_command", "cancel_command", "send_command_input") -> ToolRiskLevel.HIGH
-                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "create_folder") -> ToolRiskLevel.HIGH
+                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder") -> ToolRiskLevel.HIGH
                 toolCall.name == "fetch_url" -> ToolRiskLevel.MEDIUM
                 customTool != null -> ToolRiskLevel.HIGH
                 else -> ToolRiskLevel.LOW
@@ -7056,7 +7429,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val approvalRequired = when {
                 customTool != null -> customTool.needsApproval || customMode == CustomToolExecutionMode.SHELL
                 toolCall.name == "run_command" -> true
-                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "create_folder") -> true
+                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder") -> true
                 else -> false
             }
 
@@ -7112,6 +7485,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "create_folder" -> lines.firstOrNull() ?: "Folder created."
                 "view_image" -> lines.firstOrNull() ?: "Image queued for inspection."
                 "generate_image" -> lines.firstOrNull() ?: "Image generated successfully."
+                "remove_image_background" -> lines.firstOrNull() ?: "Background removed successfully."
                 "reflection" -> lines.firstOrNull { it.contains("\"status\"") } ?: "Reflection completed."
                 "write_memory" -> lines.firstOrNull() ?: "Memory appended."
                 "rewrite_memory" -> lines.firstOrNull() ?: "Memory rewritten."
@@ -7141,6 +7515,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "apply_patch" -> "If the patch looks correct, append a short memory note and reread the affected files or changed_files.md before patching again."
                 "create_folder" -> "Use list_directory or write_file next if you need to populate the new folder."
                 "generate_image" -> "Inspect the saved image path or hand it to a vision-enabled agent with view_image if you need analysis."
+                "remove_image_background" -> "Inspect the transparent PNG path or use it as the next image artifact."
                 "view_image" -> "Use the visual evidence in the next response, or delegate the specialist follow-up through call_agent."
                 "reflection" -> "If can_finalize is false, address the missing items before finishing. If it passed, finalize only after one last verification read."
                 "write_memory" -> "If memory is getting long, read it back and use rewrite_memory to consolidate it."
@@ -7177,6 +7552,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val repo = settingsRepo ?: AgentForegroundService.getSettingsRepository(com.example.llamadroid.LlamaApplication.instance)
             val kiwixEnabled = repo.agentKiwixEnabled.value
             val imageGenerationToolEnabled = repo.agentImageGenerationToolEnabled.value
+            val backgroundRemovalToolEnabled = repo.agentBackgroundRemovalToolEnabled.value
             val webSearchEnabled = repo.agentWebSearchEnabled.value
             val visionEnabled = isVisionEnabledForAgent(role, activeCustom, repo)
             val capabilityPolicy = resolveCapabilityPolicy(role, activeCustom)
@@ -7463,13 +7839,27 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 tools.add(
                     AgentTool(
                         name = "generate_image",
-                        description = "Generate a PNG image with the configured ONNX image model and save it inside the current project workspace. Creates parent folders automatically if needed.",
+                        description = "Generate a PNG image with the configured image engine and save it inside the current project workspace. Creates parent folders automatically if needed.",
                         parameters = mapOf(
                             "prompt" to "Positive prompt describing the image to generate",
                             "negative_prompt" to "Optional negative prompt",
                             "output_path" to "Workspace-relative output path including filename, e.g., 'art/concepts/forest.png'"
                         ),
                         requiredParams = listOf("prompt", "output_path")
+                    )
+                )
+            }
+
+            if (backgroundRemovalToolEnabled) {
+                tools.add(
+                    AgentTool(
+                        name = "remove_image_background",
+                        description = "Remove the background from an existing workspace image with the configured ONNX background-removal model. Only image_path is required; output_path is optional and defaults to generated/background-removal/<source>_bgr.png.",
+                        parameters = mapOf(
+                            "image_path" to "Workspace-relative source image path, e.g., 'images/dog.jpg'",
+                            "output_path" to "Optional workspace-relative PNG output path including filename"
+                        ),
+                        requiredParams = listOf("image_path")
                     )
                 )
             }
@@ -7980,6 +8370,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             "run_command" -> context.getString(R.string.agent_approve_cmd_title)
             "create_folder" -> context.getString(R.string.agent_create_folder_tool_name)
             "generate_image" -> context.getString(R.string.agent_generate_image_tool_name)
+            "remove_image_background" -> context.getString(R.string.agent_bgr_tool_name)
             "propose_plan" -> context.getString(R.string.agent_plan_title)
             else -> toolName
         }
@@ -7990,6 +8381,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             "apply_patch" -> extractSummarySnippet(validatedToolCall.normalizedArguments["patch"].orEmpty(), 320)
             "create_folder" -> validatedToolCall.normalizedArguments["path"].orEmpty()
             "generate_image" -> "${extractSummarySnippet(validatedToolCall.normalizedArguments["prompt"].orEmpty(), 220)}\n${validatedToolCall.normalizedArguments["output_path"].orEmpty()}".trim()
+            "remove_image_background" -> "${validatedToolCall.normalizedArguments["image_path"].orEmpty()}\n${validatedToolCall.normalizedArguments["output_path"].orEmpty()}".trim()
             "propose_plan" -> extractSummarySnippet(validatedToolCall.normalizedArguments["summary"].orEmpty(), 240)
             else -> validatedToolCall.normalizedArguments.entries.joinToString("\n") { (key, value) ->
                 "$key: ${extractSummarySnippet(value, 180)}"
@@ -9485,7 +9877,40 @@ sys.exit(proc.returncode)
         )
 
         val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
-        val result = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
+        val result = if (SettingsRepository.isLiteRtBackend(backend)) {
+            val appContext = context.applicationContext
+            val selectedId = settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
+                ?: return Result.failure(IllegalStateException("Missing LiteRT model"))
+            val liteRtModel = AppDatabase.getDatabase(appContext)
+                .liteRtModelDao()
+                .getById(selectedId)
+                ?: return Result.failure(IllegalStateException("Selected LiteRT model was not found"))
+            runCatching {
+                val generated = LiteRtTextGenerationClient(appContext).generate(
+                    model = liteRtModel,
+                    title = title,
+                    systemPrompt = systemPrompt,
+                    messages = emptyList(),
+                    userPrompt = userPrompt,
+                    contextSize = summarizerCtx,
+                    maxTokens = null,
+                    temperature = 0.3f,
+                    thinkingEnabled = false,
+                    backendMode = settingsRepo.agentLiteRtBackend.value,
+                    mtpEnabled = settingsRepo.agentLiteRtMtpEnabled.value
+                )
+                OllamaService.ChatResponse(
+                    message = OllamaService.ChatMessage(role = "assistant", content = generated.output),
+                    done = true,
+                    usage = OllamaService.ChatUsage(
+                        promptTokens = generated.stats.promptTokens,
+                        completionTokens = generated.stats.completionTokens,
+                        totalTokens = generated.stats.promptTokens + generated.stats.completionTokens,
+                        backend = SettingsRepository.PDF_BACKEND_LITERT
+                    )
+                )
+            }
+        } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
             val baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
                 settingsRepo.agentLlamaSwapUrl.value.trim()
             } else {

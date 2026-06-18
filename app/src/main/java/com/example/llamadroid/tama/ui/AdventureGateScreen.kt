@@ -88,6 +88,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.InventoryItem
+import com.example.llamadroid.tama.data.TamaDialogTextCatalog
 import com.example.llamadroid.tama.game.PetMapper
 import com.example.llamadroid.tama.rpg.AdventureGateBattleEvent
 import com.example.llamadroid.tama.rpg.AdventureGateBattleEventType
@@ -860,6 +861,7 @@ private fun AdventureGateWorldPortal(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val cleared = progress?.highestClearedPhase ?: 0
     Surface(
         modifier = modifier
@@ -889,7 +891,7 @@ private fun AdventureGateWorldPortal(
                 filterQuality = FilterQuality.None
             )
             Text(
-                text = stringResource(world.nameRes),
+                text = TamaDialogTextCatalog.localizedResource(context, world.nameRes),
                 color = GateText,
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold,
@@ -2450,6 +2452,7 @@ private fun AdventureGateWorldCard(
     isUnlocked: Boolean,
     onSelectPhase: (AdventureGatePhaseDefinition) -> Unit
 ) {
+    val context = LocalContext.current
     val cleared = progress?.highestClearedPhase ?: 0
     Card(
         colors = CardDefaults.cardColors(containerColor = if (isUnlocked) GatePanel else GatePanel.copy(alpha = 0.55f)),
@@ -2470,7 +2473,7 @@ private fun AdventureGateWorldCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = stringResource(world.nameRes),
+                        text = TamaDialogTextCatalog.localizedResource(context, world.nameRes),
                         color = if (isUnlocked) GateAccent else GateText.copy(alpha = 0.45f),
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
@@ -2486,7 +2489,7 @@ private fun AdventureGateWorldCard(
                 }
             }
             Text(
-                text = stringResource(world.descriptionRes),
+                text = TamaDialogTextCatalog.localizedResource(context, world.descriptionRes),
                 color = GateText.copy(alpha = 0.82f),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 12.sp,
@@ -2645,7 +2648,11 @@ private fun AdventureGateBattleView(
         stringResource(R.string.night_arena_battle_header, battle.phaseNumber)
     } else {
         val world = AdventureGateCatalog.world(battle.worldId)
-        stringResource(R.string.adventure_gate_battle_header, stringResource(world.nameRes), battle.phaseNumber)
+        stringResource(
+            R.string.adventure_gate_battle_header,
+            TamaDialogTextCatalog.localizedResource(context, world.nameRes),
+            battle.phaseNumber
+        )
     }
     var activeEffectSkillId by remember { mutableStateOf<String?>(null) }
     var activeEffectFrame by remember { mutableStateOf(0) }
@@ -3847,6 +3854,7 @@ private fun BattleRewardOverlay(
     onClaim: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val coinReward = battle.log.lastOrNull { it.messageKey == AdventureGateLogMessage.COINS_REWARDED }?.amount
     val potionReward = battle.log.lastOrNull { it.messageKey == AdventureGateLogMessage.POTION_REWARDED }?.itemId
         ?.let(AdventureGateCatalog::supply)
@@ -3924,7 +3932,7 @@ private fun BattleRewardOverlay(
                     }
                     phase.bossRevealRes?.let { reveal ->
                         Text(
-                            text = stringResource(reveal),
+                            text = TamaDialogTextCatalog.localizedResource(context, reveal),
                             color = GateText.copy(alpha = 0.88f),
                             fontFamily = FontFamily.Monospace,
                             fontSize = 12.sp,
@@ -4029,7 +4037,9 @@ private fun PhaseStoryDialog(
     onDismiss: () -> Unit,
     onStart: () -> Unit
 ) {
+    val context = LocalContext.current
     val world = AdventureGateCatalog.world(phase.worldId)
+    val worldName = TamaDialogTextCatalog.localizedResource(context, world.nameRes)
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = GatePanel,
@@ -4037,7 +4047,7 @@ private fun PhaseStoryDialog(
         textContentColor = GateText,
         title = {
             Text(
-                text = stringResource(R.string.adventure_gate_story_title, stringResource(world.nameRes), phase.phaseNumber),
+                text = stringResource(R.string.adventure_gate_story_title, worldName, phase.phaseNumber),
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Bold
             )
@@ -4049,7 +4059,7 @@ private fun PhaseStoryDialog(
             ) {
                 item {
                     Text(
-                        text = stringResource(phase.storyRes),
+                        text = TamaDialogTextCatalog.localizedResource(context, phase.storyRes),
                         fontFamily = FontFamily.Monospace,
                         lineHeight = 19.sp
                     )
@@ -4384,7 +4394,7 @@ private fun PetInspectDialog(
                                     Text(
                                         stringResource(
                                             R.string.adventure_gate_pet_passive_study_mana_desc,
-                                            AdventureGateCombatEngine.studyManaRegenPercent()
+                                            AdventureGateCombatEngine.studyManaRegenPercent(profile)
                                         ),
                                         color = GateText.copy(alpha = 0.84f),
                                         fontFamily = FontFamily.Monospace,

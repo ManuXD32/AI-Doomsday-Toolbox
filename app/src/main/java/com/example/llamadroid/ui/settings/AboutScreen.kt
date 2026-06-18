@@ -200,6 +200,16 @@ fun AboutScreen(navController: NavController) {
                             url = "https://github.com/leejet/stable-diffusion.cpp"
                         )
                         LibraryItem(
+                            name = "Supertonic",
+                            description = stringResource(R.string.about_supertonic_desc),
+                            url = "https://github.com/supertone-inc/supertonic"
+                        )
+                        LibraryItem(
+                            name = "Quadtrix.cpp",
+                            description = stringResource(R.string.about_quadtrix_cpp_desc),
+                            url = "https://github.com/Eamon2009/Quadtrix.cpp"
+                        )
+                        LibraryItem(
                             name = "FFmpeg",
                             description = stringResource(R.string.about_ffmpeg),
                             url = "https://ffmpeg.org"
@@ -345,7 +355,7 @@ private fun LibraryItem(
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowForward,
-                contentDescription = "Open",
+                contentDescription = stringResource(R.string.action_open),
                 modifier = Modifier.size(18.dp)
             )
         }

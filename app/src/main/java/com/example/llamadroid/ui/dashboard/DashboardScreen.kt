@@ -1024,7 +1024,7 @@ fun DashboardScreen(
                         IconButton(onClick = { navController.navigate("kiwix_viewer") }) {
                             Icon(
                                 Icons.Default.PlayArrow,
-                                contentDescription = "View",
+                                contentDescription = stringResource(R.string.action_view),
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         }

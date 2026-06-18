@@ -1,5 +1,7 @@
 package com.example.llamadroid.tama.data
 
+import android.content.Context
+
 data class TamaSleepyFairyReminder(
     val lineIndex: Int,
     val shownAt: Long = System.currentTimeMillis()
@@ -43,9 +45,12 @@ object TamaSleepyFairyCatalog {
         )
     )
 
-    fun resolveLine(reminder: TamaSleepyFairyReminder, locale: java.util.Locale): String {
-        return definition.lines.getOrElse(reminder.lineIndex.coerceAtLeast(0)) {
+    fun resolveLine(context: Context, reminder: TamaSleepyFairyReminder): String {
+        val locale = context.resources.configuration.locales[0]
+        val lineIndex = reminder.lineIndex.coerceAtLeast(0)
+        val fallback = definition.lines.getOrElse(lineIndex) {
             definition.lines.first()
         }.resolve(locale)
+        return TamaDialogTextCatalog.localizedText(context, "sleepy_fairy:line:$lineIndex", fallback)
     }
 }

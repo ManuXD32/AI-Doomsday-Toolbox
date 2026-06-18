@@ -72,6 +72,19 @@ class AiRuntimeRecoveryTest {
     }
 
     @Test
+    fun `boot recovery action routes media workflow recovery to workflows screen`() {
+        val action = resolveAiRuntimeBootRecoveryAction(
+            recoverableJobs = emptyList(),
+            hasRecoverableMediaWorkflow = true
+        )
+
+        assertTrue(action.shouldShowManualResumeNotification)
+        assertEquals(Screen.Workflows.route, action.manualResumeRoute)
+        assertEquals(1, action.recoverableCount)
+        assertNull("media workflow boot recovery must wait for app-open resume", action.foregroundServiceAction)
+    }
+
+    @Test
     fun `boot recovery action ignores empty recoverable job list`() {
         val action = resolveAiRuntimeBootRecoveryAction(emptyList())
 

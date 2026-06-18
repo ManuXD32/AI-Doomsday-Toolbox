@@ -2,11 +2,14 @@ package com.example.llamadroid.ui.ai.llama
 
 import android.Manifest
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.media.MediaPlayer
 import android.media.MediaRecorder
+import android.os.Build
 import android.provider.OpenableColumns
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -26,6 +30,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.material.icons.filled.ExpandLess
@@ -79,12 +84,15 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.KnowledgeBaseSourceStatus
 import com.example.llamadroid.data.db.KnowledgeSourceEntity
+import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.NoteEntity
 import com.example.llamadroid.data.db.NoteType
 import com.example.llamadroid.data.model.EmbeddedDocumentText
 import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
+import com.example.llamadroid.data.model.defaultLiteRtChatContextTokens
+import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import com.example.llamadroid.data.model.estimateNativeChatTextTokens
 import com.example.llamadroid.data.model.extractEmbeddedAudioTranscript
 import com.example.llamadroid.data.model.extractEmbeddedDocumentText
@@ -93,6 +101,8 @@ import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.model.stripEmbeddedAudioTranscript
 import com.example.llamadroid.data.model.stripEmbeddedDocumentText
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.model.supportsLiteRtVision
+import com.example.llamadroid.data.model.supportsLiteRtAudio
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.onnx.OnnxBackendOverride
@@ -100,13 +110,27 @@ import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
+import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
 import com.example.llamadroid.onnx.resolveSupertonicVoices
 import com.example.llamadroid.onnx.supertonicLanguageCodes
+import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.service.KnowledgeBaseIndexingService
+import com.example.llamadroid.service.LITERT_PARAM_MAX_OUTPUT_TOKENS
+import com.example.llamadroid.service.LITERT_PARAM_MTP_ENABLED
+import com.example.llamadroid.service.LlamaCallUiState
+import com.example.llamadroid.service.LlamaCallService
 import com.example.llamadroid.service.LlamaClientService
+import com.example.llamadroid.service.NativeChatImageGenerationEngine
 import com.example.llamadroid.service.NativeChatImageToolParams
+import com.example.llamadroid.service.NativeChatSdImageToolParams
+import com.example.llamadroid.service.NativeChatBackgroundRemovalToolParams
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.SamplingMethod
+import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftNullableIntTextField
@@ -120,6 +144,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+private const val LITERT_CHAT_MIN_CONTEXT_TOKENS = 512
+private const val LITERT_CHAT_FALLBACK_CONTEXT_MAX = 4000
+private const val LITERT_CHAT_GPU_HIGH_CONTEXT_WARNING_TOKENS = 16_384
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,18 +175,54 @@ fun LlamaChatScreen(
     // UI State
     val messages by viewModel.messages.collectAsState()
     val generationState by LlamaClientService.generationState.collectAsState()
+    val callState by LlamaCallService.state.collectAsState()
     val whisperModels by remember(database) {
         database.modelDao().getModelsByType(ModelType.WHISPER)
     }.collectAsState(initial = emptyList())
     val onnxImageModels by remember(database) {
         database.modelDao().getModelsByType(ModelType.ONNX_IMAGE_GEN)
     }.collectAsState(initial = emptyList())
+    val sdImageMainModels by remember(database) {
+        database.modelDao().getModelsByTypes(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
+    }.collectAsState(initial = emptyList())
+    val sdImageSupportModels by remember(database) {
+        database.modelDao().getModelsByTypes(
+            listOf(
+                ModelType.SD_VAE,
+                ModelType.SD_TAE,
+                ModelType.SD_CLIP_L,
+                ModelType.SD_CLIP_G,
+                ModelType.SD_T5XXL,
+                ModelType.LLM,
+                ModelType.VISION_PROJECTOR,
+                ModelType.SD_PHOTOMAKER
+            )
+        )
+    }.collectAsState(initial = emptyList())
+    val onnxBackgroundRemovalModels by remember(database) {
+        database.modelDao().getModelsByType(ModelType.ONNX_BACKGROUND_REMOVAL)
+    }.collectAsState(initial = emptyList())
     val onnxTtsModels by remember(database) {
         database.modelDao().getModelsByType(ModelType.ONNX_TTS)
+    }.collectAsState(initial = emptyList())
+    val liteRtModels by remember(database) {
+        database.liteRtModelDao().observeAll()
     }.collectAsState(initial = emptyList())
     val nativeChatImageModelOptions = remember(onnxImageModels) {
         onnxImageModels
             .filter { it.isOnnxTxt2ImgBundle() }
+            .map { it.filename }
+            .distinct()
+    }
+    val nativeChatSdImageModelOptions = remember(sdImageMainModels) {
+        sdImageMainModels
+            .filter { it.supportsSdTxt2Img() }
+            .map { it.filename }
+            .distinct()
+    }
+    val nativeChatBgrModelOptions = remember(onnxBackgroundRemovalModels) {
+        onnxBackgroundRemovalModels
+            .filter { it.isOnnxBackgroundRemovalModel() }
             .map { it.filename }
             .distinct()
     }
@@ -183,6 +247,7 @@ fun LlamaChatScreen(
     var inputMessage by remember { mutableStateOf("") }
     var activeServer by remember { mutableStateOf<LlamaServerEntity?>(null) }
     var activeServerId by remember { mutableLongStateOf(initialServerId) }
+    val isCallActiveForChat = callState.isActive && callState.chatId == chatId
     var messagePendingDelete by remember { mutableStateOf<LlamaMessageEntity?>(null) }
     var messagePendingRetry by remember { mutableStateOf<LlamaMessageEntity?>(null) }
     var chatContentBottomInWindowPx by remember { mutableIntStateOf(0) }
@@ -309,11 +374,28 @@ fun LlamaChatScreen(
     var mediaRecorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var recordingFile by remember { mutableStateOf<File?>(null) }
     var pendingMicStart by remember { mutableStateOf(false) }
+    var pendingCallStart by remember { mutableStateOf(false) }
     var imagePreviewPath by remember { mutableStateOf<String?>(null) }
 
-    val supportsVision = activeServer?.supportsVision == true
+    val activeLiteRtModel = remember(activeServer?.liteRtModelId, liteRtModels) {
+        liteRtModels.firstOrNull { model -> model.id == activeServer?.liteRtModelId }
+    }
+    val supportsVision = activeServer?.let { server ->
+        if (server.isLiteRtEngine()) {
+            activeLiteRtModel?.supportsLiteRtVision() == true
+        } else {
+            server.supportsVision
+        }
+    } == true
     val whisperFallbackAvailable = activeServer?.whisperModelPath?.isNotBlank() == true || whisperModels.isNotEmpty()
-    val supportsAudioInput = activeServer?.supportsDirectAudioInput() == true ||
+    val supportsDirectAudioInput = activeServer?.let { server ->
+        if (server.isLiteRtEngine()) {
+            activeLiteRtModel?.supportsLiteRtAudio() == true
+        } else {
+            server.supportsDirectAudioInput()
+        }
+    } == true
+    val supportsAudioInput = supportsDirectAudioInput ||
         (activeServer != null && whisperFallbackAvailable)
     val generationStateSnapshot = generationState
     val activeGenerationState = generationStateSnapshot as? LlamaClientService.GenerationState.Generating
@@ -336,13 +418,23 @@ fun LlamaChatScreen(
             messages
         }
     }
-    val canContinueChat = !isGeneratingAnyChat && messages.lastOrNull()?.role == "assistant"
+    val lastPersistedMessage = messages.lastOrNull()
+    val canContinueChat = !isGeneratingAnyChat &&
+        lastPersistedMessage?.role == "assistant" &&
+        (
+            lastPersistedMessage.content.isNotBlank() ||
+                !lastPersistedMessage.thinking.isNullOrBlank() ||
+                !lastPersistedMessage.imagePath.isNullOrBlank() ||
+                !lastPersistedMessage.audioPath.isNullOrBlank()
+        )
     val activeServerSubtitle = remember(activeServer, context) {
         activeServer?.let { server ->
             buildList {
                 add(server.name)
                 add(
-                    if (server.isOllamaEngine()) {
+                    if (server.isLiteRtEngine()) {
+                        context.getString(R.string.llama_engine_litert)
+                    } else if (server.isOllamaEngine()) {
                         context.getString(R.string.llama_engine_ollama)
                     } else {
                         context.getString(R.string.llama_engine_llama_server)
@@ -351,6 +443,15 @@ fun LlamaChatScreen(
                 server.modelName?.takeIf { it.isNotBlank() }?.let(::add)
             }.joinToString(separator = " · ")
         } ?: context.getString(R.string.llama_no_servers)
+    }
+    val liteRtContextCap = activeLiteRtModel?.defaultLiteRtEngineMaxTokens()
+        ?: LITERT_CHAT_FALLBACK_CONTEXT_MAX
+    val liteRtDefaultContext = activeLiteRtModel
+        ?.defaultLiteRtChatContextTokens()
+        ?.coerceAtMost(liteRtContextCap)
+        ?: liteRtContextCap
+    val liteRtContextRange = remember(liteRtContextCap) {
+        LITERT_CHAT_MIN_CONTEXT_TOKENS..liteRtContextCap.coerceAtLeast(LITERT_CHAT_MIN_CONTEXT_TOKENS)
     }
 
     // Parameter States
@@ -372,8 +473,17 @@ fun LlamaChatScreen(
     var enableThinking by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, "enable_thinking", true))
     }
-    var liteRtMaxTokens by remember(currentChat?.id, currentChat?.contextSize) {
-        mutableIntStateOf((currentChat?.contextSize ?: 4000).coerceIn(2000, 4000))
+    var liteRtMtpEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, LITERT_PARAM_MTP_ENABLED, false))
+    }
+    var liteRtMaxOutputTokens by remember(currentChat?.apiParams) {
+        mutableIntStateOf(parseParam(currentChat?.apiParams, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024).coerceAtLeast(1))
+    }
+    var liteRtMaxTokens by remember(currentChat?.id, currentChat?.contextSize, liteRtContextRange, liteRtDefaultContext) {
+        mutableIntStateOf(
+            (currentChat?.contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
+                .coerceIn(liteRtContextRange)
+        )
     }
     var liteRtSystemPrompt by remember(currentChat?.id, currentChat?.systemPrompt) {
         mutableStateOf(currentChat?.systemPrompt.orEmpty())
@@ -469,6 +579,9 @@ fun LlamaChatScreen(
     var imageIterationEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_IMAGE_ITERATION_ENABLED, false))
     }
+    var backgroundRemovalEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_BGR_ENABLED, false))
+    }
     var assistantTtsEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_ASSISTANT_TTS_ENABLED, false))
     }
@@ -478,11 +591,26 @@ fun LlamaChatScreen(
     var assistantTtsVoiceName by remember(currentChat?.apiParams) {
         mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).assistantTtsVoiceName.orEmpty())
     }
+    var assistantTtsSpeed by remember(currentChat?.apiParams) {
+        mutableFloatStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).assistantTtsSpeed)
+    }
+    var assistantTtsSteps by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).assistantTtsTotalSteps)
+    }
+    var callSilenceAfterSpeechSeconds by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).callSilenceAfterSpeechSeconds)
+    }
+    var callNoSpeechTimeoutSeconds by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).callNoSpeechTimeoutSeconds)
+    }
     var maxToolRounds by remember(currentChat?.apiParams) {
         mutableIntStateOf(parseParam(currentChat?.apiParams, NativeChatToolConfig.KEY_MAX_TOOL_ROUNDS, NativeChatToolConfig.DEFAULT_TOOL_ROUNDS))
     }
     var imageToolModel by remember(currentChat?.apiParams) {
         mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.model.orEmpty())
+    }
+    var imageToolEngine by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.engine)
     }
     var imageToolWidth by remember(currentChat?.apiParams) {
         mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.width)
@@ -541,6 +669,108 @@ fun LlamaChatScreen(
     var imageToolNnapiFp16 by remember(currentChat?.apiParams) {
         mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.nnapiUseFp16)
     }
+    var imageToolSdModel by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.model.orEmpty())
+    }
+    var imageToolSdVae by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.vaePath.orEmpty())
+    }
+    var imageToolSdTae by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.taePath.orEmpty())
+    }
+    var imageToolSdClipL by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.clipLPath.orEmpty())
+    }
+    var imageToolSdClipG by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.clipGPath.orEmpty())
+    }
+    var imageToolSdT5xxl by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.t5xxlPath.orEmpty())
+    }
+    var imageToolSdLlm by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.llmPath.orEmpty())
+    }
+    var imageToolSdLlmVision by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.llmVisionPath.orEmpty())
+    }
+    var imageToolSdPhotoMaker by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.photoMakerPath.orEmpty())
+    }
+    var imageToolSdWidth by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.width)
+    }
+    var imageToolSdHeight by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.height)
+    }
+    var imageToolSdSteps by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.steps)
+    }
+    var imageToolSdCfg by remember(currentChat?.apiParams) {
+        mutableFloatStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.cfgScale)
+    }
+    var imageToolSdSampler by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.sampler)
+    }
+    var imageToolSdSeed by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.seed)
+    }
+    var imageToolSdNegativePrompt by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.negativePrompt)
+    }
+    var imageToolSdThreads by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.threads)
+    }
+    var imageToolSdFlowShift by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.flowShift)
+    }
+    var imageToolSdDiffusionFa by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.diffusionFa)
+    }
+    var imageToolSdMmap by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.mmap)
+    }
+    var imageToolSdVaeConvDirect by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.vaeConvDirect)
+    }
+    var imageToolSdQwenZeroCondT by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.qwenImageZeroCondT)
+    }
+    var imageToolSdChromaDisableDitMask by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).imageParams.sdParams.chromaDisableDitMask)
+    }
+    var bgrToolModel by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.model.orEmpty())
+    }
+    var bgrToolBackend by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.backend)
+    }
+    var bgrToolRuntimeThreads by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.runtimeThreads)
+    }
+    var bgrToolGraphOpt by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.graphOptimizationLevel)
+    }
+    var bgrToolAlphaThreshold by remember(currentChat?.apiParams) {
+        mutableFloatStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.alphaThreshold)
+    }
+    var bgrToolFeatherRadius by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.featherRadius)
+    }
+    var bgrToolMaskSoftness by remember(currentChat?.apiParams) {
+        mutableFloatStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.maskSoftness)
+    }
+    var bgrToolMaskContrast by remember(currentChat?.apiParams) {
+        mutableFloatStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.maskContrast)
+    }
+    var bgrToolExportMask by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.exportMask)
+    }
+    var bgrToolResizeBeforeProcessing by remember(currentChat?.apiParams) {
+        mutableStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.resizeBeforeProcessing)
+    }
+    var bgrToolResizeMaxEdge by remember(currentChat?.apiParams) {
+        mutableIntStateOf(NativeChatToolConfig.fromApiParams(currentChat?.apiParams).backgroundRemovalParams.resizeMaxEdge)
+    }
 
     LaunchedEffect(nativeChatTtsVoiceOptions, assistantTtsVoiceName) {
         if (nativeChatTtsVoiceOptions.isNotEmpty() && assistantTtsVoiceName !in nativeChatTtsVoiceOptions) {
@@ -558,25 +788,27 @@ fun LlamaChatScreen(
         NativeChatToolConfig.fromApiParams(activeServer?.defaultApiParams)
     }
     val activeServerIsLiteRt = activeServer?.isLiteRtEngine() == true
-    val serverAllowsTools = activeServerToolDefaults.toolsEnabled
-    val serverAllowsWebSearch = serverAllowsTools && activeServerToolDefaults.webSearchEnabled
-    val serverAllowsKiwixSearch = serverAllowsTools && activeServerToolDefaults.kiwixSearchEnabled
-    val serverAllowsFetchUrl = serverAllowsTools && activeServerToolDefaults.fetchUrlEnabled
-    val serverAllowsDeepResearch = serverAllowsTools && activeServerToolDefaults.deepResearchEnabled
+    val serverToolGate = if (activeServerIsLiteRt) NativeChatToolConfig.liteRtToolDefaults() else activeServerToolDefaults
+    val serverAllowsTools = serverToolGate.toolsEnabled
+    val serverAllowsWebSearch = serverAllowsTools && serverToolGate.webSearchEnabled
+    val serverAllowsKiwixSearch = serverAllowsTools && serverToolGate.kiwixSearchEnabled
+    val serverAllowsFetchUrl = serverAllowsTools && serverToolGate.fetchUrlEnabled
+    val serverAllowsDeepResearch = serverAllowsTools && serverToolGate.deepResearchEnabled
     val serverAllowsDeepResearchSelectedKbImport =
-        serverAllowsDeepResearch && activeServerToolDefaults.deepResearchImportIntoSelectedKbEnabled
-    val serverAllowsDateTime = serverAllowsTools && activeServerToolDefaults.dateTimeEnabled
-    val serverAllowsCalculator = serverAllowsTools && activeServerToolDefaults.calculatorEnabled
-    val serverAllowsNotes = serverAllowsTools && activeServerToolDefaults.noteToolsEnabled
-    val serverAllowsTodoLists = serverAllowsTools && activeServerToolDefaults.todoToolsEnabled
-    val serverAllowsKnowledgeBases = serverAllowsTools && activeServerToolDefaults.knowledgeBaseEnabled
+        serverAllowsDeepResearch && serverToolGate.deepResearchImportIntoSelectedKbEnabled
+    val serverAllowsDateTime = serverAllowsTools && serverToolGate.dateTimeEnabled
+    val serverAllowsCalculator = serverAllowsTools && serverToolGate.calculatorEnabled
+    val serverAllowsNotes = serverAllowsTools && serverToolGate.noteToolsEnabled
+    val serverAllowsTodoLists = serverAllowsTools && serverToolGate.todoToolsEnabled
+    val serverAllowsKnowledgeBases = serverAllowsTools && serverToolGate.knowledgeBaseEnabled
     val serverAllowsKnowledgeAutoContext =
-        serverAllowsKnowledgeBases && activeServerToolDefaults.knowledgeBaseAutoContextEnabled
-    val serverAllowsCalendar = serverAllowsTools && activeServerToolDefaults.calendarToolsEnabled
-    val serverAllowsAlarms = serverAllowsTools && activeServerToolDefaults.alarmToolsEnabled
-    val serverAllowsImageGeneration = serverAllowsTools && activeServerToolDefaults.imageGenerationEnabled
+        serverAllowsKnowledgeBases && serverToolGate.knowledgeBaseAutoContextEnabled
+    val serverAllowsCalendar = serverAllowsTools && serverToolGate.calendarToolsEnabled
+    val serverAllowsAlarms = serverAllowsTools && serverToolGate.alarmToolsEnabled
+    val serverAllowsImageGeneration = serverAllowsTools && serverToolGate.imageGenerationEnabled
     val serverAllowsImageIteration =
-        serverAllowsImageGeneration && activeServerToolDefaults.imageIterationEnabled
+        serverAllowsImageGeneration && serverToolGate.imageIterationEnabled
+    val serverAllowsBackgroundRemoval = serverAllowsTools && serverToolGate.backgroundRemovalEnabled
     val chatDocumentForcesKnowledgeTools = chatDocumentKnowledgeBaseId != null && serverAllowsKnowledgeBases
     val chatToolsEnabledByUser = toolsEnabled && serverAllowsTools
     val effectiveToolsEnabled = chatToolsEnabledByUser || chatDocumentForcesKnowledgeTools
@@ -597,6 +829,7 @@ fun LlamaChatScreen(
     val effectiveAlarmToolsEnabled = chatToolsEnabledByUser && alarmToolsEnabled && serverAllowsAlarms
     val effectiveImageGenerationEnabled = chatToolsEnabledByUser && imageGenerationEnabled && serverAllowsImageGeneration
     val effectiveImageIterationEnabled = chatToolsEnabledByUser && imageIterationEnabled && serverAllowsImageIteration
+    val effectiveBackgroundRemovalEnabled = chatToolsEnabledByUser && backgroundRemovalEnabled && serverAllowsBackgroundRemoval
 
     fun saveParams(
         chatDocumentKnowledgeBaseIdOverride: Long? = chatDocumentKnowledgeBaseId,
@@ -611,11 +844,14 @@ fun LlamaChatScreen(
             "top_k" to if (activeServerIsLiteRt) topK.toInt().coerceIn(5, 64) else topK.toInt()
         )
         if (activeServerIsLiteRt) {
+            map[LITERT_PARAM_MTP_ENABLED] = liteRtMtpEnabled
+            map[LITERT_PARAM_MAX_OUTPUT_TOKENS] = liteRtMaxOutputTokens.coerceAtLeast(1)
+            map["enable_thinking"] = enableThinking
             currentChat?.let { chat ->
                 viewModel.updateChat(
                     chat = chat,
                     newTitle = chat.title,
-                    newContextSize = liteRtMaxTokens.coerceIn(2000, 4000),
+                    newContextSize = liteRtMaxTokens.coerceIn(liteRtContextRange),
                     newSystemPrompt = liteRtSystemPrompt.trim().takeIf { it.isNotBlank() }
                 )
             }
@@ -631,6 +867,106 @@ fun LlamaChatScreen(
                     scope.launch { repository.updateServer(updated) }
                 }
             }
+            map.putAll(
+                NativeChatToolConfig(
+                    toolsEnabled = nextToolsEnabled,
+                    webSearchEnabled = webSearchEnabled,
+                    webSearchMaxPages = webSearchMaxPages,
+                    webSearchMaxChars = webSearchMaxChars,
+                    kiwixSearchEnabled = kiwixSearchEnabled,
+                    kiwixServerUrl = kiwixServerUrl,
+                    kiwixMaxPages = kiwixMaxPages,
+                    kiwixMaxChars = kiwixMaxChars,
+                    fetchUrlEnabled = fetchUrlEnabled,
+                    fetchUrlMaxChars = fetchUrlMaxChars,
+                    deepResearchEnabled = deepResearchEnabled,
+                    deepResearchImportIntoSelectedKbEnabled = deepResearchImportIntoSelectedKbEnabled,
+                    deepResearchSourceLimit = deepResearchSourceLimit,
+                    dateTimeEnabled = dateTimeEnabled,
+                    calculatorEnabled = calculatorEnabled,
+                    noteToolsEnabled = noteToolsEnabled,
+                    todoToolsEnabled = todoToolsEnabled,
+                    calendarToolsEnabled = calendarToolsEnabled,
+                    alarmToolsEnabled = alarmToolsEnabled,
+                    knowledgeBaseEnabled = nextKnowledgeBaseEnabled,
+                    knowledgeBaseAutoContextEnabled = nextKnowledgeBaseAutoContextEnabled,
+                    selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
+                    chatDocumentKnowledgeBaseId = chatDocumentKnowledgeBaseIdOverride,
+                    knowledgeBaseMaxResults = knowledgeBaseMaxResults,
+                    imageGenerationEnabled = imageGenerationEnabled,
+                    imageIterationEnabled = imageIterationEnabled,
+                    backgroundRemovalEnabled = backgroundRemovalEnabled,
+                    assistantTtsEnabled = assistantTtsEnabled,
+                    assistantTtsLanguage = assistantTtsLanguage,
+                    assistantTtsVoiceName = assistantTtsVoiceName.takeIf { it.isNotBlank() },
+                    assistantTtsTotalSteps = assistantTtsSteps,
+                    assistantTtsSpeed = assistantTtsSpeed,
+                    callSilenceAfterSpeechSeconds = callSilenceAfterSpeechSeconds,
+                    callNoSpeechTimeoutSeconds = callNoSpeechTimeoutSeconds,
+                    imageParams = NativeChatImageToolParams(
+                        engine = imageToolEngine,
+                        model = imageToolModel.takeIf { it.isNotBlank() },
+                        width = imageToolWidth,
+                        height = imageToolHeight,
+                        steps = imageToolSteps,
+                        cfgScale = imageToolCfg,
+                        seed = imageToolSeed,
+                        negativePrompt = imageToolNegativePrompt,
+                        backend = imageToolBackend,
+                        runtimeThreads = imageToolRuntimeThreads,
+                        graphOptimizationLevel = imageToolGraphOpt,
+                        unetBackendOverride = imageToolUnetBackend,
+                        vaeDecoderBackendOverride = imageToolVaeDecoderBackend,
+                        vaeEncoderBackendOverride = imageToolVaeEncoderBackend,
+                        intraOpThreads = imageToolIntraThreads,
+                        interOpThreads = imageToolInterThreads,
+                        executionMode = imageToolExecutionMode,
+                        memoryPatternOptimization = imageToolMemoryPattern,
+                        cpuArenaAllocator = imageToolCpuArena,
+                        nnapiCpuDisabled = imageToolNnapiCpuDisabled,
+                        nnapiUseFp16 = imageToolNnapiFp16,
+                        sdParams = NativeChatSdImageToolParams(
+                            model = imageToolSdModel.takeIf { it.isNotBlank() },
+                            vaePath = imageToolSdVae.takeIf { it.isNotBlank() },
+                            taePath = imageToolSdTae.takeIf { it.isNotBlank() },
+                            clipLPath = imageToolSdClipL.takeIf { it.isNotBlank() },
+                            clipGPath = imageToolSdClipG.takeIf { it.isNotBlank() },
+                            t5xxlPath = imageToolSdT5xxl.takeIf { it.isNotBlank() },
+                            llmPath = imageToolSdLlm.takeIf { it.isNotBlank() },
+                            llmVisionPath = imageToolSdLlmVision.takeIf { it.isNotBlank() },
+                            photoMakerPath = imageToolSdPhotoMaker.takeIf { it.isNotBlank() },
+                            width = imageToolSdWidth,
+                            height = imageToolSdHeight,
+                            steps = imageToolSdSteps,
+                            cfgScale = imageToolSdCfg,
+                            sampler = imageToolSdSampler,
+                            seed = imageToolSdSeed,
+                            negativePrompt = imageToolSdNegativePrompt,
+                            threads = imageToolSdThreads,
+                            flowShift = imageToolSdFlowShift,
+                            diffusionFa = imageToolSdDiffusionFa,
+                            mmap = imageToolSdMmap,
+                            vaeConvDirect = imageToolSdVaeConvDirect,
+                            qwenImageZeroCondT = imageToolSdQwenZeroCondT,
+                            chromaDisableDitMask = imageToolSdChromaDisableDitMask
+                        )
+                    ),
+                    backgroundRemovalParams = NativeChatBackgroundRemovalToolParams(
+                        model = bgrToolModel.takeIf { it.isNotBlank() },
+                        backend = bgrToolBackend,
+                        runtimeThreads = bgrToolRuntimeThreads,
+                        graphOptimizationLevel = bgrToolGraphOpt,
+                        alphaThreshold = bgrToolAlphaThreshold,
+                        featherRadius = bgrToolFeatherRadius,
+                        maskSoftness = bgrToolMaskSoftness,
+                        maskContrast = bgrToolMaskContrast,
+                        exportMask = bgrToolExportMask,
+                        resizeBeforeProcessing = bgrToolResizeBeforeProcessing,
+                        resizeMaxEdge = bgrToolResizeMaxEdge
+                    ),
+                    maxToolRounds = maxToolRounds
+                ).toParamMap()
+            )
         } else {
             map["min_p"] = minP
             map["repeat_penalty"] = repPen
@@ -663,10 +999,16 @@ fun LlamaChatScreen(
                     knowledgeBaseMaxResults = knowledgeBaseMaxResults,
                     imageGenerationEnabled = imageGenerationEnabled,
                     imageIterationEnabled = imageIterationEnabled,
+                    backgroundRemovalEnabled = backgroundRemovalEnabled,
                     assistantTtsEnabled = assistantTtsEnabled,
                     assistantTtsLanguage = assistantTtsLanguage,
                     assistantTtsVoiceName = assistantTtsVoiceName.takeIf { it.isNotBlank() },
+                    assistantTtsTotalSteps = assistantTtsSteps,
+                    assistantTtsSpeed = assistantTtsSpeed,
+                    callSilenceAfterSpeechSeconds = callSilenceAfterSpeechSeconds,
+                    callNoSpeechTimeoutSeconds = callNoSpeechTimeoutSeconds,
                     imageParams = NativeChatImageToolParams(
+                        engine = imageToolEngine,
                         model = imageToolModel.takeIf { it.isNotBlank() },
                         width = imageToolWidth,
                         height = imageToolHeight,
@@ -686,7 +1028,45 @@ fun LlamaChatScreen(
                         memoryPatternOptimization = imageToolMemoryPattern,
                         cpuArenaAllocator = imageToolCpuArena,
                         nnapiCpuDisabled = imageToolNnapiCpuDisabled,
-                        nnapiUseFp16 = imageToolNnapiFp16
+                        nnapiUseFp16 = imageToolNnapiFp16,
+                        sdParams = NativeChatSdImageToolParams(
+                            model = imageToolSdModel.takeIf { it.isNotBlank() },
+                            vaePath = imageToolSdVae.takeIf { it.isNotBlank() },
+                            taePath = imageToolSdTae.takeIf { it.isNotBlank() },
+                            clipLPath = imageToolSdClipL.takeIf { it.isNotBlank() },
+                            clipGPath = imageToolSdClipG.takeIf { it.isNotBlank() },
+                            t5xxlPath = imageToolSdT5xxl.takeIf { it.isNotBlank() },
+                            llmPath = imageToolSdLlm.takeIf { it.isNotBlank() },
+                            llmVisionPath = imageToolSdLlmVision.takeIf { it.isNotBlank() },
+                            photoMakerPath = imageToolSdPhotoMaker.takeIf { it.isNotBlank() },
+                            width = imageToolSdWidth,
+                            height = imageToolSdHeight,
+                            steps = imageToolSdSteps,
+                            cfgScale = imageToolSdCfg,
+                            sampler = imageToolSdSampler,
+                            seed = imageToolSdSeed,
+                            negativePrompt = imageToolSdNegativePrompt,
+                            threads = imageToolSdThreads,
+                            flowShift = imageToolSdFlowShift,
+                            diffusionFa = imageToolSdDiffusionFa,
+                            mmap = imageToolSdMmap,
+                            vaeConvDirect = imageToolSdVaeConvDirect,
+                            qwenImageZeroCondT = imageToolSdQwenZeroCondT,
+                            chromaDisableDitMask = imageToolSdChromaDisableDitMask
+                        )
+                    ),
+                    backgroundRemovalParams = NativeChatBackgroundRemovalToolParams(
+                        model = bgrToolModel.takeIf { it.isNotBlank() },
+                        backend = bgrToolBackend,
+                        runtimeThreads = bgrToolRuntimeThreads,
+                        graphOptimizationLevel = bgrToolGraphOpt,
+                        alphaThreshold = bgrToolAlphaThreshold,
+                        featherRadius = bgrToolFeatherRadius,
+                        maskSoftness = bgrToolMaskSoftness,
+                        maskContrast = bgrToolMaskContrast,
+                        exportMask = bgrToolExportMask,
+                        resizeBeforeProcessing = bgrToolResizeBeforeProcessing,
+                        resizeMaxEdge = bgrToolResizeMaxEdge
                     ),
                     maxToolRounds = maxToolRounds
                 ).toParamMap()
@@ -704,7 +1084,11 @@ fun LlamaChatScreen(
         minP = parseParam(params, "min_p", 0.05f)
         repPen = parseParam(params, "repeat_penalty", 1.1f)
         enableThinking = parseParam(params, "enable_thinking", true)
-        liteRtMaxTokens = (currentChat?.contextSize ?: 4000).coerceIn(2000, 4000)
+        liteRtMtpEnabled = parseParam(params, LITERT_PARAM_MTP_ENABLED, false)
+        liteRtMaxOutputTokens = parseParam(params, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024).coerceAtLeast(1)
+        enableThinking = parseParam(params, "enable_thinking", true)
+        liteRtMaxTokens = (currentChat?.contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
+            .coerceIn(liteRtContextRange)
         liteRtSystemPrompt = currentChat?.systemPrompt.orEmpty()
         liteRtAccelerator = if (normalizeLiteRtBackend(activeServer?.liteRtBackend) == LITERT_BACKEND_CPU) {
             LITERT_BACKEND_CPU
@@ -737,11 +1121,17 @@ fun LlamaChatScreen(
         knowledgeBaseMaxResults = parseParam(params, NativeChatToolConfig.KEY_KNOWLEDGE_MAX_RESULTS, NativeChatToolConfig.DEFAULT_KB_RESULTS)
         imageGenerationEnabled = parseParam(params, NativeChatToolConfig.KEY_IMAGE_GENERATION_ENABLED, false)
         imageIterationEnabled = parseParam(params, NativeChatToolConfig.KEY_IMAGE_ITERATION_ENABLED, false)
+        backgroundRemovalEnabled = parseParam(params, NativeChatToolConfig.KEY_BGR_ENABLED, false)
         assistantTtsEnabled = parseParam(params, NativeChatToolConfig.KEY_ASSISTANT_TTS_ENABLED, false)
         assistantTtsLanguage = NativeChatToolConfig.fromApiParams(params).assistantTtsLanguage
         assistantTtsVoiceName = NativeChatToolConfig.fromApiParams(params).assistantTtsVoiceName.orEmpty()
+        assistantTtsSpeed = NativeChatToolConfig.fromApiParams(params).assistantTtsSpeed
+        assistantTtsSteps = NativeChatToolConfig.fromApiParams(params).assistantTtsTotalSteps
+        callSilenceAfterSpeechSeconds = NativeChatToolConfig.fromApiParams(params).callSilenceAfterSpeechSeconds
+        callNoSpeechTimeoutSeconds = NativeChatToolConfig.fromApiParams(params).callNoSpeechTimeoutSeconds
         maxToolRounds = parseParam(params, NativeChatToolConfig.KEY_MAX_TOOL_ROUNDS, NativeChatToolConfig.DEFAULT_TOOL_ROUNDS)
         val imageParams = NativeChatToolConfig.fromApiParams(params).imageParams
+        imageToolEngine = imageParams.engine
         imageToolModel = imageParams.model.orEmpty()
         imageToolWidth = imageParams.width
         imageToolHeight = imageParams.height
@@ -762,6 +1152,42 @@ fun LlamaChatScreen(
         imageToolCpuArena = imageParams.cpuArenaAllocator
         imageToolNnapiCpuDisabled = imageParams.nnapiCpuDisabled
         imageToolNnapiFp16 = imageParams.nnapiUseFp16
+        val sdParams = imageParams.sdParams
+        imageToolSdModel = sdParams.model.orEmpty()
+        imageToolSdVae = sdParams.vaePath.orEmpty()
+        imageToolSdTae = sdParams.taePath.orEmpty()
+        imageToolSdClipL = sdParams.clipLPath.orEmpty()
+        imageToolSdClipG = sdParams.clipGPath.orEmpty()
+        imageToolSdT5xxl = sdParams.t5xxlPath.orEmpty()
+        imageToolSdLlm = sdParams.llmPath.orEmpty()
+        imageToolSdLlmVision = sdParams.llmVisionPath.orEmpty()
+        imageToolSdPhotoMaker = sdParams.photoMakerPath.orEmpty()
+        imageToolSdWidth = sdParams.width
+        imageToolSdHeight = sdParams.height
+        imageToolSdSteps = sdParams.steps
+        imageToolSdCfg = sdParams.cfgScale
+        imageToolSdSampler = sdParams.sampler
+        imageToolSdSeed = sdParams.seed
+        imageToolSdNegativePrompt = sdParams.negativePrompt
+        imageToolSdThreads = sdParams.threads
+        imageToolSdFlowShift = sdParams.flowShift
+        imageToolSdDiffusionFa = sdParams.diffusionFa
+        imageToolSdMmap = sdParams.mmap
+        imageToolSdVaeConvDirect = sdParams.vaeConvDirect
+        imageToolSdQwenZeroCondT = sdParams.qwenImageZeroCondT
+        imageToolSdChromaDisableDitMask = sdParams.chromaDisableDitMask
+        val bgrParams = NativeChatToolConfig.fromApiParams(params).backgroundRemovalParams
+        bgrToolModel = bgrParams.model.orEmpty()
+        bgrToolBackend = bgrParams.backend
+        bgrToolRuntimeThreads = bgrParams.runtimeThreads
+        bgrToolGraphOpt = bgrParams.graphOptimizationLevel
+        bgrToolAlphaThreshold = bgrParams.alphaThreshold
+        bgrToolFeatherRadius = bgrParams.featherRadius
+        bgrToolMaskSoftness = bgrParams.maskSoftness
+        bgrToolMaskContrast = bgrParams.maskContrast
+        bgrToolExportMask = bgrParams.exportMask
+        bgrToolResizeBeforeProcessing = bgrParams.resizeBeforeProcessing
+        bgrToolResizeMaxEdge = bgrParams.resizeMaxEdge
     }
 
     fun clearImageAttachment() {
@@ -896,6 +1322,7 @@ fun LlamaChatScreen(
                         knowledgeBaseAutoContextEnabled = true
                         imageGenerationEnabled = false
                         imageIterationEnabled = false
+                        backgroundRemovalEnabled = false
                         assistantTtsEnabled = false
                         saveParams(
                             chatDocumentKnowledgeBaseIdOverride = knowledgeBaseId,
@@ -981,6 +1408,26 @@ fun LlamaChatScreen(
             }
         }
     }
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && pendingCallStart) {
+            pendingCallStart = false
+            val serverId = activeServer?.id
+            if (serverId != null) {
+                context.startForegroundService(LlamaCallService.startIntent(context, chatId, serverId))
+            }
+        } else {
+            pendingCallStart = false
+            if (!granted) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.llama_record_permission_denied),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+        }
+    }
 
     fun stopCurrentRecording() {
         if (!isRecording) return
@@ -1009,6 +1456,29 @@ fun LlamaChatScreen(
                 }
             }
         }
+    }
+
+    fun startCallMode() {
+        val serverId = activeServer?.id
+        if (serverId == null) {
+            Toast.makeText(
+                context,
+                context.getString(R.string.llama_no_server_selected),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        val permission = Manifest.permission.RECORD_AUDIO
+        if (ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            context.startForegroundService(LlamaCallService.startIntent(context, chatId, serverId))
+        } else {
+            pendingCallStart = true
+            callPermissionLauncher.launch(permission)
+        }
+    }
+
+    fun hangUpCallMode() {
+        context.startService(LlamaCallService.hangUpIntent(context))
     }
 
     fun startCurrentRecording() {
@@ -1120,10 +1590,30 @@ fun LlamaChatScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },
                 actions = {
+                    IconButton(
+                        onClick = {
+                            if (isCallActiveForChat) {
+                                hangUpCallMode()
+                            } else {
+                                startCallMode()
+                            }
+                        },
+                        enabled = activeServer != null
+                    ) {
+                        Icon(
+                            painter = painterResource(android.R.drawable.sym_action_call),
+                            contentDescription = stringResource(R.string.llama_call_mode),
+                            tint = if (isCallActiveForChat) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                LocalContentColor.current
+                            }
+                        )
+                    }
                     // Search toggle
                     IconButton(onClick = {
                         isSearching = !isSearching
@@ -1222,8 +1712,34 @@ fun LlamaChatScreen(
                                 label = stringResource(R.string.litert_gallery_max_tokens),
                                 value = liteRtMaxTokens,
                                 onValueChange = { liteRtMaxTokens = it },
-                                range = 2000..4000
+                                range = liteRtContextRange
                             )
+                            LlamaToolNumberRow(
+                                label = stringResource(R.string.litert_gallery_max_output_tokens),
+                                value = liteRtMaxOutputTokens,
+                                onValueChange = { liteRtMaxOutputTokens = it.coerceAtLeast(1) },
+                                range = 1..liteRtContextCap.coerceAtLeast(1)
+                            )
+                            Text(
+                                text = stringResource(
+                                    R.string.litert_gallery_context_cap_hint,
+                                    liteRtDefaultContext,
+                                    liteRtContextCap
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (liteRtAccelerator == LITERT_BACKEND_GPU && liteRtMaxTokens > LITERT_CHAT_GPU_HIGH_CONTEXT_WARNING_TOKENS) {
+                                Text(
+                                    text = stringResource(R.string.litert_gallery_high_gpu_context_warning),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     text = stringResource(R.string.litert_gallery_temperature, "%.2f".format(temperature.coerceIn(0f, 1f))),
@@ -1283,6 +1799,52 @@ fun LlamaChatScreen(
                                     )
                                 }
                             }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.litert_gallery_mtp_title),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.litert_gallery_mtp_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Switch(
+                                    checked = liteRtMtpEnabled,
+                                    onCheckedChange = { liteRtMtpEnabled = it }
+                                )
+                            }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = stringResource(R.string.litert_thinking_title),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = stringResource(R.string.litert_thinking_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Switch(
+                                    checked = enableThinking,
+                                    onCheckedChange = { enableThinking = it }
+                                )
+                            }
                             OutlinedTextField(
                                 value = liteRtSystemPrompt,
                                 onValueChange = { liteRtSystemPrompt = it },
@@ -1295,23 +1857,23 @@ fun LlamaChatScreen(
                             )
                         } else {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Temp (${"%.1f".format(temperature)})", modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.llama_temperature_value, temperature), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
                                 Slider(value = temperature, onValueChange = { temperature = it }, valueRange = 0f..2f, modifier = Modifier.weight(1f))
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Top P (${"%.2f".format(topP)})", modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.llama_top_p_value, topP), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
                                 Slider(value = topP, onValueChange = { topP = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Top K (${topK.toInt()})", modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.llama_top_k_value, topK.toInt()), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
                                 Slider(value = topK, onValueChange = { topK = it }, valueRange = 1f..100f, modifier = Modifier.weight(1f))
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Min P (${"%.2f".format(minP)})", modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.llama_min_p_value, minP), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
                                 Slider(value = minP, onValueChange = { minP = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Rep Pen (${"%.2f".format(repPen)})", modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
+                                Text(stringResource(R.string.llama_repeat_penalty_value, repPen), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
                                 Slider(value = repPen, onValueChange = { repPen = it }, valueRange = 1f..2f, modifier = Modifier.weight(1f))
                             }
 
@@ -1322,9 +1884,10 @@ fun LlamaChatScreen(
                                 Text(stringResource(R.string.llama_thinking_process), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                                 Switch(checked = enableThinking, onCheckedChange = { enableThinking = it })
                             }
+                        }
 
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                            Text(stringResource(R.string.llama_voice_replies_title), style = MaterialTheme.typography.titleSmall)
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Text(stringResource(R.string.llama_voice_replies_title), style = MaterialTheme.typography.titleSmall)
                         LlamaToolToggleRow(
                             label = stringResource(R.string.llama_tool_assistant_tts),
                             description = stringResource(R.string.llama_tool_assistant_tts_desc),
@@ -1356,6 +1919,43 @@ fun LlamaChatScreen(
                                 enabled = nativeChatTtsVoiceOptions.isNotEmpty(),
                                 modifier = Modifier.fillMaxWidth()
                             )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.llama_tool_assistant_tts_speed, assistantTtsSpeed),
+                                    modifier = Modifier.width(120.dp),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Slider(
+                                    value = assistantTtsSpeed,
+                                    onValueChange = {
+                                        assistantTtsSpeed = it.coerceIn(
+                                            NativeChatToolConfig.MIN_ASSISTANT_TTS_SPEED,
+                                            NativeChatToolConfig.MAX_ASSISTANT_TTS_SPEED
+                                        )
+                                    },
+                                    valueRange = NativeChatToolConfig.MIN_ASSISTANT_TTS_SPEED..NativeChatToolConfig.MAX_ASSISTANT_TTS_SPEED,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.llama_tool_assistant_tts_steps, assistantTtsSteps),
+                                    modifier = Modifier.width(120.dp),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Slider(
+                                    value = assistantTtsSteps.toFloat(),
+                                    onValueChange = {
+                                        assistantTtsSteps = it.toInt().coerceIn(
+                                            NativeChatToolConfig.MIN_ASSISTANT_TTS_STEPS,
+                                            NativeChatToolConfig.MAX_ASSISTANT_TTS_STEPS
+                                        )
+                                    },
+                                    valueRange = NativeChatToolConfig.MIN_ASSISTANT_TTS_STEPS.toFloat()..NativeChatToolConfig.MAX_ASSISTANT_TTS_STEPS.toFloat(),
+                                    steps = NativeChatToolConfig.MAX_ASSISTANT_TTS_STEPS - NativeChatToolConfig.MIN_ASSISTANT_TTS_STEPS - 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                             if (nativeChatTtsVoiceOptions.isEmpty() && onnxTtsModels.isNotEmpty()) {
                                 Text(
                                     text = stringResource(R.string.llama_tool_assistant_tts_no_voices),
@@ -1363,6 +1963,52 @@ fun LlamaChatScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                        }
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Text(stringResource(R.string.llama_call_settings_title), style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = stringResource(R.string.llama_call_settings_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                stringResource(R.string.llama_call_after_last_word, callSilenceAfterSpeechSeconds),
+                                modifier = Modifier.width(150.dp),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Slider(
+                                value = callSilenceAfterSpeechSeconds.toFloat(),
+                                onValueChange = {
+                                    callSilenceAfterSpeechSeconds = it.toInt().coerceIn(
+                                        NativeChatToolConfig.MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS,
+                                        NativeChatToolConfig.MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS
+                                    )
+                                },
+                                valueRange = NativeChatToolConfig.MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS.toFloat()..NativeChatToolConfig.MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS.toFloat(),
+                                steps = NativeChatToolConfig.MAX_CALL_SILENCE_AFTER_SPEECH_SECONDS - NativeChatToolConfig.MIN_CALL_SILENCE_AFTER_SPEECH_SECONDS - 1,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                stringResource(R.string.llama_call_wait_for_answer, callNoSpeechTimeoutSeconds),
+                                modifier = Modifier.width(150.dp),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Slider(
+                                value = callNoSpeechTimeoutSeconds.toFloat(),
+                                onValueChange = {
+                                    callNoSpeechTimeoutSeconds = it.toInt().coerceIn(
+                                        NativeChatToolConfig.MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS,
+                                        NativeChatToolConfig.MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS
+                                    )
+                                },
+                                valueRange = NativeChatToolConfig.MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS.toFloat()..NativeChatToolConfig.MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS.toFloat(),
+                                steps = NativeChatToolConfig.MAX_CALL_NO_SPEECH_TIMEOUT_SECONDS - NativeChatToolConfig.MIN_CALL_NO_SPEECH_TIMEOUT_SECONDS - 1,
+                                modifier = Modifier.weight(1f)
+                            )
                         }
 
                         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -1621,48 +2267,184 @@ fun LlamaChatScreen(
                                     enabled = serverAllowsImageIteration,
                                     onCheckedChange = { imageIterationEnabled = it }
                                 )
-                                LlamaNativeImageToolSettings(
-                                    model = imageToolModel,
-                                    availableModels = nativeChatImageModelOptions,
-                                    onModelChange = { imageToolModel = it },
-                                    width = imageToolWidth,
-                                    onWidthChange = { imageToolWidth = it },
-                                    height = imageToolHeight,
-                                    onHeightChange = { imageToolHeight = it },
-                                    steps = imageToolSteps,
-                                    onStepsChange = { imageToolSteps = it },
-                                    cfg = imageToolCfg,
-                                    onCfgChange = { imageToolCfg = it },
-                                    seed = imageToolSeed,
-                                    onSeedChange = { imageToolSeed = it },
-                                    negativePrompt = imageToolNegativePrompt,
-                                    onNegativePromptChange = { imageToolNegativePrompt = it },
-                                    backend = imageToolBackend,
-                                    onBackendChange = { imageToolBackend = it },
-                                    runtimeThreads = imageToolRuntimeThreads,
-                                    onRuntimeThreadsChange = { imageToolRuntimeThreads = it },
-                                    graphOptimizationLevel = imageToolGraphOpt,
-                                    onGraphOptimizationLevelChange = { imageToolGraphOpt = it },
-                                    unetBackendOverride = imageToolUnetBackend,
-                                    onUnetBackendOverrideChange = { imageToolUnetBackend = it },
-                                    vaeDecoderBackendOverride = imageToolVaeDecoderBackend,
-                                    onVaeDecoderBackendOverrideChange = { imageToolVaeDecoderBackend = it },
-                                    vaeEncoderBackendOverride = imageToolVaeEncoderBackend,
-                                    onVaeEncoderBackendOverrideChange = { imageToolVaeEncoderBackend = it },
-                                    intraOpThreads = imageToolIntraThreads,
-                                    onIntraOpThreadsChange = { imageToolIntraThreads = it },
-                                    interOpThreads = imageToolInterThreads,
-                                    onInterOpThreadsChange = { imageToolInterThreads = it },
-                                    executionMode = imageToolExecutionMode,
-                                    onExecutionModeChange = { imageToolExecutionMode = it },
-                                    memoryPatternOptimization = imageToolMemoryPattern,
-                                    onMemoryPatternOptimizationChange = { imageToolMemoryPattern = it },
-                                    cpuArenaAllocator = imageToolCpuArena,
-                                    onCpuArenaAllocatorChange = { imageToolCpuArena = it },
-                                    nnapiCpuDisabled = imageToolNnapiCpuDisabled,
-                                    onNnapiCpuDisabledChange = { imageToolNnapiCpuDisabled = it },
-                                    nnapiUseFp16 = imageToolNnapiFp16,
-                                    onNnapiUseFp16Change = { imageToolNnapiFp16 = it }
+                                LlamaImageToolEnumDropdown(
+                                    label = stringResource(R.string.image_tool_engine_label),
+                                    selected = imageToolEngine,
+                                    values = NativeChatImageGenerationEngine.entries,
+                                    labelFor = {
+                                        when (it) {
+                                            NativeChatImageGenerationEngine.ONNX -> stringResource(R.string.image_tool_engine_onnx)
+                                            NativeChatImageGenerationEngine.SD -> stringResource(R.string.image_tool_engine_sd)
+                                        }
+                                    },
+                                    onSelected = { imageToolEngine = it }
+                                )
+                                if (imageToolEngine == NativeChatImageGenerationEngine.ONNX) {
+                                    LlamaNativeImageToolSettings(
+                                        model = imageToolModel,
+                                        availableModels = nativeChatImageModelOptions,
+                                        onModelChange = { imageToolModel = it },
+                                        width = imageToolWidth,
+                                        onWidthChange = { imageToolWidth = it },
+                                        height = imageToolHeight,
+                                        onHeightChange = { imageToolHeight = it },
+                                        steps = imageToolSteps,
+                                        onStepsChange = { imageToolSteps = it },
+                                        cfg = imageToolCfg,
+                                        onCfgChange = { imageToolCfg = it },
+                                        seed = imageToolSeed,
+                                        onSeedChange = { imageToolSeed = it },
+                                        negativePrompt = imageToolNegativePrompt,
+                                        onNegativePromptChange = { imageToolNegativePrompt = it },
+                                        backend = imageToolBackend,
+                                        onBackendChange = { imageToolBackend = it },
+                                        runtimeThreads = imageToolRuntimeThreads,
+                                        onRuntimeThreadsChange = { imageToolRuntimeThreads = it },
+                                        graphOptimizationLevel = imageToolGraphOpt,
+                                        onGraphOptimizationLevelChange = { imageToolGraphOpt = it },
+                                        unetBackendOverride = imageToolUnetBackend,
+                                        onUnetBackendOverrideChange = { imageToolUnetBackend = it },
+                                        vaeDecoderBackendOverride = imageToolVaeDecoderBackend,
+                                        onVaeDecoderBackendOverrideChange = { imageToolVaeDecoderBackend = it },
+                                        vaeEncoderBackendOverride = imageToolVaeEncoderBackend,
+                                        onVaeEncoderBackendOverrideChange = { imageToolVaeEncoderBackend = it },
+                                        intraOpThreads = imageToolIntraThreads,
+                                        onIntraOpThreadsChange = { imageToolIntraThreads = it },
+                                        interOpThreads = imageToolInterThreads,
+                                        onInterOpThreadsChange = { imageToolInterThreads = it },
+                                        executionMode = imageToolExecutionMode,
+                                        onExecutionModeChange = { imageToolExecutionMode = it },
+                                        memoryPatternOptimization = imageToolMemoryPattern,
+                                        onMemoryPatternOptimizationChange = { imageToolMemoryPattern = it },
+                                        cpuArenaAllocator = imageToolCpuArena,
+                                        onCpuArenaAllocatorChange = { imageToolCpuArena = it },
+                                        nnapiCpuDisabled = imageToolNnapiCpuDisabled,
+                                        onNnapiCpuDisabledChange = { imageToolNnapiCpuDisabled = it },
+                                        nnapiUseFp16 = imageToolNnapiFp16,
+                                        onNnapiUseFp16Change = { imageToolNnapiFp16 = it }
+                                    )
+                                } else {
+                                    val selectedSdModel = sdImageMainModels.firstOrNull {
+                                        it.filename == imageToolSdModel || it.path == imageToolSdModel
+                                    } ?: sdImageMainModels.firstOrNull { it.supportsSdTxt2Img() }
+                                    val selectedSdFamily = selectedSdModel?.resolvedSdFamily()
+                                    val selectedSdSpec = selectedSdFamily?.first?.let { family ->
+                                        resolveSdFamilySpec(family, selectedSdFamily.second)
+                                    }
+                                    val sdRoles = selectedSdSpec?.let { spec ->
+                                        listOf(
+                                            SdComponentRole.VAE,
+                                            SdComponentRole.TAE,
+                                            SdComponentRole.CLIP_L,
+                                            SdComponentRole.CLIP_G,
+                                            SdComponentRole.T5XXL,
+                                            SdComponentRole.LLM,
+                                            SdComponentRole.LLM_VISION,
+                                            SdComponentRole.PHOTOMAKER
+                                        ).filter { it in spec.requiredRoles || it in spec.optionalRoles }
+                                    }.orEmpty()
+                                    LlamaNativeSdImageToolSettings(
+                                        model = imageToolSdModel,
+                                        availableModels = nativeChatSdImageModelOptions,
+                                        onModelChange = { imageToolSdModel = it },
+                                        componentRoles = sdRoles,
+                                        requiredRoles = selectedSdSpec?.requiredRoles.orEmpty(),
+                                        componentOptions = { role -> llamaSdComponentOptions(sdImageSupportModels, selectedSdModel, role) },
+                                        selectedComponent = { role ->
+                                            when (role) {
+                                                SdComponentRole.VAE -> imageToolSdVae
+                                                SdComponentRole.TAE -> imageToolSdTae
+                                                SdComponentRole.CLIP_L -> imageToolSdClipL
+                                                SdComponentRole.CLIP_G -> imageToolSdClipG
+                                                SdComponentRole.T5XXL -> imageToolSdT5xxl
+                                                SdComponentRole.LLM -> imageToolSdLlm
+                                                SdComponentRole.LLM_VISION -> imageToolSdLlmVision
+                                                SdComponentRole.PHOTOMAKER -> imageToolSdPhotoMaker
+                                                else -> ""
+                                            }
+                                        },
+                                        onComponentChange = { role, value ->
+                                            when (role) {
+                                                SdComponentRole.VAE -> imageToolSdVae = value
+                                                SdComponentRole.TAE -> imageToolSdTae = value
+                                                SdComponentRole.CLIP_L -> imageToolSdClipL = value
+                                                SdComponentRole.CLIP_G -> imageToolSdClipG = value
+                                                SdComponentRole.T5XXL -> imageToolSdT5xxl = value
+                                                SdComponentRole.LLM -> imageToolSdLlm = value
+                                                SdComponentRole.LLM_VISION -> imageToolSdLlmVision = value
+                                                SdComponentRole.PHOTOMAKER -> imageToolSdPhotoMaker = value
+                                                else -> Unit
+                                            }
+                                        },
+                                        width = imageToolSdWidth,
+                                        onWidthChange = { imageToolSdWidth = it.coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE) },
+                                        height = imageToolSdHeight,
+                                        onHeightChange = { imageToolSdHeight = it.coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE) },
+                                        steps = imageToolSdSteps,
+                                        onStepsChange = { imageToolSdSteps = it.coerceIn(NativeChatSdImageToolParams.MIN_STEPS, NativeChatSdImageToolParams.MAX_STEPS) },
+                                        cfg = imageToolSdCfg,
+                                        onCfgChange = { imageToolSdCfg = it.coerceIn(NativeChatSdImageToolParams.MIN_CFG, NativeChatSdImageToolParams.MAX_CFG) },
+                                        sampler = imageToolSdSampler,
+                                        onSamplerChange = { imageToolSdSampler = it },
+                                        seed = imageToolSdSeed,
+                                        onSeedChange = { imageToolSdSeed = it },
+                                        negativePrompt = imageToolSdNegativePrompt,
+                                        onNegativePromptChange = { imageToolSdNegativePrompt = it },
+                                        threads = imageToolSdThreads,
+                                        onThreadsChange = { imageToolSdThreads = it.coerceIn(NativeChatSdImageToolParams.MIN_THREADS, NativeChatSdImageToolParams.MAX_THREADS) },
+                                        flowShift = imageToolSdFlowShift,
+                                        onFlowShiftChange = { imageToolSdFlowShift = it },
+                                        showFlowShift = selectedSdSpec?.supportsFlowShift == true,
+                                        diffusionFa = imageToolSdDiffusionFa,
+                                        onDiffusionFaChange = { imageToolSdDiffusionFa = it },
+                                        showDiffusionFa = selectedSdSpec?.supportsDiffusionFa == true,
+                                        mmap = imageToolSdMmap,
+                                        onMmapChange = { imageToolSdMmap = it },
+                                        showMmap = selectedSdSpec?.supportsMmap == true,
+                                        vaeConvDirect = imageToolSdVaeConvDirect,
+                                        onVaeConvDirectChange = { imageToolSdVaeConvDirect = it },
+                                        showVaeConvDirect = selectedSdSpec?.supportsVaeConvDirect == true,
+                                        qwenZeroCondT = imageToolSdQwenZeroCondT,
+                                        onQwenZeroCondTChange = { imageToolSdQwenZeroCondT = it },
+                                        showQwenZeroCondT = selectedSdSpec?.supportsQwenImageZeroCondT == true,
+                                        chromaDisableDitMask = imageToolSdChromaDisableDitMask,
+                                        onChromaDisableDitMaskChange = { imageToolSdChromaDisableDitMask = it },
+                                        showChromaDisableDitMask = selectedSdSpec?.supportsChromaDisableDitMask == true
+                                    )
+                                }
+                            }
+                            LlamaToolToggleRow(
+                                label = stringResource(R.string.llama_tool_bgr),
+                                description = stringResource(R.string.llama_tool_bgr_desc),
+                                checked = effectiveBackgroundRemovalEnabled,
+                                enabled = serverAllowsBackgroundRemoval,
+                                onCheckedChange = { backgroundRemovalEnabled = it }
+                            )
+                            if (effectiveBackgroundRemovalEnabled) {
+                                LlamaNativeBackgroundRemovalToolSettings(
+                                    model = bgrToolModel,
+                                    availableModels = nativeChatBgrModelOptions,
+                                    onModelChange = { bgrToolModel = it },
+                                    backend = bgrToolBackend,
+                                    onBackendChange = { bgrToolBackend = it },
+                                    runtimeThreads = bgrToolRuntimeThreads,
+                                    onRuntimeThreadsChange = { bgrToolRuntimeThreads = it },
+                                    graphOptimizationLevel = bgrToolGraphOpt,
+                                    onGraphOptimizationLevelChange = { bgrToolGraphOpt = it },
+                                    alphaThreshold = bgrToolAlphaThreshold,
+                                    onAlphaThresholdChange = { bgrToolAlphaThreshold = it },
+                                    featherRadius = bgrToolFeatherRadius,
+                                    onFeatherRadiusChange = { bgrToolFeatherRadius = it },
+                                    maskSoftness = bgrToolMaskSoftness,
+                                    onMaskSoftnessChange = { bgrToolMaskSoftness = it },
+                                    maskContrast = bgrToolMaskContrast,
+                                    onMaskContrastChange = { bgrToolMaskContrast = it },
+                                    exportMask = bgrToolExportMask,
+                                    onExportMaskChange = { bgrToolExportMask = it },
+                                    resizeBeforeProcessing = bgrToolResizeBeforeProcessing,
+                                    onResizeBeforeProcessingChange = { bgrToolResizeBeforeProcessing = it },
+                                    resizeMaxEdge = bgrToolResizeMaxEdge,
+                                    onResizeMaxEdgeChange = { bgrToolResizeMaxEdge = it }
                                 )
                             }
                             LlamaToolNumberRow(
@@ -1671,7 +2453,6 @@ fun LlamaChatScreen(
                                 onValueChange = { maxToolRounds = it },
                                 range = NativeChatToolConfig.MIN_TOOL_ROUNDS..NativeChatToolConfig.MAX_TOOL_ROUNDS
                             )
-                        }
                         }
 
                         Row(
@@ -1721,7 +2502,7 @@ fun LlamaChatScreen(
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
                                 IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear")
+                                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_clear))
                                 }
                             }
                         },
@@ -1741,7 +2522,7 @@ fun LlamaChatScreen(
                             },
                             modifier = Modifier.size(32.dp)
                         ) {
-                            Icon(Icons.Default.ExpandLess, contentDescription = "Previous", modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.ExpandLess, contentDescription = stringResource(R.string.action_previous), modifier = Modifier.size(20.dp))
                         }
                         IconButton(
                             onClick = {
@@ -1750,7 +2531,7 @@ fun LlamaChatScreen(
                             },
                             modifier = Modifier.size(32.dp)
                         ) {
-                            Icon(Icons.Default.ExpandMore, contentDescription = "Next", modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.ExpandMore, contentDescription = stringResource(R.string.action_next), modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -1842,6 +2623,7 @@ fun LlamaChatScreen(
                             onDelete = { messagePendingDelete = msg },
                             autoPlayAssistantAudio = msg.role == "assistant" &&
                                 assistantTtsEnabled &&
+                                !isCallActiveForChat &&
                                 msg.timestamp >= openedAtMs &&
                                 msg.audioPath?.takeIf { it.isNotBlank() } !in autoPlayedAssistantAudioPaths,
                             onAssistantAudioAutoPlayed = { path ->
@@ -2006,6 +2788,13 @@ fun LlamaChatScreen(
                     Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.llama_scroll_to_bottom))
                 }
             }
+            if (isCallActiveForChat) {
+                LlamaCallOverlay(
+                    state = callState,
+                    onHangUp = { hangUpCallMode() },
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
             } // end Box
 
             // Input Area
@@ -2058,7 +2847,7 @@ fun LlamaChatScreen(
                         Box(modifier = Modifier.padding(end = 4.dp)) {
                             IconButton(
                                 onClick = { showAttachmentMenu = true },
-                                enabled = !isGeneratingAnyChat
+                                enabled = !isGeneratingAnyChat && !isCallActiveForChat
                             ) {
                                 Icon(
                                     Icons.Default.Add,
@@ -2103,7 +2892,7 @@ fun LlamaChatScreen(
                                         documentPickerLauncher.launch(nativeChatDocumentMimeTypes())
                                     }
                                 )
-                                if (supportsAudioInput && !isRecording) {
+                                if (supportsAudioInput && !isRecording && !isCallActiveForChat) {
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.llama_record_audio)) },
                                         leadingIcon = {
@@ -2130,7 +2919,7 @@ fun LlamaChatScreen(
                             placeholder = { Text(stringResource(R.string.chat_placeholder)) },
                             maxLines = 4,
                             shape = RoundedCornerShape(24.dp),
-                            enabled = !isGeneratingAnyChat
+                            enabled = !isGeneratingAnyChat && !isCallActiveForChat
                         )
 
                         if (isGeneratingAnyChat) {
@@ -2188,7 +2977,7 @@ fun LlamaChatScreen(
                                         ).show()
                                     }
                                 },
-                                enabled = canSend,
+                                enabled = canSend && !isCallActiveForChat,
                                 modifier = Modifier
                                     .background(MaterialTheme.colorScheme.primary, CircleShape)
                                     .size(48.dp)
@@ -2305,6 +3094,76 @@ private fun RecordingStrip(
             )
             TextButton(onClick = onStop) {
                 Text(stringResource(R.string.action_stop))
+            }
+        }
+    }
+}
+
+@Composable
+private fun LlamaCallOverlay(
+    state: LlamaCallUiState,
+    onHangUp: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .padding(20.dp)
+            .widthIn(max = 320.dp),
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 8.dp,
+        shadowElevation = 10.dp,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+    ) {
+        Column(
+            modifier = Modifier.padding(22.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Surface(
+                modifier = Modifier.size(112.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(android.R.drawable.ic_btn_speak_now),
+                        contentDescription = stringResource(R.string.llama_call_mode),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.size(54.dp)
+                    )
+                }
+            }
+            Text(
+                text = stringResource(R.string.llama_call_mode),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = state.status,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            LinearProgressIndicator(
+                progress = { state.inputLevel.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = stringResource(R.string.llama_call_elapsed, state.elapsedSeconds),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.outline
+            )
+            Button(
+                onClick = onHangUp,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                )
+            ) {
+                Icon(Icons.Default.Close, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.llama_call_hang_up))
             }
         }
     }
@@ -2625,6 +3484,15 @@ private fun LlamaImagePreviewDialog(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    TextButton(onClick = { saveLlamaChatImageToGallery(context, imageFile) }) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.llama_image_save_to_device))
+                    }
                     TextButton(onClick = { shareLlamaChatImage(context, imageFile) }) {
                         Icon(
                             Icons.Default.Share,
@@ -2666,6 +3534,73 @@ private fun shareLlamaChatImage(context: Context, imageFile: File) {
             context,
             context.getString(
                 R.string.onnx_image_gen_share_failed,
+                error.message ?: context.getString(R.string.error_generic)
+            ),
+            Toast.LENGTH_SHORT
+        ).show()
+    }
+}
+
+private fun saveLlamaChatImageToGallery(context: Context, imageFile: File) {
+    runCatching {
+        require(imageFile.exists() && imageFile.isFile) { "Image file not found." }
+        val extension = imageFile.extension.lowercase(Locale.US)
+        val mimeType = when (extension) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "webp" -> "image/webp"
+            "gif" -> "image/gif"
+            else -> "image/png"
+        }
+        val safeExtension = extension.ifBlank {
+            when (mimeType) {
+                "image/jpeg" -> "jpg"
+                "image/webp" -> "webp"
+                "image/gif" -> "gif"
+                else -> "png"
+            }
+        }
+        val displayNameBase = imageFile.nameWithoutExtension
+            .ifBlank { "llama_image" }
+            .replace(Regex("""\s+"""), "_")
+        val displayName = "${displayNameBase}_${System.currentTimeMillis()}.$safeExtension"
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Images.Media.MIME_TYPE, mimeType)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/AI-Doomsday-Toolbox")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+        }
+
+        val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("Could not create gallery entry.")
+
+        try {
+            resolver.openOutputStream(uri)?.use { output ->
+                imageFile.inputStream().use { input -> input.copyTo(output) }
+            } ?: throw IllegalStateException("Could not open gallery output stream.")
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val completeValues = ContentValues().apply {
+                    put(MediaStore.Images.Media.IS_PENDING, 0)
+                }
+                resolver.update(uri, completeValues, null, null)
+            }
+            Toast.makeText(
+                context,
+                context.getString(R.string.llama_image_save_to_device_success),
+                Toast.LENGTH_SHORT
+            ).show()
+        } catch (error: Throwable) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw error
+        }
+    }.onFailure { error ->
+        Toast.makeText(
+            context,
+            context.getString(
+                R.string.llama_image_save_to_device_failed,
                 error.message ?: context.getString(R.string.error_generic)
             ),
             Toast.LENGTH_SHORT
@@ -3096,7 +4031,7 @@ private fun LlamaToolActivityDialog(
                         contentPadding = PaddingValues(vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(events, key = { it.id }) { event ->
+                        itemsIndexed(events, key = { index, event -> "${event.id}_$index" }) { _, event ->
                             LlamaToolActivityRow(event)
                         }
                     }
@@ -3165,6 +4100,194 @@ private fun LlamaToolActivityRow(event: LlamaClientService.ToolActivityEvent) {
             }
         }
         HorizontalDivider(modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LlamaNativeBackgroundRemovalToolSettings(
+    model: String,
+    availableModels: List<String>,
+    onModelChange: (String) -> Unit,
+    backend: OnnxRuntimeBackend,
+    onBackendChange: (OnnxRuntimeBackend) -> Unit,
+    runtimeThreads: Int?,
+    onRuntimeThreadsChange: (Int?) -> Unit,
+    graphOptimizationLevel: OnnxGraphOptimizationLevel,
+    onGraphOptimizationLevelChange: (OnnxGraphOptimizationLevel) -> Unit,
+    alphaThreshold: Float,
+    onAlphaThresholdChange: (Float) -> Unit,
+    featherRadius: Int,
+    onFeatherRadiusChange: (Int) -> Unit,
+    maskSoftness: Float,
+    onMaskSoftnessChange: (Float) -> Unit,
+    maskContrast: Float,
+    onMaskContrastChange: (Float) -> Unit,
+    exportMask: Boolean,
+    onExportMaskChange: (Boolean) -> Unit,
+    resizeBeforeProcessing: Boolean,
+    onResizeBeforeProcessingChange: (Boolean) -> Unit,
+    resizeMaxEdge: Int,
+    onResizeMaxEdgeChange: (Int) -> Unit
+) {
+    var modelExpanded by remember { mutableStateOf(false) }
+    var settingsExpanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { settingsExpanded = !settingsExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.native_chat_bgr_settings_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        stringResource(R.string.native_chat_bgr_collapsed_summary, resizeMaxEdge, alphaThreshold, featherRadius),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = if (settingsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = stringResource(R.string.native_chat_bgr_settings_title),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            AnimatedVisibility(visible = settingsExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        stringResource(R.string.native_chat_bgr_settings_desc),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    ExposedDropdownMenuBox(
+                        expanded = modelExpanded,
+                        onExpandedChange = { modelExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = model,
+                            onValueChange = onModelChange,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            label = { Text(stringResource(R.string.agent_image_generation_model_label)) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelExpanded) },
+                            singleLine = true
+                        )
+                        ExposedDropdownMenu(
+                            expanded = modelExpanded,
+                            onDismissRequest = { modelExpanded = false }
+                        ) {
+                            availableModels.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option) },
+                                    onClick = {
+                                        onModelChange(option)
+                                        modelExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    LlamaImageToolEnumDropdown(
+                        label = stringResource(R.string.onnx_image_gen_backend_label),
+                        selected = backend,
+                        values = OnnxRuntimeBackend.entries,
+                        labelFor = {
+                            when (it) {
+                                OnnxRuntimeBackend.CPU -> stringResource(R.string.onnx_image_gen_backend_cpu)
+                                OnnxRuntimeBackend.NNAPI -> stringResource(R.string.onnx_image_gen_backend_nnapi)
+                            }
+                        },
+                        onSelected = onBackendChange
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LlamaImageToolOptionalNumberField(
+                            value = runtimeThreads,
+                            onValueChange = onRuntimeThreadsChange,
+                            label = stringResource(R.string.onnx_image_gen_runtime_threads_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        LlamaImageToolEnumDropdown(
+                            label = stringResource(R.string.onnx_image_gen_graph_opt_title),
+                            selected = graphOptimizationLevel,
+                            values = OnnxGraphOptimizationLevel.entries,
+                            labelFor = { it.name },
+                            onSelected = onGraphOptimizationLevelChange,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LlamaImageToolFloatField(
+                            value = alphaThreshold,
+                            onValueChange = onAlphaThresholdChange,
+                            label = stringResource(R.string.agent_bgr_alpha_threshold_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        LlamaImageToolNumberField(
+                            value = featherRadius,
+                            onValueChange = onFeatherRadiusChange,
+                            label = stringResource(R.string.agent_bgr_feather_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LlamaImageToolFloatField(
+                            value = maskSoftness,
+                            onValueChange = onMaskSoftnessChange,
+                            label = stringResource(R.string.agent_bgr_mask_softness_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        LlamaImageToolFloatField(
+                            value = maskContrast,
+                            onValueChange = onMaskContrastChange,
+                            label = stringResource(R.string.agent_bgr_mask_contrast_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    LlamaImageToolSwitchRow(
+                        title = stringResource(R.string.agent_bgr_resize_label),
+                        checked = resizeBeforeProcessing,
+                        onCheckedChange = onResizeBeforeProcessingChange
+                    )
+                    if (resizeBeforeProcessing) {
+                        LlamaImageToolNumberField(
+                            value = resizeMaxEdge,
+                            onValueChange = onResizeMaxEdgeChange,
+                            label = stringResource(R.string.agent_bgr_resize_max_edge_label)
+                        )
+                    }
+                    LlamaImageToolSwitchRow(
+                        title = stringResource(R.string.agent_bgr_export_mask_label),
+                        checked = exportMask,
+                        onCheckedChange = onExportMaskChange
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -3463,6 +4586,235 @@ private fun LlamaNativeImageToolSettings(
 }
 
 @Composable
+private fun LlamaNativeSdImageToolSettings(
+    model: String,
+    availableModels: List<String>,
+    onModelChange: (String) -> Unit,
+    componentRoles: List<SdComponentRole>,
+    requiredRoles: Set<SdComponentRole>,
+    componentOptions: (SdComponentRole) -> List<String>,
+    selectedComponent: (SdComponentRole) -> String,
+    onComponentChange: (SdComponentRole, String) -> Unit,
+    width: Int,
+    onWidthChange: (Int) -> Unit,
+    height: Int,
+    onHeightChange: (Int) -> Unit,
+    steps: Int,
+    onStepsChange: (Int) -> Unit,
+    cfg: Float,
+    onCfgChange: (Float) -> Unit,
+    sampler: SamplingMethod,
+    onSamplerChange: (SamplingMethod) -> Unit,
+    seed: String,
+    onSeedChange: (String) -> Unit,
+    negativePrompt: String,
+    onNegativePromptChange: (String) -> Unit,
+    threads: Int,
+    onThreadsChange: (Int) -> Unit,
+    flowShift: String,
+    onFlowShiftChange: (String) -> Unit,
+    showFlowShift: Boolean,
+    diffusionFa: Boolean,
+    onDiffusionFaChange: (Boolean) -> Unit,
+    showDiffusionFa: Boolean,
+    mmap: Boolean,
+    onMmapChange: (Boolean) -> Unit,
+    showMmap: Boolean,
+    vaeConvDirect: Boolean,
+    onVaeConvDirectChange: (Boolean) -> Unit,
+    showVaeConvDirect: Boolean,
+    qwenZeroCondT: Boolean,
+    onQwenZeroCondTChange: (Boolean) -> Unit,
+    showQwenZeroCondT: Boolean,
+    chromaDisableDitMask: Boolean,
+    onChromaDisableDitMaskChange: (Boolean) -> Unit,
+    showChromaDisableDitMask: Boolean
+) {
+    var settingsExpanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { settingsExpanded = !settingsExpanded },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.native_chat_sd_image_generation_settings_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        stringResource(
+                            R.string.native_chat_image_generation_collapsed_summary,
+                            width,
+                            height,
+                            steps,
+                            cfg
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Icon(
+                    imageVector = if (settingsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = stringResource(R.string.native_chat_sd_image_generation_settings_title),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            AnimatedVisibility(visible = settingsExpanded) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    LlamaStringDropdown(
+                        label = stringResource(R.string.agent_sd_image_generation_model_label),
+                        selected = model,
+                        values = availableModels,
+                        onSelected = onModelChange,
+                        enabled = availableModels.isNotEmpty()
+                    )
+
+                    componentRoles.forEach { role ->
+                        LlamaSdComponentDropdown(
+                            label = stringResource(llamaSdComponentLabelRes(role)) +
+                                if (role in requiredRoles) " *" else "",
+                            selected = selectedComponent(role),
+                            values = componentOptions(role),
+                            allowNone = role !in requiredRoles,
+                            onSelected = { onComponentChange(role, it) }
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LlamaImageToolNumberField(
+                            value = width,
+                            onValueChange = onWidthChange,
+                            label = stringResource(R.string.onnx_image_gen_width_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        LlamaImageToolNumberField(
+                            value = height,
+                            onValueChange = onHeightChange,
+                            label = stringResource(R.string.onnx_image_gen_height_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LlamaImageToolNumberField(
+                            value = steps,
+                            onValueChange = onStepsChange,
+                            label = stringResource(R.string.onnx_image_gen_steps_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                        LlamaImageToolFloatField(
+                            value = cfg,
+                            onValueChange = onCfgChange,
+                            label = stringResource(R.string.onnx_image_gen_cfg_label),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+
+                    LlamaImageToolEnumDropdown(
+                        label = stringResource(R.string.imagegen_sampler_label),
+                        selected = sampler,
+                        values = SamplingMethod.entries,
+                        labelFor = { it.cliName },
+                        onSelected = onSamplerChange
+                    )
+
+                    OutlinedTextField(
+                        value = seed,
+                        onValueChange = onSeedChange,
+                        label = { Text(stringResource(R.string.onnx_image_gen_seed_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text(stringResource(R.string.onnx_image_gen_seed_placeholder)) },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = negativePrompt,
+                        onValueChange = onNegativePromptChange,
+                        label = { Text(stringResource(R.string.native_chat_image_generation_negative_prompt_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4
+                    )
+
+                    LlamaImageToolNumberField(
+                        value = threads,
+                        onValueChange = onThreadsChange,
+                        label = stringResource(R.string.imagegen_threads_label)
+                    )
+
+                    if (showFlowShift) {
+                        OutlinedTextField(
+                            value = flowShift,
+                            onValueChange = onFlowShiftChange,
+                            label = { Text(stringResource(R.string.imagegen_flow_shift_label)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                            )
+                        )
+                    }
+                    if (showDiffusionFa) {
+                        LlamaImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_diffusion_fa_label),
+                            checked = diffusionFa,
+                            onCheckedChange = onDiffusionFaChange
+                        )
+                    }
+                    if (showMmap) {
+                        LlamaImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_mmap_label),
+                            checked = mmap,
+                            onCheckedChange = onMmapChange
+                        )
+                    }
+                    if (showVaeConvDirect) {
+                        LlamaImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_vae_conv_direct_label),
+                            checked = vaeConvDirect,
+                            onCheckedChange = onVaeConvDirectChange
+                        )
+                    }
+                    if (showQwenZeroCondT) {
+                        LlamaImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_qwen_zero_cond_t_label),
+                            checked = qwenZeroCondT,
+                            onCheckedChange = onQwenZeroCondTChange
+                        )
+                    }
+                    if (showChromaDisableDitMask) {
+                        LlamaImageToolSwitchRow(
+                            title = stringResource(R.string.imagegen_chroma_disable_dit_mask_label),
+                            checked = chromaDisableDitMask,
+                            onCheckedChange = onChromaDisableDitMaskChange
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun LlamaImageToolNumberField(
     value: Int,
     onValueChange: (Int) -> Unit,
@@ -3554,6 +4906,51 @@ private fun LlamaStringDropdown(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun LlamaSdComponentDropdown(
+    label: String,
+    selected: String,
+    values: List<String>,
+    allowNone: Boolean,
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val options = remember(values, allowNone) {
+        (if (allowNone) listOf("") else emptyList()) + values
+    }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (options.isNotEmpty()) expanded = it }
+    ) {
+        OutlinedTextField(
+            value = selected.ifBlank { stringResource(R.string.image_tool_component_none) },
+            onValueChange = {},
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            singleLine = true
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.ifBlank { stringResource(R.string.image_tool_component_none) }) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun <T : Enum<T>> LlamaImageToolEnumDropdown(
     label: String,
     selected: T,
@@ -3616,6 +5013,46 @@ private fun LlamaImageToolSwitchRow(
         )
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
+}
+
+private fun llamaSdComponentOptions(
+    models: List<ModelEntity>,
+    selectedModel: ModelEntity?,
+    role: SdComponentRole
+): List<String> {
+    val (family, variant) = selectedModel?.resolvedSdFamily() ?: return emptyList()
+    val resolvedFamily = family ?: return emptyList()
+    val modelType = role.toModelType() ?: return emptyList()
+    return models
+        .filter { model ->
+            model.type == modelType && model.matchesSdFamily(resolvedFamily, variant)
+        }
+        .map { it.filename }
+        .distinct()
+}
+
+private fun SdComponentRole.toModelType(): ModelType? = when (this) {
+    SdComponentRole.VAE -> ModelType.SD_VAE
+    SdComponentRole.TAE -> ModelType.SD_TAE
+    SdComponentRole.CLIP_L -> ModelType.SD_CLIP_L
+    SdComponentRole.CLIP_G -> ModelType.SD_CLIP_G
+    SdComponentRole.T5XXL -> ModelType.SD_T5XXL
+    SdComponentRole.LLM -> ModelType.LLM
+    SdComponentRole.LLM_VISION -> ModelType.VISION_PROJECTOR
+    SdComponentRole.PHOTOMAKER -> ModelType.SD_PHOTOMAKER
+    else -> null
+}
+
+private fun llamaSdComponentLabelRes(role: SdComponentRole): Int = when (role) {
+    SdComponentRole.VAE -> R.string.imagegen_component_vae
+    SdComponentRole.TAE -> R.string.imagegen_component_tae
+    SdComponentRole.CLIP_L -> R.string.imagegen_component_clip_l
+    SdComponentRole.CLIP_G -> R.string.imagegen_component_clip_g
+    SdComponentRole.T5XXL -> R.string.imagegen_component_t5xxl
+    SdComponentRole.LLM -> R.string.imagegen_component_llm
+    SdComponentRole.LLM_VISION -> R.string.imagegen_component_llm_vision
+    SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    else -> R.string.imagegen_component_main_model
 }
 
 @Composable
@@ -3717,7 +5154,7 @@ fun LlamaMessageItem(
     val transcriptionFailed = isUser && audioFile != null && message.isError && embeddedTranscript.isNullOrBlank()
 
     fun copyMessageToClipboard() {
-        val clip = android.content.ClipData.newPlainText("Message", message.content)
+        val clip = android.content.ClipData.newPlainText(context.getString(R.string.clipboard_label_message), message.content)
         clipboardManager.setPrimaryClip(clip)
         Toast.makeText(context, context.getString(R.string.termux_copy_toast), Toast.LENGTH_SHORT).show()
     }
@@ -3908,6 +5345,19 @@ fun LlamaMessageItem(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    if (imageFile != null) {
+                        IconButton(
+                            onClick = { saveLlamaChatImageToGallery(context, imageFile) },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = stringResource(R.string.llama_image_save_to_device),
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                     IconButton(onClick = onRegenerate, modifier = Modifier.size(28.dp)) {
                         Icon(
                             Icons.Default.Refresh,
@@ -3951,6 +5401,19 @@ fun LlamaMessageItem(
                             tint = MaterialTheme.colorScheme.outline,
                             modifier = Modifier.size(16.dp)
                         )
+                    }
+                    if (imageFile != null) {
+                        IconButton(
+                            onClick = { saveLlamaChatImageToGallery(context, imageFile) },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = stringResource(R.string.llama_image_save_to_device),
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                     IconButton(
                         onClick = {
@@ -4134,7 +5597,7 @@ fun ThinkingMessageContent(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Square,
-                            contentDescription = "Thinking",
+                            contentDescription = stringResource(R.string.action_thinking),
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.onSecondaryContainer
                         )

@@ -39,6 +39,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -59,6 +60,13 @@ fun LogsScreen(navController: NavController) {
     
     var selectedTab by remember { mutableStateOf(LogTab.APP) }
     var autoOpenedDiagnostics by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            DebugLog.refreshFromDisk()
+            delay(1000)
+        }
+    }
 
     LaunchedEffect(generationDiagnosticsAvailable, appLogs.isEmpty()) {
         if (!autoOpenedDiagnostics && generationDiagnosticsAvailable && appLogs.isEmpty()) {

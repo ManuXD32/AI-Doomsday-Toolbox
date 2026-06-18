@@ -30,6 +30,7 @@ data class KnowledgeBaseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val description: String = "",
+    val contentSummary: String = "",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

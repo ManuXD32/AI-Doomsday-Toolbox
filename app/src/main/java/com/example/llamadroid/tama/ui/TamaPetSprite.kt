@@ -224,6 +224,7 @@ private fun locationSceneAssetPath(sceneKey: String, homeRoomId: String?): Strin
     "bathroom" -> "tama/backgrounds/bathroom.png"
     "school" -> "tama/backgrounds/classroom.png"
     "office", "workplace" -> "tama/backgrounds/workplace.png"
+    "boxing_ring" -> "tama/backgrounds/boxing_ring.png"
     "park" -> "tama/backgrounds/park.png"
     "hospital" -> "tama/backgrounds/hospital.png"
     "farm" -> "tama/backgrounds/farm.png"

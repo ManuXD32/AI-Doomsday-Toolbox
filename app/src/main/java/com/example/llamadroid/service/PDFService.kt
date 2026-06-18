@@ -11,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Base64
 import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
+import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.util.DebugLog
 import com.google.mlkit.vision.common.InputImage
@@ -18,13 +19,20 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.contentstream.operator.Operator
+import com.tom_roush.pdfbox.pdfparser.PDFStreamParser
+import com.tom_roush.pdfbox.pdfwriter.ContentStreamWriter
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.PDResources
+import com.tom_roush.pdfbox.pdmodel.common.PDStream
 import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.tom_roush.pdfbox.pdmodel.font.PDFont
 import com.tom_roush.pdfbox.pdmodel.font.PDType0Font
 import com.tom_roush.pdfbox.pdmodel.font.PDType1Font
+import com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject
+import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -170,7 +178,7 @@ data class MangaTranslationFileResult(
     val cbzUri: Uri? = null,
     val errorMessage: String? = null
 ) {
-    val isSuccess: Boolean get() = pdfUri != null && cbzUri != null && errorMessage == null
+    val isSuccess: Boolean get() = (pdfUri != null || cbzUri != null) && errorMessage == null
 }
 
 /**
@@ -179,6 +187,7 @@ data class MangaTranslationFileResult(
 class PDFService(private val context: Context) {
     
     private val settingsRepo = SettingsRepository(context)
+    private val textDrawingOperatorsToReplace = setOf("Tj", "TJ", "'", "\"")
     
     init {
         // Initialize PDFBox
@@ -481,6 +490,7 @@ class PDFService(private val context: Context) {
     suspend fun exportTranslatedOcrPdf(
         pdfUri: Uri,
         outputFileName: String = "translated_ocr_${System.currentTimeMillis()}.pdf",
+        settingsOverride: RemoteSummarySettingsSnapshot? = null,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
     ): Result<Uri> = withContext(Dispatchers.IO) {
         val notificationId = UnifiedNotificationManager.startTask(
@@ -489,75 +499,24 @@ class PDFService(private val context: Context) {
         )
         try {
             DebugLog.log("[PDF] Exporting OCR-translated PDF")
-            val ocrResult = collectPdfOcrText(pdfUri) { progress ->
-                onProgress?.invoke(
-                    PdfOcrTranslationProgress(
-                        stage = PdfOcrTranslationStage.OCR,
-                        processedPages = progress.processedPages,
-                        totalPages = progress.totalPages,
-                        translatedBlocks = 0,
-                        totalBlocks = 0
-                    )
-                )
-            }.getOrThrow()
-
-            val translatableBlocks = ocrResult.blocks.filter { it.text.isNotBlank() }
-            if (translatableBlocks.isEmpty()) {
-                throw IllegalStateException("No OCR text found")
-            }
-
-            val translations = translateOcrDocumentPages(
-                pdfUri = pdfUri,
-                ocrResult = ocrResult,
-                onProgress = onProgress,
-                notificationId = notificationId
-            )
-
-            val cachedPdf = copyPdfToCache(pdfUri)
+            val tempFile = File(context.cacheDir, outputFileName)
             try {
-                val doc = PDDocument.load(cachedPdf)
-                try {
-                    if (doc.isEncrypted) {
-                        runCatching { doc.setAllSecurityToBeRemoved(true) }
-                    }
-                    val font = loadTranslationFont(doc)
-                    ocrResult.pages.forEach { pageResult ->
-                        currentCoroutineContext().ensureActive()
-                        if (pageResult.pageIndex >= doc.numberOfPages) return@forEach
-                        onProgress?.invoke(
-                            PdfOcrTranslationProgress(
-                                stage = PdfOcrTranslationStage.WRITING,
-                                processedPages = pageResult.pageIndex + 1,
-                                totalPages = ocrResult.totalPages,
-                                translatedBlocks = translations.size,
-                                totalBlocks = translatableBlocks.size
-                            )
-                        )
-                        UnifiedNotificationManager.updateProgress(
-                            notificationId,
-                            0.82f + (pageResult.pageIndex + 1).toFloat() / ocrResult.totalPages.toFloat() * 0.16f,
-                            context.getString(R.string.pdf_translation_notification_writing, pageResult.pageIndex + 1, ocrResult.totalPages)
-                        )
-                        appendTranslatedBlocks(
-                            doc = doc,
-                            page = doc.getPage(pageResult.pageIndex),
-                            pageResult = pageResult,
-                            translations = translations,
-                            font = font
-                        )
-                    }
-                    val outputUri = saveToOutputFolder(doc, outputFileName)
-                    DebugLog.log("[PDF] OCR-translated PDF saved: $outputUri")
-                    UnifiedNotificationManager.completeTask(
-                        notificationId,
-                        context.getString(R.string.pdf_translation_notification_complete)
-                    )
-                    Result.success(outputUri)
-                } finally {
-                    doc.close()
-                }
+                createTranslatedOcrPdfFile(
+                    pdfUri = pdfUri,
+                    outputFile = tempFile,
+                    settingsOverride = settingsOverride,
+                    onProgress = onProgress,
+                    notificationId = notificationId
+                )
+                val outputUri = saveFileToOutputFolder(tempFile, "pdfs", "application/pdf", outputFileName)
+                DebugLog.log("[PDF] OCR-translated PDF saved: $outputUri")
+                UnifiedNotificationManager.completeTask(
+                    notificationId,
+                    context.getString(R.string.pdf_translation_notification_complete)
+                )
+                Result.success(outputUri)
             } finally {
-                cachedPdf.delete()
+                tempFile.delete()
             }
         } catch (e: Exception) {
             DebugLog.log("[PDF] OCR-translated PDF export failed: ${e.message}")
@@ -566,9 +525,85 @@ class PDFService(private val context: Context) {
         }
     }
 
+    private suspend fun createTranslatedOcrPdfFile(
+        pdfUri: Uri,
+        outputFile: File,
+        settingsOverride: RemoteSummarySettingsSnapshot?,
+        onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
+        notificationId: Int
+    ): File {
+        val ocrResult = collectPdfOcrText(pdfUri) { progress ->
+            onProgress?.invoke(
+                PdfOcrTranslationProgress(
+                    stage = PdfOcrTranslationStage.OCR,
+                    processedPages = progress.processedPages,
+                    totalPages = progress.totalPages,
+                    translatedBlocks = 0,
+                    totalBlocks = 0
+                )
+            )
+        }.getOrThrow()
+
+        val translatableBlocks = ocrResult.blocks.filter { it.text.isNotBlank() }
+        if (translatableBlocks.isEmpty()) {
+            throw IllegalStateException("No OCR text found")
+        }
+
+        val translations = translateOcrDocumentPages(
+            pdfUri = pdfUri,
+            ocrResult = ocrResult,
+            settingsOverride = settingsOverride,
+            onProgress = onProgress,
+            notificationId = notificationId
+        )
+
+        val cachedPdf = copyPdfToCache(pdfUri)
+        try {
+            val doc = PDDocument.load(cachedPdf)
+            try {
+                if (doc.isEncrypted) {
+                    runCatching { doc.setAllSecurityToBeRemoved(true) }
+                }
+                val font = loadTranslationFont(doc)
+                ocrResult.pages.forEach { pageResult ->
+                    currentCoroutineContext().ensureActive()
+                    if (pageResult.pageIndex >= doc.numberOfPages) return@forEach
+                    onProgress?.invoke(
+                        PdfOcrTranslationProgress(
+                            stage = PdfOcrTranslationStage.WRITING,
+                            processedPages = pageResult.pageIndex + 1,
+                            totalPages = ocrResult.totalPages,
+                            translatedBlocks = translations.size,
+                            totalBlocks = translatableBlocks.size
+                        )
+                    )
+                    UnifiedNotificationManager.updateProgress(
+                        notificationId,
+                        0.82f + (pageResult.pageIndex + 1).toFloat() / ocrResult.totalPages.toFloat() * 0.16f,
+                        context.getString(R.string.pdf_translation_notification_writing, pageResult.pageIndex + 1, ocrResult.totalPages)
+                    )
+                    appendTranslatedBlocks(
+                        doc = doc,
+                        page = doc.getPage(pageResult.pageIndex),
+                        pageResult = pageResult,
+                        translations = translations,
+                        font = font
+                    )
+                }
+                FileOutputStream(outputFile).use { doc.save(it) }
+                return outputFile
+            } finally {
+                doc.close()
+            }
+        } finally {
+            cachedPdf.delete()
+        }
+    }
+
     suspend fun exportTranslatedTextLayerPdf(
         pdfUri: Uri,
         outputFileName: String = "translated_text_layer_${System.currentTimeMillis()}.pdf",
+        settingsOverride: RemoteSummarySettingsSnapshot? = null,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
     ): Result<Uri> = withContext(Dispatchers.IO) {
         val notificationId = UnifiedNotificationManager.startTask(
@@ -589,6 +624,7 @@ class PDFService(private val context: Context) {
             val translations = translateTextLayerDocumentPages(
                 pdfUri = pdfUri,
                 textLayerResult = textLayerResult,
+                settingsOverride = settingsOverride,
                 onProgress = onProgress,
                 notificationId = notificationId
             )
@@ -616,12 +652,20 @@ class PDFService(private val context: Context) {
                         0.82f + (pageResult.pageIndex + 1).toFloat() / textLayerResult.totalPages.toFloat() * 0.16f,
                         context.getString(R.string.pdf_translation_notification_writing, pageResult.pageIndex + 1, textLayerResult.totalPages)
                     )
+                    val page = doc.getPage(pageResult.pageIndex)
+                    var shouldOverlayOriginal = pageContainsImageContent(page)
+                    if (!shouldOverlayOriginal) {
+                        shouldOverlayOriginal = !runCatching { stripVisibleTextDrawingOperators(doc, page) }
+                            .onFailure { DebugLog.log("[PDF] Falling back to overlay text replacement: ${it.message}") }
+                            .isSuccess
+                    }
                     appendTranslatedTextLayerBlocks(
                         doc = doc,
-                        page = doc.getPage(pageResult.pageIndex),
+                        page = page,
                         pageResult = pageResult,
                         translations = translations,
-                        font = font
+                        font = font,
+                        coverOriginalText = shouldOverlayOriginal
                     )
                 }
                 val outputUri = saveToOutputFolder(doc, outputFileName)
@@ -646,6 +690,7 @@ class PDFService(private val context: Context) {
     private suspend fun translateOcrDocumentPages(
         pdfUri: Uri,
         ocrResult: PdfOcrDocumentResult,
+        settingsOverride: RemoteSummarySettingsSnapshot?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int
     ): LinkedHashMap<Pair<Int, Int>, String> {
@@ -671,6 +716,7 @@ class PDFService(private val context: Context) {
             pdfUri = pdfUri,
             totalPages = ocrResult.totalPages,
             pageBlocks = pageBlocks,
+            settingsOverride = settingsOverride,
             onProgress = onProgress,
             notificationId = notificationId
         )
@@ -679,6 +725,7 @@ class PDFService(private val context: Context) {
     private suspend fun translateTextLayerDocumentPages(
         pdfUri: Uri,
         textLayerResult: PdfTextLayerDocumentResult,
+        settingsOverride: RemoteSummarySettingsSnapshot?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int
     ): LinkedHashMap<Pair<Int, Int>, String> {
@@ -697,6 +744,7 @@ class PDFService(private val context: Context) {
             pdfUri = pdfUri,
             totalPages = textLayerResult.totalPages,
             pageBlocks = pageBlocks,
+            settingsOverride = settingsOverride,
             onProgress = onProgress,
             notificationId = notificationId
         )
@@ -706,12 +754,13 @@ class PDFService(private val context: Context) {
         pdfUri: Uri,
         totalPages: Int,
         pageBlocks: Map<Int, List<PdfPageBlockForTranslation>>,
+        settingsOverride: RemoteSummarySettingsSnapshot?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int
     ): LinkedHashMap<Pair<Int, Int>, String> {
-        val snapshot = settingsRepo.pdfTranslationSettings.snapshot()
+        val snapshot = settingsOverride ?: settingsRepo.pdfTranslationSettings.snapshot()
         val options = settingsRepo.pdfTranslationOptionsSnapshot()
-        val client = RemoteSummaryClientFactory.fromSnapshot(snapshot)
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
         val targetLanguage = snapshot.targetLanguage
         val totalBlocks = pageBlocks.values.sumOf { it.size }
         var translatedBlocks = 0
@@ -828,7 +877,7 @@ class PDFService(private val context: Context) {
                         contextSize = snapshot.chunkContext,
                         maxTokens = snapshot.chunkMaxTokens,
                         temperature = snapshot.temperature,
-                        thinkingEnabled = false
+                        thinkingEnabled = snapshot.thinkingEnabled
                     )
                 )
                 runCatching { PDFTranslationLogic.parseOptionalTranslationFixesJson(response.output) }
@@ -840,7 +889,7 @@ class PDFService(private val context: Context) {
                                 contextSize = snapshot.chunkContext,
                                 maxTokens = snapshot.chunkMaxTokens,
                                 temperature = snapshot.temperature,
-                                thinkingEnabled = false
+                                thinkingEnabled = snapshot.thinkingEnabled
                             )
                         )
                         PDFTranslationLogic.parseOptionalTranslationFixesJson(repairResponse.output)
@@ -936,7 +985,7 @@ class PDFService(private val context: Context) {
                         snapshot.chunkMaxTokens
                     ),
                     temperature = snapshot.temperature,
-                    thinkingEnabled = false,
+                    thinkingEnabled = snapshot.thinkingEnabled,
                     imageAttachments = if (withImage && imageAttachment != null) listOf(imageAttachment) else emptyList()
                 )
             )
@@ -954,7 +1003,7 @@ class PDFService(private val context: Context) {
                         contextSize = snapshot.chunkContext,
                         maxTokens = snapshot.chunkMaxTokens,
                         temperature = snapshot.temperature,
-                        thinkingEnabled = false
+                        thinkingEnabled = snapshot.thinkingEnabled
                     )
                 )
                 PDFTranslationLogic.parsePageTranslationJson(repairResponse.output, promptBlocks.map { it.id }.toSet())
@@ -1663,12 +1712,61 @@ class PDFService(private val context: Context) {
         }
     }
 
+    private fun pageContainsImageContent(page: PDPage): Boolean {
+        return resourcesContainImageContent(page.resources, mutableSetOf())
+    }
+
+    private fun resourcesContainImageContent(resources: PDResources?, visitedResources: MutableSet<Int>): Boolean {
+        if (resources == null) return false
+        val resourceId = System.identityHashCode(resources.cosObject)
+        if (!visitedResources.add(resourceId)) return false
+        return try {
+            resources.xObjectNames.any { name ->
+                val xObject = runCatching { resources.getXObject(name) }.getOrNull()
+                when (xObject) {
+                    is PDImageXObject -> true
+                    is PDFormXObject -> resourcesContainImageContent(xObject.resources, visitedResources)
+                    else -> false
+                }
+            }
+        } catch (error: Exception) {
+            DebugLog.log("[PDF] Could not inspect page image resources: ${error.message}")
+            true
+        }
+    }
+
+    private fun stripVisibleTextDrawingOperators(doc: PDDocument, page: PDPage) {
+        val parser = PDFStreamParser(page)
+        parser.parse()
+        val filteredTokens = mutableListOf<Any>()
+        val pendingOperands = mutableListOf<Any>()
+        parser.tokens.forEach { token ->
+            if (token is Operator) {
+                if (token.name !in textDrawingOperatorsToReplace) {
+                    filteredTokens.addAll(pendingOperands)
+                    filteredTokens.add(token)
+                }
+                pendingOperands.clear()
+            } else {
+                pendingOperands.add(token)
+            }
+        }
+        filteredTokens.addAll(pendingOperands)
+
+        val replacementStream = PDStream(doc)
+        replacementStream.createOutputStream().use { output ->
+            ContentStreamWriter(output).writeTokens(filteredTokens)
+        }
+        page.setContents(replacementStream)
+    }
+
     private fun appendTranslatedTextLayerBlocks(
         doc: PDDocument,
         page: PDPage,
         pageResult: PdfTextLayerPageResult,
         translations: Map<Pair<Int, Int>, String>,
-        font: PDFont
+        font: PDFont,
+        coverOriginalText: Boolean = true
     ) {
         PDPageContentStream(
             doc,
@@ -1681,13 +1779,15 @@ class PDFService(private val context: Context) {
                 val translated = translations[block.pageIndex to block.blockIndex]?.trim().orEmpty()
                 if (translated.isBlank()) return@forEach
                 val rect = block.rect.padded(2f, pageResult.pdfWidth, pageResult.pdfHeight)
-                stream.setNonStrokingColor(
-                    Color.red(block.backgroundColor),
-                    Color.green(block.backgroundColor),
-                    Color.blue(block.backgroundColor)
-                )
-                stream.addRect(rect.x, rect.y, rect.width, rect.height)
-                stream.fill()
+                if (coverOriginalText) {
+                    stream.setNonStrokingColor(
+                        Color.red(block.backgroundColor),
+                        Color.green(block.backgroundColor),
+                        Color.blue(block.backgroundColor)
+                    )
+                    stream.addRect(rect.x, rect.y, rect.width, rect.height)
+                    stream.fill()
+                }
                 drawTextInRect(
                     stream = stream,
                     text = translated,
@@ -1968,8 +2068,14 @@ class PDFService(private val context: Context) {
 
     suspend fun translateMangaCbzBatch(
         cbzUris: List<Uri>,
+        exportPdf: Boolean = true,
+        exportCbz: Boolean = true,
+        settingsOverride: RemoteSummarySettingsSnapshot? = null,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
     ): Result<List<MangaTranslationFileResult>> = withContext(Dispatchers.IO) {
+        if (!exportPdf && !exportCbz) {
+            return@withContext Result.failure(IllegalArgumentException(context.getString(R.string.workflow_manga_select_output_first)))
+        }
         val notificationId = UnifiedNotificationManager.startTask(
             UnifiedNotificationManager.TaskType.PDF_TRANSLATION,
             context.getString(R.string.workflow_manga_notification_title)
@@ -1988,6 +2094,10 @@ class PDFService(private val context: Context) {
                     translateSingleCbz(
                         cbzUri = cbzUri,
                         sourceName = sourceName,
+                        exportPdf = exportPdf,
+                        exportCbz = exportCbz,
+                        settingsOverride = settingsOverride,
+                        notificationId = notificationId,
                         onProgress = onProgress
                     )
                 }.getOrElse { error ->
@@ -2019,6 +2129,10 @@ class PDFService(private val context: Context) {
     private suspend fun translateSingleCbz(
         cbzUri: Uri,
         sourceName: String,
+        exportPdf: Boolean,
+        exportCbz: Boolean,
+        settingsOverride: RemoteSummarySettingsSnapshot?,
+        notificationId: Int,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?
     ): MangaTranslationFileResult {
         val timestamp = System.currentTimeMillis()
@@ -2035,21 +2149,35 @@ class PDFService(private val context: Context) {
 
             val pdfName = "translated_${baseName}_$timestamp.pdf"
             val cbzName = "translated_${baseName}_$timestamp.cbz"
-            val translatedPdfUri = exportTranslatedOcrPdf(
+            val translatedPdfFile = File(workDir, pdfName)
+            createTranslatedOcrPdfFile(
                 pdfUri = Uri.fromFile(intermediatePdf),
-                outputFileName = pdfName,
-                onProgress = onProgress
-            ).getOrThrow()
+                outputFile = translatedPdfFile,
+                settingsOverride = settingsOverride,
+                onProgress = onProgress,
+                notificationId = notificationId
+            )
 
-            onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.RENDERING, 0, imageFiles.size, 0, 0))
-            val renderedPages = renderPdfPagesToPng(translatedPdfUri, workDir, baseName)
-            if (renderedPages.isEmpty()) throw IllegalStateException("No translated pages rendered")
+            val savedPdfUri = if (exportPdf) {
+                saveFileToOutputFolder(translatedPdfFile, "pdfs", "application/pdf", pdfName)
+            } else {
+                null
+            }
 
-            onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.PACKING, renderedPages.size, renderedPages.size, 0, 0))
-            val cbzFile = File(workDir, cbzName)
-            packPngPagesAsCbz(renderedPages, cbzFile)
-            val savedCbzUri = saveFileToOutputFolder(cbzFile, "comics", "application/vnd.comicbook+zip", cbzName)
-            return MangaTranslationFileResult(sourceName = sourceName, pdfUri = translatedPdfUri, cbzUri = savedCbzUri)
+            val savedCbzUri = if (exportCbz) {
+                onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.RENDERING, 0, imageFiles.size, 0, 0))
+                val renderedPages = renderPdfPagesToPng(Uri.fromFile(translatedPdfFile), workDir, baseName)
+                if (renderedPages.isEmpty()) throw IllegalStateException(context.getString(R.string.workflow_manga_error_no_rendered_pages))
+
+                onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.PACKING, renderedPages.size, renderedPages.size, 0, 0))
+                val cbzFile = File(workDir, cbzName)
+                packPngPagesAsCbz(renderedPages, cbzFile)
+                saveFileToOutputFolder(cbzFile, "comics", "application/vnd.comicbook+zip", cbzName)
+            } else {
+                null
+            }
+
+            return MangaTranslationFileResult(sourceName = sourceName, pdfUri = savedPdfUri, cbzUri = savedCbzUri)
         } finally {
             runCatching { workDir.deleteRecursively() }
         }

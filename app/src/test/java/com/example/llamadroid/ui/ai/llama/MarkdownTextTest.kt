@@ -88,6 +88,42 @@ class MarkdownTextTest {
     }
 
     @Test
+    fun markdownBlockParser_keepsClosedCodeBlocks() {
+        val markdown = """
+            ```kotlin
+            val answer = 42
+            ```
+        """.trimIndent()
+
+        assertEquals(listOf("code"), markdownBlockKindsForText(markdown))
+        assertEquals("kotlin" to "val answer = 42", markdownCodeBlockForText(markdown))
+    }
+
+    @Test
+    fun markdownBlockParser_treatsTrailingOpenFenceAsCodeBlock() {
+        val markdown = """
+            ```python
+            print("hola")
+        """.trimIndent()
+
+        assertEquals(listOf("code"), markdownBlockKindsForText(markdown))
+        assertEquals("python" to "print(\"hola\")", markdownCodeBlockForText(markdown))
+    }
+
+    @Test
+    fun markdownBlockParser_keepsTextBeforeTrailingOpenFence() {
+        val markdown = """
+            Intro
+
+            ```sql
+            select * from chats
+        """.trimIndent()
+
+        assertEquals(listOf("text", "code"), markdownBlockKindsForText(markdown))
+        assertEquals("sql" to "select * from chats", markdownCodeBlockForText(markdown))
+    }
+
+    @Test
     fun markdownHeadingParser_acceptsCommonAtxHeaders() {
         assertEquals(2, markdownHeadingLevelForLine("## Results"))
         assertEquals(3, markdownHeadingLevelForLine("###Results"))

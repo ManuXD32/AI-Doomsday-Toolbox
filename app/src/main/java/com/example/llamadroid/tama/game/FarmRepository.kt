@@ -127,6 +127,51 @@ class FarmRepository(
         }
     }
 
+    suspend fun saveDroneUpdateBatch(
+        petId: String,
+        tiles: List<FarmTile>,
+        plantingState: PlantingDroneState? = null,
+        harvesterState: HarvesterDroneState? = null,
+        rescheduleNotifications: Boolean = true
+    ) {
+        val tileEntities = tiles.map { tileToEntity(petId, it) }
+        val upgradeEntities = buildList {
+            if (plantingState != null) {
+                val existing = farmDao.getUpgrade(petId, FARM_PLANTING_DRONE_ID) ?: FarmUpgradeEntity(
+                    type = FARM_PLANTING_DRONE_ID,
+                    petId = petId,
+                    isPurchased = true
+                )
+                add(
+                    existing.copy(
+                        isPurchased = true,
+                        storedOutput = plantingState.fuel,
+                        extraDataJson = Json.encodeToString(plantingState)
+                    )
+                )
+            }
+            if (harvesterState != null) {
+                val existing = farmDao.getUpgrade(petId, FARM_HARVESTING_DRONE_ID) ?: FarmUpgradeEntity(
+                    type = FARM_HARVESTING_DRONE_ID,
+                    petId = petId,
+                    isPurchased = true
+                )
+                add(
+                    existing.copy(
+                        isPurchased = true,
+                        storedOutput = harvesterState.fuel,
+                        extraDataJson = Json.encodeToString(harvesterState)
+                    )
+                )
+            }
+        }
+        if (tileEntities.isEmpty() && upgradeEntities.isEmpty()) return
+        farmDao.saveTilesAndUpgrades(tileEntities, upgradeEntities)
+        if (rescheduleNotifications) {
+            TamaNotificationScheduler.scheduleForPet(context.applicationContext, petId)
+        }
+    }
+
     suspend fun saveLivestock(entity: FarmLivestockEntity, rescheduleNotifications: Boolean = true) {
         farmDao.saveLivestock(entity)
         if (rescheduleNotifications) {

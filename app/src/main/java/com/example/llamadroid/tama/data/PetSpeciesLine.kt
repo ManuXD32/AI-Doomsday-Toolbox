@@ -93,7 +93,7 @@ fun mapPetActionToSpriteState(action: String?, isSleeping: Boolean): PetSpriteSt
         "walking" -> PetSpriteState.WALK
         "sleeping" -> PetSpriteState.SLEEP
         "eating" -> PetSpriteState.EAT
-        "idle", "cleaning", "playing", "working", "studying", "sunbathing", "relaxing" -> PetSpriteState.IDLE
+        "idle", "cleaning", "playing", "working", "studying", "training", "sunbathing", "relaxing" -> PetSpriteState.IDLE
         else -> PetSpriteState.IDLE
     }
 }

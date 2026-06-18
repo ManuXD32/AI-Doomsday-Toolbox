@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
@@ -32,6 +33,18 @@ import com.example.llamadroid.R
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
+import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
+import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
+import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.resolveSdFamilySpec
+import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 
@@ -417,6 +430,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
 /**
  * SSH and Ollama connection settings dialog
  */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ConnectionSettingsDialog(
     host: String,
@@ -434,6 +448,20 @@ fun ConnectionSettingsDialog(
     onDismiss: () -> Unit
 ) {
     var editedOllamaUrl by remember { mutableStateOf(ollamaUrl) }
+    val context = LocalContext.current
+    val settingsRepo = remember { SettingsRepository(context) }
+    val agentBackend by settingsRepo.agentBackend.collectAsState()
+    val isAgentOllama = agentBackend == SettingsRepository.PDF_BACKEND_OLLAMA
+    val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(agentBackend)
+    val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(agentBackend)
+    val isAgentLiteRt = SettingsRepository.isLiteRtBackend(agentBackend)
+    val liteRtModels by remember(context) {
+        AppDatabase.getDatabase(context.applicationContext).liteRtModelDao().observeAll()
+    }.collectAsState(initial = emptyList())
+    val agentLiteRtModelId by settingsRepo.agentLiteRtModelId.collectAsState()
+    val agentLiteRtBackend by settingsRepo.agentLiteRtBackend.collectAsState()
+    val agentLiteRtMtpEnabled by settingsRepo.agentLiteRtMtpEnabled.collectAsState()
+    var showLiteRtModelMenu by remember { mutableStateOf(false) }
     
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -495,62 +523,6 @@ fun ConnectionSettingsDialog(
                 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
                 
-                Text(stringResource(R.string.ollama_server_title), fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                
-                OutlinedTextField(
-                    value = editedOllamaUrl,
-                    onValueChange = { editedOllamaUrl = it },
-                    label = { Text(stringResource(R.string.ollama_url_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    placeholder = { Text("http://localhost:11434", fontSize = 12.sp) },
-                    textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                // Mmap toggle
-                val context = LocalContext.current
-                val settingsRepo = remember { SettingsRepository(context) }
-                val useMmap by settingsRepo.ollamaMmap.collectAsState()
-                val numThreads by settingsRepo.ollamaThreads.collectAsState()
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.ollama_mmap_label), fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                        Text(stringResource(R.string.ollama_mmap_desc), fontSize = 10.sp, color = Color.Gray)
-                    }
-                    Switch(
-                        checked = useMmap,
-                        onCheckedChange = { 
-                            settingsRepo.setOllamaMmap(it)
-                            ollamaService.setUseMmap(it)
-                        }
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                // Thread count
-                Text(stringResource(R.string.ollama_threads_label, numThreads), fontWeight = FontWeight.Medium, fontSize = 13.sp)
-                Slider(
-                    value = numThreads.toFloat(),
-                    onValueChange = { 
-                        val newVal = it.toInt()
-                        settingsRepo.setOllamaThreads(newVal)
-                        ollamaService.setNumThreads(newVal)
-                    },
-                    valueRange = 1f..16f,
-                    steps = 14,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
                 // Auto Mode Toggle
                 val autoMode by settingsRepo.autoMode.collectAsState()
                 Row(
@@ -570,10 +542,7 @@ fun ConnectionSettingsDialog(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Backend Selector (Ollama / llama-server / llama-swap)
-                val agentBackend by settingsRepo.agentBackend.collectAsState()
-                val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(agentBackend)
-                val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(agentBackend)
+                // Backend Selector (Ollama / llama-server / llama-swap / LiteRT)
                 val llamaServerUrl by settingsRepo.llamaServerUrl.collectAsState()
                 val llamaSwapUrl by settingsRepo.agentLlamaSwapUrl.collectAsState()
                 var showBackendDropdown by remember { mutableStateOf(false) }
@@ -588,6 +557,7 @@ fun ConnectionSettingsDialog(
                             when {
                                 isAgentLlamaServer -> stringResource(R.string.pdf_backend_llama_server)
                                 isAgentLlamaSwap -> stringResource(R.string.pdf_backend_llama_swap)
+                                isAgentLiteRt -> stringResource(R.string.pdf_backend_litert)
                                 else -> stringResource(R.string.pdf_backend_ollama)
                             }
                         )
@@ -605,7 +575,64 @@ fun ConnectionSettingsDialog(
                             settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LLAMA_SWAP)
                             showBackendDropdown = false
                         })
+                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_litert)) }, onClick = {
+                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LITERT)
+                            showBackendDropdown = false
+                        })
                     }
+                }
+
+                if (isAgentOllama) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(stringResource(R.string.ollama_server_title), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+
+                    OutlinedTextField(
+                        value = editedOllamaUrl,
+                        onValueChange = { editedOllamaUrl = it },
+                        label = { Text(stringResource(R.string.ollama_url_label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("http://localhost:11434", fontSize = 12.sp) },
+                        textStyle = LocalTextStyle.current.copy(fontSize = 14.sp)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val useMmap by settingsRepo.ollamaMmap.collectAsState()
+                    val numThreads by settingsRepo.ollamaThreads.collectAsState()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.ollama_mmap_label), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                            Text(stringResource(R.string.ollama_mmap_desc), fontSize = 10.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = useMmap,
+                            onCheckedChange = {
+                                settingsRepo.setOllamaMmap(it)
+                                ollamaService.setUseMmap(it)
+                            }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(stringResource(R.string.ollama_threads_label, numThreads), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    Slider(
+                        value = numThreads.toFloat(),
+                        onValueChange = {
+                            val newVal = it.toInt()
+                            settingsRepo.setOllamaThreads(newVal)
+                            ollamaService.setNumThreads(newVal)
+                        },
+                        valueRange = 1f..16f,
+                        steps = 14,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
                 
                 if (isAgentLlamaServer || isAgentLlamaSwap) {
@@ -649,6 +676,78 @@ fun ConnectionSettingsDialog(
                         fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                     )
                 }
+
+                if (isAgentLiteRt) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(stringResource(R.string.pdf_backend_litert), fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == agentLiteRtModelId }
+                        ?: liteRtModels.firstOrNull()
+                    ExposedDropdownMenuBox(
+                        expanded = showLiteRtModelMenu,
+                        onExpandedChange = { showLiteRtModelMenu = it }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedLiteRtModel?.displayName.orEmpty(),
+                            onValueChange = {},
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
+                            readOnly = true,
+                            enabled = liteRtModels.isNotEmpty(),
+                            label = { Text(stringResource(R.string.litert_model_label)) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(showLiteRtModelMenu) },
+                            singleLine = true
+                        )
+                        ExposedDropdownMenu(
+                            expanded = showLiteRtModelMenu,
+                            onDismissRequest = { showLiteRtModelMenu = false }
+                        ) {
+                            liteRtModels.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model.displayName) },
+                                    onClick = {
+                                        settingsRepo.setAgentLiteRtModelId(model.id)
+                                        showLiteRtModelMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(stringResource(R.string.litert_gallery_accelerator), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        listOf(
+                            LITERT_BACKEND_AUTO to R.string.general_acceleration_mode_auto,
+                            LITERT_BACKEND_CPU to R.string.general_acceleration_mode_cpu,
+                            LITERT_BACKEND_GPU to R.string.litert_backend_gpu
+                        ).forEach { (mode, labelRes) ->
+                            FilterChip(
+                                selected = normalizeLiteRtBackend(agentLiteRtBackend) == mode,
+                                onClick = { settingsRepo.setAgentLiteRtBackend(mode) },
+                                modifier = Modifier.defaultMinSize(minWidth = 104.dp),
+                                label = { Text(stringResource(labelRes), maxLines = 1) }
+                            )
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.litert_gallery_mtp_title), fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                            Text(stringResource(R.string.litert_gallery_mtp_desc), fontSize = 10.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = agentLiteRtMtpEnabled,
+                            onCheckedChange = settingsRepo::setAgentLiteRtMtpEnabled
+                        )
+                    }
+                }
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
@@ -684,7 +783,9 @@ fun ConnectionSettingsDialog(
                     }
                     Button(
                         onClick = {
-                            onOllamaUrlChange(editedOllamaUrl)
+                            if (isAgentOllama) {
+                                onOllamaUrlChange(editedOllamaUrl)
+                            }
                             onConnect()
                         },
                         modifier = Modifier.weight(1f)
@@ -704,6 +805,9 @@ fun AgentSettingsDialog(
     settingsRepository: SettingsRepository,
     availableModels: List<String>,
     availableImageGenerationModels: List<String>,
+    availableSdImageMainModels: List<ModelEntity>,
+    availableSdImageSupportModels: List<ModelEntity>,
+    availableBackgroundRemovalModels: List<String>,
     onDismiss: () -> Unit
 ) {
     val agentBackend by settingsRepository.agentBackend.collectAsState()
@@ -729,10 +833,46 @@ fun AgentSettingsDialog(
     val executorVisionEnabled by settingsRepository.agentExecutorVisionEnabled.collectAsState()
     val summarizerVisionEnabled by settingsRepository.agentSummarizerVisionEnabled.collectAsState()
     val imageGenerationToolEnabled by settingsRepository.agentImageGenerationToolEnabled.collectAsState()
+    val imageGenerationEngine by settingsRepository.agentImageGenerationEngine.collectAsState()
     val imageGenerationModel by settingsRepository.agentImageGenerationModel.collectAsState()
     val imageGenerationSteps by settingsRepository.agentImageGenerationSteps.collectAsState()
     val imageGenerationCfg by settingsRepository.agentImageGenerationCfg.collectAsState()
     val imageGenerationResolution by settingsRepository.agentImageGenerationResolution.collectAsState()
+    val sdImageGenerationModel by settingsRepository.agentSdImageGenerationModel.collectAsState()
+    val sdImageGenerationVae by settingsRepository.agentSdImageGenerationVae.collectAsState()
+    val sdImageGenerationTae by settingsRepository.agentSdImageGenerationTae.collectAsState()
+    val sdImageGenerationClipL by settingsRepository.agentSdImageGenerationClipL.collectAsState()
+    val sdImageGenerationClipG by settingsRepository.agentSdImageGenerationClipG.collectAsState()
+    val sdImageGenerationT5xxl by settingsRepository.agentSdImageGenerationT5xxl.collectAsState()
+    val sdImageGenerationLlm by settingsRepository.agentSdImageGenerationLlm.collectAsState()
+    val sdImageGenerationLlmVision by settingsRepository.agentSdImageGenerationLlmVision.collectAsState()
+    val sdImageGenerationPhotoMaker by settingsRepository.agentSdImageGenerationPhotoMaker.collectAsState()
+    val sdImageGenerationWidth by settingsRepository.agentSdImageGenerationWidth.collectAsState()
+    val sdImageGenerationHeight by settingsRepository.agentSdImageGenerationHeight.collectAsState()
+    val sdImageGenerationSteps by settingsRepository.agentSdImageGenerationSteps.collectAsState()
+    val sdImageGenerationCfg by settingsRepository.agentSdImageGenerationCfg.collectAsState()
+    val sdImageGenerationSampler by settingsRepository.agentSdImageGenerationSampler.collectAsState()
+    val sdImageGenerationSeed by settingsRepository.agentSdImageGenerationSeed.collectAsState()
+    val sdImageGenerationNegativePrompt by settingsRepository.agentSdImageGenerationNegativePrompt.collectAsState()
+    val sdImageGenerationThreads by settingsRepository.agentSdImageGenerationThreads.collectAsState()
+    val sdImageGenerationFlowShift by settingsRepository.agentSdImageGenerationFlowShift.collectAsState()
+    val sdImageGenerationDiffusionFa by settingsRepository.agentSdImageGenerationDiffusionFa.collectAsState()
+    val sdImageGenerationMmap by settingsRepository.agentSdImageGenerationMmap.collectAsState()
+    val sdImageGenerationVaeConvDirect by settingsRepository.agentSdImageGenerationVaeConvDirect.collectAsState()
+    val sdImageGenerationQwenZeroCondT by settingsRepository.agentSdImageGenerationQwenZeroCondT.collectAsState()
+    val sdImageGenerationChromaDisableDitMask by settingsRepository.agentSdImageGenerationChromaDisableDitMask.collectAsState()
+    val backgroundRemovalToolEnabled by settingsRepository.agentBackgroundRemovalToolEnabled.collectAsState()
+    val backgroundRemovalModel by settingsRepository.agentBackgroundRemovalModel.collectAsState()
+    val backgroundRemovalBackend by settingsRepository.agentBackgroundRemovalBackend.collectAsState()
+    val backgroundRemovalRuntimeThreads by settingsRepository.agentBackgroundRemovalRuntimeThreads.collectAsState()
+    val backgroundRemovalGraphOptimization by settingsRepository.agentBackgroundRemovalGraphOptimization.collectAsState()
+    val backgroundRemovalResizeBeforeProcessing by settingsRepository.agentBackgroundRemovalResizeBeforeProcessing.collectAsState()
+    val backgroundRemovalResizeMaxEdge by settingsRepository.agentBackgroundRemovalResizeMaxEdge.collectAsState()
+    val backgroundRemovalAlphaThreshold by settingsRepository.agentBackgroundRemovalAlphaThreshold.collectAsState()
+    val backgroundRemovalFeatherRadius by settingsRepository.agentBackgroundRemovalFeatherRadius.collectAsState()
+    val backgroundRemovalMaskSoftness by settingsRepository.agentBackgroundRemovalMaskSoftness.collectAsState()
+    val backgroundRemovalMaskContrast by settingsRepository.agentBackgroundRemovalMaskContrast.collectAsState()
+    val backgroundRemovalExportMask by settingsRepository.agentBackgroundRemovalExportMask.collectAsState()
     
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -923,91 +1063,473 @@ fun AgentSettingsDialog(
                         }
 
                         AnimatedVisibility(visible = imageGenerationToolEnabled) {
-                            Column {
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                        var imageModelExpanded by remember { mutableStateOf(false) }
-                        ExposedDropdownMenuBox(
-                            expanded = imageModelExpanded,
-                            onExpandedChange = { imageModelExpanded = it }
-                        ) {
-                            OutlinedTextField(
-                                value = imageGenerationModel.orEmpty(),
-                                onValueChange = { settingsRepository.setAgentImageGenerationModel(it) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                label = { Text(stringResource(R.string.agent_image_generation_model_label)) },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = imageModelExpanded) },
-                                singleLine = true
-                            )
-                            ExposedDropdownMenu(
-                                expanded = imageModelExpanded,
-                                onDismissRequest = { imageModelExpanded = false }
-                            ) {
-                                availableImageGenerationModels.forEach { model ->
-                                    DropdownMenuItem(
-                                        text = { Text(model) },
-                                        onClick = {
-                                            settingsRepository.setAgentImageGenerationModel(model)
-                                            imageModelExpanded = false
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                AgentStringDropdown(
+                                    label = stringResource(R.string.image_tool_engine_label),
+                                    selected = imageGenerationEngine,
+                                    values = listOf("ONNX", "SD"),
+                                    labelFor = { engine ->
+                                        when (engine.uppercase()) {
+                                            "SD" -> stringResource(R.string.image_tool_engine_sd)
+                                            else -> stringResource(R.string.image_tool_engine_onnx)
                                         }
+                                    },
+                                    onSelected = settingsRepository::setAgentImageGenerationEngine
+                                )
+
+                                if (imageGenerationEngine.equals("SD", ignoreCase = true)) {
+                                    val selectedSdModel = availableSdImageMainModels.firstOrNull {
+                                        it.filename == sdImageGenerationModel || it.path == sdImageGenerationModel
+                                    } ?: availableSdImageMainModels.firstOrNull()
+                                    val selectedSdSpec = selectedSdModel?.resolvedSdFamily()
+                                        ?.let { (family, variant) -> family?.let { resolveSdFamilySpec(it, variant) } }
+                                    val allowedRoles = setOf(
+                                        SdComponentRole.VAE,
+                                        SdComponentRole.TAE,
+                                        SdComponentRole.CLIP_L,
+                                        SdComponentRole.CLIP_G,
+                                        SdComponentRole.T5XXL,
+                                        SdComponentRole.LLM,
+                                        SdComponentRole.LLM_VISION,
+                                        SdComponentRole.PHOTOMAKER
+                                    )
+                                    val componentRoles = ((selectedSdSpec?.requiredRoles.orEmpty() + selectedSdSpec?.optionalRoles.orEmpty()) intersect allowedRoles)
+                                        .toList()
+
+                                    AgentStringDropdown(
+                                        label = stringResource(R.string.agent_sd_image_generation_model_label),
+                                        selected = sdImageGenerationModel.orEmpty(),
+                                        values = availableSdImageMainModels.map { it.filename }.distinct(),
+                                        onSelected = settingsRepository::setAgentSdImageGenerationModel
+                                    )
+
+                                    componentRoles.forEach { role ->
+                                        AgentSdComponentDropdown(
+                                            label = stringResource(agentSdComponentLabelRes(role)) +
+                                                if (role in selectedSdSpec?.requiredRoles.orEmpty()) " *" else "",
+                                            selected = when (role) {
+                                                SdComponentRole.VAE -> sdImageGenerationVae.orEmpty()
+                                                SdComponentRole.TAE -> sdImageGenerationTae.orEmpty()
+                                                SdComponentRole.CLIP_L -> sdImageGenerationClipL.orEmpty()
+                                                SdComponentRole.CLIP_G -> sdImageGenerationClipG.orEmpty()
+                                                SdComponentRole.T5XXL -> sdImageGenerationT5xxl.orEmpty()
+                                                SdComponentRole.LLM -> sdImageGenerationLlm.orEmpty()
+                                                SdComponentRole.LLM_VISION -> sdImageGenerationLlmVision.orEmpty()
+                                                SdComponentRole.PHOTOMAKER -> sdImageGenerationPhotoMaker.orEmpty()
+                                                else -> ""
+                                            },
+                                            values = agentSdComponentOptions(availableSdImageSupportModels, selectedSdModel, role),
+                                            allowNone = role !in selectedSdSpec?.requiredRoles.orEmpty(),
+                                            onSelected = { value ->
+                                                when (role) {
+                                                    SdComponentRole.VAE -> settingsRepository.setAgentSdImageGenerationVae(value)
+                                                    SdComponentRole.TAE -> settingsRepository.setAgentSdImageGenerationTae(value)
+                                                    SdComponentRole.CLIP_L -> settingsRepository.setAgentSdImageGenerationClipL(value)
+                                                    SdComponentRole.CLIP_G -> settingsRepository.setAgentSdImageGenerationClipG(value)
+                                                    SdComponentRole.T5XXL -> settingsRepository.setAgentSdImageGenerationT5xxl(value)
+                                                    SdComponentRole.LLM -> settingsRepository.setAgentSdImageGenerationLlm(value)
+                                                    SdComponentRole.LLM_VISION -> settingsRepository.setAgentSdImageGenerationLlmVision(value)
+                                                    SdComponentRole.PHOTOMAKER -> settingsRepository.setAgentSdImageGenerationPhotoMaker(value)
+                                                    else -> Unit
+                                                }
+                                            }
+                                        )
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        DraftIntTextField(
+                                            value = sdImageGenerationWidth,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationWidth,
+                                            label = { Text(stringResource(R.string.onnx_image_gen_width_label)) },
+                                            modifier = Modifier.weight(1f),
+                                            blankValue = sdImageGenerationWidth
+                                        )
+                                        DraftIntTextField(
+                                            value = sdImageGenerationHeight,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationHeight,
+                                            label = { Text(stringResource(R.string.onnx_image_gen_height_label)) },
+                                            modifier = Modifier.weight(1f),
+                                            blankValue = sdImageGenerationHeight
+                                        )
+                                    }
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        DraftIntTextField(
+                                            value = sdImageGenerationSteps,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationSteps,
+                                            label = { Text(stringResource(R.string.agent_image_generation_steps_label)) },
+                                            modifier = Modifier.weight(1f),
+                                            blankValue = sdImageGenerationSteps
+                                        )
+                                        DraftFloatTextField(
+                                            value = sdImageGenerationCfg,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationCfg,
+                                            label = { Text(stringResource(R.string.agent_image_generation_cfg_label)) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+
+                                    AgentStringDropdown(
+                                        label = stringResource(R.string.imagegen_sampler_label),
+                                        selected = sdImageGenerationSampler,
+                                        values = SamplingMethod.entries.map { it.name },
+                                        labelFor = { name ->
+                                            SamplingMethod.entries.firstOrNull { it.name == name }?.cliName ?: name
+                                        },
+                                        onSelected = settingsRepository::setAgentSdImageGenerationSampler
+                                    )
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        DraftIntTextField(
+                                            value = sdImageGenerationThreads,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationThreads,
+                                            label = { Text(stringResource(R.string.imagegen_threads_label)) },
+                                            modifier = Modifier.weight(1f),
+                                            blankValue = sdImageGenerationThreads
+                                        )
+                                        OutlinedTextField(
+                                            value = sdImageGenerationSeed,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationSeed,
+                                            label = { Text(stringResource(R.string.onnx_image_gen_seed_label)) },
+                                            modifier = Modifier.weight(1f),
+                                            singleLine = true
+                                        )
+                                    }
+
+                                    OutlinedTextField(
+                                        value = sdImageGenerationNegativePrompt,
+                                        onValueChange = settingsRepository::setAgentSdImageGenerationNegativePrompt,
+                                        label = { Text(stringResource(R.string.native_chat_image_generation_negative_prompt_label)) },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        minLines = 2,
+                                        maxLines = 4
+                                    )
+
+                                    if (selectedSdSpec?.supportsFlowShift == true) {
+                                        OutlinedTextField(
+                                            value = sdImageGenerationFlowShift,
+                                            onValueChange = settingsRepository::setAgentSdImageGenerationFlowShift,
+                                            label = { Text(stringResource(R.string.imagegen_flow_shift_label)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
+                                    if (selectedSdSpec?.supportsDiffusionFa == true) {
+                                        AgentSwitchRow(
+                                            title = stringResource(R.string.video_gen_diffusion_fa_label),
+                                            checked = sdImageGenerationDiffusionFa,
+                                            onCheckedChange = settingsRepository::setAgentSdImageGenerationDiffusionFa
+                                        )
+                                    }
+                                    if (selectedSdSpec?.supportsMmap == true) {
+                                        AgentSwitchRow(
+                                            title = stringResource(R.string.imagegen_mmap_label),
+                                            checked = sdImageGenerationMmap,
+                                            onCheckedChange = settingsRepository::setAgentSdImageGenerationMmap
+                                        )
+                                    }
+                                    if (selectedSdSpec?.supportsVaeConvDirect == true) {
+                                        AgentSwitchRow(
+                                            title = stringResource(R.string.imagegen_vae_conv_direct_label),
+                                            checked = sdImageGenerationVaeConvDirect,
+                                            onCheckedChange = settingsRepository::setAgentSdImageGenerationVaeConvDirect
+                                        )
+                                    }
+                                    if (selectedSdSpec?.supportsQwenImageZeroCondT == true) {
+                                        AgentSwitchRow(
+                                            title = stringResource(R.string.imagegen_qwen_zero_cond_t_label),
+                                            checked = sdImageGenerationQwenZeroCondT,
+                                            onCheckedChange = settingsRepository::setAgentSdImageGenerationQwenZeroCondT
+                                        )
+                                    }
+                                    if (selectedSdSpec?.supportsChromaDisableDitMask == true) {
+                                        AgentSwitchRow(
+                                            title = stringResource(R.string.imagegen_chroma_disable_dit_mask_label),
+                                            checked = sdImageGenerationChromaDisableDitMask,
+                                            onCheckedChange = settingsRepository::setAgentSdImageGenerationChromaDisableDitMask
+                                        )
+                                    }
+                                } else {
+                                    AgentStringDropdown(
+                                        label = stringResource(R.string.agent_image_generation_model_label),
+                                        selected = imageGenerationModel.orEmpty(),
+                                        values = availableImageGenerationModels,
+                                        onSelected = settingsRepository::setAgentImageGenerationModel
+                                    )
+
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        DraftIntTextField(
+                                            value = imageGenerationSteps,
+                                            onValueChange = settingsRepository::setAgentImageGenerationSteps,
+                                            label = { Text(stringResource(R.string.agent_image_generation_steps_label)) },
+                                            modifier = Modifier.weight(1f),
+                                            blankValue = imageGenerationSteps
+                                        )
+                                        DraftFloatTextField(
+                                            value = imageGenerationCfg,
+                                            onValueChange = settingsRepository::setAgentImageGenerationCfg,
+                                            label = { Text(stringResource(R.string.agent_image_generation_cfg_label)) },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+
+                                    AgentStringDropdown(
+                                        label = stringResource(R.string.agent_image_generation_resolution_label),
+                                        selected = imageGenerationResolution,
+                                        values = listOf("128x128", "256x256", "384x384", "512x512", "640x640", "768x768", "896x896", "1024x1024"),
+                                        onSelected = settingsRepository::setAgentImageGenerationResolution
                                     )
                                 }
                             }
                         }
+                    }
+                }
 
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Text(
+                            text = stringResource(R.string.agent_bgr_settings_title),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.agent_bgr_settings_desc),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            DraftIntTextField(
-                                value = imageGenerationSteps,
-                                onValueChange = settingsRepository::setAgentImageGenerationSteps,
-                                label = { Text(stringResource(R.string.agent_image_generation_steps_label)) },
-                                modifier = Modifier.weight(1f),
-                                blankValue = imageGenerationSteps
-                            )
-                            DraftFloatTextField(
-                                value = imageGenerationCfg,
-                                onValueChange = settingsRepository::setAgentImageGenerationCfg,
-                                label = { Text(stringResource(R.string.agent_image_generation_cfg_label)) },
-                                modifier = Modifier.weight(1f)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    settingsRepository.setAgentBackgroundRemovalToolEnabled(!backgroundRemovalToolEnabled)
+                                }
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = stringResource(R.string.agent_bgr_tool_enabled),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    text = stringResource(R.string.agent_bgr_tool_enabled_desc),
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = backgroundRemovalToolEnabled,
+                                onCheckedChange = settingsRepository::setAgentBackgroundRemovalToolEnabled,
+                                modifier = Modifier.scale(0.8f)
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        var resolutionExpanded by remember { mutableStateOf(false) }
-                        ExposedDropdownMenuBox(
-                            expanded = resolutionExpanded,
-                            onExpandedChange = { resolutionExpanded = it }
-                        ) {
-                            OutlinedTextField(
-                                value = imageGenerationResolution,
-                                onValueChange = {},
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                readOnly = true,
-                                label = { Text(stringResource(R.string.agent_image_generation_resolution_label)) },
-                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = resolutionExpanded) },
-                                singleLine = true
-                            )
-                            ExposedDropdownMenu(
-                                expanded = resolutionExpanded,
-                                onDismissRequest = { resolutionExpanded = false }
-                            ) {
-                                listOf("128x128", "256x256", "384x384", "512x512", "640x640", "768x768", "896x896", "1024x1024").forEach { resolution ->
-                                    DropdownMenuItem(
-                                        text = { Text(resolution) },
-                                        onClick = {
-                                            settingsRepository.setAgentImageGenerationResolution(resolution)
-                                            resolutionExpanded = false
+                        AnimatedVisibility(visible = backgroundRemovalToolEnabled) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                var bgrModelExpanded by remember { mutableStateOf(false) }
+                                ExposedDropdownMenuBox(
+                                    expanded = bgrModelExpanded,
+                                    onExpandedChange = { bgrModelExpanded = it }
+                                ) {
+                                    OutlinedTextField(
+                                        value = backgroundRemovalModel.orEmpty(),
+                                        onValueChange = { settingsRepository.setAgentBackgroundRemovalModel(it) },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .menuAnchor(),
+                                        label = { Text(stringResource(R.string.agent_image_generation_model_label)) },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bgrModelExpanded) },
+                                        singleLine = true
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = bgrModelExpanded,
+                                        onDismissRequest = { bgrModelExpanded = false }
+                                    ) {
+                                        availableBackgroundRemovalModels.forEach { model ->
+                                            DropdownMenuItem(
+                                                text = { Text(model) },
+                                                onClick = {
+                                                    settingsRepository.setAgentBackgroundRemovalModel(model)
+                                                    bgrModelExpanded = false
+                                                }
+                                            )
                                         }
+                                    }
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    var bgrBackendExpanded by remember { mutableStateOf(false) }
+                                    ExposedDropdownMenuBox(
+                                        expanded = bgrBackendExpanded,
+                                        onExpandedChange = { bgrBackendExpanded = it },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        OutlinedTextField(
+                                            value = backgroundRemovalBackend,
+                                            onValueChange = {},
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .menuAnchor(),
+                                            readOnly = true,
+                                            label = { Text(stringResource(R.string.onnx_image_gen_backend_label)) },
+                                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bgrBackendExpanded) },
+                                            singleLine = true
+                                        )
+                                        ExposedDropdownMenu(
+                                            expanded = bgrBackendExpanded,
+                                            onDismissRequest = { bgrBackendExpanded = false }
+                                        ) {
+                                            listOf("CPU", "NNAPI").forEach { backend ->
+                                                DropdownMenuItem(
+                                                    text = { Text(backend) },
+                                                    onClick = {
+                                                        settingsRepository.setAgentBackgroundRemovalBackend(backend)
+                                                        bgrBackendExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                    DraftIntTextField(
+                                        value = backgroundRemovalRuntimeThreads,
+                                        onValueChange = settingsRepository::setAgentBackgroundRemovalRuntimeThreads,
+                                        label = { Text(stringResource(R.string.agent_bgr_runtime_threads_label)) },
+                                        modifier = Modifier.weight(1f),
+                                        blankValue = 0
                                     )
                                 }
-                            }
-                        }
+
+                                var bgrGraphExpanded by remember { mutableStateOf(false) }
+                                ExposedDropdownMenuBox(
+                                    expanded = bgrGraphExpanded,
+                                    onExpandedChange = { bgrGraphExpanded = it }
+                                ) {
+                                    OutlinedTextField(
+                                        value = backgroundRemovalGraphOptimization,
+                                        onValueChange = {},
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .menuAnchor(),
+                                        readOnly = true,
+                                        label = { Text(stringResource(R.string.onnx_image_gen_graph_opt_title)) },
+                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bgrGraphExpanded) },
+                                        singleLine = true
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = bgrGraphExpanded,
+                                        onDismissRequest = { bgrGraphExpanded = false }
+                                    ) {
+                                        listOf("DISABLED", "BASIC", "EXTENDED", "ALL").forEach { level ->
+                                            DropdownMenuItem(
+                                                text = { Text(level) },
+                                                onClick = {
+                                                    settingsRepository.setAgentBackgroundRemovalGraphOptimization(level)
+                                                    bgrGraphExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DraftFloatTextField(
+                                        value = backgroundRemovalAlphaThreshold,
+                                        onValueChange = settingsRepository::setAgentBackgroundRemovalAlphaThreshold,
+                                        label = { Text(stringResource(R.string.agent_bgr_alpha_threshold_label)) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    DraftIntTextField(
+                                        value = backgroundRemovalFeatherRadius,
+                                        onValueChange = settingsRepository::setAgentBackgroundRemovalFeatherRadius,
+                                        label = { Text(stringResource(R.string.agent_bgr_feather_label)) },
+                                        modifier = Modifier.weight(1f),
+                                        blankValue = 1
+                                    )
+                                }
+
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    DraftFloatTextField(
+                                        value = backgroundRemovalMaskSoftness,
+                                        onValueChange = settingsRepository::setAgentBackgroundRemovalMaskSoftness,
+                                        label = { Text(stringResource(R.string.agent_bgr_mask_softness_label)) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    DraftFloatTextField(
+                                        value = backgroundRemovalMaskContrast,
+                                        onValueChange = settingsRepository::setAgentBackgroundRemovalMaskContrast,
+                                        label = { Text(stringResource(R.string.agent_bgr_mask_contrast_label)) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(stringResource(R.string.agent_bgr_resize_label), style = MaterialTheme.typography.bodyMedium)
+                                        Text(stringResource(R.string.agent_bgr_resize_desc), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Switch(
+                                        checked = backgroundRemovalResizeBeforeProcessing,
+                                        onCheckedChange = settingsRepository::setAgentBackgroundRemovalResizeBeforeProcessing,
+                                        modifier = Modifier.scale(0.8f)
+                                    )
+                                }
+
+                                if (backgroundRemovalResizeBeforeProcessing) {
+                                    var bgrResizeExpanded by remember { mutableStateOf(false) }
+                                    ExposedDropdownMenuBox(
+                                        expanded = bgrResizeExpanded,
+                                        onExpandedChange = { bgrResizeExpanded = it }
+                                    ) {
+                                        OutlinedTextField(
+                                            value = backgroundRemovalResizeMaxEdge.toString(),
+                                            onValueChange = {},
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .menuAnchor(),
+                                            readOnly = true,
+                                            label = { Text(stringResource(R.string.agent_bgr_resize_max_edge_label)) },
+                                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = bgrResizeExpanded) },
+                                            singleLine = true
+                                        )
+                                        ExposedDropdownMenu(
+                                            expanded = bgrResizeExpanded,
+                                            onDismissRequest = { bgrResizeExpanded = false }
+                                        ) {
+                                            listOf(512, 768, 1024, 1536, 2048).forEach { edge ->
+                                                DropdownMenuItem(
+                                                    text = { Text(edge.toString()) },
+                                                    onClick = {
+                                                        settingsRepository.setAgentBackgroundRemovalResizeMaxEdge(edge)
+                                                        bgrResizeExpanded = false
+                                                    }
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        stringResource(R.string.agent_bgr_export_mask_label),
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Switch(
+                                        checked = backgroundRemovalExportMask,
+                                        onCheckedChange = settingsRepository::setAgentBackgroundRemovalExportMask,
+                                        modifier = Modifier.scale(0.8f)
+                                    )
+                                }
                             }
                         }
                     }
@@ -1151,7 +1673,7 @@ fun AgentSettingsDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(stringResource(R.string.agent_kiwix_enabled), fontWeight = FontWeight.Bold)
-                                Text("Offline encyclopedia search", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(stringResource(R.string.agent_kiwix_desc), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(
                                 checked = kiwixEnabled,
@@ -1269,6 +1791,171 @@ fun AgentSettingsDialog(
     )
 }
 
+@Composable
+private fun AgentStringDropdown(
+    label: String,
+    selected: String,
+    values: List<String>,
+    labelFor: @Composable (String) -> String = { it },
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = values.isNotEmpty()
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (selected.isBlank()) {
+                        stringResource(R.string.image_tool_component_none)
+                    } else {
+                        labelFor(selected)
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(imageVector = Icons.Default.ExpandMore, contentDescription = label)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            values.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(labelFor(option), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentSdComponentDropdown(
+    label: String,
+    selected: String,
+    values: List<String>,
+    allowNone: Boolean,
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = selected.ifBlank { stringResource(R.string.image_tool_component_none) },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(imageVector = Icons.Default.ExpandMore, contentDescription = label)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (allowNone) {
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.image_tool_component_none)) },
+                    onClick = {
+                        onSelected("")
+                        expanded = false
+                    }
+                )
+            }
+            values.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    onClick = {
+                        onSelected(option)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentSwitchRow(
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            title,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.scale(0.8f)
+        )
+    }
+}
+
+private fun agentSdComponentOptions(
+    models: List<ModelEntity>,
+    selectedModel: ModelEntity?,
+    role: SdComponentRole
+): List<String> {
+    val (family, variant) = selectedModel?.resolvedSdFamily() ?: return emptyList()
+    val modelType = role.toAgentModelType() ?: return emptyList()
+    val resolvedFamily = family ?: return emptyList()
+    return models
+        .filter { model -> model.type == modelType && model.matchesSdFamily(resolvedFamily, variant) }
+        .map { it.filename }
+        .distinct()
+}
+
+private fun SdComponentRole.toAgentModelType(): ModelType? = when (this) {
+    SdComponentRole.VAE -> ModelType.SD_VAE
+    SdComponentRole.TAE -> ModelType.SD_TAE
+    SdComponentRole.CLIP_L -> ModelType.SD_CLIP_L
+    SdComponentRole.CLIP_G -> ModelType.SD_CLIP_G
+    SdComponentRole.T5XXL -> ModelType.SD_T5XXL
+    SdComponentRole.LLM -> ModelType.LLM
+    SdComponentRole.LLM_VISION -> ModelType.VISION_PROJECTOR
+    SdComponentRole.PHOTOMAKER -> ModelType.SD_PHOTOMAKER
+    else -> null
+}
+
+private fun agentSdComponentLabelRes(role: SdComponentRole): Int = when (role) {
+    SdComponentRole.VAE -> R.string.imagegen_component_vae
+    SdComponentRole.TAE -> R.string.imagegen_component_tae
+    SdComponentRole.CLIP_L -> R.string.imagegen_component_clip_l
+    SdComponentRole.CLIP_G -> R.string.imagegen_component_clip_g
+    SdComponentRole.T5XXL -> R.string.imagegen_component_t5xxl
+    SdComponentRole.LLM -> R.string.imagegen_component_llm
+    SdComponentRole.LLM_VISION -> R.string.imagegen_component_llm_vision
+    SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    else -> R.string.imagegen_component_main_model
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentConfigCard(
@@ -1365,7 +2052,18 @@ fun AgentConfigCard(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    if (SettingsRepository.isLlamaServerBackend(backend)) {
+                    if (SettingsRepository.isLiteRtBackend(backend)) {
+                        Text(
+                            text = stringResource(R.string.pdf_backend_litert),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.agent_litert_role_model_note),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else if (SettingsRepository.isLlamaServerBackend(backend)) {
                         Text(
                             text = stringResource(R.string.pdf_llama_server_model_label),
                             style = MaterialTheme.typography.labelLarge

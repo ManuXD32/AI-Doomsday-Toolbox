@@ -74,6 +74,9 @@ fun PDFSettingsScreen(navController: NavController) {
     val serverModelLabel by settingsRepo.pdfSummaryLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.pdfSummaryLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.pdfSummaryLlamaServerContextTokens.collectAsState()
+    val liteRtModelId by settingsRepo.pdfSummaryLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepo.pdfSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.pdfSummaryLiteRtMtpEnabled.collectAsState()
 
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
         if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
@@ -113,8 +116,16 @@ fun PDFSettingsScreen(navController: NavController) {
                     llamaServerContextLabel = serverContextLabel,
                     llamaServerContextTokens = serverContextTokens,
                     requestedContextForWarning = pdfMergeContextSize,
+                    liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = settingsRepo::setPdfSummaryLiteRtModelId,
+                    liteRtBackend = liteRtBackend,
+                    onLiteRtBackendChange = settingsRepo::setPdfSummaryLiteRtBackend,
+                    liteRtMtpEnabled = liteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = settingsRepo::setPdfSummaryLiteRtMtpEnabled,
+                    liteRtThinkingEnabled = thinkingEnabled,
+                    onLiteRtThinkingEnabledChange = settingsRepo::setPdfSummaryThinkingEnabled,
                     fetchMetadata = {
-                        RemoteSummaryClientFactory.fromSnapshot(settingsRepo.pdfSummarySettings.snapshot())
+                        RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.pdfSummarySettings.snapshot())
                             .fetchMetadata()
                     },
                     onMetadataLoaded = ::persistMetadata

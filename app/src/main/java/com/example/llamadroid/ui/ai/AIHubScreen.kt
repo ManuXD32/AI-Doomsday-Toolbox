@@ -37,6 +37,16 @@ data class AIToolItem(
 fun AIHubScreen(navController: NavController) {
     val aiTools = listOf(
         AIToolItem(
+            emoji = "🌐",
+            title = stringResource(R.string.ai_servers_hub_title),
+            description = stringResource(R.string.ai_servers_hub_card_desc),
+            gradientColors = listOf(
+                Color(0xFF00A896).copy(alpha = 0.15f),
+                Color(0xFF3A86FF).copy(alpha = 0.28f)
+            ),
+            route = Screen.AiServersHub.route
+        ),
+        AIToolItem(
             emoji = "💬",
             title = stringResource(R.string.ai_chat),
             description = stringResource(R.string.ai_chat_desc),
@@ -75,6 +85,16 @@ fun AIHubScreen(navController: NavController) {
                 Color(0xFF5E35B1).copy(alpha = 0.3f)
             ),
             route = Screen.OnnxTts.route
+        ),
+        AIToolItem(
+            emoji = "🌐",
+            title = stringResource(R.string.live_translator_title),
+            description = stringResource(R.string.live_translator_hub_desc),
+            gradientColors = listOf(
+                Color(0xFF00897B).copy(alpha = 0.15f),
+                Color(0xFF3949AB).copy(alpha = 0.3f)
+            ),
+            route = Screen.LiveTranslator.route
         ),
         AIToolItem(
             emoji = "✂️",

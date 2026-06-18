@@ -25,7 +25,11 @@ import com.example.llamadroid.tama.data.LocationType
 import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.TamaDecorCatalog
 import com.example.llamadroid.tama.data.TamaPet
+import com.example.llamadroid.tama.data.TAMA_RELAX_INTROSPECTION_PER_HOUR
+import com.example.llamadroid.tama.data.TAMA_TRAINING_EXERCISE_PER_HOUR
+import com.example.llamadroid.tama.data.TAMA_TRAINING_HAPPINESS_PER_HOUR
 import com.example.llamadroid.tama.data.TamaRoomCatalog
+import com.example.llamadroid.tama.data.TamaTrainingCatalog
 import com.example.llamadroid.tama.data.TamaWorkCatalog
 import com.example.llamadroid.tama.data.localizedName
 import com.example.llamadroid.tama.data.mapPetActionToSpriteState
@@ -252,6 +256,11 @@ class TamaPetWidgetProvider : AppWidgetProvider() {
                     ?.let { context.getString(it.titleRes) }
                     ?: LocationType.WORKPLACE.localizedName(context)
             }
+            if (pet.currentActivity == ActivityType.TRAINING) {
+                return TamaTrainingCatalog.tierById(pet.currentWorkJobId)
+                    ?.let { context.getString(it.titleRes) }
+                    ?: LocationType.BOXING_RING.localizedName(context)
+            }
             val locationType = resolveLocationType(pet.currentLocationId)
             return if (locationType == LocationType.HOME) {
                 TamaRoomCatalog.roomById(pet.homeRoomId)
@@ -267,6 +276,7 @@ class TamaPetWidgetProvider : AppWidgetProvider() {
             return when (pet.currentActivity) {
                 ActivityType.WORKING -> context.getString(R.string.widget_tama_status_working, placeLabel)
                 ActivityType.STUDYING -> context.getString(R.string.widget_tama_status_studying)
+                ActivityType.TRAINING -> context.getString(R.string.widget_tama_status_training, placeLabel)
                 ActivityType.RELAXING -> context.getString(R.string.widget_tama_status_relaxing)
                 ActivityType.NONE -> {
                     if (resolveLocationType(pet.currentLocationId) == LocationType.HOME) {
@@ -289,6 +299,7 @@ class TamaPetWidgetProvider : AppWidgetProvider() {
             when (pet.currentActivity) {
                 ActivityType.WORKING -> context.getString(R.string.tama_action_work)
                 ActivityType.STUDYING -> context.getString(R.string.tama_action_study)
+                ActivityType.TRAINING -> context.getString(R.string.tama_action_train)
                 ActivityType.RELAXING -> context.getString(R.string.tama_action_relax)
                 ActivityType.NONE -> context.getString(R.string.widget_tama_timer_label)
             }
@@ -306,9 +317,19 @@ class TamaPetWidgetProvider : AppWidgetProvider() {
                     R.string.tama_activity_gain_education,
                     (hoursPassed * 5).toInt()
                 )
+                ActivityType.TRAINING -> {
+                    val hourlyPay = TamaTrainingCatalog.tierById(pet.currentWorkJobId)?.hourlyPay ?: 8
+                    context.getString(
+                        R.string.tama_activity_gain_training,
+                        (hoursPassed * TAMA_TRAINING_EXERCISE_PER_HOUR).toInt(),
+                        (hoursPassed * TAMA_TRAINING_HAPPINESS_PER_HOUR).toInt(),
+                        (hoursPassed * hourlyPay).toInt()
+                    )
+                }
                 ActivityType.RELAXING -> context.getString(
                     R.string.tama_activity_gain_happiness,
-                    (hoursPassed * 40).toInt()
+                    (hoursPassed * 40).toInt(),
+                    (hoursPassed * TAMA_RELAX_INTROSPECTION_PER_HOUR).toInt()
                 )
                 ActivityType.NONE -> null
             }
@@ -329,6 +350,7 @@ private object TamaPetWidgetSceneRenderer {
     private const val STUDY_ACTION_ICON_ASSET = "tama/actions/study.png"
     private const val WORK_ACTION_ICON_ASSET = "tama/actions/work.png"
     private const val RELAX_ACTION_ICON_ASSET = "tama/icons/ui/park_tree_relax.png"
+    private const val TRAINING_ACTION_ICON_ASSET = "tama/icons/ui/exercise_glove.png"
     private const val POOP_PROP_ASSET = "tama/decor/poop.png"
 
     fun renderEmpty(context: Context): Bitmap =
@@ -357,6 +379,8 @@ private object TamaPetWidgetSceneRenderer {
             ActivityType.WORKING -> TamaWorkCatalog.jobById(pet.currentWorkJobId)?.backgroundAssetPath
                 ?: "tama/backgrounds/workplace.png"
             ActivityType.STUDYING -> "tama/backgrounds/classroom.png"
+            ActivityType.TRAINING -> TamaTrainingCatalog.tierById(pet.currentWorkJobId)?.backgroundAssetPath
+                ?: "tama/backgrounds/boxing_ring.png"
             ActivityType.RELAXING -> "tama/backgrounds/park.png"
             ActivityType.NONE -> when (resolveLocationType(pet.currentLocationId)) {
                 LocationType.HOME -> TamaRoomCatalog.homeRoomAssetPath(pet.homeRoomId)
@@ -369,6 +393,7 @@ private object TamaPetWidgetSceneRenderer {
                 LocationType.ALCHEMIST -> "tama/backgrounds/alchemist.png"
                 LocationType.FARM -> "tama/backgrounds/farm.png"
                 LocationType.DUNGEON -> "tama/backgrounds/dungeon.png"
+                LocationType.BOXING_RING -> "tama/backgrounds/boxing_ring.png"
                 LocationType.ADVENTURE_GATE -> "tama/backgrounds/adventure_gate.png"
             }
         }
@@ -379,6 +404,7 @@ private object TamaPetWidgetSceneRenderer {
             pet.isSleeping -> "sleeping"
             pet.currentActivity == ActivityType.WORKING -> "working"
             pet.currentActivity == ActivityType.STUDYING -> "studying"
+            pet.currentActivity == ActivityType.TRAINING -> "training"
             pet.currentActivity == ActivityType.RELAXING -> "relaxing"
             else -> "idle"
         }
@@ -455,6 +481,9 @@ private object TamaPetWidgetSceneRenderer {
             pet.currentActivity == ActivityType.RELAXING -> {
                 drawAsset(context, canvas, RELAX_ACTION_ICON_ASSET, RectF(320f, 140f, 418f, 238f))
             }
+            pet.currentActivity == ActivityType.TRAINING -> {
+                drawAsset(context, canvas, TRAINING_ACTION_ICON_ASSET, RectF(320f, 140f, 418f, 238f))
+            }
         }
     }
 
@@ -503,6 +532,7 @@ private fun resolveLocationType(locationId: String?): LocationType {
         raw == "fixed_1_1" || raw.contains("school") -> LocationType.SCHOOL
         raw == "fixed_2_1" || raw.contains("work") || raw.contains("office") -> LocationType.WORKPLACE
         raw == "fixed_3_1" || raw.contains("farm") -> LocationType.FARM
+        raw == "fixed_4_1" || raw.contains("boxing") || raw.contains("ring") -> LocationType.BOXING_RING
         raw == "fixed_0_2" || raw == "fixed_4_2" || raw.contains("dungeon") -> LocationType.DUNGEON
         raw == "fixed_2_2" || raw.contains("adventure") -> LocationType.ADVENTURE_GATE
         else -> LocationType.HOME

@@ -45,6 +45,10 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
+import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
+import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
+import com.example.llamadroid.data.model.normalizeLiteRtBackend
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.WhisperLanguages
 import com.example.llamadroid.tama.game.TamaAgentService
@@ -142,6 +146,7 @@ fun TamaChatScreen(
     val backendLabel = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
         SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.tama_backend_llama_server)
         SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.tama_backend_llama_swap)
+        SettingsRepository.PDF_BACKEND_LITERT -> stringResource(R.string.tama_backend_litert)
         else -> stringResource(R.string.tama_backend_ollama)
     }
 
@@ -561,7 +566,7 @@ fun TamaChatScreen(
                 }
                 showSummaryDialog = false
             },
-            onSummarize = {
+            onRecreateMemory = {
                 agentService.requestSummaryRefresh(pet!!)
             },
             onDismiss = { showSummaryDialog = false }
@@ -575,32 +580,61 @@ fun SummaryEditDialog(
     currentSummary: String,
     isLoading: Boolean,
     onSave: (String) -> Unit,
-    onSummarize: () -> Unit,
+    onRecreateMemory: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var text by remember(currentSummary) { mutableStateOf(currentSummary) }
+    var showRecreateConfirmation by remember { mutableStateOf(false) }
+    val hasUnsavedChanges = text != currentSummary
+
+    if (showRecreateConfirmation) {
+        TamaPopupDialog(
+            title = stringResource(R.string.tama_chat_recreate_memory_confirm_title),
+            backgroundAsset = "tama/backgrounds/library_room.png",
+            compact = true,
+            onDismissRequest = { showRecreateConfirmation = false },
+            bodyContent = {
+                Text(
+                    stringResource(R.string.tama_chat_recreate_memory_confirm_body),
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = TamaDark
+                )
+            },
+            footerContent = {
+                TextButton(
+                    onClick = { showRecreateConfirmation = false },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.action_cancel), color = TamaLight, fontFamily = FontFamily.Monospace)
+                }
+                Button(
+                    onClick = {
+                        showRecreateConfirmation = false
+                        onRecreateMemory()
+                    },
+                    enabled = !isLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = TamaLight),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.tama_chat_recreate_memory_confirm_action),
+                        color = TamaDark,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        )
+    }
+
     TamaPopupDialog(
         title = stringResource(R.string.tama_chat_memory_title),
         backgroundAsset = "tama/backgrounds/library_room.png",
         onDismissRequest = onDismiss,
+        showFooter = false,
         bodyContent = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onSummarize,
-                        enabled = !isLoading
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = TamaDark)
-                        } else {
-                            Icon(Icons.Default.Sync, contentDescription = stringResource(R.string.tama_chat_regenerate_summary), tint = TamaDark)
-                        }
-                    }
-                }
                 Text(
                     stringResource(R.string.tama_chat_memory_hint),
                     fontSize = 10.sp,
@@ -612,25 +646,64 @@ fun SummaryEditDialog(
                     onValueChange = { text = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 180.dp),
+                        .heightIn(min = 160.dp, max = 260.dp),
                     textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TamaDark),
                     colors = tamaOutlinedFieldColors()
                 )
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { onSave(text) },
+                        colors = ButtonDefaults.buttonColors(containerColor = TamaDark),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(stringResource(R.string.tama_chat_save_memory), color = TamaLight, fontFamily = FontFamily.Monospace)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (hasUnsavedChanges) {
+                                showRecreateConfirmation = true
+                            } else {
+                                onRecreateMemory()
+                            }
+                        },
+                        enabled = !isLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isLoading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = TamaDark
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        } else {
+                            Icon(
+                                Icons.Default.Sync,
+                                contentDescription = stringResource(R.string.tama_chat_recreate_memory),
+                                tint = TamaDark
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(
+                            stringResource(R.string.tama_chat_recreate_memory),
+                            color = TamaDark,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(stringResource(R.string.action_cancel), color = TamaDark, fontFamily = FontFamily.Monospace)
+                    }
+                }
             }
         },
-        footerContent = {
-            TextButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.action_cancel), color = TamaDark, fontFamily = FontFamily.Monospace)
-            }
-            Button(
-                onClick = { onSave(text) },
-                colors = ButtonDefaults.buttonColors(containerColor = TamaDark),
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text(stringResource(R.string.tama_chat_save_memory), color = TamaLight, fontFamily = FontFamily.Monospace)
-            }
-        }
+        footerContent = {}
     )
 }
 
@@ -1163,6 +1236,9 @@ fun TamaChatSettingsDialog(
     val llamaServerModelLabel by settingsRepo.tamaLlamaServerModelLabel.collectAsState()
     val llamaServerContextTokens by settingsRepo.tamaLlamaServerContextTokens.collectAsState()
     val llamaServerContextLabel by settingsRepo.tamaLlamaServerContextLabel.collectAsState()
+    val tamaLiteRtModelId by settingsRepo.tamaLiteRtModelId.collectAsState()
+    val tamaLiteRtBackend by settingsRepo.tamaLiteRtBackend.collectAsState()
+    val tamaLiteRtMtpEnabled by settingsRepo.tamaLiteRtMtpEnabled.collectAsState()
     val availableModels by OllamaService.availableModels.collectAsState()
     val modelNames = remember(availableModels) { availableModels.map { it.name } }
     val whisperModelsFlow = remember(appContext) {
@@ -1173,6 +1249,9 @@ fun TamaChatSettingsDialog(
         }
     }
     val whisperModels by whisperModelsFlow.collectAsState(initial = emptyList())
+    val liteRtModels by remember(appContext) {
+        AppDatabase.getDatabase(appContext).liteRtModelDao().observeAll()
+    }.collectAsState(initial = emptyList())
     val thinkingStatusLabel = stringResource(
         if (thinkingEnabled) R.string.action_enabled else R.string.action_disabled
     )
@@ -1189,6 +1268,7 @@ fun TamaChatSettingsDialog(
     }
     var metadataMessage by remember { mutableStateOf<String?>(null) }
     var showVoiceLanguageMenu by remember { mutableStateOf(false) }
+    var showLiteRtModelMenu by remember { mutableStateOf(false) }
 
         TamaPopupDialog(
         title = stringResource(R.string.tama_chat_settings_title),
@@ -1302,76 +1382,174 @@ fun TamaChatSettingsDialog(
                 Text(stringResource(R.string.tama_chat_engine_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TamaDark)
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TamaBackendChoiceButton(
-                        label = stringResource(R.string.tama_backend_ollama),
-                        selected = tempBackend == SettingsRepository.PDF_BACKEND_OLLAMA,
-                        onClick = { tempBackend = SettingsRepository.PDF_BACKEND_OLLAMA },
-                        modifier = Modifier.weight(1f)
-                    )
-                    TamaBackendChoiceButton(
-                        label = stringResource(R.string.tama_backend_llama_server),
-                        selected = tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
-                        onClick = {
-                            tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER
-                            if (tempLlamaServerUrl.isBlank() || tempLlamaServerUrl == SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL) {
-                                tempLlamaServerUrl = SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    TamaBackendChoiceButton(
-                        label = stringResource(R.string.tama_backend_llama_swap),
-                        selected = tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
-                        onClick = {
-                            tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SWAP
-                            if (tempLlamaSwapUrl.isBlank() || tempLlamaSwapUrl == SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL) {
-                                tempLlamaSwapUrl = SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TamaBackendChoiceButton(
+                            label = stringResource(R.string.tama_backend_ollama),
+                            selected = tempBackend == SettingsRepository.PDF_BACKEND_OLLAMA,
+                            onClick = { tempBackend = SettingsRepository.PDF_BACKEND_OLLAMA },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TamaBackendChoiceButton(
+                            label = stringResource(R.string.tama_backend_llama_server),
+                            selected = tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
+                            onClick = {
+                                tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER
+                                if (tempLlamaServerUrl.isBlank() || tempLlamaServerUrl == SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL) {
+                                    tempLlamaServerUrl = SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        TamaBackendChoiceButton(
+                            label = stringResource(R.string.tama_backend_llama_swap),
+                            selected = tempBackend == SettingsRepository.PDF_BACKEND_LLAMA_SWAP,
+                            onClick = {
+                                tempBackend = SettingsRepository.PDF_BACKEND_LLAMA_SWAP
+                                if (tempLlamaSwapUrl.isBlank() || tempLlamaSwapUrl == SettingsRepository.PDF_LLAMA_SERVER_DEFAULT_URL) {
+                                    tempLlamaSwapUrl = SettingsRepository.PDF_LLAMA_SWAP_DEFAULT_URL
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        TamaBackendChoiceButton(
+                            label = stringResource(R.string.tama_backend_litert),
+                            selected = SettingsRepository.isLiteRtBackend(tempBackend),
+                            onClick = { tempBackend = SettingsRepository.PDF_BACKEND_LITERT },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text(stringResource(R.string.tama_chat_connection_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TamaDark)
-                Spacer(modifier = Modifier.height(8.dp))
+                if (!SettingsRepository.isLiteRtBackend(tempBackend)) {
+                    Text(stringResource(R.string.tama_chat_connection_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TamaDark)
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                OutlinedTextField(
-                    value = when (tempBackend) {
-                        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tempLlamaServerUrl
-                        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tempLlamaSwapUrl
-                        else -> tempOllamaUrl
-                    },
-                    onValueChange = {
-                        when (tempBackend) {
-                            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tempLlamaServerUrl = it
-                            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tempLlamaSwapUrl = it
-                            else -> tempOllamaUrl = it
-                        }
-                    },
-                    label = {
-                        Text(
+                    OutlinedTextField(
+                        value = when (tempBackend) {
+                            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tempLlamaServerUrl
+                            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tempLlamaSwapUrl
+                            else -> tempOllamaUrl
+                        },
+                        onValueChange = {
                             when (tempBackend) {
-                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_llama_server_url_label)
-                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_llama_swap_url_label)
-                                else -> stringResource(R.string.pdf_ollama_url_label)
-                            },
-                            fontSize = 10.sp
+                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tempLlamaServerUrl = it
+                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> tempLlamaSwapUrl = it
+                                else -> tempOllamaUrl = it
+                            }
+                        },
+                        label = {
+                            Text(
+                                when (tempBackend) {
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> stringResource(R.string.pdf_llama_server_url_label)
+                                    SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> stringResource(R.string.pdf_llama_swap_url_label)
+                                    else -> stringResource(R.string.pdf_ollama_url_label)
+                                },
+                                fontSize = 10.sp
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace),
+                        colors = tamaOutlinedFieldColors()
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+
+                if (SettingsRepository.isLiteRtBackend(tempBackend)) {
+                    Text(stringResource(R.string.tama_chat_models_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = TamaDark)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == tamaLiteRtModelId }
+                        ?: liteRtModels.firstOrNull()
+                    ExposedDropdownMenuBox(
+                        expanded = showLiteRtModelMenu,
+                        onExpandedChange = { showLiteRtModelMenu = it }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedLiteRtModel?.displayName.orEmpty(),
+                            onValueChange = {},
+                            readOnly = true,
+                            enabled = liteRtModels.isNotEmpty(),
+                            label = { Text(stringResource(R.string.litert_model_label), fontSize = 10.sp) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = showLiteRtModelMenu) },
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth(),
+                            textStyle = TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace),
+                            colors = tamaOutlinedFieldColors()
                         )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    textStyle = TextStyle(fontSize = 12.sp, fontFamily = FontFamily.Monospace),
-                    colors = tamaOutlinedFieldColors()
-                )
+                        ExposedDropdownMenu(
+                            expanded = showLiteRtModelMenu,
+                            onDismissRequest = { showLiteRtModelMenu = false }
+                        ) {
+                            liteRtModels.forEach { model ->
+                                DropdownMenuItem(
+                                    text = { Text(model.displayName) },
+                                    onClick = {
+                                        settingsRepo.setTamaLiteRtModelId(model.id)
+                                        showLiteRtModelMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(stringResource(R.string.litert_gallery_accelerator), fontSize = 12.sp, color = TamaDark, fontWeight = FontWeight.Bold)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            TamaBackendChoiceButton(
+                                label = stringResource(R.string.general_acceleration_mode_auto),
+                                selected = normalizeLiteRtBackend(tamaLiteRtBackend) == LITERT_BACKEND_AUTO,
+                                onClick = { settingsRepo.setTamaLiteRtBackend(LITERT_BACKEND_AUTO) },
+                                modifier = Modifier.weight(1f)
+                            )
+                            TamaBackendChoiceButton(
+                                label = stringResource(R.string.general_acceleration_mode_cpu),
+                                selected = normalizeLiteRtBackend(tamaLiteRtBackend) == LITERT_BACKEND_CPU,
+                                onClick = { settingsRepo.setTamaLiteRtBackend(LITERT_BACKEND_CPU) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        TamaBackendChoiceButton(
+                            label = stringResource(R.string.litert_backend_gpu),
+                            selected = normalizeLiteRtBackend(tamaLiteRtBackend) == LITERT_BACKEND_GPU,
+                            onClick = { settingsRepo.setTamaLiteRtBackend(LITERT_BACKEND_GPU) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
 
-                if (SettingsRepository.usesOpenAiChatBackend(tempBackend)) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.litert_gallery_mtp_title), fontSize = 12.sp, color = TamaDark, fontWeight = FontWeight.Bold)
+                            Text(
+                                stringResource(R.string.litert_gallery_mtp_desc),
+                                fontSize = 11.sp,
+                                color = TamaMutedText,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                        Switch(
+                            checked = tamaLiteRtMtpEnabled,
+                            onCheckedChange = settingsRepo::setTamaLiteRtMtpEnabled,
+                            colors = SwitchDefaults.colors(checkedThumbColor = TamaDark, checkedTrackColor = TamaAccent)
+                        )
+                    }
+                } else if (SettingsRepository.usesOpenAiChatBackend(tempBackend)) {
                     OutlinedButton(
                         onClick = {
                             settingsRepo.setTamaBackend(tempBackend)

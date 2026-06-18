@@ -47,6 +47,8 @@ import com.example.llamadroid.tama.game.wellProductionIntervalForSpeedLevel
 import com.example.llamadroid.tama.game.wellSpeedUpgradeCostForLevel
 import com.example.llamadroid.tama.db.FarmUpgradeEntity
 import com.example.llamadroid.tama.game.wellCapacityForLevel
+import com.example.llamadroid.ui.components.pressAndHoldRepeat
+import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -508,21 +510,7 @@ fun FarmScreen(
                 },
                 onCollectStorage = {
                     scope.launch {
-                        val latest = farmRepository.decodeHarvesterDroneState(
-                            farmRepository.getUpgrade(pet.id, FARM_HARVESTING_DRONE_ID),
-                            System.currentTimeMillis()
-                        )
-                        latest.storage.forEach { stored ->
-                            val item = stored.toInventoryItem(context)
-                            gameEngine.grantItem(item, stored.quantity)
-                        }
-                        farmRepository.saveHarvesterDroneState(
-                            pet.id,
-                            latest.copy(
-                                storage = emptyList(),
-                                lastUpdatedAt = System.currentTimeMillis()
-                            )
-                        )
+                        gameEngine.collectHarvesterDroneStorage()
                     }
                 }
             )
@@ -1170,8 +1158,12 @@ private fun PlantingDroneDialog(
                 label = stringResource(R.string.tama_farm_drone_refill_fuel, fuelTransferAmount),
                 enabled = fuelItem != null && fuelTransfer > 0,
                 onClick = {
-                    fuelItem?.let { item ->
+                    if (fuelItem != null) {
+                        val item = fuelItem
                         onTransferItem(item, fuelTransfer) { it.copy(fuel = (it.fuel + fuelTransfer).coerceAtMost(farmDroneFuelCapacityForUpgradeLevel(it.fuelUpgradeLevel))) }
+                        true
+                    } else {
+                        false
                     }
                 }
             )
@@ -1191,6 +1183,7 @@ private fun PlantingDroneDialog(
                     onTransferToolDurability("hoe", hoeTransfer) { latest, transferred ->
                         latest.copy(hoe = addDroneToolDurability(latest.hoe, "hoe", context.getString(R.string.tama_inventory_hoe), transferred))
                     }
+                    true
                 }
             )
             DroneTransferButton(
@@ -1200,17 +1193,34 @@ private fun PlantingDroneDialog(
                     onTransferToolDurability("watering_can", wateringCanTransfer) { latest, transferred ->
                         latest.copy(wateringCan = addDroneToolDurability(latest.wateringCan, "watering_can", context.getString(R.string.tama_inventory_watering_can), transferred))
                     }
+                    true
                 }
             )
             DroneTransferButton(
                 label = stringResource(R.string.tama_farm_drone_add_water),
                 enabled = waterItem != null,
-                onClick = { waterItem?.let { item -> onTransferItem(item, 1) { it.copy(water = it.water + 1) } } }
+                onClick = {
+                    if (waterItem != null) {
+                        val item = waterItem
+                        onTransferItem(item, 1) { it.copy(water = it.water + 1) }
+                        true
+                    } else {
+                        false
+                    }
+                }
             )
             DroneTransferButton(
                 label = stringResource(R.string.tama_farm_drone_add_fertilizer),
                 enabled = fertilizerItem != null,
-                onClick = { fertilizerItem?.let { item -> onTransferItem(item, 1) { it.copy(fertilizer = it.fertilizer + 1) } } }
+                onClick = {
+                    if (fertilizerItem != null) {
+                        val item = fertilizerItem
+                        onTransferItem(item, 1) { it.copy(fertilizer = it.fertilizer + 1) }
+                        true
+                    } else {
+                        false
+                    }
+                }
             )
         }
         FarmInfoSection(title = stringResource(R.string.tama_farm_drone_seed_priority_section)) {
@@ -1232,8 +1242,11 @@ private fun PlantingDroneDialog(
                 val cropId = item.id.removePrefix("seed_")
                 DroneTransferButton(
                     label = stringResource(R.string.tama_farm_drone_add_seed, inventoryItemDisplayName(context, item), item.quantity),
-                    enabled = true,
-                    onClick = { onTransferItem(item, 1) { it.copy(seeds = addDroneSeed(it.seeds, cropId, 1)) } }
+                    enabled = item.quantity > 0,
+                    onClick = {
+                        onTransferItem(item, 1) { it.copy(seeds = addDroneSeed(it.seeds, cropId, 1)) }
+                        true
+                    }
                 )
             }
         }
@@ -1283,7 +1296,14 @@ private fun HarvesterDroneDialog(
             DroneTransferButton(
                 label = stringResource(R.string.tama_farm_drone_refill_fuel, fuelTransferAmount),
                 enabled = fuelItem != null && fuelTransfer > 0,
-                onClick = { fuelItem?.let { onTransferFuel(it, fuelTransfer) } }
+                onClick = {
+                    if (fuelItem != null) {
+                        onTransferFuel(fuelItem, fuelTransfer)
+                        true
+                    } else {
+                        false
+                    }
+                }
             )
         }
         FarmInfoSection(title = stringResource(R.string.tama_farm_drone_filter_section)) {
@@ -1488,12 +1508,18 @@ private fun DroneResourceLine(label: String, value: String) {
 private fun DroneTransferButton(
     label: String,
     enabled: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Boolean
 ) {
+    val repeatState = rememberPressAndHoldRepeatState()
     Button(
-        onClick = onClick,
+        onClick = { repeatState.handleClick { onClick() } },
         enabled = enabled,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .pressAndHoldRepeat(
+                state = repeatState,
+                enabled = enabled
+            ) { onClick() },
         colors = farmPopupButtonColors()
     ) {
         Text(label)
@@ -1575,13 +1601,6 @@ private fun addDroneToolDurability(
         maxDurability = FARM_TOOL_DURABILITY_CAP
     )
 }
-
-private fun DroneStoredCrop.toInventoryItem(context: android.content.Context): InventoryItem =
-    InventoryItem(
-        id = inventoryId,
-        name = inventoryIdDisplayName(context, inventoryId),
-        type = if (inventoryId.startsWith("crop_")) ItemType.CROP else ItemType.MATERIAL
-    )
 
 private fun inventoryIdDisplayName(context: android.content.Context, inventoryId: String): String {
     if (inventoryId == "rotten_crop") return context.getString(R.string.tama_item_rotten_crop)

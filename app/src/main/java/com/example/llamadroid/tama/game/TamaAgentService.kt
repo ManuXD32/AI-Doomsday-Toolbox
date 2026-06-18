@@ -8,6 +8,8 @@ import android.os.IBinder
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.LlamaServerChatService
+import com.example.llamadroid.service.LiteRtConversationMessage
+import com.example.llamadroid.service.LiteRtTextGenerationClient
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.RemoteSummaryProtection
 import com.example.llamadroid.service.UnifiedNotificationManager
@@ -20,10 +22,16 @@ import com.example.llamadroid.service.inferImageMimeType
 import com.example.llamadroid.service.WhisperConfig
 import com.example.llamadroid.service.WhisperOutputFormat
 import com.example.llamadroid.service.WhisperService
+import com.example.llamadroid.tama.data.ActivityType
 import com.example.llamadroid.tama.data.GrowthStage
 import com.example.llamadroid.tama.data.PetSpeciesLine
 import com.example.llamadroid.tama.data.Personality
+import com.example.llamadroid.tama.data.TamaWorkCatalog
 import com.example.llamadroid.tama.data.TamaPet
+import com.example.llamadroid.tama.data.TAMA_RELAX_INTROSPECTION_PER_HOUR
+import com.example.llamadroid.tama.data.TAMA_TRAINING_EXERCISE_PER_HOUR
+import com.example.llamadroid.tama.data.TAMA_TRAINING_HAPPINESS_PER_HOUR
+import com.example.llamadroid.tama.data.TamaTrainingCatalog
 import com.example.llamadroid.tama.data.isEffectivelyMad
 import com.example.llamadroid.tama.db.*
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -285,7 +293,45 @@ class TamaAgentService(
         )
         _messages.value = mergeTamaMessages(_messages.value + placeholderMsg, activeAssistantMessage)
 
-        val response = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
+        val response = if (SettingsRepository.isLiteRtBackend(backend)) {
+            runCatching {
+                val modelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }
+                    ?: throw IllegalStateException(context.getString(R.string.litert_error_model_missing))
+                val model = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
+                    .liteRtModelDao()
+                    .getById(modelId)
+                    ?: throw IllegalStateException(context.getString(R.string.litert_error_model_missing))
+                val result = LiteRtTextGenerationClient(context).generate(
+                    model = model,
+                    title = "Tama chat",
+                    systemPrompt = systemPrompt,
+                    messages = historyContext.map { LiteRtConversationMessage(it.role, it.content) },
+                    userPrompt = llmUserMessage.content,
+                    contextSize = settingsRepo.tamaOllamaNumCtx.value,
+                    maxTokens = 1024,
+                    temperature = 0.8f,
+                    thinkingEnabled = thinkingEnabled,
+                    backendMode = settingsRepo.tamaLiteRtBackend.value,
+                    mtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value,
+                    onChunk = { chunk ->
+                        assistantContent += sanitizeTamaReplyChunk(chunk, assistantContent.isBlank())
+                        updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
+                        onChunk(chunk)
+                    },
+                    onThinkingChunk = { chunk ->
+                        thinkingContent += sanitizeTamaReplyChunk(chunk, thinkingContent.isBlank())
+                        updateActiveAssistantMessage(pet.id, assistantId, assistantContent, thinkingContent)
+                    }
+                )
+                if (assistantContent.isBlank()) {
+                    assistantContent = sanitizeTamaReplyChunk(result.output, true)
+                }
+                OllamaService.ChatResponse(
+                    message = OllamaService.ChatMessage(role = "assistant", content = assistantContent),
+                    done = true
+                )
+            }
+        } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
             withTamaLlamaServerProtection {
                 llamaServerChatService.chatWithToolsStreaming(
                     baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
@@ -404,7 +450,7 @@ class TamaAgentService(
         _isLoading.value = true
         var summaryContent = ""
         val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)
-        val response = if (SettingsRepository.usesOpenAiChatBackend(backend)) {
+        val response = if (SettingsRepository.usesOpenAiChatBackend(backend) || SettingsRepository.isLiteRtBackend(backend)) {
             withTamaLlamaServerProtection {
                 val client = RemoteSummaryClientFactory.fromConfig(
                     RemoteSummaryBackendConfig(
@@ -416,10 +462,16 @@ class TamaAgentService(
                         },
                         model = if (SettingsRepository.isLlamaSwapBackend(backend)) {
                             settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
+                        } else if (SettingsRepository.isLiteRtBackend(backend)) {
+                            settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }?.let { "litert:$it" }
                         } else {
                             settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
                         },
-                        timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED
+                        timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED,
+                        context = context,
+                        liteRtModelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L },
+                        liteRtBackend = settingsRepo.tamaLiteRtBackend.value,
+                        liteRtMtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value
                     )
                 )
                 runCatching {
@@ -608,10 +660,16 @@ class TamaAgentService(
                     },
                     model = if (SettingsRepository.isLlamaSwapBackend(backend)) {
                         settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
+                    } else if (SettingsRepository.isLiteRtBackend(backend)) {
+                        settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }?.let { "litert:$it" }
                     } else {
                         settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
                     },
-                    timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED
+                    timeoutMinutes = SettingsRepository.PDF_TIMEOUT_DISABLED,
+                    context = context,
+                    liteRtModelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L },
+                    liteRtBackend = settingsRepo.tamaLiteRtBackend.value,
+                    liteRtMtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value
                 )
             )
             client.fetchMetadata().onSuccess { metadata ->
@@ -864,7 +922,13 @@ class TamaAgentService(
             recentEvents = recentEvents,
             retrievalHints = retrievalHints,
             currentTime = currentTime,
-            studyContext = TamaStudySessionSupport.activeStudyContextLine(context, activeStudySession)
+            studyContext = TamaStudySessionSupport.activeStudyContextLine(context, activeStudySession),
+            activityContext = buildTamaActivityContextLine(
+                pet = pet,
+                studyContext = TamaStudySessionSupport.activeStudyContextLine(context, activeStudySession),
+                workJobName = TamaWorkCatalog.jobById(pet.currentWorkJobId)?.let { context.getString(it.titleRes) },
+                now = System.currentTimeMillis()
+            )
         )
     }
 
@@ -1015,7 +1079,8 @@ internal fun buildTamaSystemPrompt(
     recentEvents: List<TamaEventEntity>,
     retrievalHints: Set<String>,
     currentTime: String,
-    studyContext: String = "The pet is not currently studying."
+    studyContext: String = "The pet is not currently studying.",
+    activityContext: String = buildTamaActivityContextLine(pet, studyContext)
 ): String {
     val statsStr = "hunger=${pet.stats.hunger.toInt()}, happiness=${pet.stats.happiness.toInt()}, health=${pet.stats.health.toInt()}, energy=${pet.stats.energy.toInt()}, hygiene=${pet.stats.hygiene.toInt()}"
     val moodStr = if (pet.isEffectivelyMad()) "mad" else pet.mood.name.lowercase()
@@ -1074,6 +1139,7 @@ internal fun buildTamaSystemPrompt(
         Location: $locationStr
         Current activity: $activityStr
         Study context: $studyContext
+        Current moment detail: $activityContext
         Stats: $statsStr
         Money: ${pet.money}
         Miscare count: ${pet.miscareCount}
@@ -1108,6 +1174,57 @@ internal fun buildTamaSystemPrompt(
         [Personality Style]
         $personalityGuidance
     """.trimIndent()
+}
+
+internal fun buildTamaActivityContextLine(
+    pet: TamaPet,
+    studyContext: String = "The pet is not currently studying.",
+    workJobName: String? = null,
+    now: Long = System.currentTimeMillis()
+): String {
+    if (pet.isSleeping) {
+        return "The pet is sleeping right now and should not chat as if awake."
+    }
+    val elapsedMs = pet.activityStartTime?.let { (now - it).coerceAtLeast(0L) } ?: 0L
+    val elapsedText = formatTamaActivityDuration(elapsedMs)
+    val hoursPassed = elapsedMs / (1000f * 60f * 60f)
+    return when (pet.currentActivity) {
+        ActivityType.WORKING -> {
+            val jobName = workJobName?.takeIf { it.isNotBlank() } ?: "a job"
+            val hourlyPay = TamaWorkCatalog.jobById(pet.currentWorkJobId)?.hourlyPay ?: 4L
+            val earnedCoins = (hoursPassed * hourlyPay).toInt().coerceAtLeast(0)
+            "The pet is working as $jobName at the workplace right now. Elapsed time: $elapsedText. Estimated current work reward: $earnedCoins coins."
+        }
+        ActivityType.STUDYING -> {
+            "The pet is studying right now. $studyContext Elapsed study time: $elapsedText."
+        }
+        ActivityType.TRAINING -> {
+            val tier = TamaTrainingCatalog.tierById(pet.currentWorkJobId)
+            val tierName = tier?.id?.replace('_', ' ') ?: "boxing drills"
+            val earnedCoins = (hoursPassed * (tier?.hourlyPay ?: 8L)).toInt().coerceAtLeast(0)
+            val exerciseGain = (hoursPassed * TAMA_TRAINING_EXERCISE_PER_HOUR).toInt().coerceAtLeast(0)
+            val happinessGain = (hoursPassed * TAMA_TRAINING_HAPPINESS_PER_HOUR).toInt().coerceAtLeast(0)
+            "The pet is training at the boxing ring right now. Current tier: $tierName. Elapsed time: $elapsedText. Estimated current training reward: $exerciseGain exercise points, $happinessGain happiness, and $earnedCoins coins."
+        }
+        ActivityType.RELAXING -> {
+            val happinessGain = (hoursPassed * 40).toInt().coerceAtLeast(0)
+            val introspectionGain = (hoursPassed * TAMA_RELAX_INTROSPECTION_PER_HOUR).toInt().coerceAtLeast(0)
+            "The pet is relaxing in the park right now. Elapsed time: $elapsedText. Estimated current relaxation recovery: $happinessGain happiness and $introspectionGain introspection."
+        }
+        ActivityType.NONE -> "The pet is awake and not doing a timed activity right now."
+    }
+}
+
+private fun formatTamaActivityDuration(elapsedMs: Long): String {
+    val totalSeconds = (elapsedMs / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        "%d:%02d:%02d".format(Locale.US, hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(Locale.US, minutes, seconds)
+    }
 }
 
 internal data class ActiveTamaAssistantMessage(

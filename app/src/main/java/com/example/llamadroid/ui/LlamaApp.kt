@@ -22,11 +22,14 @@ import com.example.llamadroid.ui.logs.LogsScreen
 import com.example.llamadroid.ui.pdf.PDFToolboxScreen
 import com.example.llamadroid.ui.pdf.PDFSummaryScreen
 import com.example.llamadroid.ui.ai.AIHubScreen
+import com.example.llamadroid.ui.ai.AiServersHubScreen
 import com.example.llamadroid.ui.ai.ImageGenScreen
 import com.example.llamadroid.ui.ai.LegacyUpscaleScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
 import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
 import com.example.llamadroid.ui.ai.OnnxTtsScreen
+import com.example.llamadroid.ui.ai.OnnxTtsGalleryScreen
+import com.example.llamadroid.ui.ai.LiveTranslatorScreen
 import com.example.llamadroid.ui.ai.SDModelsScreen
 import com.example.llamadroid.ui.ai.VideoGenScreen
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -305,8 +308,9 @@ fun LlamaApp(
                             Screen.AIHub.route, Screen.Chat.route, Screen.ImageGen.route,
                             Screen.ImageGenUpscale.route,
                             Screen.OnnxImageGen.route, Screen.OnnxBackgroundRemoval.route, Screen.VideoGen.route,
+                            Screen.OnnxTts.route, Screen.OnnxTtsGallery.route, Screen.LiveTranslator.route,
                             Screen.AudioTranscription.route, Screen.VideoUpscaler.route,
-                            Screen.SubtitleBurn.route
+                            Screen.SubtitleBurn.route, Screen.AiServersHub.route, Screen.Workflows.route
                         )
                     
                     // For Model Hub, also highlight when on LLMModels or SDModels screens
@@ -389,6 +393,7 @@ fun LlamaApp(
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
+            composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
             composable(Screen.Chat.route) { ChatScreen(navController) }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}",
@@ -406,6 +411,8 @@ fun LlamaApp(
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
+            composable(Screen.OnnxTtsGallery.route) { OnnxTtsGalleryScreen(navController) }
+            composable(Screen.LiveTranslator.route) { LiveTranslatorScreen(navController) }
             composable(Screen.VideoGen.route) { VideoGenScreen(navController) }
             composable(Screen.AudioTranscription.route) { AudioTranscriptionScreen(navController) }
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }

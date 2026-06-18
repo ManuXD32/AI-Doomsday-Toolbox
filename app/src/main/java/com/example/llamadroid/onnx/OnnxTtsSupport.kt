@@ -73,6 +73,23 @@ data class OnnxTtsResult(
     val metadata: OnnxTtsMetadata
 )
 
+data class OnnxTtsDeleteResult(
+    val deletedAudioFiles: Int = 0,
+    val deletedMetadataFiles: Int = 0,
+    val failedFiles: Int = 0,
+    val skippedUnsafe: Boolean = false
+) {
+    val success: Boolean
+        get() = !skippedUnsafe && failedFiles == 0 && (deletedAudioFiles > 0 || deletedMetadataFiles > 0)
+
+    operator fun plus(other: OnnxTtsDeleteResult): OnnxTtsDeleteResult = OnnxTtsDeleteResult(
+        deletedAudioFiles = deletedAudioFiles + other.deletedAudioFiles,
+        deletedMetadataFiles = deletedMetadataFiles + other.deletedMetadataFiles,
+        failedFiles = failedFiles + other.failedFiles,
+        skippedUnsafe = skippedUnsafe || other.skippedUnsafe
+    )
+}
+
 @Serializable
 data class OnnxTtsMetadata(
     val audioPath: String,
@@ -98,11 +115,13 @@ data class OnnxTtsMetadata(
 }
 
 object OnnxTtsStorage {
+    private val audioExtensions = setOf("mp3", "wav")
+
     fun outputDir(context: Context): File = File(context.filesDir, "onnx_tts_output").apply { mkdirs() }
 
     fun buildWavFile(context: Context, prefix: String = "tts"): File {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        return File(outputDir(context), "${prefix}_$timestamp.wav")
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        return File(outputDir(context), "${sanitizeOutputPrefix(prefix)}_$timestamp.wav")
     }
 
     fun metadataFileFor(audioFile: File): File = File(
@@ -111,6 +130,7 @@ object OnnxTtsStorage {
     )
 
     fun writeMetadata(audioFile: File, metadata: OnnxTtsMetadata) {
+        audioFile.parentFile?.mkdirs()
         metadataFileFor(audioFile).writeText(metadata.toJsonString())
     }
 
@@ -120,10 +140,83 @@ object OnnxTtsStorage {
         return runCatching { OnnxTtsMetadata.fromJson(file.readText()) }.getOrNull()
     }
 
-    fun listGeneratedAudio(context: Context): List<File> =
-        outputDir(context).listFiles().orEmpty()
-            .filter { it.isFile && it.extension.lowercase(Locale.US) in setOf("mp3", "wav") }
+    fun listGeneratedAudio(context: Context): List<File> {
+        return listGeneratedAudio(outputDir(context))
+    }
+
+    fun listGeneratedAudio(outputDir: File): List<File> {
+        val audioFiles = outputDir.listFiles().orEmpty()
+            .filter { it.isFile && it.extension.lowercase(Locale.US) in audioExtensions }
+        return audioFiles
+            .groupBy { it.nameWithoutExtension }
+            .map { (_, siblings) ->
+                siblings.firstOrNull { it.extension.equals("mp3", ignoreCase = true) } ?: siblings.first()
+            }
             .sortedByDescending { it.lastModified() }
+    }
+
+    fun deleteGeneratedAudioSet(context: Context, audioFile: File): OnnxTtsDeleteResult =
+        deleteGeneratedAudioSet(outputDir(context), audioFile)
+
+    fun deleteGeneratedAudioSets(context: Context, audioFiles: Collection<File>): OnnxTtsDeleteResult {
+        val outputDir = outputDir(context)
+        return audioFiles
+            .distinctBy { it.nameWithoutExtension }
+            .fold(OnnxTtsDeleteResult()) { acc, file -> acc + deleteGeneratedAudioSet(outputDir, file) }
+    }
+
+    fun deleteGeneratedAudioSet(outputDir: File, audioFile: File): OnnxTtsDeleteResult {
+        val outputRoot = runCatching { outputDir.canonicalFile }.getOrElse { return OnnxTtsDeleteResult(skippedUnsafe = true) }
+        val target = runCatching { audioFile.canonicalFile }.getOrElse { return OnnxTtsDeleteResult(skippedUnsafe = true) }
+        val targetParent = runCatching { target.parentFile?.canonicalFile }.getOrNull()
+        val extension = target.extension.lowercase(Locale.US)
+        if (targetParent != outputRoot || extension !in audioExtensions) {
+            return OnnxTtsDeleteResult(skippedUnsafe = true)
+        }
+
+        val audioCandidates = audioExtensions.map { ext -> File(outputRoot, "${target.nameWithoutExtension}.$ext") }
+        var deletedAudioFiles = 0
+        var deletedMetadataFiles = 0
+        var failedFiles = 0
+
+        audioCandidates.forEach { candidate ->
+            if (candidate.exists()) {
+                if (candidate.isFile && candidate.delete()) {
+                    deletedAudioFiles++
+                } else {
+                    failedFiles++
+                }
+            }
+        }
+        audioCandidates.map(::metadataFileFor).distinctBy { it.absolutePath }.forEach { metadata ->
+            if (metadata.exists()) {
+                if (metadata.isFile && metadata.delete()) {
+                    deletedMetadataFiles++
+                } else {
+                    failedFiles++
+                }
+            }
+        }
+        return OnnxTtsDeleteResult(
+            deletedAudioFiles = deletedAudioFiles,
+            deletedMetadataFiles = deletedMetadataFiles,
+            failedFiles = failedFiles
+        )
+    }
+
+    fun outputPrefixForSource(sourceName: String?): String =
+        sourceName
+            ?.substringBeforeLast('.', missingDelimiterValue = sourceName)
+            ?.takeIf { it.isNotBlank() }
+            ?: "tts"
+
+    private fun sanitizeOutputPrefix(raw: String): String {
+        val normalized = raw
+            .replace(Regex("""[^A-Za-z0-9._-]+"""), "_")
+            .trim('_', '.', '-')
+            .take(60)
+        return normalized.ifBlank { "tts" }
+    }
 }
 
 class SupertonicTtsPipeline(
@@ -142,7 +235,9 @@ class SupertonicTtsPipeline(
             val paths = OnnxTtsBundleValidator.requirePaths(File(request.modelPath))
             val voice = resolveVoiceFile(paths.voiceStylesDir, request.voiceName)
             val env = OrtEnvironmentProvider.environment
-            val outputWav = context?.let { OnnxTtsStorage.buildWavFile(it) }
+            val outputWav = context?.let {
+                OnnxTtsStorage.buildWavFile(it, OnnxTtsStorage.outputPrefixForSource(request.sourceName))
+            }
                 ?: File.createTempFile("onnx_tts_", ".wav")
             var mp3File: File? = null
             var mp3Status = "not_requested"
@@ -197,6 +292,9 @@ class SupertonicTtsPipeline(
                     mp3ConversionStatus = mp3Status
                 )
                 OnnxTtsStorage.writeMetadata(playable, metadata)
+                if (playable.absolutePath != outputWav.absolutePath) {
+                    OnnxTtsStorage.writeMetadata(outputWav, metadata)
+                }
                 DebugLog.log("$ONNX_TTS_LOG_TAG Completed generation output=${playable.absolutePath} duration=${result.durationSeconds}s mp3=$mp3Status")
                 onProgress(1f, "Complete")
                 return OnnxTtsResult(

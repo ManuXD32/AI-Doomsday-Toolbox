@@ -161,8 +161,8 @@ class LlamaServerViewModel(
         repository.updateServerModelMetadata(
             id = server.id,
             modelName = server.modelName?.ifBlank { server.name } ?: server.name,
-            supportsVision = false,
-            supportsAudio = false
+            supportsVision = server.supportsVision,
+            supportsAudio = server.supportsAudio
         )
         DebugLog.log("LiteRT server metadata uses local model '${server.modelName ?: server.name}'")
     }

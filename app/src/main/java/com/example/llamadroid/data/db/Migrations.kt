@@ -2,6 +2,7 @@ package com.example.llamadroid.data.db
 
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.example.llamadroid.data.RemoteBackendUrlSupport
 import com.example.llamadroid.quadtrix.QuadtrixOptionKeys
 import com.example.llamadroid.util.DebugLog
 
@@ -1170,6 +1171,8 @@ object Migrations {
                         `supportsCpu` INTEGER NOT NULL,
                         `supportsGpu` INTEGER NOT NULL,
                         `supportsNpu` INTEGER NOT NULL,
+                        `supportsVision` INTEGER NOT NULL DEFAULT 0,
+                        `supportsAudio` INTEGER NOT NULL DEFAULT 0,
                         `createdAt` INTEGER NOT NULL,
                         `updatedAt` INTEGER NOT NULL
                     )
@@ -1187,6 +1190,603 @@ object Migrations {
             }
 
             DebugLog.log("[DB] Migration 64 -> 65 complete")
+        }
+    }
+
+    val MIGRATION_65_66 = object : Migration(65, 66) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 65 -> 66")
+
+            if (tableExists(db, "litert_models") && !columnExists(db, "litert_models", "maxContextTokens")) {
+                db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `maxContextTokens` INTEGER")
+            }
+
+            DebugLog.log("[DB] Migration 65 -> 66 complete")
+        }
+    }
+
+    val MIGRATION_66_67 = object : Migration(66, 67) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 66 -> 67")
+
+            if (!tableExists(db, "live_translator_templates")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `live_translator_templates` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `speaker1Language` TEXT NOT NULL,
+                        `speaker2Language` TEXT NOT NULL,
+                        `whisperModelPath` TEXT,
+                        `whisperThreads` INTEGER NOT NULL,
+                        `ttsModelPath` TEXT,
+                        `ttsModelName` TEXT,
+                        `ttsLanguage` TEXT NOT NULL,
+                        `ttsVoiceName` TEXT,
+                        `ttsSteps` INTEGER NOT NULL,
+                        `ttsSpeed` REAL NOT NULL,
+                        `backendEngine` TEXT NOT NULL,
+                        `llamaHost` TEXT NOT NULL,
+                        `llamaPort` INTEGER NOT NULL,
+                        `llamaModelName` TEXT,
+                        `ollamaHost` TEXT NOT NULL,
+                        `ollamaPort` INTEGER NOT NULL,
+                        `ollamaModelName` TEXT,
+                        `liteRtModelId` INTEGER,
+                        `liteRtBackend` TEXT NOT NULL,
+                        `contextSize` INTEGER NOT NULL,
+                        `maxTokens` INTEGER NOT NULL,
+                        `temperature` REAL NOT NULL,
+                        `timeoutSeconds` INTEGER NOT NULL,
+                        `startSpeakingTimeoutSeconds` INTEGER NOT NULL,
+                        `finishedTalkingTimeoutSeconds` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_templates_updatedAt` ON `live_translator_templates` (`updatedAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_templates_backendEngine` ON `live_translator_templates` (`backendEngine`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_templates_liteRtModelId` ON `live_translator_templates` (`liteRtModelId`)")
+            }
+
+            if (!tableExists(db, "live_translator_sessions")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `live_translator_sessions` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `templateId` INTEGER,
+                        `templateSnapshotJson` TEXT NOT NULL,
+                        `speaker1Language` TEXT NOT NULL,
+                        `speaker2Language` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_sessions_updatedAt` ON `live_translator_sessions` (`updatedAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_sessions_templateId` ON `live_translator_sessions` (`templateId`)")
+            }
+
+            if (!tableExists(db, "live_translator_turns")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `live_translator_turns` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `sessionId` INTEGER NOT NULL,
+                        `speaker` INTEGER NOT NULL,
+                        `originalText` TEXT NOT NULL,
+                        `translatedText` TEXT,
+                        `detectedLanguage` TEXT,
+                        `sourceLanguage` TEXT NOT NULL,
+                        `targetLanguage` TEXT NOT NULL,
+                        `audioPath` TEXT,
+                        `ttsAudioPath` TEXT,
+                        `timestamp` INTEGER NOT NULL,
+                        `isError` INTEGER NOT NULL,
+                        `errorMessage` TEXT,
+                        FOREIGN KEY(`sessionId`) REFERENCES `live_translator_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_turns_sessionId` ON `live_translator_turns` (`sessionId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_live_translator_turns_timestamp` ON `live_translator_turns` (`timestamp`)")
+            }
+
+            DebugLog.log("[DB] Migration 66 -> 67 complete")
+        }
+    }
+
+    val MIGRATION_67_68 = object : Migration(67, 68) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 67 -> 68")
+
+            if (tableExists(db, "live_translator_templates")) {
+                if (!columnExists(db, "live_translator_templates", "speaker1TtsLanguage")) {
+                    db.execSQL("ALTER TABLE `live_translator_templates` ADD COLUMN `speaker1TtsLanguage` TEXT NOT NULL DEFAULT 'en'")
+                    db.execSQL(
+                        """
+                        UPDATE `live_translator_templates`
+                        SET `speaker1TtsLanguage` = CASE
+                            WHEN TRIM(COALESCE(`ttsLanguage`, '')) = '' THEN 'en'
+                            ELSE `ttsLanguage`
+                        END
+                        """.trimIndent()
+                    )
+                }
+                if (!columnExists(db, "live_translator_templates", "speaker2TtsLanguage")) {
+                    db.execSQL("ALTER TABLE `live_translator_templates` ADD COLUMN `speaker2TtsLanguage` TEXT NOT NULL DEFAULT 'es'")
+                    db.execSQL(
+                        """
+                        UPDATE `live_translator_templates`
+                        SET `speaker2TtsLanguage` = CASE
+                            WHEN TRIM(COALESCE(`ttsLanguage`, '')) = '' THEN 'es'
+                            ELSE `ttsLanguage`
+                        END
+                        """.trimIndent()
+                    )
+                }
+            }
+
+            DebugLog.log("[DB] Migration 67 -> 68 complete")
+        }
+    }
+
+    val MIGRATION_68_69 = object : Migration(68, 69) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 68 -> 69")
+
+            if (tableExists(db, "litert_models") && columnExists(db, "litert_models", "maxContextTokens")) {
+                db.execSQL(
+                    """
+                    UPDATE `litert_models`
+                    SET `maxContextTokens` = 32768
+                    WHERE `maxContextTokens` = 4000
+                        AND (
+                            LOWER(COALESCE(`filename`, '')) LIKE '%gemma-4%'
+                            OR LOWER(COALESCE(`displayName`, '')) LIKE '%gemma 4%'
+                            OR LOWER(COALESCE(`displayName`, '')) LIKE '%gemma-4%'
+                            OR LOWER(COALESCE(`repoId`, '')) LIKE '%gemma-4%'
+                        )
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 68 -> 69 complete")
+        }
+    }
+
+    val MIGRATION_69_70 = object : Migration(69, 70) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 69 -> 70")
+
+            if (tableExists(db, "live_translator_templates") &&
+                !columnExists(db, "live_translator_templates", "liteRtMtpEnabled")
+            ) {
+                db.execSQL("ALTER TABLE `live_translator_templates` ADD COLUMN `liteRtMtpEnabled` INTEGER NOT NULL DEFAULT 0")
+            }
+
+            DebugLog.log("[DB] Migration 69 -> 70 complete")
+        }
+    }
+
+    val MIGRATION_70_71 = object : Migration(70, 71) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 70 -> 71")
+
+            if (tableExists(db, "live_translator_templates") &&
+                !columnExists(db, "live_translator_templates", "liteRtThinkingEnabled")
+            ) {
+                db.execSQL("ALTER TABLE `live_translator_templates` ADD COLUMN `liteRtThinkingEnabled` INTEGER NOT NULL DEFAULT 0")
+            }
+
+            DebugLog.log("[DB] Migration 70 -> 71 complete")
+        }
+    }
+
+    val MIGRATION_71_72 = object : Migration(71, 72) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 71 -> 72")
+
+            if (tableExists(db, "knowledge_bases") &&
+                !columnExists(db, "knowledge_bases", "contentSummary")
+            ) {
+                db.execSQL("ALTER TABLE `knowledge_bases` ADD COLUMN `contentSummary` TEXT NOT NULL DEFAULT ''")
+            }
+
+            DebugLog.log("[DB] Migration 71 -> 72 complete")
+        }
+    }
+
+    val MIGRATION_72_73 = object : Migration(72, 73) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 72 -> 73")
+
+            if (tableExists(db, "litert_models")) {
+                if (!columnExists(db, "litert_models", "supportsVision")) {
+                    db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `supportsVision` INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!columnExists(db, "litert_models", "supportsAudio")) {
+                    db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `supportsAudio` INTEGER NOT NULL DEFAULT 0")
+                }
+                db.execSQL(
+                    """
+                    UPDATE `litert_models`
+                    SET `supportsVision` = 1
+                    WHERE LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma-4%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma 4%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma-3n%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma 3n%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%multimodal%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%vision%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%image%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%vlm%'
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `litert_models`
+                    SET `supportsAudio` = 1
+                    WHERE (
+                            (
+                                LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma-4%'
+                                OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma 4%'
+                            )
+                            AND (
+                                LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%e2b%'
+                                OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%e4b%'
+                            )
+                        )
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma-3n%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gemma 3n%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%audio%'
+                        OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%speech%'
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 72 -> 73 complete")
+        }
+    }
+
+    val MIGRATION_73_74 = object : Migration(73, 74) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 73 -> 74")
+
+            if (!columnExists(db, "llama_servers", "preferWhisperAudioTranscription")) {
+                db.execSQL("ALTER TABLE `llama_servers` ADD COLUMN `preferWhisperAudioTranscription` INTEGER NOT NULL DEFAULT 0")
+            }
+
+            DebugLog.log("[DB] Migration 73 -> 74 complete")
+        }
+    }
+
+    val MIGRATION_74_75 = object : Migration(74, 75) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 74 -> 75: AI servers hub")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_configs` (
+                    `serverType` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `port` INTEGER NOT NULL,
+                    `lanVisible` INTEGER NOT NULL,
+                    `accessMode` TEXT NOT NULL,
+                    `enabled` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`serverType`)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_users` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `username` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `passwordHash` TEXT NOT NULL,
+                    `passwordSalt` TEXT NOT NULL,
+                    `enabled` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_ai_server_users_username` ON `ai_server_users` (`username`)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_permissions` (
+                    `userId` INTEGER NOT NULL,
+                    `serverType` TEXT NOT NULL,
+                    `canAccess` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`userId`, `serverType`),
+                    FOREIGN KEY(`userId`) REFERENCES `ai_server_users`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_permissions_userId` ON `ai_server_permissions` (`userId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_permissions_serverType` ON `ai_server_permissions` (`serverType`)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_sessions` (
+                    `tokenHash` TEXT NOT NULL,
+                    `userId` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `expiresAt` INTEGER NOT NULL,
+                    `lastSeenAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`tokenHash`),
+                    FOREIGN KEY(`userId`) REFERENCES `ai_server_users`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_sessions_userId` ON `ai_server_sessions` (`userId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_sessions_expiresAt` ON `ai_server_sessions` (`expiresAt`)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_artifacts` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `serverType` TEXT NOT NULL,
+                    `ownerUserId` INTEGER,
+                    `origin` TEXT NOT NULL,
+                    `jobId` TEXT NOT NULL,
+                    `artifactType` TEXT NOT NULL,
+                    `path` TEXT NOT NULL,
+                    `mimeType` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `metadataJson` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`ownerUserId`) REFERENCES `ai_server_users`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_artifacts_serverType` ON `ai_server_artifacts` (`serverType`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_artifacts_ownerUserId` ON `ai_server_artifacts` (`ownerUserId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_artifacts_origin` ON `ai_server_artifacts` (`origin`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_ai_server_artifacts_path` ON `ai_server_artifacts` (`path`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_artifacts_jobId` ON `ai_server_artifacts` (`jobId`)")
+
+            val now = System.currentTimeMillis()
+            val defaults = listOf(
+                "image" to ("Image Studio" to 10101),
+                "video" to ("Video Studio" to 10102),
+                "workflows" to ("Workflows" to 10103),
+                "tts" to ("Voice Studio" to 10104),
+                "video_upscale" to ("Video Upscale" to 10105),
+                "docs_datasets" to ("Docs and Datasets" to 10106),
+                "llama_chat" to ("Llama Chat" to 10107)
+            )
+            defaults.forEach { (serverType, details) ->
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `ai_server_configs`
+                    (`serverType`, `displayName`, `port`, `lanVisible`, `accessMode`, `enabled`, `createdAt`, `updatedAt`)
+                    VALUES (?, ?, ?, 0, 'PUBLIC', 0, ?, ?)
+                    """.trimIndent(),
+                    arrayOf(serverType, details.first, details.second, now, now)
+                )
+            }
+
+            DebugLog.log("[DB] Migration 74 -> 75 complete")
+        }
+    }
+
+    val MIGRATION_75_76 = object : Migration(75, 76) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 75 -> 76: AI server web chat persistence")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_web_providers` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `engine` TEXT NOT NULL,
+                    `baseUrl` TEXT NOT NULL,
+                    `modelName` TEXT,
+                    `liteRtModelId` INTEGER,
+                    `liteRtBackend` TEXT NOT NULL,
+                    `supportsVision` INTEGER NOT NULL,
+                    `supportsAudio` INTEGER NOT NULL,
+                    `defaultParamsJson` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_providers_engine` ON `ai_server_web_providers` (`engine`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_providers_updatedAt` ON `ai_server_web_providers` (`updatedAt`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_web_chats` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `providerId` INTEGER,
+                    `systemPrompt` TEXT,
+                    `apiParamsJson` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`providerId`) REFERENCES `ai_server_web_providers`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_chats_providerId` ON `ai_server_web_chats` (`providerId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_chats_updatedAt` ON `ai_server_web_chats` (`updatedAt`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_web_messages` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `chatId` INTEGER NOT NULL,
+                    `role` TEXT NOT NULL,
+                    `content` TEXT NOT NULL,
+                    `imagePath` TEXT,
+                    `audioPath` TEXT,
+                    `documentPath` TEXT,
+                    `thinking` TEXT,
+                    `toolActivity` TEXT,
+                    `isError` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`chatId`) REFERENCES `ai_server_web_chats`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_messages_chatId` ON `ai_server_web_messages` (`chatId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_messages_createdAt` ON `ai_server_web_messages` (`createdAt`)")
+
+            DebugLog.log("[DB] Migration 75 -> 76 complete")
+        }
+    }
+
+    val MIGRATION_76_77 = object : Migration(76, 77) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 76 -> 77: AI server web chat attachments")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_web_message_attachments` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `messageId` INTEGER NOT NULL,
+                    `attachmentType` TEXT NOT NULL,
+                    `path` TEXT NOT NULL,
+                    `mimeType` TEXT,
+                    `name` TEXT,
+                    `sizeBytes` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`messageId`) REFERENCES `ai_server_web_messages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_message_attachments_messageId` ON `ai_server_web_message_attachments` (`messageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_message_attachments_attachmentType` ON `ai_server_web_message_attachments` (`attachmentType`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_message_attachments_path` ON `ai_server_web_message_attachments` (`path`)")
+
+            DebugLog.log("[DB] Migration 76 -> 77 complete")
+        }
+    }
+
+    val MIGRATION_77_78 = object : Migration(77, 78) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 77 -> 78: AI server web chat tool events")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `ai_server_web_tool_events` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `messageId` INTEGER NOT NULL,
+                    `toolName` TEXT NOT NULL,
+                    `phase` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `argumentsJson` TEXT,
+                    `resultText` TEXT,
+                    `errorText` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`messageId`) REFERENCES `ai_server_web_messages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_tool_events_messageId` ON `ai_server_web_tool_events` (`messageId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_tool_events_toolName` ON `ai_server_web_tool_events` (`toolName`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_tool_events_status` ON `ai_server_web_tool_events` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_tool_events_createdAt` ON `ai_server_web_tool_events` (`createdAt`)")
+
+            DebugLog.log("[DB] Migration 77 -> 78 complete")
+        }
+    }
+
+    val MIGRATION_78_79 = object : Migration(78, 79) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 78 -> 79: AI server web chat ownership")
+
+            if (!columnExists(db, "ai_server_web_providers", "ownerUserId")) {
+                db.execSQL("ALTER TABLE `ai_server_web_providers` ADD COLUMN `ownerUserId` INTEGER")
+            }
+            if (!columnExists(db, "ai_server_web_chats", "ownerUserId")) {
+                db.execSQL("ALTER TABLE `ai_server_web_chats` ADD COLUMN `ownerUserId` INTEGER")
+            }
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_providers_ownerUserId` ON `ai_server_web_providers` (`ownerUserId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_ai_server_web_chats_ownerUserId` ON `ai_server_web_chats` (`ownerUserId`)")
+
+            DebugLog.log("[DB] Migration 78 -> 79 complete")
+        }
+    }
+
+    val MIGRATION_79_80 = object : Migration(79, 80) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 79 -> 80: speculative mode persistence")
+
+            if (!columnExists(db, "saved_commands", "speculativeMode")) {
+                db.execSQL(
+                    "ALTER TABLE `saved_commands` ADD COLUMN `speculativeMode` TEXT NOT NULL DEFAULT 'draft-simple'"
+                )
+            }
+
+            DebugLog.log("[DB] Migration 79 -> 80 complete")
+        }
+    }
+
+    val MIGRATION_80_81 = object : Migration(80, 81) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 80 -> 81: live translator full backend URLs")
+
+            if (tableExists(db, "live_translator_templates")) {
+                if (!columnExists(db, "live_translator_templates", "llamaServerUrl")) {
+                    db.execSQL(
+                        "ALTER TABLE `live_translator_templates` ADD COLUMN `llamaServerUrl` TEXT NOT NULL DEFAULT 'http://localhost:8080'"
+                    )
+                }
+                if (!columnExists(db, "live_translator_templates", "llamaSwapUrl")) {
+                    db.execSQL(
+                        "ALTER TABLE `live_translator_templates` ADD COLUMN `llamaSwapUrl` TEXT NOT NULL DEFAULT 'http://localhost:9292'"
+                    )
+                }
+                if (!columnExists(db, "live_translator_templates", "ollamaUrl")) {
+                    db.execSQL(
+                        "ALTER TABLE `live_translator_templates` ADD COLUMN `ollamaUrl` TEXT NOT NULL DEFAULT 'http://localhost:11434'"
+                    )
+                }
+
+                db.query(
+                    """
+                    SELECT `id`, `llamaHost`, `llamaPort`, `ollamaHost`, `ollamaPort`
+                    FROM `live_translator_templates`
+                    """.trimIndent()
+                ).use { cursor ->
+                    val idIndex = cursor.getColumnIndexOrThrow("id")
+                    val llamaHostIndex = cursor.getColumnIndexOrThrow("llamaHost")
+                    val llamaPortIndex = cursor.getColumnIndexOrThrow("llamaPort")
+                    val ollamaHostIndex = cursor.getColumnIndexOrThrow("ollamaHost")
+                    val ollamaPortIndex = cursor.getColumnIndexOrThrow("ollamaPort")
+
+                    while (cursor.moveToNext()) {
+                        val id = cursor.getLong(idIndex)
+                        val llamaUrl = RemoteBackendUrlSupport.fromHostPort(
+                            host = cursor.getString(llamaHostIndex),
+                            port = cursor.getInt(llamaPortIndex),
+                            defaultPort = 8080
+                        ).normalizedUrl
+                        val ollamaUrl = RemoteBackendUrlSupport.fromHostPort(
+                            host = cursor.getString(ollamaHostIndex),
+                            port = cursor.getInt(ollamaPortIndex),
+                            defaultPort = 11434
+                        ).normalizedUrl
+                        db.execSQL(
+                            """
+                            UPDATE `live_translator_templates`
+                            SET `llamaServerUrl` = ?, `llamaSwapUrl` = ?, `ollamaUrl` = ?
+                            WHERE `id` = ?
+                            """.trimIndent(),
+                            arrayOf(llamaUrl, llamaUrl, ollamaUrl, id)
+                        )
+                    }
+                }
+            }
+
+            DebugLog.log("[DB] Migration 80 -> 81 complete")
         }
     }
 
@@ -1228,7 +1828,23 @@ object Migrations {
         MIGRATION_61_62,
         MIGRATION_62_63,
         MIGRATION_63_64,
-        MIGRATION_64_65
+        MIGRATION_64_65,
+        MIGRATION_65_66,
+        MIGRATION_66_67,
+        MIGRATION_67_68,
+        MIGRATION_68_69,
+        MIGRATION_69_70,
+        MIGRATION_70_71,
+        MIGRATION_71_72,
+        MIGRATION_72_73,
+        MIGRATION_73_74,
+        MIGRATION_74_75,
+        MIGRATION_75_76,
+        MIGRATION_76_77,
+        MIGRATION_77_78,
+        MIGRATION_78_79,
+        MIGRATION_79_80,
+        MIGRATION_80_81
     )
     /**
      * Check if a column exists in a table.

@@ -59,13 +59,14 @@ internal object AiRuntimeRecovery {
     suspend fun performRecovery(context: Context) {
         val staleJobs = AiRuntimeJobStore.markStaleActiveJobsTerminal(context)
         val recoverableJobs = AiRuntimeJobStore.getRecoverableJobs(context)
-        val hasRecoverableRuntimeJobs = recoverableJobs.isNotEmpty()
+        val hasRecoverableMediaWorkflow = MediaTranslationWorkflowService.hasRecoverableRuntime(context)
+        val hasRecoverableRuntimeJobs = recoverableJobs.isNotEmpty() || hasRecoverableMediaWorkflow
         recordBreadcrumbSafely(
             event = "receiver_recovery_state",
-            details = "hasRecoverableRuntimeJobs=$hasRecoverableRuntimeJobs stalePruned=${staleJobs.size} recoverable=${recoverableJobs.size}"
+            details = "hasRecoverableRuntimeJobs=$hasRecoverableRuntimeJobs stalePruned=${staleJobs.size} recoverable=${recoverableJobs.size} mediaWorkflow=$hasRecoverableMediaWorkflow"
         )
         TamaNotificationScheduler.scheduleAll(context)
-        val recoveryAction = resolveAiRuntimeBootRecoveryAction(recoverableJobs)
+        val recoveryAction = resolveAiRuntimeBootRecoveryAction(recoverableJobs, hasRecoverableMediaWorkflow)
         if (recoveryAction.shouldShowManualResumeNotification && recoveryAction.manualResumeRoute != null) {
             UnifiedNotificationManager.showAiRuntimeRecoveryNotification(
                 recoverableCount = recoveryAction.recoverableCount,
@@ -105,15 +106,17 @@ internal data class AiRuntimeBootRecoveryAction(
 }
 
 internal fun resolveAiRuntimeBootRecoveryAction(
-    recoverableJobs: List<AiRuntimeJobEntity>
+    recoverableJobs: List<AiRuntimeJobEntity>,
+    hasRecoverableMediaWorkflow: Boolean = false
 ): AiRuntimeBootRecoveryAction {
     val route = when {
+        hasRecoverableMediaWorkflow -> Screen.Workflows.route
         recoverableJobs.isEmpty() -> null
         recoverableJobs.all { it.type == AiRuntimeJobStore.TYPE_DATASET_PIPELINE } -> Screen.Dataset.route
         else -> Screen.Agent.route
     }
     return AiRuntimeBootRecoveryAction(
-        recoverableCount = recoverableJobs.size,
+        recoverableCount = recoverableJobs.size + if (hasRecoverableMediaWorkflow) 1 else 0,
         manualResumeRoute = route,
         foregroundServiceAction = null
     )

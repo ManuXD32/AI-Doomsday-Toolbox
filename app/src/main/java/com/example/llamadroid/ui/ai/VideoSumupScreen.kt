@@ -95,6 +95,9 @@ fun VideoSumupScreen(navController: NavController) {
     val serverModelLabel by settingsRepo.videoSummaryLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.videoSummaryLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.videoSummaryLlamaServerContextTokens.collectAsState()
+    val liteRtModelId by settingsRepo.videoSummaryLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepo.videoSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.videoSummaryLiteRtMtpEnabled.collectAsState()
 
     LaunchedEffect(whisperModels) {
         if (selectedWhisperPath == null && whisperModels.isNotEmpty()) {
@@ -240,8 +243,16 @@ fun VideoSumupScreen(navController: NavController) {
                 llamaServerContextLabel = serverContextLabel,
                 llamaServerContextTokens = serverContextTokens,
                 requestedContextForWarning = mergeContext,
+                liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                onLiteRtModelSelected = settingsRepo::setVideoSummaryLiteRtModelId,
+                liteRtBackend = liteRtBackend,
+                onLiteRtBackendChange = settingsRepo::setVideoSummaryLiteRtBackend,
+                liteRtMtpEnabled = liteRtMtpEnabled,
+                onLiteRtMtpEnabledChange = settingsRepo::setVideoSummaryLiteRtMtpEnabled,
+                liteRtThinkingEnabled = thinkingEnabled,
+                onLiteRtThinkingEnabledChange = settingsRepo::setVideoSummaryThinkingEnabled,
                 fetchMetadata = {
-                    RemoteSummaryClientFactory.fromSnapshot(settingsRepo.videoSummarySettings.snapshot())
+                    RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.videoSummarySettings.snapshot())
                         .fetchMetadata()
                 },
                 onMetadataLoaded = ::persistMetadata

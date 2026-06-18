@@ -38,6 +38,8 @@ data class TamaPetEntity(
 
     val ownerBondLevel: Float,
     val educationLevel: Float,
+    val exerciseLevel: Float = 0f,
+    val introspectionLevel: Float = 0f,
     val currentLocationId: String,
     val homeRoomId: String = "principal_room",
     val leftDecorationId: String? = null,
@@ -205,6 +207,20 @@ data class TamaStudySessionEntity(
     val completedAt: Long?,
     val stoppedAt: Long?,
     val lastUpdatedAt: Long
+)
+
+@Entity(
+    tableName = "tama_market_quotes",
+    primaryKeys = ["petId", "itemId"],
+    indices = [Index(value = ["petId", "quoteWeekKey"])]
+)
+data class TamaMarketQuoteEntity(
+    val petId: String,
+    val itemId: String,
+    val quoteWeekKey: String,
+    val currentPrice: Int,
+    val unitsSoldSinceRefresh: Int,
+    val updatedAt: Long
 )
 
 /**
@@ -693,6 +709,21 @@ interface TamaDao {
 
     @Query("DELETE FROM tama_study_labels WHERE petId = :petId")
     suspend fun deleteStudyLabelsForPet(petId: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveMarketQuote(quote: TamaMarketQuoteEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveMarketQuotes(quotes: List<TamaMarketQuoteEntity>)
+
+    @Query("SELECT * FROM tama_market_quotes WHERE petId = :petId ORDER BY itemId ASC")
+    suspend fun getMarketQuotesForPet(petId: String): List<TamaMarketQuoteEntity>
+
+    @Query("SELECT * FROM tama_market_quotes WHERE petId = :petId AND itemId = :itemId LIMIT 1")
+    suspend fun getMarketQuote(petId: String, itemId: String): TamaMarketQuoteEntity?
+
+    @Query("DELETE FROM tama_market_quotes WHERE petId = :petId")
+    suspend fun deleteMarketQuotesForPet(petId: String)
 
     // Chat operations
     @Insert(onConflict = OnConflictStrategy.REPLACE)

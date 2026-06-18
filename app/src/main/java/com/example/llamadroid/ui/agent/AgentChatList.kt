@@ -534,7 +534,7 @@ fun ChatMessageBubble(
                     Icons.Default.ContentCopy,
                     stringResource(R.string.action_copy),
                     modifier = Modifier.size(14.dp).clickable {
-                        val clip = ClipData.newPlainText("Message", message.content)
+                        val clip = ClipData.newPlainText(context.getString(R.string.clipboard_label_message), message.content)
                         clipboardManager.setPrimaryClip(clip)
                     },
                     tint = MaterialTheme.colorScheme.outline

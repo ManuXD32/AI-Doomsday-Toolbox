@@ -38,6 +38,18 @@ internal object LiteRtLmAcceleratorHealth {
         )
     }
 
+    fun clearGpuCrash(context: Context, model: LiteRtModelEntity) {
+        val key = gpuKey(model)
+        gpuCrashes.remove(key)
+        context.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove("$GPU_TIMESTAMP_PREFIX$key")
+            .remove("$GPU_DETAIL_PREFIX$key")
+            .apply()
+        DebugLog.log("LiteRT GPU quarantine cleared for this app version: model=${model.displayName}")
+    }
+
     fun gpuCrashDetail(context: Context, model: LiteRtModelEntity): String? =
         gpuCrash(context, model)?.detail
 

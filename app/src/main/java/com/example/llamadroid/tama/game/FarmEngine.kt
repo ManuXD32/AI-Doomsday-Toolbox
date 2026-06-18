@@ -61,20 +61,22 @@ class FarmEngine(
             now = now
         )
 
-        currentTiles.sortedBy { it.id }
+        val changedTiles = currentTiles.sortedBy { it.id }
             .zip(result.tiles.sortedBy { it.id })
-            .forEach { (original, updated) ->
-                if (original != updated) {
-                    repository.saveTile(petId, updated, rescheduleNotifications = false, syncDroneWatchers = false)
-                }
+            .mapNotNull { (original, updated) ->
+                updated.takeIf { original != it }
             }
-
-        if (plantingUpgrade?.isPurchased == true && result.plantingDrone != plantingState) {
-            repository.savePlantingDroneState(petId, result.plantingDrone, rescheduleNotifications = false)
-        }
-        if (harvesterUpgrade?.isPurchased == true && result.harvesterDrone != harvesterState) {
-            repository.saveHarvesterDroneState(petId, result.harvesterDrone, rescheduleNotifications = false)
-        }
+        val updatedPlantingState = result.plantingDrone
+            .takeIf { plantingUpgrade?.isPurchased == true && it != plantingState }
+        val updatedHarvesterState = result.harvesterDrone
+            .takeIf { harvesterUpgrade?.isPurchased == true && it != harvesterState }
+        repository.saveDroneUpdateBatch(
+            petId = petId,
+            tiles = changedTiles,
+            plantingState = updatedPlantingState,
+            harvesterState = updatedHarvesterState,
+            rescheduleNotifications = false
+        )
     }
 
     private fun updateWell(well: FarmUpgradeEntity, now: Long): FarmUpgradeEntity {

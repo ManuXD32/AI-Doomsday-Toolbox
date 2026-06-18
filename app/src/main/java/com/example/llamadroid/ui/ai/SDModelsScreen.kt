@@ -2242,7 +2242,7 @@ private fun DownloadingCard(
                 IconButton(onClick = onCancel) {
                     Icon(
                         Icons.Default.Close,
-                        contentDescription = "Cancel",
+                        contentDescription = stringResource(R.string.action_cancel),
                         tint = MaterialTheme.colorScheme.error
                     )
                 }
@@ -2456,7 +2456,7 @@ private fun SearchResultCard(
             }
             Icon(
                 Icons.Default.Add,
-                contentDescription = "View files",
+                contentDescription = stringResource(R.string.sd_models_view_files),
                 tint = MaterialTheme.colorScheme.primary
             )
         }

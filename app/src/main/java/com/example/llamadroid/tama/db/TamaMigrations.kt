@@ -795,6 +795,43 @@ object TamaMigrations {
         }
     }
 
+    val MIGRATION_40_41 = object : Migration(40, 41) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 40 -> 41: Tama introspection")
+            if (!columnExists(db, "tama_pets", "introspectionLevel")) {
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN introspectionLevel REAL NOT NULL DEFAULT 0")
+            }
+        }
+    }
+
+    val MIGRATION_41_42 = object : Migration(41, 42) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 41 -> 42: Tama exercise and market quotes")
+            if (!columnExists(db, "tama_pets", "exerciseLevel")) {
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN exerciseLevel REAL NOT NULL DEFAULT 0")
+            }
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS tama_market_quotes (
+                    petId TEXT NOT NULL,
+                    itemId TEXT NOT NULL,
+                    quoteWeekKey TEXT NOT NULL,
+                    currentPrice INTEGER NOT NULL,
+                    unitsSoldSinceRefresh INTEGER NOT NULL,
+                    updatedAt INTEGER NOT NULL,
+                    PRIMARY KEY(petId, itemId)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE INDEX IF NOT EXISTS index_tama_market_quotes_petId_quoteWeekKey
+                ON tama_market_quotes(petId, quoteWeekKey)
+                """.trimIndent()
+            )
+        }
+    }
+
     private enum class AdventureGateProfileStat {
         MAX_HP,
         MAX_MANA,
@@ -919,7 +956,9 @@ object TamaMigrations {
         MIGRATION_36_37,
         MIGRATION_37_38,
         MIGRATION_38_39,
-        MIGRATION_39_40
+        MIGRATION_39_40,
+        MIGRATION_40_41,
+        MIGRATION_41_42
     )
     
     // ========== HELPER FUNCTIONS ==========

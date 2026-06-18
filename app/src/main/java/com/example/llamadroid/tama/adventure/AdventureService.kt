@@ -609,7 +609,11 @@ class AdventureService(
             backend = backend,
             baseUrl = baseUrl,
             model = model,
-            timeoutMinutes = 10
+            timeoutMinutes = 10,
+            context = context,
+            liteRtModelId = settingsRepository.adventureLiteRtModelId.value.takeIf { it > 0L },
+            liteRtBackend = settingsRepository.adventureLiteRtBackend.value,
+            liteRtMtpEnabled = settingsRepository.adventureLiteRtMtpEnabled.value
         )
     }
 

@@ -3,7 +3,6 @@ package com.example.llamadroid.tama.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -48,6 +47,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
@@ -70,7 +70,9 @@ import com.example.llamadroid.tama.rpg.AdventureGateSupplyDefinition
 import com.example.llamadroid.tama.rpg.AdventureGateSupplyKind
 import com.example.llamadroid.tama.rpg.NightArenaGenerator
 import com.example.llamadroid.ui.components.DraftIntTextField
+import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
+import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.navigation.Screen
 import androidx.navigation.NavController
 import kotlinx.coroutines.launch
@@ -100,6 +102,8 @@ private const val TAMA_ENERGY_EMOJI = "🌙"
 private const val TAMA_HYGIENE_EMOJI = "🧼"
 private const val TAMA_MONEY_EMOJI = "💰"
 private const val TAMA_EDUCATION_EMOJI = "📚"
+private const val TAMA_INTROSPECTION_EMOJI = "🪞"
+private const val TAMA_EXERCISE_ICON_ASSET = "tama/icons/ui/exercise_glove.png"
 private const val TAMA_CHAT_EMOJI = "💬"
 private const val TAMA_INVENTORY_EMOJI = "🎒"
 private const val TAMA_CHECKLIST_EMOJI = "✅"
@@ -160,7 +164,6 @@ fun TamaScreen(
     val questChecklist by questChecklistFeed.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val appContext = context.applicationContext
     var queuedPaintingArtworkId by rememberSaveable { mutableStateOf<String?>(null) }
     var artworkAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
     var dreamAlbumAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -265,6 +268,7 @@ fun TamaScreen(
         currentAction ?: when (pet?.currentActivity) {
             ActivityType.WORKING -> "working"
             ActivityType.STUDYING -> if (TamaStudySessionSupport.isRestPhase(activeStudySession)) "sleeping" else "studying"
+            ActivityType.TRAINING -> "training"
             ActivityType.RELAXING -> "sunbathing"
             else -> "idle"
         }
@@ -278,12 +282,19 @@ fun TamaScreen(
     var showSecondResetDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showWorkDialog by remember { mutableStateOf(false) }
+    var showTrainingDialog by remember { mutableStateOf(false) }
     var showAlchemistDialog by remember { mutableStateOf(false) }
     var showHospitalDialog by remember { mutableStateOf(false) }
+    var showAdventureGateWarningDialog by remember { mutableStateOf(false) }
     var showStudyDialog by remember { mutableStateOf(false) }
     var showQuestBoardDialog by remember { mutableStateOf(false) }
+    var showMarketBoardDialog by remember { mutableStateOf(false) }
     var showQuestChecklistDialog by remember { mutableStateOf(false) }
     var questBoard by remember { mutableStateOf<TamaQuestBoard?>(null) }
+    var marketBoard by remember { mutableStateOf<TamaMarketBoard?>(null) }
+    val requestAdventureGateEntry = {
+        showAdventureGateWarningDialog = true
+    }
     var questCompletionPresentation by remember { mutableStateOf<TamaQuestCompletionPresentation?>(null) }
     var sleepyFairyReminder by remember { mutableStateOf<TamaSleepyFairyReminder?>(null) }
     var wasInPrincipalHomeRoom by remember { mutableStateOf(false) }
@@ -296,6 +307,13 @@ fun TamaScreen(
             board.accepted.any { quest -> (quest.expiresAt ?: Long.MAX_VALUE) <= currentTime }
         if (needsRefresh) {
             questBoard = gameEngine.getParkQuestBoard(currentTime)
+        }
+    }
+
+    LaunchedEffect(pet?.currentParkEncounter?.npcId, pet?.currentParkEncounter?.phase) {
+        val encounter = pet?.currentParkEncounter
+        if (encounter?.type == TamaParkEncounterType.SELLER) {
+            marketBoard = gameEngine.getParkMarketBoard()
         }
     }
 
@@ -349,6 +367,7 @@ fun TamaScreen(
             Triple(1, 1, com.example.llamadroid.tama.data.LocationType.SCHOOL),
             Triple(2, 1, com.example.llamadroid.tama.data.LocationType.WORKPLACE),
             Triple(3, 1, com.example.llamadroid.tama.data.LocationType.FARM),
+            Triple(4, 1, com.example.llamadroid.tama.data.LocationType.BOXING_RING),
             Triple(0, 2, com.example.llamadroid.tama.data.LocationType.DUNGEON),
             Triple(2, 2, com.example.llamadroid.tama.data.LocationType.ADVENTURE_GATE),
             Triple(4, 2, com.example.llamadroid.tama.data.LocationType.DUNGEON),
@@ -588,6 +607,14 @@ fun TamaScreen(
                                     showQuestBoardDialog = true
                                 }
                             }
+                        } else null,
+                        onMarketBoard = if (currentLocation?.type == LocationType.PARK) {
+                            {
+                                scope.launch {
+                                    marketBoard = gameEngine.getParkMarketBoard(currentTime)
+                                    showMarketBoardDialog = true
+                                }
+                            }
                         } else null
                     )
                 }
@@ -623,7 +650,6 @@ fun TamaScreen(
                 ?: currentLocation?.name?.lowercase()
                 ?: "home",
             currentTime = currentTime,
-            activeStudySession = activeStudySession,
             onFeed = {
                 showFeedDialog = true
             },
@@ -662,6 +688,7 @@ fun TamaScreen(
                 }
             },
             onWork = { showWorkDialog = true },
+            onTrain = { showTrainingDialog = true },
             onChange = { showAlchemistDialog = true },
             onStudy = { showStudyDialog = true },
             onRelax = {
@@ -674,6 +701,12 @@ fun TamaScreen(
                 scope.launch {
                     questBoard = gameEngine.getParkQuestBoard(currentTime)
                     showQuestBoardDialog = true
+                }
+            },
+            onMarketBoard = {
+                scope.launch {
+                    marketBoard = gameEngine.getParkMarketBoard(currentTime)
+                    showMarketBoardDialog = true
                 }
             },
             onDebugDeepDream = {
@@ -711,7 +744,7 @@ fun TamaScreen(
             onBuy = { showShopDialog = true },
             onChat = onChat,
             onDungeon = { navController.navigate(Screen.Dungeon.route) },
-            onAdventureGate = { navController.navigate(Screen.AdventureGate.route) },
+            onAdventureGate = requestAdventureGateEntry,
             onNightArena = { navController.navigate(Screen.NightArena.route) },
             onInventory = { showInventoryDialog = true },
             onChecklist = { showQuestChecklistDialog = true },
@@ -847,6 +880,7 @@ fun TamaScreen(
                 LocationType.SHOP -> "tama/backgrounds/shop.png"
                 LocationType.SCHOOL -> "tama/backgrounds/classroom.png"
                 LocationType.WORKPLACE -> "tama/backgrounds/workplace.png"
+                LocationType.BOXING_RING -> "tama/backgrounds/boxing_ring.png"
                 LocationType.PARK -> "tama/backgrounds/park.png"
                 LocationType.HOSPITAL -> "tama/backgrounds/hospital.png"
                 LocationType.ARCADE -> "tama/backgrounds/arcade_location.png"
@@ -909,6 +943,10 @@ fun TamaScreen(
                                     fontSize = 11.sp
                                 )
                             }
+                        }
+                        LocationType.BOXING_RING -> {
+                            Text(stringResource(R.string.tama_training_gain), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                            Text(stringResource(R.string.tama_current_exercise, pet!!.exerciseLevel.toInt()), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                         }
                         LocationType.PARK -> {
                             Text(stringResource(R.string.tama_park_relax), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
@@ -987,6 +1025,13 @@ fun TamaScreen(
                                 showMap = false
                             }) { Text(stringResource(R.string.tama_btn_work)) }
                         }
+                        LocationType.BOXING_RING -> {
+                            TextButton(onClick = {
+                                showTrainingDialog = true
+                                selectedLocation = null
+                                showMap = false
+                            }) { Text(stringResource(R.string.tama_btn_train)) }
+                        }
                         LocationType.ARCADE -> {
                             TextButton(onClick = {
                                 selectedLocation = null
@@ -1020,7 +1065,8 @@ fun TamaScreen(
                         LocationType.ADVENTURE_GATE -> {
                             TextButton(onClick = {
                                 selectedLocation = null
-                                navController.navigate(Screen.AdventureGate.route)
+                                showMap = false
+                                requestAdventureGateEntry()
                             }) { Text(stringResource(R.string.tama_btn_adventure_gate)) }
                         }
                         else -> {
@@ -1163,6 +1209,65 @@ fun TamaScreen(
         )
     }
 
+    if (showTrainingDialog && pet != null) {
+        TamaTrainingDialog(
+            pet = pet!!,
+            onDismiss = { showTrainingDialog = false },
+            onStartTier = { tierId ->
+                scope.launch {
+                    val result = gameEngine.startTraining(tierId)
+                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    if (result.success) {
+                        showTrainingDialog = false
+                    }
+                }
+            }
+        )
+    }
+
+    if (showAdventureGateWarningDialog) {
+        AlertDialog(
+            onDismissRequest = { showAdventureGateWarningDialog = false },
+            title = {
+                Text(
+                    stringResource(R.string.adventure_gate_placeholder_warning_title),
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.adventure_gate_placeholder_warning_body),
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 18.sp
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showAdventureGateWarningDialog = false
+                        navController.navigate(Screen.AdventureGate.route)
+                    }
+                ) {
+                    Text(stringResource(R.string.adventure_gate_placeholder_warning_continue))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAdventureGateWarningDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
     if (showAlchemistDialog && pet != null) {
         AlchemistDialog(
             pet = pet!!,
@@ -1226,6 +1331,13 @@ fun TamaScreen(
                 }
             },
             onDismiss = { showQuestBoardDialog = false }
+        )
+    }
+
+    if (showMarketBoardDialog) {
+        ParkMarketBoardDialog(
+            board = marketBoard,
+            onDismiss = { showMarketBoardDialog = false }
         )
     }
 
@@ -1308,7 +1420,8 @@ fun TamaScreen(
             },
             onSellCrop = { item, quantity ->
                 gameEngine.sellToParkSeller(item, quantity)
-            }
+            },
+            marketQuotes = marketBoard?.quotes.orEmpty()
         )
     }
 
@@ -1339,19 +1452,20 @@ private fun TamaParkEncounterDialog(
     onAcceptSeller: () -> Unit,
     onDeclineSeller: () -> Unit,
     onFinishSeller: () -> Unit,
-    onSellCrop: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult
+    onSellCrop: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult,
+    marketQuotes: List<TamaMarketQuote> = emptyList()
 ) {
     val context = LocalContext.current
     val locale = context.resources.configuration.locales[0]
     val npc = remember(encounter.npcId) { TamaParkSocialCatalog.npcById(encounter.npcId) }
-    val sellableCrops = remember(pet.inventory) {
+    val sellableItems = remember(pet.inventory) {
         pet.inventory.filter { item ->
-            item.type == ItemType.CROP &&
-                item.quantity > 0 &&
+            item.quantity > 0 &&
                 FarmTradeItemCatalog.isTradeItem(item.id)
         }
     }
     val marketMode = encounter.type == TamaParkEncounterType.SELLER && encounter.phase == TamaParkEncounterPhase.SELLER_MARKET
+    val marketQuoteByItemId = remember(marketQuotes) { marketQuotes.associateBy { it.itemId } }
     val backgroundAsset = if (marketMode) {
         "file:///android_asset/$PARK_MARKET_BACKGROUND_ASSET"
     } else {
@@ -1500,7 +1614,7 @@ private fun TamaParkEncounterDialog(
                                 fontSize = 13.sp
                             )
                             if (marketMode) {
-                                if (sellableCrops.isEmpty()) {
+                                if (sellableItems.isEmpty()) {
                                     Text(
                                         stringResource(R.string.tama_park_seller_no_crops),
                                         color = TamaMutedText,
@@ -1515,9 +1629,12 @@ private fun TamaParkEncounterDialog(
                                             .verticalScroll(rememberScrollState()),
                                         verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        sellableCrops.forEach { item ->
+                                        sellableItems.forEach { item ->
+                                            val quotePrice = marketQuoteByItemId[item.id]?.currentPrice
+                                                ?: FarmTradeItemCatalog.sellPrice(item.id).coerceAtLeast(1)
                                             ParkSellerCropRow(
                                                 item = item,
+                                                pricePerUnit = quotePrice,
                                                 onSell = onSellCrop
                                             )
                                         }
@@ -1674,17 +1791,31 @@ private fun TamaQuestRewardDialog(
 @Composable
 private fun ParkSellerCropRow(
     item: InventoryItem,
+    pricePerUnit: Int,
     onSell: suspend (InventoryItem, Int) -> TamaGameEngine.ActionResult
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var quantity by remember(item.id) { mutableIntStateOf(1) }
+    val decrementRepeatState = rememberPressAndHoldRepeatState()
+    val incrementRepeatState = rememberPressAndHoldRepeatState()
     val assetPath = remember(item.id) { FarmTradeItemCatalog.assetPath(item.id) }
-    val basePrice = remember(item.id) { FarmTradeItemCatalog.sellPrice(item.id).coerceAtLeast(5) }
-    val boostedPrice = remember(basePrice) { TamaParkSocialCatalog.boostedSellerPrice(basePrice) }
     val ownedLabel = stringResource(R.string.tama_park_seller_owned_chip, item.quantity)
-    val eachLabel = stringResource(R.string.tama_park_seller_each_chip, boostedPrice.toInt())
-    val totalLabel = stringResource(R.string.tama_park_seller_total_chip, boostedPrice.toInt() * quantity)
+    val eachLabel = stringResource(R.string.tama_park_seller_each_chip, pricePerUnit)
+    val totalLabel = stringResource(R.string.tama_park_seller_total_chip, pricePerUnit * quantity)
+
+    fun decrementQuantity(): Boolean {
+        if (quantity <= 1) return false
+        quantity -= 1
+        return true
+    }
+
+    fun incrementQuantity(): Boolean {
+        if (quantity >= item.quantity) return false
+        quantity += 1
+        return true
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = Color.White.copy(alpha = 0.95f),
@@ -1754,9 +1885,14 @@ private fun ParkSellerCropRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { quantity = (quantity - 1).coerceAtLeast(1) },
+                        onClick = { decrementRepeatState.handleClick { decrementQuantity() } },
                         enabled = quantity > 1,
-                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 40.dp),
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 40.dp)
+                            .pressAndHoldRepeat(
+                                state = decrementRepeatState,
+                                enabled = quantity > 1
+                            ) { decrementQuantity() },
                         contentPadding = PaddingValues(0.dp)
                     ) { Text("-") }
                     Box(
@@ -1772,9 +1908,14 @@ private fun ParkSellerCropRow(
                         )
                     }
                     OutlinedButton(
-                        onClick = { quantity = (quantity + 1).coerceAtMost(item.quantity) },
+                        onClick = { incrementRepeatState.handleClick { incrementQuantity() } },
                         enabled = quantity < item.quantity,
-                        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 40.dp),
+                        modifier = Modifier
+                            .sizeIn(minWidth = 48.dp, minHeight = 40.dp)
+                            .pressAndHoldRepeat(
+                                state = incrementRepeatState,
+                                enabled = quantity < item.quantity
+                            ) { incrementQuantity() },
                         contentPadding = PaddingValues(0.dp)
                     ) { Text("+") }
                 }
@@ -2070,6 +2211,125 @@ private fun ParkQuestCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ParkMarketBoardDialog(
+    board: TamaMarketBoard?,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val locale = context.resources.configuration.locales[0]
+    TamaPopupDialog(
+        title = stringResource(R.string.tama_market_board_title),
+        backgroundAsset = PARK_MARKET_BACKGROUND_ASSET,
+        onDismissRequest = onDismiss,
+        compact = true,
+        bodyContent = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    stringResource(
+                        R.string.tama_market_board_refresh,
+                        board?.nextRefreshAt?.let { formatMarketRefreshTime(context, it) }.orEmpty()
+                    ),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = TamaMutedText
+                )
+                val quotes = board?.quotes.orEmpty()
+                if (quotes.isEmpty()) {
+                    Text(
+                        stringResource(R.string.tama_market_board_empty),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        color = TamaMutedText
+                    )
+                } else {
+                    quotes.forEach { quote ->
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = TamaLight.copy(alpha = 0.92f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, TamaDark.copy(alpha = 0.14f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AsyncImage(
+                                    model = rememberFarmAssetModel("file:///android_asset/${quote.assetPath}"),
+                                    contentDescription = null,
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Fit,
+                                    filterQuality = FilterQuality.None
+                                )
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(
+                                        quote.displayText.resolve(locale),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 12.sp,
+                                        color = TamaDark,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        stringResource(R.string.tama_market_board_range, quote.minPrice, quote.maxPrice),
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = TamaMutedText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                Text(
+                                    stringResource(R.string.tama_market_board_price, quote.currentPrice),
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = marketBoardPriceColor(quote),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        footerContent = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    )
+}
+
+private fun formatMarketRefreshTime(context: Context, timestamp: Long): String =
+    java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM, context.resources.configuration.locales[0])
+        .format(java.util.Date(timestamp))
+
+private fun marketBoardPriceColor(quote: TamaMarketQuote): Color {
+    if (quote.currentPrice >= quote.maxPrice) return Color(0xFF2E7D32)
+    val dangerThreshold = if (quote.itemId.startsWith("crop_")) {
+        CropDefinitions.CROPS[quote.itemId.removePrefix("crop_")]?.seedPrice ?: quote.minPrice
+    } else {
+        quote.minPrice
+    }
+    return if (quote.currentPrice <= dangerThreshold) {
+        Color(0xFFC62828)
+    } else {
+        Color(0xFFEF6C00)
     }
 }
 
@@ -3285,6 +3545,7 @@ fun TamaPopupDialog(
     onDismissRequest: () -> Unit,
     modifier: Modifier = Modifier,
     compact: Boolean = false,
+    showFooter: Boolean = true,
     bodyContent: @Composable ColumnScope.() -> Unit,
     footerContent: @Composable RowScope.() -> Unit
 ) {
@@ -3365,24 +3626,26 @@ fun TamaPopupDialog(
                                 }
                             }
                         }
-                        Surface(
-                            shape = RoundedCornerShape(18.dp),
-                            color = TamaDark.copy(alpha = 0.55f),
-                            contentColor = TamaLight,
-                            border = BorderStroke(1.dp, TamaLight.copy(alpha = 0.12f))
-                        ) {
-                            CompositionLocalProvider(
-                                LocalContentColor provides TamaLight,
-                                LocalTextStyle provides LocalTextStyle.current.copy(color = TamaLight)
+                        if (showFooter) {
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = TamaDark.copy(alpha = 0.55f),
+                                contentColor = TamaLight,
+                                border = BorderStroke(1.dp, TamaLight.copy(alpha = 0.12f))
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.End,
-                                    verticalAlignment = Alignment.CenterVertically
+                                CompositionLocalProvider(
+                                    LocalContentColor provides TamaLight,
+                                    LocalTextStyle provides LocalTextStyle.current.copy(color = TamaLight)
                                 ) {
-                                    footerContent()
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.End,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        footerContent()
+                                    }
                                 }
                             }
                         }
@@ -3966,6 +4229,7 @@ private fun RoomShopRow(
     owned: Boolean,
     onBuy: () -> Unit
 ) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -3986,7 +4250,7 @@ private fun RoomShopRow(
         )
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                stringResource(room.titleRes),
+                TamaRoomCatalog.localizedTitle(context, room),
                 fontFamily = FontFamily.Monospace,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -4333,6 +4597,7 @@ private fun DecorInventoryRow(
 
 @Composable
 private fun CurrentRoomCard(room: TamaRoomDefinition) {
+    val context = LocalContext.current
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -4352,7 +4617,7 @@ private fun CurrentRoomCard(room: TamaRoomDefinition) {
             filterQuality = FilterQuality.None
         )
         Text(
-            stringResource(room.titleRes),
+            TamaRoomCatalog.localizedTitle(context, room),
             fontFamily = FontFamily.Monospace,
             fontSize = 14.sp,
             fontWeight = FontWeight.Bold,
@@ -4376,6 +4641,7 @@ private fun RoomInventoryRow(
     current: Boolean,
     onUse: () -> Unit
 ) {
+    val context = LocalContext.current
     val clickableModifier = if (current) Modifier else Modifier.clickable(enabled = owned) { onUse() }
     Column(
         modifier = Modifier
@@ -4399,7 +4665,7 @@ private fun RoomInventoryRow(
         Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    stringResource(room.titleRes),
+                    TamaRoomCatalog.localizedTitle(context, room),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -4408,7 +4674,7 @@ private fun RoomInventoryRow(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    stringResource(room.descriptionRes),
+                    TamaRoomCatalog.localizedDescription(context, room),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = TamaMutedText,
@@ -4780,17 +5046,20 @@ fun TamaPetDisplay(
     sleepyFairyReminder: TamaSleepyFairyReminder? = null,
     activeStudySession: TamaStudySessionEntity? = null,
     currentTime: Long = System.currentTimeMillis(),
-    onQuestBoard: (() -> Unit)? = null
+    onQuestBoard: (() -> Unit)? = null,
+    onMarketBoard: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val speciesName = remember(pet.species, pet.genetics.bodyStyle) {
         speciesDisplayName(context, pet.species, pet.genetics.bodyStyle)
     }
     val workBackdropAssetPath = remember(pet.currentWorkJobId, currentAction) {
-        if (currentAction?.equals("working", ignoreCase = true) == true) {
-            TamaWorkCatalog.jobById(pet.currentWorkJobId)?.backgroundAssetPath
-        } else {
-            null
+        when {
+            currentAction?.equals("working", ignoreCase = true) == true ->
+                TamaWorkCatalog.jobById(pet.currentWorkJobId)?.backgroundAssetPath
+            currentAction?.equals("training", ignoreCase = true) == true ->
+                TamaTrainingCatalog.tierById(pet.currentWorkJobId)?.backgroundAssetPath
+            else -> null
         }
     }
     val backdropLocationType = when {
@@ -4812,7 +5081,7 @@ fun TamaPetDisplay(
     }
     val sleepyFairyLine = remember(sleepyFairyReminder?.lineIndex) {
         sleepyFairyReminder?.let {
-            TamaSleepyFairyCatalog.resolveLine(it, context.resources.configuration.locales[0])
+            TamaSleepyFairyCatalog.resolveLine(context, it)
         }.orEmpty()
     }
     val showAmbientNpcLine = pet.currentAmbientNpc != null &&
@@ -4850,6 +5119,7 @@ fun TamaPetDisplay(
                 val activityLabel = when (pet.currentActivity) {
                     com.example.llamadroid.tama.data.ActivityType.WORKING -> stringResource(R.string.tama_action_work)
                     com.example.llamadroid.tama.data.ActivityType.STUDYING -> stringResource(R.string.tama_action_study)
+                    com.example.llamadroid.tama.data.ActivityType.TRAINING -> stringResource(R.string.tama_action_train)
                     com.example.llamadroid.tama.data.ActivityType.RELAXING -> stringResource(R.string.tama_action_relax)
                     else -> stringResource(R.string.tama_action_busy)
                 }
@@ -4904,9 +5174,19 @@ fun TamaPetDisplay(
                         R.string.tama_activity_gain_education,
                         (hoursPassed * 5).toInt()
                     )
+                    com.example.llamadroid.tama.data.ActivityType.TRAINING -> {
+                        val hourlyPay = TamaTrainingCatalog.tierById(pet.currentWorkJobId)?.hourlyPay ?: 8
+                        context.getString(
+                            R.string.tama_activity_gain_training,
+                            (hoursPassed * TAMA_TRAINING_EXERCISE_PER_HOUR).toInt(),
+                            (hoursPassed * TAMA_TRAINING_HAPPINESS_PER_HOUR).toInt(),
+                            (hoursPassed * hourlyPay).toInt()
+                        )
+                    }
                     com.example.llamadroid.tama.data.ActivityType.RELAXING -> context.getString(
                         R.string.tama_activity_gain_happiness,
-                        (hoursPassed * 40).toInt()
+                        (hoursPassed * 40).toInt(),
+                        (hoursPassed * TAMA_RELAX_INTROSPECTION_PER_HOUR).toInt()
                     )
                     else -> ""
                 }
@@ -5070,6 +5350,40 @@ fun TamaPetDisplay(
                     }
                 }
 
+                if (locationTypeName?.contains("park", ignoreCase = true) == true && onMarketBoard != null) {
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .offset(x = (-112).dp, y = 88.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onMarketBoard() },
+                        color = Color(0xFF5D6B2F).copy(alpha = 0.96f),
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(3.dp, Color(0xFFE3D99C))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .width(86.dp)
+                                .padding(horizontal = 8.dp, vertical = 10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            TamaEmojiIcon("💹", fontSize = 22.sp)
+                            Text(
+                                text = stringResource(R.string.tama_market_board_title),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 9.sp,
+                                lineHeight = 10.sp,
+                                textAlign = TextAlign.Center,
+                                color = Color(0xFFFFF7DF),
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
                 if (showAmbientNpcLine && ambientNpcLine.isNotBlank()) {
                     Surface(
                         modifier = Modifier
@@ -5133,6 +5447,10 @@ fun TamaPetDisplay(
                             modifier = Modifier.offset(x = (-76).dp, y = (30 + propFloatY).dp),
                             size = 100.dp
                         )
+                    }
+                    "training" -> {
+                        TamaEmojiIcon("🥊", modifier = Modifier.offset(x = (-70).dp, y = (26 + propFloatY).dp), fontSize = 34.sp)
+                        TamaEmojiIcon("💥", modifier = Modifier.offset(x = 70.dp, y = (-18 + propFloatY).dp), fontSize = 26.sp)
                     }
                     "cleaning" -> {
                         TamaActionAsset(
@@ -5290,17 +5608,18 @@ fun TamaControls(
     isBusy: Boolean = false,
     currentLocationId: String = "home",
     currentTime: Long = System.currentTimeMillis(),
-    activeStudySession: TamaStudySessionEntity? = null,
     onFeed: () -> Unit,
     onClean: () -> Unit,
     onPlay: () -> Unit,
     onSleepOrWake: () -> Unit,
     onGoHome: () -> Unit = {},
     onWork: () -> Unit = {},
+    onTrain: () -> Unit = {},
     onChange: () -> Unit = {},
     onStudy: () -> Unit = {},
     onRelax: () -> Unit = {},
     onQuestBoard: () -> Unit = {},
+    onMarketBoard: () -> Unit = {},
     onDebugDeepDream: () -> Unit = {},
     onStopActivity: () -> Unit = {},
     onBuy: () -> Unit = {},
@@ -5329,12 +5648,7 @@ fun TamaControls(
         }
         if (isDoingActivity) {
             add(TamaControlConfig(icon = TAMA_STOP_EMOJI, label = stringResource(R.string.tama_btn_stop), enabled = !isBusy, onClick = onStopActivity))
-            if (
-                pet?.currentActivity == ActivityType.STUDYING &&
-                TamaStudySessionSupport.isRestPhase(activeStudySession)
-            ) {
-                add(TamaControlConfig(icon = TAMA_CHAT_EMOJI, label = stringResource(R.string.tama_btn_chat), enabled = !isBusy, onClick = onChat))
-            }
+            add(TamaControlConfig(icon = TAMA_CHAT_EMOJI, label = stringResource(R.string.tama_btn_chat), enabled = !isBusy && !isSleeping, onClick = onChat))
         } else if (isHome) {
             add(TamaControlConfig(icon = TAMA_FEED_EMOJI, label = stringResource(R.string.tama_btn_feed), enabled = canAct, onClick = onFeed))
             add(TamaControlConfig(icon = "🧽", label = stringResource(R.string.tama_btn_clean), enabled = canAct, onClick = onClean))
@@ -5368,9 +5682,13 @@ fun TamaControls(
                 currentLocationId.contains("office", ignoreCase = true) || currentLocationId.contains("work", ignoreCase = true) -> {
                     add(TamaControlConfig(icon = "💼", label = stringResource(R.string.tama_btn_work_short), enabled = canAct && (pet?.stage?.canWork() == true), onClick = onWork))
                 }
+                currentLocationId.contains("boxing_ring", ignoreCase = true) -> {
+                    add(TamaControlConfig(icon = "🥊", label = stringResource(R.string.tama_btn_train), enabled = canAct && (pet?.stage?.canTrain() == true), onClick = onTrain))
+                }
                 currentLocationId.contains("park", ignoreCase = true) -> {
                     add(TamaControlConfig(icon = TAMA_RELAX_EMOJI, label = stringResource(R.string.tama_btn_relax), enabled = canAct, onClick = onRelax))
                     add(TamaControlConfig(icon = "📜", label = stringResource(R.string.tama_btn_quests), enabled = canAct, onClick = onQuestBoard))
+                    add(TamaControlConfig(icon = "💹", label = stringResource(R.string.tama_btn_market), enabled = canAct, onClick = onMarketBoard))
                 }
                 currentLocationId.contains("alchemist", ignoreCase = true) -> {
                     add(TamaControlConfig(icon = TAMA_CHANGE_EMOJI, label = stringResource(R.string.tama_btn_change), enabled = canAct, onClick = onChange))
@@ -5756,6 +6074,82 @@ private fun TamaWorkDialog(
 }
 
 @Composable
+private fun TamaTrainingDialog(
+    pet: TamaPet,
+    onDismiss: () -> Unit,
+    onStartTier: (String) -> Unit
+) {
+    TamaPopupDialog(
+        title = stringResource(R.string.tama_training_dialog_title),
+        backgroundAsset = "tama/backgrounds/boxing_ring.png",
+        onDismissRequest = onDismiss,
+        bodyContent = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    stringResource(R.string.tama_training_dialog_body, pet.exerciseLevel.toInt()),
+                    fontFamily = FontFamily.Monospace,
+                    color = TamaMutedText,
+                    fontSize = 12.sp
+                )
+                TamaTrainingCatalog.tiers.forEach { tier ->
+                    val unlocked = pet.exerciseLevel >= tier.requiredExercise
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (unlocked) TamaLight.copy(alpha = 0.38f) else Color.Gray.copy(alpha = 0.18f))
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                stringResource(tier.titleRes),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.tama_training_tier_summary,
+                                    tier.requiredExercise,
+                                    tier.hourlyPay.toInt()
+                                ),
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                color = TamaMutedText
+                            )
+                        }
+                        TextButton(
+                            onClick = { onStartTier(tier.id) },
+                            enabled = unlocked
+                        ) {
+                            Text(
+                                if (unlocked) {
+                                    stringResource(R.string.tama_training_dialog_start)
+                                } else {
+                                    stringResource(R.string.tama_training_dialog_locked)
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        footerContent = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    )
+}
+
+@Composable
 private fun DecorPlacementDialog(
     decorName: String,
     onPlace: (TamaDecorSlot) -> Unit,
@@ -5816,6 +6210,10 @@ private fun TamaSettingsDialog(
     val serverModelLabel by settingsRepo.tamaLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.tamaLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.tamaLlamaServerContextTokens.collectAsState()
+    val tamaLiteRtModelId by settingsRepo.tamaLiteRtModelId.collectAsState()
+    val tamaLiteRtBackend by settingsRepo.tamaLiteRtBackend.collectAsState()
+    val tamaLiteRtMtpEnabled by settingsRepo.tamaLiteRtMtpEnabled.collectAsState()
+    val tamaThinkingEnabled by settingsRepo.tamaThinkingEnabled.collectAsState()
     val installedModelsFlow = remember(appContext) {
         runCatching {
             AppDatabase.getDatabase(appContext)
@@ -5915,9 +6313,18 @@ private fun TamaSettingsDialog(
                     llamaServerContextLabel = serverContextLabel,
                     llamaServerContextTokens = serverContextTokens,
                     requestedContextForWarning = null,
+                    liteRtModelId = tamaLiteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = settingsRepo::setTamaLiteRtModelId,
+                    liteRtBackend = tamaLiteRtBackend,
+                    onLiteRtBackendChange = settingsRepo::setTamaLiteRtBackend,
+                    liteRtMtpEnabled = tamaLiteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = settingsRepo::setTamaLiteRtMtpEnabled,
+                    liteRtThinkingEnabled = tamaThinkingEnabled,
+                    onLiteRtThinkingEnabledChange = settingsRepo::setTamaThinkingEnabled,
                     fetchMetadata = {
                         RemoteSummaryClientFactory.fromConfig(
                             RemoteSummaryBackendConfig(
+                                context = context,
                                 backend = backend,
                                 baseUrl = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
                                     SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> tamaLlamaServerUrl.trim()
@@ -5928,6 +6335,9 @@ private fun TamaSettingsDialog(
                                     SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> serverModelLabel?.trim()?.ifBlank { null }
                                     else -> tamaSummarizerModel.trim().ifBlank { null }
                                 },
+                                liteRtModelId = tamaLiteRtModelId.takeIf { it > 0L },
+                                liteRtBackend = tamaLiteRtBackend,
+                                liteRtMtpEnabled = tamaLiteRtMtpEnabled,
                                 timeoutMinutes = 1
                             )
                         ).fetchMetadata()
@@ -6250,6 +6660,43 @@ fun TamaMenuDialog(
 }
 
 @Composable
+private fun PetStatusInfoValue(
+    icon: String,
+    text: String,
+    modifier: Modifier = Modifier,
+    fontWeight: FontWeight = FontWeight.Normal,
+    assetPath: String? = null,
+    assetSize: Dp = 16.dp
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (assetPath != null) {
+            AsyncImage(
+                model = "file:///android_asset/$assetPath",
+                contentDescription = null,
+                modifier = Modifier.size(assetSize),
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.None
+            )
+        } else {
+            TamaEmojiIcon(icon, fontSize = 14.sp)
+        }
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 12.sp,
+            fontWeight = fontWeight,
+            color = TamaDark,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
 fun PetStatusDialog(
     pet: TamaPet,
     onDismiss: () -> Unit
@@ -6377,14 +6824,33 @@ fun PetStatusDialog(
                 // Info Section
                 Text(stringResource(R.string.tama_status_info_section), fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace, color = TamaAccent)
                 Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    TamaEmojiIcon(TAMA_MONEY_EMOJI, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("${pet.money}", fontFamily = FontFamily.Monospace, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = TamaDark)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    TamaEmojiIcon(TAMA_EDUCATION_EMOJI, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.tama_status_education_value, pet.educationLevel.toInt()), fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = TamaDark)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PetStatusInfoValue(
+                        icon = TAMA_MONEY_EMOJI,
+                        text = "${pet.money}",
+                        modifier = Modifier.fillMaxWidth(),
+                        fontWeight = FontWeight.Bold
+                    )
+                    PetStatusInfoValue(
+                        icon = TAMA_EDUCATION_EMOJI,
+                        text = stringResource(R.string.tama_status_education_value, pet.educationLevel.toInt()),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    PetStatusInfoValue(
+                        icon = TAMA_INTROSPECTION_EMOJI,
+                        text = stringResource(R.string.tama_status_introspection_value, pet.introspectionLevel.toInt()),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    PetStatusInfoValue(
+                        icon = "",
+                        assetPath = TAMA_EXERCISE_ICON_ASSET,
+                        text = stringResource(R.string.tama_status_exercise_value, pet.exerciseLevel.toInt()),
+                        modifier = Modifier.fillMaxWidth(),
+                        assetSize = 20.dp
+                    )
                 }
                 Text(stringResource(R.string.tama_species_label, speciesName), fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TamaMutedText)
                 Text("${pet.personality.name}: ${pet.personality.description}", fontFamily = FontFamily.Monospace, fontSize = 11.sp, color = TamaMutedText)
@@ -6489,6 +6955,7 @@ private fun tamaModelLabel(model: com.example.llamadroid.data.db.ModelEntity): S
             OnnxCatalogProvider.SDAI -> stringResource(R.string.onnx_models_provider_sdai)
             OnnxCatalogProvider.MANUXD32 -> stringResource(R.string.onnx_models_provider_manuxd32)
             OnnxCatalogProvider.SUPERTONIC -> stringResource(R.string.onnx_models_provider_supertonic)
+            OnnxCatalogProvider.BACKGROUND_REMOVAL -> stringResource(R.string.onnx_models_provider_bgr)
         }
         "${entry.title} · $providerLabel"
     } else {
@@ -6512,14 +6979,14 @@ fun ResetConfirmationDialog(
         },
         footerContent = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.action_cancel))
             }
             Spacer(modifier = Modifier.width(8.dp))
             Button(
                 onClick = onConfirm,
                 colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
             ) {
-                Text("Yes, Delete", color = Color.White)
+                Text(stringResource(R.string.tama_confirm_delete_action), color = Color.White)
             }
         }
     )

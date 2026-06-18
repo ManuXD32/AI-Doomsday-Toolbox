@@ -60,6 +60,7 @@ fun PDFTranslationSettingsScreen(navController: NavController) {
 
 @Composable
 fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val backend by settingsRepo.pdfTranslationBackend.collectAsState()
     val ollamaUrl by settingsRepo.pdfTranslationOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.pdfTranslationLlamaServerUrl.collectAsState()
@@ -75,6 +76,10 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
     val serverModelLabel by settingsRepo.pdfTranslationLlamaServerModelLabel.collectAsState()
     val serverContextLabel by settingsRepo.pdfTranslationLlamaServerContextLabel.collectAsState()
     val serverContextTokens by settingsRepo.pdfTranslationLlamaServerContextTokens.collectAsState()
+    val liteRtModelId by settingsRepo.pdfTranslationLiteRtModelId.collectAsState()
+    val liteRtBackend by settingsRepo.pdfTranslationLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.pdfTranslationLiteRtMtpEnabled.collectAsState()
+    val liteRtThinkingEnabled by settingsRepo.pdfTranslationThinkingEnabled.collectAsState()
     val screenshotContext by settingsRepo.pdfTranslationScreenshotContext.collectAsState()
     val screenshotMaxSide by settingsRepo.pdfTranslationScreenshotMaxSide.collectAsState()
     val screenshotQuality by settingsRepo.pdfTranslationScreenshotJpegQuality.collectAsState()
@@ -107,8 +112,16 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                     llamaServerContextLabel = serverContextLabel,
                     llamaServerContextTokens = serverContextTokens,
                     requestedContextForWarning = contextSize,
+                    liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                    onLiteRtModelSelected = settingsRepo::setPdfTranslationLiteRtModelId,
+                    liteRtBackend = liteRtBackend,
+                    onLiteRtBackendChange = settingsRepo::setPdfTranslationLiteRtBackend,
+                    liteRtMtpEnabled = liteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = settingsRepo::setPdfTranslationLiteRtMtpEnabled,
+                    liteRtThinkingEnabled = liteRtThinkingEnabled,
+                    onLiteRtThinkingEnabledChange = settingsRepo::setPdfTranslationThinkingEnabled,
                     fetchMetadata = {
-                        RemoteSummaryClientFactory.fromSnapshot(settingsRepo.pdfTranslationSettings.snapshot())
+                        RemoteSummaryClientFactory.fromSnapshot(context, settingsRepo.pdfTranslationSettings.snapshot())
                             .fetchMetadata()
                     },
                     onMetadataLoaded = ::persistMetadata

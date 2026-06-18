@@ -19,6 +19,8 @@ import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.data.model.supportsLiteRtAudio
+import com.example.llamadroid.data.model.supportsLiteRtVision
 import com.example.llamadroid.util.DebugLog
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
@@ -147,7 +149,7 @@ class LiteRtLmWorkerService : Service() {
                 replyTo.sendWorkerMessage(
                     what = LiteRtLmWorkerProtocol.MSG_DONE,
                     requestId = requestId,
-                    statsJson = gson.toJson(stats)
+                    statsJson = gson.toJson(LiteRtLmChatStatsDto.from(stats))
                 )
             } catch (e: Throwable) {
                 val detail = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.name
@@ -282,7 +284,8 @@ private data class LiteRtLmWorkerRequestDto(
     @SerializedName("history") val history: List<LlamaMessageEntity>? = null,
     @SerializedName("backend_mode") val backendMode: String? = null,
     @SerializedName("params") val params: Map<String, Any>? = null,
-    @SerializedName("prompt_override") val promptOverride: String? = null
+    @SerializedName("prompt_override") val promptOverride: String? = null,
+    @SerializedName("conversation_override") val conversationOverride: LiteRtConversationOverrideDto? = null
 ) {
     fun toChatRequest(): LiteRtLmChatRequest = LiteRtLmChatRequest(
         model = requireNotNull(model) { "Missing LiteRT model in worker request." },
@@ -290,7 +293,8 @@ private data class LiteRtLmWorkerRequestDto(
         history = history.orEmpty(),
         backendMode = backendMode ?: LITERT_BACKEND_GPU,
         params = params.orEmpty(),
-        promptOverride = promptOverride
+        promptOverride = promptOverride,
+        conversationOverride = conversationOverride?.toConversationOverride()
     )
 
     companion object {
@@ -300,7 +304,159 @@ private data class LiteRtLmWorkerRequestDto(
             history = request.history,
             backendMode = request.backendMode,
             params = request.params,
-            promptOverride = request.promptOverride
+            promptOverride = request.promptOverride,
+            conversationOverride = request.conversationOverride?.let(LiteRtConversationOverrideDto::from)
+        )
+    }
+}
+
+private data class LiteRtConversationOverrideDto(
+    @SerializedName("system_instruction") val systemInstruction: String? = null,
+    @SerializedName("initial_messages") val initialMessages: Array<LiteRtConversationMessageDto>? = null,
+    @SerializedName("user_message") val userMessage: String? = null,
+    @SerializedName("user_image_path") val userImagePath: String? = null,
+    @SerializedName("user_audio_path") val userAudioPath: String? = null,
+    @SerializedName("tools") val tools: Array<LiteRtToolDefinitionDto>? = null
+) {
+    fun toConversationOverride(): LiteRtConversationOverride = LiteRtConversationOverride(
+        systemInstruction = systemInstruction.orEmpty(),
+        initialMessages = initialMessages.orEmpty().map { it.toConversationMessage() },
+        userMessage = userMessage.orEmpty(),
+        userImagePath = userImagePath,
+        userAudioPath = userAudioPath,
+        tools = tools.orEmpty().map { it.toToolDefinition() }
+    )
+
+    companion object {
+        fun from(conversation: LiteRtConversationOverride): LiteRtConversationOverrideDto =
+            LiteRtConversationOverrideDto(
+                systemInstruction = conversation.systemInstruction,
+                initialMessages = conversation.initialMessages
+                    .map(LiteRtConversationMessageDto::from)
+                    .toTypedArray(),
+                userMessage = conversation.userMessage,
+                userImagePath = conversation.userImagePath,
+                userAudioPath = conversation.userAudioPath,
+                tools = conversation.tools.map(LiteRtToolDefinitionDto::from).toTypedArray()
+            )
+    }
+}
+
+private data class LiteRtConversationMessageDto(
+    @SerializedName("role") val role: String? = null,
+    @SerializedName("content") val content: String? = null,
+    @SerializedName("image_path") val imagePath: String? = null,
+    @SerializedName("audio_path") val audioPath: String? = null,
+    @SerializedName("tool_calls") val toolCalls: Array<LiteRtToolCallSpecDto>? = null,
+    @SerializedName("tool_name") val toolName: String? = null
+) {
+    fun toConversationMessage(): LiteRtConversationMessage = LiteRtConversationMessage(
+        role = role?.takeIf { it.isNotBlank() } ?: "user",
+        content = content.orEmpty(),
+        imagePath = imagePath,
+        audioPath = audioPath,
+        toolCalls = toolCalls.orEmpty().map { it.toToolCallSpec() },
+        toolName = toolName
+    )
+
+    companion object {
+        fun from(message: LiteRtConversationMessage): LiteRtConversationMessageDto =
+            LiteRtConversationMessageDto(
+                role = message.role,
+                content = message.content,
+                imagePath = message.imagePath,
+                audioPath = message.audioPath,
+                toolCalls = message.toolCalls.map(LiteRtToolCallSpecDto::from).toTypedArray(),
+                toolName = message.toolName
+            )
+    }
+}
+
+private data class LiteRtToolDefinitionDto(
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("description") val description: String? = null,
+    @SerializedName("parameters") val parameters: Map<String, String>? = null,
+    @SerializedName("required_params") val requiredParams: List<String>? = null
+) {
+    fun toToolDefinition(): LiteRtToolDefinition = LiteRtToolDefinition(
+        name = name.orEmpty(),
+        description = description.orEmpty(),
+        parameters = parameters.orEmpty(),
+        requiredParams = requiredParams.orEmpty()
+    )
+
+    companion object {
+        fun from(tool: LiteRtToolDefinition): LiteRtToolDefinitionDto = LiteRtToolDefinitionDto(
+            name = tool.name,
+            description = tool.description,
+            parameters = tool.parameters,
+            requiredParams = tool.requiredParams
+        )
+    }
+}
+
+private data class LiteRtToolCallSpecDto(
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("arguments") val arguments: Map<String, Any?>? = null
+) {
+    fun toToolCallSpec(): LiteRtToolCallSpec = LiteRtToolCallSpec(
+        name = name.orEmpty(),
+        arguments = arguments.orEmpty()
+    )
+
+    companion object {
+        fun from(call: LiteRtToolCallSpec): LiteRtToolCallSpecDto = LiteRtToolCallSpecDto(
+            name = call.name,
+            arguments = call.arguments
+        )
+    }
+}
+
+private data class LiteRtLmChatStatsDto(
+    @SerializedName("prompt_tokens") val promptTokens: Int = 0,
+    @SerializedName("completion_tokens") val completionTokens: Int = 0,
+    @SerializedName("tokens_per_second") val tokensPerSecond: Double = 0.0,
+    @SerializedName("tool_calls") val toolCalls: Array<LiteRtOllamaToolCallDto>? = null,
+    @SerializedName("visible_text") val visibleText: String = "",
+    @SerializedName("metered_text") val meteredText: String = ""
+) {
+    fun toStats(): LiteRtLmChatStats = LiteRtLmChatStats(
+        promptTokens = promptTokens,
+        completionTokens = completionTokens,
+        tokensPerSecond = tokensPerSecond,
+        toolCalls = toolCalls.orEmpty().map { it.toToolCall() },
+        visibleText = visibleText,
+        meteredText = meteredText
+    )
+
+    companion object {
+        fun from(stats: LiteRtLmChatStats): LiteRtLmChatStatsDto = LiteRtLmChatStatsDto(
+            promptTokens = stats.promptTokens,
+            completionTokens = stats.completionTokens,
+            tokensPerSecond = stats.tokensPerSecond,
+            toolCalls = stats.toolCalls.map(LiteRtOllamaToolCallDto::from).toTypedArray(),
+            visibleText = stats.visibleText,
+            meteredText = stats.meteredText
+        )
+    }
+}
+
+private data class LiteRtOllamaToolCallDto(
+    @SerializedName("name") val name: String? = null,
+    @SerializedName("arguments") val arguments: Map<String, Any?>? = null,
+    @SerializedName("id") val id: String? = null
+) {
+    fun toToolCall(): OllamaService.ToolCall = OllamaService.ToolCall(
+        name = name.orEmpty(),
+        arguments = AgentRuntimeSupport.normalizeToolArguments(arguments),
+        id = id
+    )
+
+    companion object {
+        fun from(call: OllamaService.ToolCall): LiteRtOllamaToolCallDto = LiteRtOllamaToolCallDto(
+            name = call.name,
+            arguments = call.arguments,
+            id = call.id
         )
     }
 }
@@ -319,7 +475,8 @@ private object LiteRtWorkerRequestDiagnostics {
         add(
             "worker diag request backend=${request.backendMode} chatId=${request.chat.id} " +
                 "contextSize=${request.chat.contextSize} historyCount=${request.history.size} " +
-                "promptOverrideChars=${request.promptOverride?.length ?: 0}"
+                "promptOverrideChars=${request.promptOverride?.length ?: 0} " +
+                "conversationOverride=${request.conversationOverride != null}"
         )
         add(
             "worker diag params=" +
@@ -334,7 +491,9 @@ private object LiteRtWorkerRequestDiagnostics {
         )
         add(
             "worker diag model support cpu=${request.model.supportsCpu} gpu=${request.model.supportsGpu} " +
-                "npu=${request.model.supportsNpu} preference=${request.model.backendPreference} " +
+                "npu=${request.model.supportsNpu} vision=${request.model.supportsLiteRtVision()} " +
+                "audio=${request.model.supportsLiteRtAudio()} " +
+                "preference=${request.model.backendPreference} " +
                 "dbSizeBytes=${request.model.sizeBytes}"
         )
         add("worker diag model path=${request.model.path.truncateWorkerDiagnostic(500)}")
@@ -349,7 +508,11 @@ private object LiteRtWorkerRequestDiagnostics {
             "worker diag history userMessages=${request.history.count { it.role == "user" }} " +
                 "assistantMessages=${request.history.count { it.role == "assistant" }} " +
                 "systemMessages=${request.history.count { it.role == "system" }} " +
-                "lastRole=${lastMessage?.role ?: "-"} lastChars=${lastMessage?.content?.length ?: 0}"
+                "imageMessages=${request.history.count { !it.imagePath.isNullOrBlank() }} " +
+                "audioMessages=${request.history.count { !it.audioPath.isNullOrBlank() }} " +
+                "lastRole=${lastMessage?.role ?: "-"} lastChars=${lastMessage?.content?.length ?: 0} " +
+                "lastImage=${!lastMessage?.imagePath.isNullOrBlank()} " +
+                "lastAudio=${!lastMessage?.audioPath.isNullOrBlank()}"
         )
         add(
             "worker diag process pid=${Process.myPid()} uid=${Process.myUid()} " +
@@ -409,6 +572,41 @@ private fun String.truncateWorkerDiagnostic(maxChars: Int): String {
     val head = (maxChars / 2).coerceAtLeast(1)
     val tail = (maxChars - head - 3).coerceAtLeast(1)
     return "${sanitized.take(head)}...${sanitized.takeLast(tail)}"
+}
+
+internal class LiteRtLmWorkerCrashedException(
+    message: String,
+    val requestId: String,
+    val workerLabel: String,
+    val backendMode: String,
+    val contextSize: Int,
+    val mtpEnabled: Boolean,
+    val lastPhase: String,
+    val recentExit: String?,
+    val elapsedMs: Long
+) : IllegalStateException(message) {
+    val diedBeforeEngineInitialized: Boolean =
+        !lastPhase.contains("Engine initialized", ignoreCase = true)
+
+    fun diagnosticDetail(): String = buildString {
+        append(message ?: javaClass.name)
+        append(" requestId=")
+        append(requestId)
+        append(" backend=")
+        append(backendMode)
+        append(" contextSize=")
+        append(contextSize)
+        append(" mtp=")
+        append(mtpEnabled)
+        append(" elapsedMs=")
+        append(elapsedMs)
+        append(" lastPhase=")
+        append(lastPhase.truncateWorkerDiagnostic(240))
+        recentExit?.takeIf { it.isNotBlank() }?.let { exit ->
+            append(" recentExit=")
+            append(exit.truncateWorkerDiagnostic(300))
+        }
+    }
 }
 
 internal class LiteRtLmWorkerClient(private val context: Context) {
@@ -527,13 +725,15 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
         val requestId = "${System.currentTimeMillis()}-${request.model.id}-${request.chat.id}"
         val serviceMessenger = CompletableDeferred<Messenger>()
         val events = Channel<WorkerEvent>(Channel.UNLIMITED)
-        fun logRecentWorkerExit(callback: String) {
+        var lastPhase = "binding worker"
+        var recentExitSummary: String? = null
+        fun logRecentWorkerExit(callback: String): String? {
             val elapsedMs = System.currentTimeMillis() - startedAt
             val modelFile = File(request.model.path)
             DebugLog.log(
                 "LiteRT worker: $workerLabel worker $callback context requestId=$requestId " +
                     "elapsedMs=$elapsedMs modelId=${request.model.id} model=${request.model.displayName} " +
-                    "backend=${request.backendMode} chatId=${request.chat.id}"
+                    "backend=${request.backendMode} chatId=${request.chat.id} lastPhase=${lastPhase.truncateWorkerDiagnostic(180)}"
             )
             DebugLog.log(
                 "LiteRT worker: $workerLabel worker $callback mainProcess pid=${Process.myPid()} " +
@@ -553,11 +753,26 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
                 processNameSuffix = ":litert_lm",
                 sinceTimestamp = startedAt - 2_000L
             )
+            recentExitSummary = summary
             if (summary.isNullOrBlank()) {
                 DebugLog.log("LiteRT worker: $workerLabel worker $callback; no recent worker exit info available")
             } else {
                 DebugLog.log("LiteRT worker: $workerLabel worker $callback; recent exit=$summary")
             }
+            return summary
+        }
+        fun workerCrashException(): LiteRtLmWorkerCrashedException {
+            return LiteRtLmWorkerCrashedException(
+                message = workerCrashedMessage,
+                requestId = requestId,
+                workerLabel = workerLabel,
+                backendMode = request.backendMode,
+                contextSize = request.chat.contextSize,
+                mtpEnabled = (request.params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false,
+                lastPhase = lastPhase,
+                recentExit = recentExitSummary,
+                elapsedMs = System.currentTimeMillis() - startedAt
+            )
         }
         val replyMessenger = Messenger(
             Handler(Looper.getMainLooper()) { message ->
@@ -575,7 +790,11 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
                     }
                     LiteRtLmWorkerProtocol.MSG_DONE -> {
                         val statsJson = message.data.getString(LiteRtLmWorkerProtocol.KEY_STATS_JSON).orEmpty()
-                        events.trySend(WorkerEvent.Done(gson.fromJson(statsJson, LiteRtLmChatStats::class.java)))
+                        events.trySend(
+                            WorkerEvent.Done(
+                                gson.fromJson(statsJson, LiteRtLmChatStatsDto::class.java).toStats()
+                            )
+                        )
                     }
                     LiteRtLmWorkerProtocol.MSG_ERROR -> {
                         events.trySend(WorkerEvent.Error(message.data.getString(LiteRtLmWorkerProtocol.KEY_TEXT).orEmpty()))
@@ -583,6 +802,7 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
                     LiteRtLmWorkerProtocol.MSG_LOG -> {
                         val text = message.data.getString(LiteRtLmWorkerProtocol.KEY_TEXT).orEmpty()
                         if (text.isNotBlank()) {
+                            lastPhase = text
                             DebugLog.log("LiteRT worker: $text")
                         }
                     }
@@ -604,17 +824,17 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
             override fun onServiceDisconnected(name: ComponentName?) {
                 logRecentWorkerExit("disconnected")
                 serviceMessenger.completeExceptionally(
-                    IllegalStateException(workerCrashedMessage)
+                    workerCrashException()
                 )
-                events.trySend(WorkerEvent.Error(workerCrashedMessage))
+                events.trySend(WorkerEvent.Crashed(workerCrashException()))
             }
 
             override fun onBindingDied(name: ComponentName?) {
                 logRecentWorkerExit("binding died")
                 serviceMessenger.completeExceptionally(
-                    IllegalStateException(workerCrashedMessage)
+                    workerCrashException()
                 )
-                events.trySend(WorkerEvent.Error(workerCrashedMessage))
+                events.trySend(WorkerEvent.Crashed(workerCrashException()))
             }
 
             override fun onNullBinding(name: ComponentName?) {
@@ -660,9 +880,11 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
                         val errorText = event.text.ifBlank { workerCrashedMessage }
                         if (errorText == workerCrashedMessage) {
                             logRecentWorkerExit("reported crash")
+                            throw workerCrashException()
                         }
                         throw IllegalStateException(errorText)
                     }
+                    is WorkerEvent.Crashed -> throw event.error
                 }
             }
         } finally {
@@ -671,7 +893,7 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
                 runCatching { appContext.unbindService(connection) }
             }
         }
-        finishedStats ?: throw IllegalStateException(workerCrashedMessage)
+        finishedStats ?: throw workerCrashException()
     }
 
     private sealed interface WorkerEvent {
@@ -680,6 +902,7 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
         data class Thinking(val text: String) : WorkerEvent
         data class Done(val stats: LiteRtLmChatStats) : WorkerEvent
         data class Error(val text: String) : WorkerEvent
+        data class Crashed(val error: LiteRtLmWorkerCrashedException) : WorkerEvent
     }
 
     private suspend fun streamDoctor(

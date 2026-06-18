@@ -156,6 +156,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
     }.collectAsState(initial = emptyList())
 
     var newBaseName by remember { mutableStateOf("") }
+    var newBaseSummary by remember { mutableStateOf("") }
     var query by remember { mutableStateOf("") }
     var searchResult by remember { mutableStateOf("") }
     var busyMessage by remember { mutableStateOf<String?>(null) }
@@ -414,13 +415,19 @@ fun KnowledgeBaseScreen(navController: NavController) {
                     item {
                         CreateKnowledgeBaseCard(
                             name = newBaseName,
+                            contentSummary = newBaseSummary,
                             onNameChange = { newBaseName = it },
+                            onContentSummaryChange = { newBaseSummary = it },
                             onCreate = {
                                 val name = newBaseName.trim()
                                 if (name.isNotBlank()) {
                                     launchBusy(context.getString(R.string.kb_creating_base)) {
-                                        selectedBaseId = repository.createKnowledgeBase(name)
+                                        selectedBaseId = repository.createKnowledgeBase(
+                                            name = name,
+                                            contentSummary = newBaseSummary
+                                        )
                                         newBaseName = ""
+                                        newBaseSummary = ""
                                     }
                                 }
                             }
@@ -454,6 +461,17 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             onResume = { KnowledgeBaseIndexingService.enqueueResumeBase(context, selectedBase.id) },
                             onReindex = { KnowledgeBaseIndexingService.enqueueReindexBase(context, selectedBase.id) },
                             onDelete = { basePendingDelete = selectedBase }
+                        )
+                    }
+
+                    item {
+                        KnowledgeBaseContentSummaryCard(
+                            base = selectedBase,
+                            onSave = { summary ->
+                                launchBusy(context.getString(R.string.kb_content_summary_saving)) {
+                                    repository.updateKnowledgeBaseContentSummary(selectedBase.id, summary)
+                                }
+                            }
                         )
                     }
 
@@ -1131,21 +1149,41 @@ private fun KnowledgeSummaryCard(
 }
 
 @Composable
-private fun CreateKnowledgeBaseCard(name: String, onNameChange: (String) -> Unit, onCreate: () -> Unit) {
+private fun CreateKnowledgeBaseCard(
+    name: String,
+    contentSummary: String,
+    onNameChange: (String) -> Unit,
+    onContentSummaryChange: (String) -> Unit,
+    onCreate: () -> Unit
+) {
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.kb_create_folder), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = onNameChange,
-                    label = { Text(stringResource(R.string.kb_name_label)) },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
-                Button(onClick = onCreate, enabled = name.isNotBlank()) {
-                    Icon(Icons.Default.Add, contentDescription = null)
-                }
+            OutlinedTextField(
+                value = name,
+                onValueChange = onNameChange,
+                label = { Text(stringResource(R.string.kb_name_label)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = contentSummary,
+                onValueChange = onContentSummaryChange,
+                label = { Text(stringResource(R.string.kb_content_summary_label)) },
+                placeholder = { Text(stringResource(R.string.kb_content_summary_placeholder)) },
+                minLines = 2,
+                maxLines = 4,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = stringResource(R.string.kb_content_summary_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onCreate, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.kb_create_folder), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1166,11 +1204,55 @@ private fun KnowledgeFolderCard(base: KnowledgeBaseEntity, onOpen: () -> Unit) {
             Icon(Icons.Default.Folder, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Column(modifier = Modifier.weight(1f)) {
                 Text(base.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(stringResource(R.string.kb_folder_open_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    text = base.contentSummary.ifBlank { stringResource(R.string.kb_folder_open_desc) },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }
 
+}
+
+@Composable
+private fun KnowledgeBaseContentSummaryCard(
+    base: KnowledgeBaseEntity,
+    onSave: (String) -> Unit
+) {
+    var summary by remember(base.id, base.contentSummary) { mutableStateOf(base.contentSummary) }
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+                text = stringResource(R.string.kb_content_summary_title),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = stringResource(R.string.kb_content_summary_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = summary,
+                onValueChange = { summary = it },
+                label = { Text(stringResource(R.string.kb_content_summary_label)) },
+                placeholder = { Text(stringResource(R.string.kb_content_summary_placeholder)) },
+                minLines = 3,
+                maxLines = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Button(
+                onClick = { onSave(summary) },
+                enabled = summary.trim() != base.contentSummary.trim(),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            ) {
+                Text(stringResource(R.string.kb_content_summary_save), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+    }
 }
 
 @Composable

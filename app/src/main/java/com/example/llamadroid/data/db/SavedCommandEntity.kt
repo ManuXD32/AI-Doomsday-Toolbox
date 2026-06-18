@@ -9,6 +9,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Delete
 import kotlinx.coroutines.flow.Flow
+import com.example.llamadroid.service.LlamaSpeculativeMode
 
 object SavedCommandScopes {
     const val GENERAL = "GENERAL"
@@ -32,10 +33,11 @@ data class SavedCommand(
     val host: String = "127.0.0.1",
     // Speculative decoding
     val speculativeEnabled: Boolean = false,
+    val speculativeMode: String = LlamaSpeculativeMode.DRAFT_SIMPLE.flagValue,
     val draftModelPath: String? = null,
-    val draftMax: Int = 16,
+    val draftMax: Int = 3,
     val draftMin: Int = 0,
-    val draftPMin: Float = 0.75f,
+    val draftPMin: Float = 0.0f,
     // Advanced
     val parallel: Int? = null,
     val cacheRam: Int? = null,

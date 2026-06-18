@@ -40,10 +40,10 @@ data class TamaPomodoroSettings(
 }
 
 fun GrowthStage.canStudy(): Boolean = when (this) {
+    GrowthStage.EGG,
     GrowthStage.CHILD,
     GrowthStage.TEEN,
+    GrowthStage.ADULT,
     GrowthStage.SENIOR -> true
-    GrowthStage.EGG,
-    GrowthStage.BABY,
-    GrowthStage.ADULT -> false
+    GrowthStage.BABY -> false
 }

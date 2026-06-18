@@ -58,6 +58,7 @@ class DeepResearchService : Service() {
             val query = intent?.getStringExtra(EXTRA_QUERY).orEmpty()
             val title = intent?.getStringExtra(EXTRA_TITLE).orEmpty()
             val focus = intent?.getStringExtra(EXTRA_FOCUS).orEmpty()
+            val contentSummary = intent?.getStringExtra(EXTRA_CONTENT_SUMMARY).orEmpty()
             val sourceLimit = DeepResearchSupport.normalizeSourceLimit(
                 intent?.getIntExtra(EXTRA_SOURCE_LIMIT, DeepResearchSupport.DEFAULT_SOURCE_LIMIT)
             )
@@ -77,7 +78,14 @@ class DeepResearchService : Service() {
                 require(chatId > 0L) { "A chat id is required for Deep Research." }
                 require(query.isNotBlank()) { "A research query is required." }
                 com.tom_roush.pdfbox.android.PDFBoxResourceLoader.init(applicationContext)
-                val kbId = targetKnowledgeBaseId ?: createResearchKnowledgeBase(repository, query, title, chatId)
+                val kbId = targetKnowledgeBaseId ?: createResearchKnowledgeBase(
+                    repository = repository,
+                    query = query,
+                    title = title,
+                    focus = focus,
+                    contentSummary = contentSummary,
+                    chatId = chatId
+                )
                 if (targetKnowledgeBaseId == null) {
                     createdKnowledgeBaseId = kbId
                 } else {
@@ -163,6 +171,8 @@ class DeepResearchService : Service() {
         repository: KnowledgeBaseRepository,
         query: String,
         title: String,
+        focus: String,
+        contentSummary: String,
         chatId: Long
     ): Long {
         val topic = title.ifBlank { query }
@@ -173,9 +183,28 @@ class DeepResearchService : Service() {
         val date = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
         val name = uniqueKnowledgeBaseName(repository, "Deep Research - $topic - $date")
         val description = "Created by Deep Research from chat $chatId.\nQuery: ${query.trim()}"
-        val kbId = repository.createKnowledgeBase(name, description)
+        val kbId = repository.createKnowledgeBase(
+            name = name,
+            description = description,
+            contentSummary = contentSummary.ifBlank {
+                buildDeepResearchContentSummary(query = query, title = title, focus = focus)
+            }
+        )
         KnowledgeBaseDiagnostics.log("Deep Research created knowledge base '$name' (#$kbId).")
         return kbId
+    }
+
+    private fun buildDeepResearchContentSummary(query: String, title: String, focus: String): String {
+        val topic = title.ifBlank { query }.replace(Regex("""\s+"""), " ").trim()
+        val focusText = focus.replace(Regex("""\s+"""), " ").trim()
+        return buildString {
+            append("Deep Research sources about ")
+            append(topic.ifBlank { "the requested topic" })
+            if (focusText.isNotBlank()) {
+                append("; focus: ").append(focusText)
+            }
+            append(". Contains imported webpages, PDFs, articles, guidelines, and specialized sources selected for relevance and reliability.")
+        }
     }
 
     private suspend fun uniqueKnowledgeBaseName(repository: KnowledgeBaseRepository, baseName: String): String {
@@ -448,6 +477,7 @@ class DeepResearchService : Service() {
         private const val EXTRA_QUERY = "query"
         private const val EXTRA_TITLE = "title"
         private const val EXTRA_FOCUS = "focus"
+        private const val EXTRA_CONTENT_SUMMARY = "content_summary"
         private const val EXTRA_SOURCE_LIMIT = "source_limit"
         private const val EXTRA_TARGET_KNOWLEDGE_BASE_ID = "target_knowledge_base_id"
         private const val EXTRA_JOB_ID = "job_id"
@@ -459,6 +489,7 @@ class DeepResearchService : Service() {
             query: String,
             title: String? = null,
             focus: String? = null,
+            contentSummary: String? = null,
             sourceLimit: Int = DeepResearchSupport.DEFAULT_SOURCE_LIMIT,
             targetKnowledgeBaseId: Long? = null
         ) {
@@ -468,6 +499,7 @@ class DeepResearchService : Service() {
                 query = query,
                 title = title,
                 focus = focus,
+                contentSummary = contentSummary,
                 sourceLimit = sourceLimit,
                 targetKnowledgeBaseId = targetKnowledgeBaseId,
                 jobId = null
@@ -480,6 +512,7 @@ class DeepResearchService : Service() {
             query: String,
             title: String? = null,
             focus: String? = null,
+            contentSummary: String? = null,
             sourceLimit: Int = DeepResearchSupport.DEFAULT_SOURCE_LIMIT,
             targetKnowledgeBaseId: Long? = null
         ): DeepResearchJobResult {
@@ -493,6 +526,7 @@ class DeepResearchService : Service() {
                     query = query,
                     title = title,
                     focus = focus,
+                    contentSummary = contentSummary,
                     sourceLimit = sourceLimit,
                     targetKnowledgeBaseId = targetKnowledgeBaseId,
                     jobId = jobId
@@ -509,6 +543,7 @@ class DeepResearchService : Service() {
             query: String,
             title: String? = null,
             focus: String? = null,
+            contentSummary: String? = null,
             sourceLimit: Int = DeepResearchSupport.DEFAULT_SOURCE_LIMIT,
             targetKnowledgeBaseId: Long? = null,
             jobId: String? = null
@@ -518,6 +553,7 @@ class DeepResearchService : Service() {
                 putExtra(EXTRA_QUERY, query)
                 putExtra(EXTRA_TITLE, title.orEmpty())
                 putExtra(EXTRA_FOCUS, focus.orEmpty())
+                putExtra(EXTRA_CONTENT_SUMMARY, contentSummary.orEmpty())
                 putExtra(EXTRA_SOURCE_LIMIT, DeepResearchSupport.normalizeSourceLimit(sourceLimit))
                 putExtra(EXTRA_TARGET_KNOWLEDGE_BASE_ID, targetKnowledgeBaseId?.takeIf { it > 0L } ?: 0L)
                 putExtra(EXTRA_JOB_ID, jobId.orEmpty())

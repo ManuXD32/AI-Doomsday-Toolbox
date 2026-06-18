@@ -43,7 +43,12 @@ class AdventureGateRepository(
     fun observeProfile(petId: String): Flow<AdventureGateProfile?> =
         dao.observeAdventureGateProfile(petId).combine(dao.observePet(petId)) { entity, pet ->
             entity?.toDomain()?.let { profile ->
-                AdventureGateCombatEngine.normalizedProfile(profile, pet?.educationLevel ?: 0f)
+                AdventureGateCombatEngine.normalizedProfile(
+                    profile,
+                    pet?.educationLevel ?: 0f,
+                    pet?.introspectionLevel ?: 0f,
+                    pet?.exerciseLevel ?: 0f
+                )
             }
         }
 
@@ -78,11 +83,16 @@ class AdventureGateRepository(
         now: Long = System.currentTimeMillis()
     ): AdventureGateProfile {
         val existing = dao.getAdventureGateProfile(petId)?.toDomain()
-        val educationLevel = educationLevelForPet(petId)
+        val progress = petGrowthProgressForPet(petId)
         val profile = if (existing != null) {
-            AdventureGateCombatEngine.normalizedProfile(existing, educationLevel)
+            AdventureGateCombatEngine.normalizedProfile(existing, progress.educationLevel, progress.introspectionLevel, progress.exerciseLevel)
         } else {
-            AdventureGateCombatEngine.normalizedProfile(AdventureGateProfile(petId = petId, lastRecoveryAt = now, updatedAt = now), educationLevel)
+            AdventureGateCombatEngine.normalizedProfile(
+                AdventureGateProfile(petId = petId, lastRecoveryAt = now, updatedAt = now),
+                progress.educationLevel,
+                progress.introspectionLevel,
+                progress.exerciseLevel
+            )
         }
         val activeBattle = dao.getAdventureGateBattleState(petId)?.toDomainBattle()
         val recovered = if (activeBattle != null && !activeBattle.isCompleted) {
@@ -97,7 +107,16 @@ class AdventureGateRepository(
     }
 
     private suspend fun educationLevelForPet(petId: String): Float =
-        dao.getPet(petId)?.educationLevel ?: 0f
+        petGrowthProgressForPet(petId).educationLevel
+
+    private suspend fun petGrowthProgressForPet(petId: String): PetGrowthProgress {
+        val pet = dao.getPet(petId)
+        return PetGrowthProgress(
+            educationLevel = pet?.educationLevel ?: 0f,
+            exerciseLevel = pet?.exerciseLevel ?: 0f,
+            introspectionLevel = pet?.introspectionLevel ?: 0f
+        )
+    }
 
     suspend fun getProgress(petId: String): List<AdventureGateWorldProgress> = withContext(Dispatchers.IO) {
         val existing = dao.getAdventureGateWorldProgress(petId).map { it.toDomain() }
@@ -210,7 +229,8 @@ class AdventureGateRepository(
         magicIds: List<String>
     ): AdventureGateProfile = withContext(Dispatchers.IO) {
         val profile = getOrCreateProfile(petId)
-        val normalized = AdventureGateCombatEngine.normalizedProfile(profile, educationLevelForPet(petId))
+        val progress = petGrowthProgressForPet(petId)
+        val normalized = AdventureGateCombatEngine.normalizedProfile(profile, progress.educationLevel, progress.introspectionLevel, progress.exerciseLevel)
         val purchased = normalized.purchasedSkillIds.toSet()
         val purchasedAttacks = purchased.filter { AdventureGateCatalog.skill(it).kind == AdventureGateSkillKind.ATTACK }.toSet()
         val purchasedMagic = purchased
@@ -238,7 +258,8 @@ class AdventureGateRepository(
         skillId: String
     ): AdventureGateSkillPurchaseResult = withContext(Dispatchers.IO) {
         val profile = getOrCreateProfile(petId)
-        val normalized = AdventureGateCombatEngine.normalizedProfile(profile, educationLevelForPet(petId))
+        val progress = petGrowthProgressForPet(petId)
+        val normalized = AdventureGateCombatEngine.normalizedProfile(profile, progress.educationLevel, progress.introspectionLevel, progress.exerciseLevel)
         val skill = AdventureGateCatalog.skill(skillId)
         if (skill.id in normalized.purchasedSkillIds) {
             return@withContext AdventureGateSkillPurchaseResult(normalized, purchased = false, AdventureGateSkillPurchaseError.ALREADY_PURCHASED)
@@ -419,7 +440,8 @@ class AdventureGateRepository(
         if (activeBattle != null && !activeBattle.isCompleted) {
             return@withContext AdventureGateEquipResult(profile, equipped = false, AdventureGateEquipError.ACTIVE_BATTLE)
         }
-        val normalized = AdventureGateCombatEngine.normalizedProfile(profile, educationLevelForPet(petId))
+        val progress = petGrowthProgressForPet(petId)
+        val normalized = AdventureGateCombatEngine.normalizedProfile(profile, progress.educationLevel, progress.introspectionLevel, progress.exerciseLevel)
         val updated = if (equipmentId == null) {
             normalized.withEquippedSlot(slot, null)
         } else {
@@ -433,7 +455,7 @@ class AdventureGateRepository(
                 return@withContext AdventureGateEquipResult(normalized, false, AdventureGateEquipError.NOT_OWNED)
             }
             normalized.withEquippedSlot(slot, equipment.id)
-        }.let { AdventureGateCombatEngine.normalizedProfile(it, educationLevelForPet(petId)) }
+        }.let { AdventureGateCombatEngine.normalizedProfile(it, progress.educationLevel, progress.introspectionLevel, progress.exerciseLevel) }
         dao.saveAdventureGateProfile(updated.toEntity())
         equipmentId?.let { equippedId ->
             val equipment = AdventureGateCatalog.equipment(equippedId)
@@ -507,8 +529,10 @@ class AdventureGateRepository(
 
     suspend fun abandonBattle(petId: String, applyRetreatPenalty: Boolean = false): Long = withContext(Dispatchers.IO) {
         val snapshot = dao.getAdventureGateBattleState(petId)?.toDomainBattle()
-        val educationLevel = educationLevelForPet(petId)
-        val profile = dao.getAdventureGateProfile(petId)?.toDomain()?.let { AdventureGateCombatEngine.normalizedProfile(it, educationLevel) }
+        val progress = petGrowthProgressForPet(petId)
+        val profile = dao.getAdventureGateProfile(petId)?.toDomain()?.let {
+            AdventureGateCombatEngine.normalizedProfile(it, progress.educationLevel, progress.introspectionLevel, progress.exerciseLevel)
+        }
         var paidPenalty = 0L
         if (snapshot != null && profile != null) {
             dao.saveAdventureGateProfile(
@@ -1013,3 +1037,9 @@ class AdventureGateRepository(
             .getOrDefault(fallback)
             .ifEmpty { fallback }
 }
+
+private data class PetGrowthProgress(
+    val educationLevel: Float = 0f,
+    val exerciseLevel: Float = 0f,
+    val introspectionLevel: Float = 0f
+)

@@ -110,6 +110,12 @@ object TamaRoomCatalog {
     fun homeRoomAssetPath(roomId: String?): String =
         roomById(roomId)?.assetPath ?: rooms.first { it.id == PRINCIPAL_ROOM_ID }.assetPath
 
+    fun localizedTitle(context: Context, room: TamaRoomDefinition): String =
+        TamaDialogTextCatalog.localizedResource(context, room.titleRes)
+
+    fun localizedDescription(context: Context, room: TamaRoomDefinition): String =
+        TamaDialogTextCatalog.localizedResource(context, room.descriptionRes)
+
     fun shopRooms(): List<TamaRoomDefinition> =
         standardRooms.filter { it.id != PRINCIPAL_ROOM_ID }
 
@@ -120,7 +126,7 @@ object TamaRoomCatalog {
         val room = roomById(roomId) ?: return null
         return InventoryItem(
             id = room.id,
-            name = context.getString(room.titleRes),
+            name = localizedTitle(context, room),
             type = ItemType.DECORATION,
             quantity = 1
         )

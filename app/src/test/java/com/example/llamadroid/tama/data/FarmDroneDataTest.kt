@@ -113,6 +113,30 @@ class FarmDroneDataTest {
     }
 
     @Test
+    fun `planting drone interleaves unlocked farm pages when resources are limited`() {
+        val start = 1_000L
+        val result = simulateFarmDrones(
+            tiles = (0 until 27).map { id -> FarmTile(id = id) },
+            plantingDrone = PlantingDroneState(
+                enabled = true,
+                fuel = FARM_PLANTING_DRONE_FUEL_COST * 3,
+                hoe = DroneToolState("hoe", "Hoe", durability = 3, maxDurability = FARM_TOOL_DURABILITY_CAP),
+                wateringCan = DroneToolState("watering_can", "Watering Can", durability = 3, maxDurability = FARM_TOOL_DURABILITY_CAP),
+                water = 3,
+                seeds = listOf(DroneSeedStock("carrot", 3)),
+                lastUpdatedAt = start
+            ),
+            harvesterDrone = HarvesterDroneState(),
+            now = start + FARM_PLANTING_DRONE_EMPTY_WAIT_MS
+        )
+
+        assertEquals("carrot", result.tiles.first { it.id == 0 }.crop?.type)
+        assertEquals("carrot", result.tiles.first { it.id == 9 }.crop?.type)
+        assertEquals("carrot", result.tiles.first { it.id == 18 }.crop?.type)
+        assertNull(result.tiles.first { it.id == 1 }.crop)
+    }
+
+    @Test
     fun `planting drone disables itself when fuel is unavailable`() {
         val start = 1_000L
         val result = simulateFarmDrones(
@@ -167,6 +191,73 @@ class FarmDroneDataTest {
         assertEquals(TileStatus.SOIL, result.tiles.single().status)
         assertEquals(0, result.harvesterDrone.fuel)
         assertEquals(listOf(DroneStoredCrop("crop_wheat", 2)), result.harvesterDrone.storage)
+    }
+
+    @Test
+    fun `harvester drone interleaves unlocked farm pages when fuel is limited`() {
+        val start = 1_000L
+        val matureTiles = (0 until 27).map { id ->
+            FarmTile(
+                id = id,
+                status = TileStatus.WET_FARMLAND,
+                crop = PlantedCrop(
+                    type = "wheat",
+                    stage = 3,
+                    plantedTime = start,
+                    lastStageUpdateTime = start
+                )
+            )
+        }
+
+        val result = simulateFarmDrones(
+            tiles = matureTiles,
+            plantingDrone = PlantingDroneState(),
+            harvesterDrone = HarvesterDroneState(
+                enabled = true,
+                fuel = FARM_HARVESTING_DRONE_FUEL_COST * 3,
+                mode = HarvesterDroneMode.WHITELIST,
+                cropFilter = setOf("wheat"),
+                lastUpdatedAt = start
+            ),
+            now = start
+        )
+
+        assertNull(result.tiles.first { it.id == 0 }.crop)
+        assertNull(result.tiles.first { it.id == 9 }.crop)
+        assertNull(result.tiles.first { it.id == 18 }.crop)
+        assertNotNull(result.tiles.first { it.id == 1 }.crop)
+        assertEquals(listOf(DroneStoredCrop("crop_wheat", 3)), result.harvesterDrone.storage)
+    }
+
+    @Test
+    fun `harvester drone adds new harvests to existing storage`() {
+        val start = 1_000L
+        val wheat = FarmTile(
+            id = 0,
+            crop = PlantedCrop(
+                type = "wheat",
+                stage = 3,
+                plantedTime = start,
+                lastStageUpdateTime = start
+            )
+        )
+
+        val result = simulateFarmDrones(
+            tiles = listOf(wheat),
+            plantingDrone = PlantingDroneState(),
+            harvesterDrone = HarvesterDroneState(
+                enabled = true,
+                fuel = FARM_HARVESTING_DRONE_FUEL_COST,
+                mode = HarvesterDroneMode.WHITELIST,
+                cropFilter = setOf("wheat"),
+                storage = listOf(DroneStoredCrop("crop_wheat", 3)),
+                lastUpdatedAt = start
+            ),
+            now = start
+        )
+
+        assertNull(result.tiles.single().crop)
+        assertEquals(listOf(DroneStoredCrop("crop_wheat", 4)), result.harvesterDrone.storage)
     }
 
     @Test

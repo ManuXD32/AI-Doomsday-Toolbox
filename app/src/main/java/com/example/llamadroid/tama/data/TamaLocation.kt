@@ -53,6 +53,13 @@ enum class LocationType(
    |____|
     """.trimIndent(), "tama/map/workplace.png"),
 
+    BOXING_RING("🥊", R.string.tama_location_boxing_ring, R.string.tama_location_boxing_ring_desc, """
+    _____
+   |RING|
+   | () |
+   |____|
+    """.trimIndent(), "tama/map/boxing_ring.png"),
+
     SHOP("🏪", R.string.tama_location_shop, R.string.tama_location_shop_desc, """
      ____
     |SHOP|
@@ -111,9 +118,11 @@ enum class LocationType(
     """.trimIndent(), "tama/map/adventure_gate.png")
 }
 
-fun LocationType.localizedName(context: Context): String = context.getString(displayNameRes)
+fun LocationType.localizedName(context: Context): String =
+    TamaDialogTextCatalog.localizedResource(context, displayNameRes)
 
-fun LocationType.localizedDescription(context: Context): String = context.getString(descriptionRes)
+fun LocationType.localizedDescription(context: Context): String =
+    TamaDialogTextCatalog.localizedResource(context, descriptionRes)
 
 /**
  * Job available at a workplace.

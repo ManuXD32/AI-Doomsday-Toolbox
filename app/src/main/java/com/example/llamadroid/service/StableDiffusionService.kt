@@ -515,6 +515,7 @@ class StableDiffusionService : Service() {
     }
 
     private suspend fun runGeneration(config: SDConfig, modeStateHolder: SDModeStateHolder): String = withContext(Dispatchers.IO) {
+        SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
         val sdBinary = binaryRepo.getSdBinary()
 
@@ -536,6 +537,7 @@ class StableDiffusionService : Service() {
                 throw error
             }
         }
+        }
     }
 
     private suspend fun runGenerationWithBinary(
@@ -546,7 +548,7 @@ class StableDiffusionService : Service() {
     ): String = coroutineScope {
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
 
-        val binaryCapabilities = probeSdBinaryCapabilities(sdBinary, binaryRepo)
+        val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
         try {
             args.addAll(
@@ -585,7 +587,7 @@ class StableDiffusionService : Service() {
             .directory(sdBinary.parentFile)
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
-        setupLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
+        setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
         val process = pb.start()
@@ -661,6 +663,7 @@ class StableDiffusionService : Service() {
         config: SDUpscaleConfig,
         modeStateHolder: SDModeStateHolder
     ): String = withContext(Dispatchers.IO) {
+        SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
         val sdBinary = binaryRepo.getSdBinary()
 
@@ -682,6 +685,7 @@ class StableDiffusionService : Service() {
                 throw error
             }
         }
+        }
     }
 
     private suspend fun runUpscaleGenerationWithBinary(
@@ -692,7 +696,7 @@ class StableDiffusionService : Service() {
     ): String = coroutineScope {
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
 
-        val binaryCapabilities = probeSdBinaryCapabilities(sdBinary, binaryRepo)
+        val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
         try {
             args.addAll(buildSdUpscaleCommandArgs(config, binaryCapabilities))
@@ -718,7 +722,7 @@ class StableDiffusionService : Service() {
             .directory(sdBinary.parentFile)
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
-        setupLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
+        setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
         pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
         val process = pb.start()

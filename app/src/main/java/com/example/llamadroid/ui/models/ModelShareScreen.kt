@@ -370,7 +370,7 @@ private fun ModelShareItem(model: ModelEntity) {
             
             Icon(
                 Icons.Default.CheckCircle,
-                contentDescription = "Available",
+                contentDescription = stringResource(R.string.desc_available),
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(24.dp)
             )
@@ -407,7 +407,7 @@ private fun InterfaceQrCard(interfaceName: String, url: String, bitmap: Bitmap?)
             ) {
                 Image(
                     bitmap = bitmap.asImageBitmap(),
-                    contentDescription = "QR Code for $interfaceName",
+                    contentDescription = stringResource(R.string.dashboard_qr_for, interfaceName),
                     modifier = Modifier.fillMaxSize()
                 )
             }

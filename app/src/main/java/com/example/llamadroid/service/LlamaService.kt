@@ -51,6 +51,7 @@ class LlamaService : Service() {
                     // Get optional settings overrides (used by distributed mode to avoid changing global settings)
                     val threadsOverride = if (intent.hasExtra(EXTRA_THREADS)) intent.getIntExtra(EXTRA_THREADS, -1) else null
                     val batchSizeOverride = if (intent.hasExtra(EXTRA_BATCH_SIZE)) intent.getIntExtra(EXTRA_BATCH_SIZE, 512) else null
+                    val physicalBatchSizeOverride = if (intent.hasExtra(EXTRA_PHYSICAL_BATCH_SIZE)) intent.getIntExtra(EXTRA_PHYSICAL_BATCH_SIZE, 512) else null
                     val contextSizeOverride = if (intent.hasExtra(EXTRA_CONTEXT_SIZE)) intent.getIntExtra(EXTRA_CONTEXT_SIZE, -1) else null
                     val temperatureOverride = if (intent.hasExtra(EXTRA_TEMPERATURE)) intent.getFloatExtra(EXTRA_TEMPERATURE, -1f) else null
                     val hostOverride = intent.getStringExtra(EXTRA_HOST)
@@ -58,9 +59,9 @@ class LlamaService : Service() {
                     
                     // Speculative decoding extras
                     val draftModelPath = intent.getStringExtra(EXTRA_DRAFT_MODEL_PATH)
-                    val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 16) else null
+                    val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 3) else null
                     val draftMin = if (intent.hasExtra(EXTRA_DRAFT_MIN)) intent.getIntExtra(EXTRA_DRAFT_MIN, 0) else null
-                    val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.75f) else null
+                    val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.0f) else null
                     
                     val parallelOverride = if (intent.hasExtra(EXTRA_PARALLEL)) intent.getIntExtra(EXTRA_PARALLEL, 1) else null
                     val cacheRamOverride = if (intent.hasExtra(EXTRA_CACHE_RAM)) intent.getIntExtra(EXTRA_CACHE_RAM, 0) else null
@@ -92,6 +93,7 @@ class LlamaService : Service() {
                             customCommandOverride = intent.getStringExtra(EXTRA_CUSTOM_COMMAND),
                             commandTemplateOverride = commandTemplateOverride,
                             batchSizeOverride = batchSizeOverride,
+                            physicalBatchSizeOverride = physicalBatchSizeOverride,
                             parallelOverride = parallelOverride, cacheRamOverride = cacheRamOverride, customFlagsOverride = customFlagsOverride, flashAttentionOverride = flashAttentionOverride,
                             settingsProfile = settingsProfile)
                     }
@@ -131,6 +133,7 @@ class LlamaService : Service() {
                                 kvCacheTypeVOverride = params["kvCacheTypeV"] as? String,
                                 kvCacheReuseOverride = params["kvCacheReuse"] as? Int,
                                 batchSizeOverride = params["batchSize"] as? Int,
+                                physicalBatchSizeOverride = params["physicalBatchSize"] as? Int,
                                 parallelOverride = params["parallel"] as? Int,
                                 cacheRamOverride = params["cacheRam"] as? Int,
                                 customFlagsOverride = params["customFlags"] as? String,
@@ -151,6 +154,7 @@ class LlamaService : Service() {
                      // Get optional settings overrides
                      val threadsOverride = if (intent.hasExtra(EXTRA_THREADS)) intent.getIntExtra(EXTRA_THREADS, -1) else null
                      val batchSizeOverride = if (intent.hasExtra(EXTRA_BATCH_SIZE)) intent.getIntExtra(EXTRA_BATCH_SIZE, 512) else null
+                     val physicalBatchSizeOverride = if (intent.hasExtra(EXTRA_PHYSICAL_BATCH_SIZE)) intent.getIntExtra(EXTRA_PHYSICAL_BATCH_SIZE, 512) else null
                      val contextSizeOverride = if (intent.hasExtra(EXTRA_CONTEXT_SIZE)) intent.getIntExtra(EXTRA_CONTEXT_SIZE, -1) else null
                      val temperatureOverride = if (intent.hasExtra(EXTRA_TEMPERATURE)) intent.getFloatExtra(EXTRA_TEMPERATURE, -1f) else null
                      val hostOverride = intent.getStringExtra(EXTRA_HOST)
@@ -158,9 +162,9 @@ class LlamaService : Service() {
                      
                      // Speculative decoding extras
                      val draftModelPath = intent.getStringExtra(EXTRA_DRAFT_MODEL_PATH)
-                     val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 16) else null
+                     val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 3) else null
                      val draftMin = if (intent.hasExtra(EXTRA_DRAFT_MIN)) intent.getIntExtra(EXTRA_DRAFT_MIN, 0) else null
-                     val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.75f) else null
+                     val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.0f) else null
                      
                      val parallelOverride = if (intent.hasExtra(EXTRA_PARALLEL)) intent.getIntExtra(EXTRA_PARALLEL, 1) else null
                      val cacheRamOverride = if (intent.hasExtra(EXTRA_CACHE_RAM)) intent.getIntExtra(EXTRA_CACHE_RAM, 0) else null
@@ -184,6 +188,7 @@ class LlamaService : Service() {
                              customCommandOverride = intent.getStringExtra(EXTRA_CUSTOM_COMMAND),
                              commandTemplateOverride = commandTemplateOverride,
                              batchSizeOverride = batchSizeOverride,
+                             physicalBatchSizeOverride = physicalBatchSizeOverride,
                              parallelOverride = parallelOverride, cacheRamOverride = cacheRamOverride, customFlagsOverride = customFlagsOverride, flashAttentionOverride = flashAttentionOverride,
                              settingsProfile = settingsProfile)
                      }
@@ -220,6 +225,7 @@ class LlamaService : Service() {
         customCommandOverride: String? = null,
         commandTemplateOverride: String? = null,
         batchSizeOverride: Int? = null,
+        physicalBatchSizeOverride: Int? = null,
         parallelOverride: Int? = null,
         cacheRamOverride: Int? = null,
         customFlagsOverride: String? = null,
@@ -249,10 +255,12 @@ class LlamaService : Service() {
         // Read settings from repository, but use overrides if provided.
         val settingsRepo = com.example.llamadroid.data.SettingsRepository(applicationContext)
         val threads = threadsOverride ?: if (isMasterProfile) DistributedService.masterThreads.value else settingsRepo.threads.value
-        val batchSize = batchSizeOverride ?: if (isMasterProfile) DistributedService.masterBatchSize.value else 512
+        val batchSize = batchSizeOverride ?: if (isMasterProfile) DistributedService.masterBatchSize.value else settingsRepo.serverBatchSize.value
+        val physicalBatchSize = physicalBatchSizeOverride ?: if (isMasterProfile) null else settingsRepo.serverPhysicalBatchSize.value
         val contextSize = contextSizeOverride ?: if (isMasterProfile) DistributedService.masterContextSize.value else settingsRepo.contextSize.value
         val temperature = temperatureOverride ?: if (isMasterProfile) DistributedService.masterTemperature.value else settingsRepo.temperature.value
         val host = hostOverride ?: if (isMasterProfile) "127.0.0.1" else if (settingsRepo.remoteAccess.value) "0.0.0.0" else "127.0.0.1"
+        val port = portOverride ?: if (isMasterProfile) 8080 else settingsRepo.serverPort.value
         val enableVision = if (isMasterProfile) mmprojPath != null else settingsRepo.enableVision.value
         val selectedMmprojPath = if (isMasterProfile) null else settingsRepo.selectedMmprojPath.value
         
@@ -262,12 +270,15 @@ class LlamaService : Service() {
         val kvCacheTypeV = kvCacheTypeVOverride ?: if (isMasterProfile) DistributedService.masterKvCacheTypeV.value else settingsRepo.serverKvCacheTypeV.value
         val kvCacheReuse = kvCacheReuseOverride ?: if (isMasterProfile) DistributedService.masterKvCacheReuse.value else settingsRepo.serverKvCacheReuse.value
         val noMmap = if (isMasterProfile) false else settingsRepo.lowMemoryMode.value
-        val parallel = parallelOverride ?: if (isMasterProfile) DistributedService.masterParallel.value else null
-        val cacheRam = cacheRamOverride ?: if (isMasterProfile) DistributedService.masterCacheRam.value else null
+        val parallel = parallelOverride ?: if (isMasterProfile) DistributedService.masterParallel.value else settingsRepo.serverParallel.value
+        val cacheRam = cacheRamOverride ?: if (isMasterProfile) DistributedService.masterCacheRam.value else settingsRepo.serverCacheRam.value
         val customFlags = customFlagsOverride ?: if (isMasterProfile) DistributedService.masterCustomFlags.value else settingsRepo.customFlags.value
         val flashAttention = flashAttentionOverride ?: if (isMasterProfile) DistributedService.masterFlashAttention.value else settingsRepo.flashAttentionEnabled.value
-        val mtpDecodingEnabled = !isMasterProfile && settingsRepo.mtpDecodingEnabled.value
+        val speculativeEnabled = !isMasterProfile && settingsRepo.speculativeEnabled.value
+        val speculativeMode = if (speculativeEnabled) settingsRepo.speculativeMode.value else null
         val mtpDraftMax = if (isMasterProfile) 3 else settingsRepo.mtpDraftMaxTokens.value
+        val mtpDraftMin = if (isMasterProfile) 0 else settingsRepo.mtpDraftMinTokens.value
+        val mtpDraftPMin = if (isMasterProfile) 0.0f else settingsRepo.mtpDraftPMin.value
         val commandTemplate = commandTemplateOverride
             ?.takeIf { it.isNotBlank() }
             ?: if (isMasterProfile) {
@@ -284,7 +295,7 @@ class LlamaService : Service() {
             mmprojPath ?: selectedMmprojPath
         } else null
         
-        DebugLog.log("LlamaService: Settings - threads=$threads, ctx=$contextSize, temp=$temperature, host=$host")
+        DebugLog.log("LlamaService: Settings - threads=$threads, batch=$batchSize, ubatch=${physicalBatchSize ?: "auto"}, ctx=$contextSize, temp=$temperature, host=$host, port=$port, parallel=${parallel ?: "auto"}, cacheRam=${cacheRam ?: "auto"}")
         DebugLog.log("LlamaService: Vision enabled=$enableVision, mmproj=$effectiveMmprojPath")
         
         // Save last run params for remote switch support
@@ -295,14 +306,20 @@ class LlamaService : Service() {
                 "mmprojPath" to effectiveMmprojPath,
                 "threads" to threads,
                 "batchSize" to batchSize,
+                "physicalBatchSize" to physicalBatchSize,
                 "contextSize" to contextSize,
                 "temperature" to temperature,
                 "host" to host,
-                "port" to (portOverride ?: 8080),
+                "port" to port,
+                "speculativeEnabled" to speculativeEnabled,
+                "speculativeMode" to speculativeMode?.flagValue,
                 "draftModelPath" to draftModelPath,
                 "draftMax" to draftMax,
                 "draftMin" to draftMin,
                 "draftPMin" to draftPMin,
+                "mtpDraftMax" to mtpDraftMax,
+                "mtpDraftMin" to mtpDraftMin,
+                "mtpDraftPMin" to mtpDraftPMin,
                 "kvCacheEnabled" to kvCacheEnabled,
                 "kvCacheTypeK" to kvCacheTypeK,
                 "kvCacheTypeV" to kvCacheTypeV,
@@ -311,8 +328,6 @@ class LlamaService : Service() {
                 "cacheRam" to cacheRam,
                 "customFlags" to customFlags,
                 "flashAttention" to flashAttention,
-                "mtpDecodingEnabled" to mtpDecodingEnabled,
-                "mtpDraftMax" to mtpDraftMax,
                 "commandTemplate" to commandTemplate,
                 "settingsProfile" to settingsProfile
             ))
@@ -356,7 +371,7 @@ class LlamaService : Service() {
                     DebugLog.log("LlamaService: Using CUSTOM command override")
                     Companion.updateState(ServerState.Starting)
                     updateNotification("Starting custom command...")
-                    currentServerPort = portOverride ?: 8080
+                    currentServerPort = port
                     processController.start(binary, LlamaConfig(modelPath = modelPath), filesDir, customArgs = args)
                     return@launch
                 }
@@ -489,9 +504,10 @@ class LlamaService : Service() {
                     isEmbedding = isEmbedding,
                     threads = threads,
                     batchSize = batchSize,
+                    physicalBatchSize = physicalBatchSize,
                     contextSize = contextSize,
                     temperature = temperature,
-                    port = portOverride ?: 8080,
+                    port = port,
                     host = host,
                     mmprojPath = effectiveMmprojPath,
                     kvCacheEnabled = kvCacheEnabled,
@@ -502,32 +518,60 @@ class LlamaService : Service() {
                     nGpuLayers = nGpuLayers,
                     tensorSplit = tensorSplit,
                     noMmap = noMmap,
+                    speculativeMode = speculativeMode,
                     draftModelPath = draftModelPath,
-                    draftMax = draftMax ?: 16,
+                    draftMax = draftMax ?: 3,
                     draftMin = draftMin ?: 0,
-                    draftPMin = draftPMin ?: 0.75f,
+                    draftPMin = draftPMin ?: 0.0f,
+                    mtpDraftMax = mtpDraftMax,
+                    mtpDraftMin = mtpDraftMin,
+                    mtpDraftPMin = mtpDraftPMin,
                     parallel = parallel,
                     cacheRam = cacheRam,
                     customFlags = customFlags,
-                    flashAttention = flashAttention,
-                    mtpDecodingEnabled = mtpDecodingEnabled,
-                    mtpDraftMax = mtpDraftMax
+                    flashAttention = flashAttention
                 )
                 currentServerPort = config.port
                 
                 
                 DebugLog.log("LlamaService: Binary found at $binary")
 
-                fun buildCommandArgsFor(candidateBinary: String): List<String> {
-                    return if (commandTemplate.isNullOrBlank()) {
-                        processController.getCommand(candidateBinary, config)
+                var launchConfig = config
+                var primaryBinaryFile = binaryFile
+                if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP &&
+                    !processController.binarySupportsMtpSpeculative(binaryFile)
+                ) {
+                    val cpuBinaryFile = binaryRepo.getCpuExecutable()
+                    if (cpuBinaryFile != null &&
+                        cpuBinaryFile.absolutePath != binaryFile.absolutePath &&
+                        processController.binarySupportsMtpSpeculative(cpuBinaryFile)
+                    ) {
+                        val warning = getString(
+                            R.string.llama_server_mtp_cpu_fallback,
+                            binaryFile.name,
+                            cpuBinaryFile.name
+                        )
+                        DebugLog.log("LlamaService: $warning")
+                        Companion.addServerLog(warning)
+                        primaryBinaryFile = cpuBinaryFile
                     } else {
-                        DebugLog.log("LlamaService: Rendering command template for ${if (isMasterProfile) "master" else "general"} profile")
-                        processController.renderCommandTemplate(commandTemplate, candidateBinary, config)
+                        val warning = getString(R.string.llama_server_mtp_disabled, binaryFile.name)
+                        DebugLog.log("LlamaService: $warning")
+                        Companion.addServerLog(warning)
+                        launchConfig = config.copy(speculativeMode = null)
                     }
                 }
 
-                val commandArgs = buildCommandArgsFor(binary)
+                fun buildCommandArgsFor(candidateBinary: String, candidateConfig: LlamaConfig = launchConfig): List<String> {
+                    return if (commandTemplate.isNullOrBlank()) {
+                        processController.getCommand(candidateBinary, candidateConfig)
+                    } else {
+                        DebugLog.log("LlamaService: Rendering command template for ${if (isMasterProfile) "master" else "general"} profile")
+                        processController.renderCommandTemplate(commandTemplate, candidateBinary, candidateConfig)
+                    }
+                }
+
+                val commandArgs = buildCommandArgsFor(primaryBinaryFile.absolutePath)
                 val commandString = processController.buildCommandString(commandArgs)
                 DistributedService.setLastCommand(commandString)
 
@@ -571,12 +615,12 @@ class LlamaService : Service() {
                 fun acceleratorBackendFailureReason(line: String): String =
                     "GPU backend unavailable: ${line.take(180)}"
 
-                suspend fun startCandidate(candidateFile: File, args: List<String>): ProcessRunResult {
+                suspend fun startCandidate(candidateFile: File, candidateConfig: LlamaConfig, args: List<String>): ProcessRunResult {
                     var backendUnavailable = false
                     var stoppedForAcceleratorBackendIssue = false
                     val result = processController.start(
                         candidateFile.absolutePath,
-                        config,
+                        candidateConfig,
                         filesDir,
                         customArgs = args,
                         onLog = { line ->
@@ -621,17 +665,31 @@ class LlamaService : Service() {
                     DebugLog.log("LlamaService: $reason; retrying CPU fallback at ${cpuBinaryFile.absolutePath}")
                     Companion.updateState(ServerState.Loading(0f, fallbackStatus))
                     updateNotification(fallbackStatus)
-                    ensureServerPortAvailableOrThrow(config.host, config.port, "before CPU fallback")
-                    val fallbackArgs = buildCommandArgsFor(cpuBinaryFile.absolutePath)
+                    val fallbackConfig = if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP &&
+                        !processController.binarySupportsMtpSpeculative(cpuBinaryFile)
+                    ) {
+                        val warning = getString(R.string.llama_server_mtp_disabled, cpuBinaryFile.name)
+                        DebugLog.log("LlamaService: $warning")
+                        Companion.addServerLog(warning)
+                        launchConfig.copy(speculativeMode = null)
+                    } else {
+                        launchConfig
+                    }
+                    ensureServerPortAvailableOrThrow(fallbackConfig.host, fallbackConfig.port, "before CPU fallback")
+                    val fallbackArgs = buildCommandArgsFor(cpuBinaryFile.absolutePath, fallbackConfig)
                     DistributedService.setLastCommand(processController.buildCommandString(fallbackArgs))
-                    return startCandidate(cpuBinaryFile, fallbackArgs)
+                    return startCandidate(cpuBinaryFile, fallbackConfig, fallbackArgs)
                 }
 
-                val candidateFiles = if (DeviceAcceleration.isAcceleratorBinary(binaryFile)) {
-                    (listOf(binaryFile) + binaryRepo.getAcceleratorBinaries("llama_server"))
+                val candidateFiles = if (DeviceAcceleration.isAcceleratorBinary(primaryBinaryFile)) {
+                    (listOf(primaryBinaryFile) + binaryRepo.getAcceleratorBinaries("llama_server"))
                         .distinctBy { it.absolutePath }
+                        .filter {
+                            launchConfig.speculativeMode != LlamaSpeculativeMode.DRAFT_MTP ||
+                                processController.binarySupportsMtpSpeculative(it)
+                        }
                 } else {
-                    listOf(binaryFile)
+                    listOf(primaryBinaryFile)
                 }
 
                 var attemptedAccelerator = false
@@ -644,12 +702,12 @@ class LlamaService : Service() {
                     val candidateArgs = buildCommandArgsFor(candidateFile.absolutePath)
                     DistributedService.setLastCommand(processController.buildCommandString(candidateArgs))
                     if (candidateFile.absolutePath != binaryFile.absolutePath) {
-                        DebugLog.log("LlamaService: Trying alternate accelerator candidate: ${candidateFile.absolutePath}")
+                        DebugLog.log("LlamaService: Trying alternate llama-server candidate: ${candidateFile.absolutePath}")
                     }
-                    ensureServerPortAvailableOrThrow(config.host, config.port, "before starting ${candidateFile.name}")
+                    ensureServerPortAvailableOrThrow(launchConfig.host, launchConfig.port, "before starting ${candidateFile.name}")
 
                     val candidateResult = try {
-                        startCandidate(candidateFile, candidateArgs)
+                        startCandidate(candidateFile, launchConfig, candidateArgs)
                     } catch (e: Exception) {
                         if (processController.stoppedIntentionally) {
                             runResult = ProcessRunResult(
@@ -823,6 +881,7 @@ class LlamaService : Service() {
         // Optional settings overrides for distributed mode (to avoid modifying global settings)
         const val EXTRA_THREADS = "THREADS"
         const val EXTRA_BATCH_SIZE = "BATCH_SIZE"
+        const val EXTRA_PHYSICAL_BATCH_SIZE = "PHYSICAL_BATCH_SIZE"
         const val EXTRA_CONTEXT_SIZE = "CONTEXT_SIZE"
         const val EXTRA_TEMPERATURE = "TEMPERATURE"
         const val EXTRA_HOST = "HOST"

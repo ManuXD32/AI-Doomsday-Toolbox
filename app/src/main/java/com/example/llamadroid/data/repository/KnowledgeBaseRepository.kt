@@ -58,6 +58,8 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.ceil
 import kotlin.math.sqrt
 
+private const val KNOWLEDGE_BASE_CONTENT_SUMMARY_MAX_CHARS = 900
+
 data class KnowledgeBaseSearchResult(
     val chunkId: Long,
     val knowledgeBaseId: Long,
@@ -195,13 +197,20 @@ class KnowledgeBaseRepository(
         dao.markIndexedSourcesStaleForConfig(currentEmbeddingConfig().hash)
     }
 
+    private fun cleanKnowledgeBaseContentSummary(value: String): String =
+        value.trim().replace(Regex("""\s+"""), " ").take(KNOWLEDGE_BASE_CONTENT_SUMMARY_MAX_CHARS)
+
     suspend fun repairAllSourceProgress() = withContext(Dispatchers.IO) {
         dao.getAllSourcesOnce().forEach { source ->
             refreshDerivedSourceProgress(source.id)
         }
     }
 
-    suspend fun createKnowledgeBase(name: String, description: String = ""): Long {
+    suspend fun createKnowledgeBase(
+        name: String,
+        description: String = "",
+        contentSummary: String = ""
+    ): Long {
         val now = System.currentTimeMillis()
         val cleanName = name.trim()
         require(cleanName.isNotBlank()) { "Knowledge base name is required." }
@@ -209,6 +218,7 @@ class KnowledgeBaseRepository(
             KnowledgeBaseEntity(
                 name = cleanName,
                 description = description.trim(),
+                contentSummary = cleanKnowledgeBaseContentSummary(contentSummary),
                 createdAt = now,
                 updatedAt = now
             )
@@ -229,6 +239,10 @@ class KnowledgeBaseRepository(
                             append(CHAT_DOCUMENT_BASE_DESCRIPTION)
                             if (displayTitle.isNotBlank()) append(": ").append(displayTitle)
                         },
+                        contentSummary = buildString {
+                            append("Documents uploaded only to chat #").append(chatId)
+                            if (displayTitle.isNotBlank()) append(": ").append(displayTitle)
+                        },
                         createdAt = now,
                         updatedAt = now
                     )
@@ -239,17 +253,48 @@ class KnowledgeBaseRepository(
         }
     }
 
-    suspend fun renameKnowledgeBase(id: Long, name: String, description: String = "") {
+    suspend fun renameKnowledgeBase(
+        id: Long,
+        name: String,
+        description: String? = null,
+        contentSummary: String? = null
+    ) {
         val existing = dao.getKnowledgeBase(id) ?: return
         val cleanName = name.trim()
         require(cleanName.isNotBlank()) { "Knowledge base name is required." }
         dao.updateKnowledgeBase(
             existing.copy(
                 name = cleanName,
-                description = description.trim(),
+                description = description?.trim() ?: existing.description,
+                contentSummary = contentSummary?.let(::cleanKnowledgeBaseContentSummary) ?: existing.contentSummary,
                 updatedAt = System.currentTimeMillis()
             )
         )
+    }
+
+    suspend fun updateKnowledgeBaseContentSummary(id: Long, contentSummary: String) {
+        val existing = dao.getKnowledgeBase(id) ?: return
+        dao.updateKnowledgeBase(
+            existing.copy(
+                contentSummary = cleanKnowledgeBaseContentSummary(contentSummary),
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
+
+    suspend fun buildKnowledgeBaseSelectionGuidance(ids: List<Long>): String? = withContext(Dispatchers.IO) {
+        val requestedIds = ids.filter { it > 0L }.distinct()
+        if (requestedIds.isEmpty()) return@withContext null
+        val bases = dao.getKnowledgeBasesByIds(requestedIds)
+        if (bases.isEmpty()) return@withContext null
+        buildString {
+            appendLine("Selected knowledge-base routing guide:")
+            bases.forEach { base ->
+                val summary = base.contentSummary.ifBlank { base.description }.ifBlank { "No user summary provided." }
+                appendLine("- KB #${base.id} \"${base.name}\": ${summary.replace('\n', ' ').take(700)}")
+            }
+            append("When the user's request matches one of these KB summaries, prefer kb_search/kb_read_source before web_search or kiwix_search. Use web_search or Kiwix first only for current, external, or clearly unrelated information, or after KB results are insufficient.")
+        }.trim()
     }
 
     suspend fun deleteKnowledgeBase(id: Long) {
@@ -1609,12 +1654,45 @@ class KnowledgeEmbeddingService(private val context: Context) {
             context.getString(R.string.kb_error_embedding_requires_local_backend)
         }
         require(config.isConfigured) { context.getString(R.string.kb_upload_needs_embedding) }
-        ensureServerStarted(requireNotNull(config.localModelPath))
+        startMutex.withLock {
+            manualServerHold = true
+            pendingIdleStopReason = null
+        }
+        try {
+            ensureServerStarted(requireNotNull(config.localModelPath))
+        } catch (error: Throwable) {
+            startMutex.withLock {
+                manualServerHold = false
+            }
+            throw error
+        }
         EMBEDDING_PORT
     }
 
     suspend fun stopLocalServer(reason: String = "user") = withContext(Dispatchers.IO) {
         startMutex.withLock {
+            if (isIdleStopReason(reason)) {
+                if (manualServerHold) {
+                    KnowledgeBaseDiagnostics.log(
+                        context.getString(R.string.kb_log_embedding_stop_skipped_manual, reason)
+                    )
+                    return@withLock
+                }
+                if (activeLocalEmbeddingRequests > 0) {
+                    pendingIdleStopReason = reason
+                    KnowledgeBaseDiagnostics.log(
+                        context.getString(
+                            R.string.kb_log_embedding_stop_deferred,
+                            reason,
+                            activeLocalEmbeddingRequests
+                        )
+                    )
+                    return@withLock
+                }
+            } else {
+                manualServerHold = false
+                pendingIdleStopReason = null
+            }
             stopLocalServerLocked(reason)
         }
     }
@@ -1642,26 +1720,53 @@ class KnowledgeEmbeddingService(private val context: Context) {
         config: KnowledgeEmbeddingConfig,
         cleanText: String
     ): List<Float> {
-        val modelPath = requireNotNull(config.localModelPath)
-        ensureServerStarted(modelPath)
-        var url = localServerBaseUrl()
-        return try {
-            requestLlamaServerEmbedding(url, cleanText)
-        } catch (error: Throwable) {
-            if (!isTransientLocalEmbeddingFailure(error)) throw error
-            val message = error.message ?: error::class.java.simpleName
-            KnowledgeBaseDiagnostics.log("Local embedding request failed transiently ($message); restarting CPU embedding server and retrying once.")
-            DebugLog.log("[KnowledgeEmbedding] Transient local embedding failure; retrying once after CPU restart: $message")
-            startMutex.withLock {
-                startLocalServerLocked(modelPath, preferAccelerator = false)
+        acquireLocalEmbeddingUse()
+        try {
+            val modelPath = requireNotNull(config.localModelPath)
+            ensureServerStarted(modelPath)
+            var url = localServerBaseUrl()
+            return try {
+                requestLlamaServerEmbedding(url, cleanText)
+            } catch (error: Throwable) {
+                if (!isTransientLocalEmbeddingFailure(error)) throw error
+                val message = error.message ?: error::class.java.simpleName
+                KnowledgeBaseDiagnostics.log("Local embedding request failed transiently ($message); restarting CPU embedding server and retrying once.")
+                DebugLog.log("[KnowledgeEmbedding] Transient local embedding failure; retrying once after CPU restart: $message")
+                startMutex.withLock {
+                    startLocalServerLocked(modelPath, preferAccelerator = false)
+                }
+                if (waitForServerReady()) {
+                    markServerReady(modelPath)
+                } else {
+                    error(context.getString(R.string.kb_error_embedding_server_not_ready, EMBEDDING_PORT))
+                }
+                url = localServerBaseUrl()
+                requestLlamaServerEmbedding(url, cleanText)
             }
-            if (waitForServerReady()) {
-                markServerReady(modelPath)
-            } else {
-                error(context.getString(R.string.kb_error_embedding_server_not_ready, EMBEDDING_PORT))
+        } finally {
+            releaseLocalEmbeddingUse()
+        }
+    }
+
+    private suspend fun acquireLocalEmbeddingUse() {
+        startMutex.withLock {
+            activeLocalEmbeddingRequests += 1
+        }
+    }
+
+    private suspend fun releaseLocalEmbeddingUse() {
+        startMutex.withLock {
+            activeLocalEmbeddingRequests = (activeLocalEmbeddingRequests - 1).coerceAtLeast(0)
+            val idleStopReason = pendingIdleStopReason
+            if (activeLocalEmbeddingRequests == 0 && idleStopReason != null) {
+                pendingIdleStopReason = null
+                if (!manualServerHold) {
+                    KnowledgeBaseDiagnostics.log(
+                        context.getString(R.string.kb_log_embedding_stop_after_active_requests, idleStopReason)
+                    )
+                    stopLocalServerLocked(idleStopReason)
+                }
             }
-            url = localServerBaseUrl()
-            requestLlamaServerEmbedding(url, cleanText)
         }
     }
 
@@ -1959,6 +2064,9 @@ class KnowledgeEmbeddingService(private val context: Context) {
     private fun currentLocalBindHost(): String =
         if (SettingsRepository(context).knowledgeEmbeddingNetworkVisible.value) PUBLIC_HOST else LOCALHOST
 
+    private fun isIdleStopReason(reason: String): Boolean =
+        reason.contains("idle", ignoreCase = true)
+
     private suspend fun requestLlamaServerEmbedding(baseUrl: String, text: String): List<Float> =
         withContext(Dispatchers.IO) {
             val response = postJson(
@@ -2047,6 +2155,9 @@ class KnowledgeEmbeddingService(private val context: Context) {
         @Volatile private var runningContextSize: Int? = null
         @Volatile private var runningThreads: Int? = null
         @Volatile private var runningHost: String? = null
+        @Volatile private var manualServerHold: Boolean = false
+        @Volatile private var activeLocalEmbeddingRequests: Int = 0
+        @Volatile private var pendingIdleStopReason: String? = null
 
         private fun joinUrl(baseUrl: String, path: String): String =
             baseUrl.trim().trimEnd('/') + "/" + path.trimStart('/')

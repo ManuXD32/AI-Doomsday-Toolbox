@@ -8,6 +8,7 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.LlamaServerChatService
 import com.example.llamadroid.service.LlamaService
 import com.example.llamadroid.service.GenerationDiagnosticsStore
+import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.RemoteSummaryBackendConfig
 import com.example.llamadroid.service.RemoteBackendResilience
 import com.example.llamadroid.service.RemoteSummaryClientFactory
@@ -388,7 +389,11 @@ object TamaDailyDreamManager {
             backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value),
             baseUrl = activeBaseUrl(settingsRepo),
             model = activeModel(settingsRepo),
-            timeoutMinutes = DEEP_DREAM_STEP_TIMEOUT_MINUTES
+            timeoutMinutes = DEEP_DREAM_STEP_TIMEOUT_MINUTES,
+            context = context,
+            liteRtModelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L },
+            liteRtBackend = settingsRepo.tamaLiteRtBackend.value,
+            liteRtMtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value
         )
         val client = RemoteSummaryClientFactory.fromConfig(backendConfig)
         val sharedFacts = buildString {
@@ -691,7 +696,13 @@ object TamaDailyDreamManager {
             putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
             putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
             if (settingsRepo.speculativeEnabled.value) {
-                putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
+                val speculativeMode = settingsRepo.speculativeMode.value
+                val shouldPassDraftModel =
+                    speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE ||
+                        (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
+                if (shouldPassDraftModel) {
+                    putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
+                }
                 putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
                 putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
                 putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)
@@ -782,6 +793,7 @@ object TamaDailyDreamManager {
         return when (SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)) {
             SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> settingsRepo.tamaLlamaServerUrl.value.trim().trimEnd('/')
             SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> settingsRepo.tamaLlamaSwapUrl.value.trim().trimEnd('/')
+            SettingsRepository.PDF_BACKEND_LITERT -> "local"
             else -> settingsRepo.tamaOllamaUrl.value.trim().trimEnd('/')
         }
     }
@@ -790,18 +802,27 @@ object TamaDailyDreamManager {
         return when (SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value)) {
             SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
                 settingsRepo.tamaLlamaServerModelLabel.value?.trim()?.ifBlank { null }
+            SettingsRepository.PDF_BACKEND_LITERT ->
+                settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L }?.let { "litert:$it" }
             else ->
                 settingsRepo.tamaSummarizerModel.value.trim().ifBlank { null }
         }
     }
 
-    private suspend fun fetchBackendMetadata(settingsRepo: SettingsRepository): Result<RemoteSummaryMetadata> {
+    private suspend fun fetchBackendMetadata(
+        context: Context,
+        settingsRepo: SettingsRepository
+    ): Result<RemoteSummaryMetadata> {
         return RemoteSummaryClientFactory.fromConfig(
             RemoteSummaryBackendConfig(
                 backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.tamaBackend.value),
                 baseUrl = activeBaseUrl(settingsRepo),
                 model = activeModel(settingsRepo),
-                timeoutMinutes = DEEP_DREAM_METADATA_TIMEOUT_MINUTES
+                timeoutMinutes = DEEP_DREAM_METADATA_TIMEOUT_MINUTES,
+                context = context,
+                liteRtModelId = settingsRepo.tamaLiteRtModelId.value.takeIf { it > 0L },
+                liteRtBackend = settingsRepo.tamaLiteRtBackend.value,
+                liteRtMtpEnabled = settingsRepo.tamaLiteRtMtpEnabled.value
             )
         ).fetchMetadata().recoverCatching { error ->
             if (!SettingsRepository.isLlamaServerBackend(settingsRepo.tamaBackend.value)) {
@@ -841,7 +862,7 @@ object TamaDailyDreamManager {
                     localLlamaAutostartReporter(true)
                 }
             }
-            return fetchBackendMetadata(settingsRepo).recoverCatching { error ->
+            return fetchBackendMetadata(context, settingsRepo).recoverCatching { error ->
                 if (!shouldRecoverLocalLlamaBackend(settingsRepo, error)) {
                     throw error
                 }
@@ -854,7 +875,7 @@ object TamaDailyDreamManager {
                 if (autostarted) {
                     localLlamaAutostartReporter(true)
                 }
-                fetchBackendMetadata(settingsRepo).getOrElse { retryError ->
+                fetchBackendMetadata(context, settingsRepo).getOrElse { retryError ->
                     if (RemoteBackendResilience.isRecoverable(retryError)) {
                         throw backendConnectionLimitException(context, retryError)
                     }
@@ -867,7 +888,7 @@ object TamaDailyDreamManager {
             repeat(DEEP_DREAM_BACKEND_CONNECT_MAX_ATTEMPTS) { attempt ->
                 if (llamaServerChatService.checkConnection(baseUrl)) {
                     recordDreamBreadcrumb("backend_connection_ready", petId = petId, details = "$backend attempt=${attempt + 1}")
-                    return fetchBackendMetadata(settingsRepo)
+                    return fetchBackendMetadata(context, settingsRepo)
                 }
                 recordDreamBreadcrumb("backend_connection_retry", petId = petId, details = "$backend attempt=${attempt + 1}")
                 if (attempt < DEEP_DREAM_BACKEND_CONNECT_MAX_ATTEMPTS - 1) {
@@ -881,7 +902,7 @@ object TamaDailyDreamManager {
 
         var lastError: Throwable? = null
         repeat(DEEP_DREAM_BACKEND_CONNECT_MAX_ATTEMPTS) { attempt ->
-            val metadata = fetchBackendMetadata(settingsRepo)
+            val metadata = fetchBackendMetadata(context, settingsRepo)
             metadata.onSuccess {
                 recordDreamBreadcrumb("backend_connection_ready", petId = petId, details = "$backend attempt=${attempt + 1}")
                 return metadata

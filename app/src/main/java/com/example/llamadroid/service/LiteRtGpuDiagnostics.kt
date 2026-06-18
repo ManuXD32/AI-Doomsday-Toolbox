@@ -267,8 +267,54 @@ internal data class LiteRtGpuCurrentContext(
 internal fun liteRtLmEngineCacheDir(
     cacheRoot: File,
     modelId: Long,
-    backendLabel: String
-): File = File(cacheRoot, "litert_lm/$modelId/$backendLabel").apply { mkdirs() }
+    backendLabel: String,
+    mtpEnabled: Boolean = false,
+    contextTokens: Int? = null,
+    cacheVersion: String = LITERT_LM_ENGINE_CACHE_VERSION
+): File {
+    return liteRtLmEngineCachePath(
+        cacheRoot = cacheRoot,
+        modelId = modelId,
+        backendLabel = backendLabel,
+        mtpEnabled = mtpEnabled,
+        contextTokens = contextTokens,
+        cacheVersion = cacheVersion
+    ).apply { mkdirs() }
+}
+
+internal fun purgeLiteRtLmEngineCacheDir(
+    cacheRoot: File,
+    modelId: Long,
+    backendLabel: String,
+    mtpEnabled: Boolean = false,
+    contextTokens: Int? = null,
+    cacheVersion: String = LITERT_LM_ENGINE_CACHE_VERSION
+): Boolean {
+    val cacheDir = liteRtLmEngineCachePath(
+        cacheRoot = cacheRoot,
+        modelId = modelId,
+        backendLabel = backendLabel,
+        mtpEnabled = mtpEnabled,
+        contextTokens = contextTokens,
+        cacheVersion = cacheVersion
+    )
+    return !cacheDir.exists() || cacheDir.deleteRecursively()
+}
+
+private fun liteRtLmEngineCachePath(
+    cacheRoot: File,
+    modelId: Long,
+    backendLabel: String,
+    mtpEnabled: Boolean,
+    contextTokens: Int?,
+    cacheVersion: String
+): File {
+    val modeLabel = if (mtpEnabled) "${backendLabel}_MTP" else backendLabel
+    val contextLabel = "ctx_${contextTokens?.coerceAtLeast(1) ?: "default"}"
+    return File(cacheRoot, "litert_lm/$modelId/$modeLabel/$cacheVersion/$contextLabel")
+}
+
+internal const val LITERT_LM_ENGINE_CACHE_VERSION = "v2"
 
 internal fun liteRtGpuExtensionSummary(
     raw: String,

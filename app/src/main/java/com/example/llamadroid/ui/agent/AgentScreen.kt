@@ -61,6 +61,7 @@ import coil.compose.AsyncImage
 import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.data.db.AgentMessageEntity
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
+import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.service.AgentForegroundService
@@ -69,6 +70,9 @@ import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.StagedFileCache
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
+import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
+import com.example.llamadroid.sd.isSdImageMainModel
+import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.ApprovalQueueDialog
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
@@ -151,6 +155,7 @@ fun AgentScreen(navController: NavController) {
     val agentBackend by settingsRepository.agentBackend.collectAsStateWithLifecycle()
     val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(agentBackend)
     val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(agentBackend)
+    val isAgentLiteRt = SettingsRepository.isLiteRtBackend(agentBackend)
     val isAgentOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(agentBackend)
     val llamaServerUrl by settingsRepository.llamaServerUrl.collectAsStateWithLifecycle()
     val llamaSwapUrl by settingsRepository.agentLlamaSwapUrl.collectAsStateWithLifecycle()
@@ -175,7 +180,7 @@ fun AgentScreen(navController: NavController) {
             if (remoteUrl.isNotBlank()) {
                 agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
             }
-        } else {
+        } else if (!isAgentLiteRt) {
             ollamaService.checkConnection()
         }
     }
@@ -283,10 +288,35 @@ fun AgentScreen(navController: NavController) {
         AgentService.setLoadedCustomTools(customTools)
     }
 
-    val installedOnnxModels by db.modelDao().getModelsByType(ModelType.ONNX_IMAGE_GEN).collectAsState(initial = emptyList())
+    val installedOnnxModels by db.modelDao()
+        .getModelsByTypes(listOf(ModelType.ONNX_IMAGE_GEN, ModelType.ONNX_BACKGROUND_REMOVAL))
+        .collectAsState(initial = emptyList())
     val availableImageGenerationModels = remember(installedOnnxModels) {
         installedOnnxModels.filter { it.isOnnxTxt2ImgBundle() }.map { it.filename }
     }
+    val availableBackgroundRemovalModels = remember(installedOnnxModels) {
+        installedOnnxModels.filter { it.isOnnxBackgroundRemovalModel() }.map { it.filename }
+    }
+    val installedSdImageMainModels by db.modelDao()
+        .getModelsByTypes(listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION))
+        .collectAsState(initial = emptyList())
+    val availableSdImageMainModels = remember(installedSdImageMainModels) {
+        installedSdImageMainModels.filter { it.isSdImageMainModel() && it.supportsSdTxt2Img() }
+    }
+    val availableSdImageSupportModels by db.modelDao()
+        .getModelsByTypes(
+            listOf(
+                ModelType.SD_VAE,
+                ModelType.SD_TAE,
+                ModelType.SD_CLIP_L,
+                ModelType.SD_CLIP_G,
+                ModelType.SD_T5XXL,
+                ModelType.LLM,
+                ModelType.VISION_PROJECTOR,
+                ModelType.SD_PHOTOMAKER
+            )
+        )
+        .collectAsState(initial = emptyList())
     
     // Load custom agents from database
     val customAgents by db.customAgentDao().getEnabledAgents().collectAsState(initial = emptyList())
@@ -1028,7 +1058,7 @@ fun AgentScreen(navController: NavController) {
                     scope.launch {
                         if (isAgentOpenAiBackend) {
                             agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-                        } else if (!isOllamaConnected) {
+                        } else if (!isAgentLiteRt && !isOllamaConnected) {
                             ollamaService.checkConnection()
                         }
                         if (agentConnectionStatus == AgentService.Companion.ConnectionStatus.DISCONNECTED) {
@@ -1176,7 +1206,7 @@ fun AgentScreen(navController: NavController) {
                     val portInt = sshPort.toIntOrNull() ?: 8023
                     if (isAgentOpenAiBackend) {
                         agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-                    } else {
+                    } else if (!isAgentLiteRt) {
                         ollamaService.initFromSettings()
                         ollamaService.checkConnection()
                     }
@@ -1193,7 +1223,7 @@ fun AgentScreen(navController: NavController) {
         LaunchedEffect(Unit) {
             if (isAgentOpenAiBackend) {
                 agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-            } else {
+            } else if (!isAgentLiteRt) {
                 ollamaService.checkConnection()
             }
         }
@@ -1205,6 +1235,9 @@ fun AgentScreen(navController: NavController) {
                 availableModels
             },
             availableImageGenerationModels = availableImageGenerationModels,
+            availableSdImageMainModels = availableSdImageMainModels,
+            availableSdImageSupportModels = availableSdImageSupportModels,
+            availableBackgroundRemovalModels = availableBackgroundRemovalModels,
             onDismiss = { showAgentSettings = false }
         )
     }

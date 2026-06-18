@@ -8,7 +8,9 @@ import androidx.room.*
 enum class WorkflowType {
     TRANSCRIBE_SUMMARY,
     TXT2IMG_UPSCALE,
-    MANGA_TRANSLATION
+    MANGA_TRANSLATION,
+    MEDIA_DUB_TRANSLATION,
+    SUBTITLE_TRANSLATION
 }
 
 /**

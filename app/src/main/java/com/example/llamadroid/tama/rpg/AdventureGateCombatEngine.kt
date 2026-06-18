@@ -17,7 +17,6 @@ object AdventureGateCombatEngine {
     private const val GUARD_DAMAGE_MULTIPLIER = 0.6f
     private const val DEFAULT_GUARD_MANA_RESTORE = 6
     private const val STUDY_MANA_REGEN_UNLOCK_POINTS = 200f
-    private const val STUDY_MANA_REGEN_PERCENT = 3
 
     private sealed class QueuedPetAction {
         data class Skill(val skill: AdventureGateSkillDefinition, val targetInstanceId: String?) : QueuedPetAction()
@@ -64,8 +63,15 @@ object AdventureGateCombatEngine {
         12 + (magic.coerceAtLeast(1) / 3)
 
 
-    fun normalizedProfile(profile: AdventureGateProfile, educationLevel: Float = profile.educationLevel): AdventureGateProfile {
+    fun normalizedProfile(
+        profile: AdventureGateProfile,
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel,
+        exerciseLevel: Float = profile.exerciseLevel
+    ): AdventureGateProfile {
         val effectiveEducationLevel = educationLevel.coerceAtLeast(0f)
+        val effectiveIntrospectionLevel = introspectionLevel.coerceAtLeast(0f)
+        val effectiveExerciseLevel = exerciseLevel.coerceAtLeast(0f)
         val sanitizedGear = profile.copy(
             equippedWeaponId = profile.equippedWeaponId
                 ?.takeIf { AdventureGateCatalog.equipment(it)?.slot == AdventureGateEquipmentSlot.WEAPON },
@@ -76,7 +82,12 @@ object AdventureGateCombatEngine {
             equippedRelicId = profile.equippedRelicId
                 ?.takeIf { AdventureGateCatalog.equipment(it)?.slot == AdventureGateEquipmentSlot.RELIC }
         )
-        val stats = AdventureGateCatalog.effectiveStats(sanitizedGear, effectiveEducationLevel)
+        val stats = AdventureGateCatalog.effectiveStats(
+            sanitizedGear,
+            effectiveEducationLevel,
+            effectiveIntrospectionLevel,
+            effectiveExerciseLevel
+        )
         val learnedAttackIds = AdventureGateCatalog.learnedAttackIdsForLevel(profile.level)
         val learnedMagicIds = AdventureGateCatalog.learnedMagicIdsForLevel(profile.level)
         val levelUnlockedIds = (learnedAttackIds + learnedMagicIds).toSet()
@@ -88,6 +99,8 @@ object AdventureGateCombatEngine {
         return sanitizedGear.copy(
             stats = stats,
             educationLevel = effectiveEducationLevel,
+            exerciseLevel = effectiveExerciseLevel,
+            introspectionLevel = effectiveIntrospectionLevel,
             currentHp = profile.currentHp.coerceIn(0, stats.maxHp),
             currentMana = profile.currentMana.coerceIn(0, stats.maxMana),
             skillPoints = profile.skillPoints.coerceAtLeast(0),
@@ -107,9 +120,11 @@ object AdventureGateCombatEngine {
         profile: AdventureGateProfile,
         phase: AdventureGatePhaseDefinition,
         seed: Long = System.currentTimeMillis(),
-        educationLevel: Float = profile.educationLevel
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel,
+        exerciseLevel: Float = profile.exerciseLevel
     ): AdventureGateBattleSnapshot {
-        val safeProfile = normalizedProfile(profile, educationLevel)
+        val safeProfile = normalizedProfile(profile, educationLevel, introspectionLevel, exerciseLevel)
         val loadout = AdventureGateCatalog.loadoutForProfile(safeProfile)
         val shield = loadout.shield
         val pet = AdventureGateCombatantState(
@@ -150,12 +165,21 @@ object AdventureGateCombatEngine {
         snapshot: AdventureGateBattleSnapshot,
         skillId: String,
         targetInstanceId: String?,
-        educationLevel: Float = profile.educationLevel
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel
     ): AdventureGateActionResult {
-        if (snapshot.isCompleted || snapshot.turn != AdventureGateTurn.PET) {
+        if (snapshot.isCompleted) {
             return AdventureGateActionResult(snapshot = snapshot, profile = profile)
         }
-        val safeProfile = normalizedProfile(profile, educationLevel)
+        val safeProfile = normalizedProfile(profile, educationLevel, introspectionLevel)
+        if (!snapshot.pet.isAlive) {
+            val defeated = completeDefeatIfPetDown(snapshot)
+            val result = finishBattle(safeProfile, defeated, educationLevel, introspectionLevel)
+            return result.copy(events = eventsFromLogs(logsAddedSince(snapshot.log, result.snapshot.log)))
+        }
+        if (snapshot.turn != AdventureGateTurn.PET) {
+            return AdventureGateActionResult(snapshot = snapshot, profile = profile)
+        }
         val skill = AdventureGateCatalog.skill(skillId)
         val available = (AdventureGateCatalog.skillsForProfile(safeProfile).map { it.id } + AdventureGateCatalog.ALWAYS_GUARD_SKILL_ID).toSet()
         if (skill.id !in available) {
@@ -221,7 +245,7 @@ object AdventureGateCombatEngine {
             action = QueuedPetAction.Skill(skill, targetInstanceId)
         )
         return if (afterWave.isCompleted) {
-            val result = finishBattle(safeProfile, afterWave, educationLevel)
+            val result = finishBattle(safeProfile, afterWave, educationLevel, introspectionLevel)
             result.copy(events = eventsFromLogs(logsAddedSince(snapshot.log, result.snapshot.log)))
         } else {
             AdventureGateActionResult(
@@ -235,16 +259,25 @@ object AdventureGateCombatEngine {
     fun resolveEnemyTurn(
         profile: AdventureGateProfile,
         snapshot: AdventureGateBattleSnapshot,
-        educationLevel: Float = profile.educationLevel
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel
     ): AdventureGateActionResult {
-        if (snapshot.isCompleted || snapshot.turn != AdventureGateTurn.ENEMY) {
+        if (snapshot.isCompleted) {
+            return AdventureGateActionResult(snapshot = snapshot, profile = profile)
+        }
+        val safeProfile = normalizedProfile(profile, educationLevel, introspectionLevel)
+        if (!snapshot.pet.isAlive) {
+            val defeated = completeDefeatIfPetDown(snapshot)
+            val result = finishBattle(safeProfile, defeated, educationLevel, introspectionLevel)
+            return result.copy(events = eventsFromLogs(logsAddedSince(snapshot.log, result.snapshot.log)))
+        }
+        if (snapshot.turn != AdventureGateTurn.ENEMY) {
             return AdventureGateActionResult(snapshot = snapshot, profile = profile)
         }
         val phase = snapshot.phaseDefinition()
-        val safeProfile = normalizedProfile(profile, educationLevel)
         val afterEnemyTurn = runEnemyTurn(snapshot, phase, safeProfile)
         val result = if (afterEnemyTurn.isCompleted) {
-            finishBattle(safeProfile, afterEnemyTurn, educationLevel)
+            finishBattle(safeProfile, afterEnemyTurn, educationLevel, introspectionLevel)
         } else {
             val updated = afterEnemyTurn.copy(turn = AdventureGateTurn.PET, updatedAt = System.currentTimeMillis())
             AdventureGateActionResult(
@@ -259,12 +292,23 @@ object AdventureGateCombatEngine {
         profile: AdventureGateProfile,
         snapshot: AdventureGateBattleSnapshot,
         supplyId: String,
-        educationLevel: Float = profile.educationLevel
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel
     ): AdventureGatePotionUseResult {
         val supply = AdventureGateCatalog.supply(supplyId)
             ?: return AdventureGatePotionUseResult(used = false, error = AdventureGatePotionUseError.UNKNOWN_ITEM)
         if (snapshot.isCompleted) {
             return AdventureGatePotionUseResult(used = false, error = AdventureGatePotionUseError.ACTIVE_BATTLE_REQUIRED)
+        }
+        val safeProfile = normalizedProfile(profile, educationLevel, introspectionLevel)
+        if (!snapshot.pet.isAlive) {
+            val defeated = completeDefeatIfPetDown(snapshot)
+            val result = finishBattle(safeProfile, defeated, educationLevel, introspectionLevel)
+            return AdventureGatePotionUseResult(
+                result = result.copy(events = eventsFromLogs(logsAddedSince(snapshot.log, result.snapshot.log))),
+                used = false,
+                error = AdventureGatePotionUseError.ACTIVE_BATTLE_REQUIRED
+            )
         }
         if (snapshot.turn != AdventureGateTurn.PET) {
             return AdventureGatePotionUseResult(used = false, error = AdventureGatePotionUseError.NOT_PET_TURN)
@@ -284,14 +328,13 @@ object AdventureGateCombatEngine {
             return AdventureGatePotionUseResult(
                 result = AdventureGateActionResult(
                     snapshot = blocked,
-                    profile = normalizedProfile(profile, educationLevel).persistBattleVitals(blocked.pet),
+                    profile = normalizedProfile(profile, educationLevel, introspectionLevel).persistBattleVitals(blocked.pet),
                     events = eventsFromLogs(logsAddedSince(snapshot.log, blocked.log))
                 ),
                 used = false,
                 error = AdventureGatePotionUseError.LIMIT_REACHED
             )
         }
-        val safeProfile = normalizedProfile(profile, educationLevel)
         val potionBonus = AdventureGateCatalog.loadoutForProfile(safeProfile)
             .equipment
             .sumOf { it.effect.potionBonusPercent }
@@ -331,6 +374,7 @@ object AdventureGateCombatEngine {
             turn = AdventureGateTurn.PET,
             actionSequence = snapshot.actionSequence + 1
         )
+        completeDefeatIfPetDown(turnSnapshot).takeIf { it.isCompleted }?.let { return it }
         val rng = roundRandom(turnSnapshot)
         var state = applyTurnRegeneration(turnSnapshot, profile, loadout)
         val statusLogs = mutableListOf<AdventureGateBattleLogEntry>()
@@ -395,6 +439,8 @@ object AdventureGateCombatEngine {
                     is QueuedPetAction.Supply -> applyPetSupply(state.copy(pet = petAfterCost), action.supply, action.amount)
                 }
                 petActionTaken = true
+                state = completeDefeatIfPetDown(state)
+                if (state.isCompleted) break
                 state = advanceWaveOrVictory(state, phase, profile)
             } else if (actorId == state.minion?.instanceId) {
                 if (state.minion?.isAlive != true) continue
@@ -544,9 +590,10 @@ object AdventureGateCombatEngine {
         profile: AdventureGateProfile,
         loadout: AdventureGateEffectiveLoadout
     ): AdventureGateBattleSnapshot {
+        if (!snapshot.pet.isAlive) return snapshot
         val hpPercent = loadout.equipment.sumOf { it.effect.turnHpRegenPercent }
         val gearManaPercent = loadout.equipment.sumOf { it.effect.turnManaRegenPercent }
-        val studyManaPercent = if (hasStudyManaRegenPassive(profile)) STUDY_MANA_REGEN_PERCENT else 0
+        val studyManaPercent = studyManaRegenPercent(profile)
         val manaPercent = gearManaPercent + studyManaPercent
         if (hpPercent <= 0 && manaPercent <= 0) return snapshot
         val hpRestored = if (hpPercent > 0) {
@@ -580,9 +627,14 @@ object AdventureGateCombatEngine {
     }
 
     fun hasStudyManaRegenPassive(profile: AdventureGateProfile): Boolean =
-        profile.educationLevel >= STUDY_MANA_REGEN_UNLOCK_POINTS
+        studyManaRegenPercent(profile) > 0
 
-    fun studyManaRegenPercent(): Int = STUDY_MANA_REGEN_PERCENT
+    fun studyManaRegenPercent(profile: AdventureGateProfile): Int = when {
+        profile.educationLevel >= 600f -> 3
+        profile.educationLevel >= 400f -> 2
+        profile.educationLevel >= STUDY_MANA_REGEN_UNLOCK_POINTS -> 1
+        else -> 0
+    }
 
     private fun applyPetSupply(
         snapshot: AdventureGateBattleSnapshot,
@@ -1256,12 +1308,30 @@ object AdventureGateCombatEngine {
         )
     }
 
+    private fun completeDefeatIfPetDown(snapshot: AdventureGateBattleSnapshot): AdventureGateBattleSnapshot {
+        if (snapshot.isCompleted || snapshot.pet.isAlive) return snapshot
+        val log = if (snapshot.log.lastOrNull()?.messageKey == AdventureGateLogMessage.PET_DEFEATED) {
+            snapshot.log
+        } else {
+            appendLog(snapshot, AdventureGateBattleLogEntry(AdventureGateLogMessage.PET_DEFEATED))
+        }
+        return snapshot.copy(
+            turn = AdventureGateTurn.COMPLETE,
+            isCompleted = true,
+            isVictory = false,
+            log = log,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
     private fun finishBattle(
         profile: AdventureGateProfile,
         snapshot: AdventureGateBattleSnapshot,
-        educationLevel: Float = profile.educationLevel
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel
     ): AdventureGateActionResult {
-        val profileWithVitals = normalizedProfile(profile, educationLevel).persistBattleVitals(snapshot.pet)
+        val profileWithVitals = normalizedProfile(profile, educationLevel, introspectionLevel)
+            .persistBattleVitals(snapshot.pet)
         if (!snapshot.isVictory) {
             return AdventureGateActionResult(
                 snapshot = snapshot.copy(
@@ -1273,7 +1343,7 @@ object AdventureGateCombatEngine {
                 )
             )
         }
-        val reward = grantXp(profileWithVitals, snapshot.xpAwarded, educationLevel)
+        val reward = grantXp(profileWithVitals, snapshot.xpAwarded, educationLevel, introspectionLevel)
         val levelLogs = buildList {
             if (reward.leveledUp) {
                 add(AdventureGateBattleLogEntry(
@@ -1299,7 +1369,12 @@ object AdventureGateCombatEngine {
         )
     }
 
-    fun grantXp(profile: AdventureGateProfile, xpAwarded: Int, educationLevel: Float = profile.educationLevel): XpGrantResult {
+    fun grantXp(
+        profile: AdventureGateProfile,
+        xpAwarded: Int,
+        educationLevel: Float = profile.educationLevel,
+        introspectionLevel: Float = profile.introspectionLevel
+    ): XpGrantResult {
         var level = profile.level
         var xp = profile.xp + xpAwarded
         var leveled = false
@@ -1315,11 +1390,14 @@ object AdventureGateCombatEngine {
         val learnedAttacks = AdventureGateCatalog.learnedAttackIdsForLevel(level)
         val learnedMagic = AdventureGateCatalog.learnedMagicIdsForLevel(level)
         val leveledProfile = profile.copy(level = level)
-        val stats = AdventureGateCatalog.effectiveStats(leveledProfile, educationLevel)
+        val stats = AdventureGateCatalog.effectiveStats(leveledProfile, educationLevel, introspectionLevel, profile.exerciseLevel)
         val profileWithLevel = profile.copy(
             level = level,
             xp = xp,
             stats = stats,
+            educationLevel = educationLevel.coerceAtLeast(0f),
+            exerciseLevel = profile.exerciseLevel.coerceAtLeast(0f),
+            introspectionLevel = introspectionLevel.coerceAtLeast(0f),
             currentHp = profile.currentHp.coerceIn(0, stats.maxHp),
             currentMana = profile.currentMana.coerceIn(0, stats.maxMana),
             skillPoints = profile.skillPoints + levelsGained,

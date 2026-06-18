@@ -6,9 +6,12 @@ import android.content.Intent
 import android.net.Uri
 import android.os.IBinder
 import android.provider.OpenableColumns
+import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.onnx.OnnxTtsRequest
 import com.example.llamadroid.onnx.OnnxTtsResult
+import com.example.llamadroid.onnx.OnnxTtsStorage
 import com.example.llamadroid.onnx.SupertonicTtsPipeline
 import com.example.llamadroid.onnx.extractReadableTextFromUri
 import com.example.llamadroid.util.DebugLog
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -168,6 +172,7 @@ class OnnxTtsGenerationService : Service() {
                     val scaled = (0.08f + value.coerceIn(0f, 1f) * 0.9f).coerceIn(0.08f, 0.98f)
                     updateProgress(scaled, label, spec.sourceName)
                 }
+                mirrorToSharedOutputFolder(result)
                 complete(result)
             } catch (cancelled: CancellationException) {
                 DebugLog.log("[ONNX-TTS] Manual generation cancelled")
@@ -221,6 +226,42 @@ class OnnxTtsGenerationService : Service() {
         if (taskId != null) {
             UnifiedNotificationManager.completeTask(taskId, getString(R.string.onnx_tts_complete))
         }
+    }
+
+    private fun mirrorToSharedOutputFolder(result: OnnxTtsResult) {
+        val outputFolderUri = SettingsRepository(this).outputFolderUri.value ?: run {
+            DebugLog.log("[ONNX-TTS] No shared output folder configured; local output=${result.playableFile.absolutePath}")
+            return
+        }
+        runCatching {
+            val rootDoc = DocumentFile.fromTreeUri(this, Uri.parse(outputFolderUri))
+                ?: error("Could not open configured output folder")
+            val ttsDir = rootDoc.findFile(SHARED_OUTPUT_DIR) ?: rootDoc.createDirectory(SHARED_OUTPUT_DIR)
+                ?: error("Could not create $SHARED_OUTPUT_DIR folder")
+            copyFileIntoDocument(result.playableFile, ttsDir, mimeTypeForAudio(result.playableFile))
+            val metadataFile = OnnxTtsStorage.metadataFileFor(result.playableFile)
+            if (metadataFile.isFile) {
+                copyFileIntoDocument(metadataFile, ttsDir, "application/json")
+            }
+            DebugLog.log("[ONNX-TTS] Mirrored output to shared folder: $SHARED_OUTPUT_DIR/${result.playableFile.name}")
+        }.onFailure { error ->
+            DebugLog.log("[ONNX-TTS] Failed to mirror output folder copy: ${error.message}\n${error.stackTraceToString()}")
+        }
+    }
+
+    private fun copyFileIntoDocument(sourceFile: File, targetDir: DocumentFile, mimeType: String) {
+        val existing = targetDir.findFile(sourceFile.name)
+        val targetFile = existing ?: targetDir.createFile(mimeType, sourceFile.name)
+        requireNotNull(targetFile) { "Could not create ${sourceFile.name}" }
+        contentResolver.openOutputStream(targetFile.uri, "wt")?.use { output ->
+            sourceFile.inputStream().use { input -> input.copyTo(output) }
+        } ?: error("Could not open output stream for ${sourceFile.name}")
+    }
+
+    private fun mimeTypeForAudio(file: File): String = when (file.extension.lowercase(Locale.US)) {
+        "mp3" -> "audio/mpeg"
+        "wav" -> "audio/wav"
+        else -> "audio/*"
     }
 
     private fun updateProgress(progress: Float, status: String, sourceName: String?) {
@@ -280,6 +321,7 @@ class OnnxTtsGenerationService : Service() {
         const val ACTION_START = "com.example.llamadroid.action.START_ONNX_TTS"
         const val ACTION_CANCEL = "com.example.llamadroid.action.CANCEL_ONNX_TTS"
         private const val EXTRA_JOB_ID = "job_id"
+        private const val SHARED_OUTPUT_DIR = "tts"
 
         fun start(context: Context, spec: OnnxTtsGenerationJobSpec) {
             val jobId = OnnxTtsGenerationStateStore.enqueue(spec)
