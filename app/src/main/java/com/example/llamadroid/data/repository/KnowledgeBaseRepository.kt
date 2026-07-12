@@ -14,9 +14,11 @@ import com.example.llamadroid.data.db.KnowledgeBaseSourceType
 import com.example.llamadroid.data.db.KnowledgeChunkEntity
 import com.example.llamadroid.data.db.KnowledgeSourceEntity
 import com.example.llamadroid.data.db.NoteEntity
+import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.service.LlamaConfig
 import com.example.llamadroid.service.KnowledgeBaseDiagnostics
 import com.example.llamadroid.service.DeepResearchSupport
+import com.example.llamadroid.service.LiteRtEmbeddingClient
 import com.example.llamadroid.service.ProcessController
 import com.example.llamadroid.service.extractNativePdfTextFromBytes
 import com.example.llamadroid.util.AIConstants
@@ -115,12 +117,15 @@ data class KnowledgeEmbeddingConfig(
     val label: String,
     val localModelPath: String?,
     val url: String?,
-    val remoteModel: String?
+    val remoteModel: String?,
+    val liteRtModelId: Long? = null,
+    val liteRtModelPath: String? = null
 ) {
     val isConfigured: Boolean
         get() = when (backend) {
             SettingsRepository.KB_EMBED_BACKEND_LOCAL -> !localModelPath.isNullOrBlank()
             SettingsRepository.KB_EMBED_BACKEND_LLAMA_SERVER -> !url.isNullOrBlank()
+            SettingsRepository.KB_EMBED_BACKEND_LITERT -> liteRtModelId != null
             SettingsRepository.KB_EMBED_BACKEND_OLLAMA,
             SettingsRepository.KB_EMBED_BACKEND_LLAMA_SWAP -> !url.isNullOrBlank() && !remoteModel.isNullOrBlank()
             else -> false
@@ -128,7 +133,14 @@ data class KnowledgeEmbeddingConfig(
 
     val hash: String
         get() = KnowledgeBaseRepository.sha256(
-            listOf(backend, localModelPath.orEmpty(), url.orEmpty(), remoteModel.orEmpty())
+            listOf(
+                backend,
+                localModelPath.orEmpty(),
+                url.orEmpty(),
+                remoteModel.orEmpty(),
+                liteRtModelId?.toString().orEmpty(),
+                liteRtModelPath.orEmpty()
+            )
                 .joinToString("|")
         )
 }
@@ -577,7 +589,8 @@ class KnowledgeBaseRepository(
             )
             true
         } catch (error: Throwable) {
-            KnowledgeBaseDiagnostics.log("Continuing embeddings failed for '${source.title}': ${error.message ?: error::class.java.simpleName}.")
+            val detail = error.knowledgeBaseRepositoryFailureDetail()
+            KnowledgeBaseDiagnostics.log("Continuing embeddings failed for '${source.title}': $detail.")
             val finalTextChunks = runCatching { dao.getTextChunkCountForSource(sourceId) }.getOrDefault(textChunks)
             val finalEmbeddedChunks = runCatching { dao.getEmbeddedChunkCountForSource(sourceId) }.getOrDefault(embedded)
             val latest = dao.getSource(sourceId) ?: source
@@ -585,7 +598,7 @@ class KnowledgeBaseRepository(
                 latest.copy(
                     status = KnowledgeBaseSourceStatus.ERROR,
                     processingStage = KnowledgeBaseSourceStatus.ERROR,
-                    errorMessage = error.message ?: error::class.java.simpleName,
+                    errorMessage = detail,
                     chunkCount = finalTextChunks,
                     embeddedChunkCount = finalEmbeddedChunks,
                     progressDone = finalEmbeddedChunks,
@@ -1604,6 +1617,21 @@ class KnowledgeEmbeddingService(private val context: Context) {
                     remoteModel = null
                 )
             }
+            SettingsRepository.KB_EMBED_BACKEND_LITERT -> {
+                val modelId = settings.knowledgeEmbeddingLiteRtModelId.value.takeIf { it > 0L }
+                val modelLabel = settings.knowledgeEmbeddingLiteRtModelLabel.value
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                KnowledgeEmbeddingConfig(
+                    backend = backend,
+                    label = modelLabel ?: context.getString(R.string.kb_litert_embedding_model_none),
+                    localModelPath = null,
+                    url = null,
+                    remoteModel = null,
+                    liteRtModelId = modelId,
+                    liteRtModelPath = null
+                )
+            }
             SettingsRepository.KB_EMBED_BACKEND_OLLAMA -> {
                 val url = settings.knowledgeEmbeddingOllamaUrl.value.trim().ifBlank { AIConstants.Urls.OLLAMA_DEFAULT }
                 val model = settings.knowledgeEmbeddingOllamaModel.value?.trim()?.takeIf { it.isNotBlank() }
@@ -1706,6 +1734,12 @@ class KnowledgeEmbeddingService(private val context: Context) {
             SettingsRepository.KB_EMBED_BACKEND_LOCAL -> requestLocalEmbeddingWithRetry(config, cleanText)
             SettingsRepository.KB_EMBED_BACKEND_LLAMA_SERVER ->
                 requestLlamaServerEmbedding(requireNotNull(config.url), cleanText)
+            SettingsRepository.KB_EMBED_BACKEND_LITERT ->
+                requestLiteRtEmbedding(
+                    modelId = requireNotNull(config.liteRtModelId),
+                    modelLabel = config.label,
+                    text = cleanText
+                )
             SettingsRepository.KB_EMBED_BACKEND_OLLAMA ->
                 requestOllamaEmbedding(requireNotNull(config.url), requireNotNull(config.remoteModel), cleanText)
             SettingsRepository.KB_EMBED_BACKEND_LLAMA_SWAP ->
@@ -1745,6 +1779,58 @@ class KnowledgeEmbeddingService(private val context: Context) {
             }
         } finally {
             releaseLocalEmbeddingUse()
+        }
+    }
+
+    private suspend fun requestLiteRtEmbedding(modelId: Long, modelLabel: String?, text: String): List<Float> {
+        val dao = AppDatabase.getDatabase(context).liteRtModelDao()
+        val model = dao.getById(modelId)
+            ?: recoverLiteRtEmbeddingModel(dao.getAllOnce(), modelLabel)
+            ?: throw IllegalStateException(context.getString(R.string.kb_litert_embedding_model_missing))
+        if (model.id != modelId && model.id > 0L) {
+            SettingsRepository(context).setKnowledgeEmbeddingLiteRtModelId(model.id, model.displayName)
+            KnowledgeBaseDiagnostics.log("Recovered missing LiteRT embedding model selection as '${model.displayName}'.")
+            DebugLog.log("[KnowledgeEmbedding] Recovered stale LiteRT embedding model id=$modelId as id=${model.id} (${model.displayName})")
+        }
+        require(model.supportsEmbedding) {
+            context.getString(R.string.kb_litert_embedding_model_not_supported, model.displayName)
+        }
+        require(model.kbEmbeddingRunnable) {
+            context.getString(
+                R.string.kb_litert_embedding_model_not_runnable,
+                model.displayName,
+                liteRtKbEmbeddingStatusLabel(context, model.kbEmbeddingStatus)
+            )
+        }
+        return LiteRtEmbeddingClient(context).embed(
+            model = model,
+            text = text,
+            threadCount = SettingsRepository.normalizeKnowledgeEmbeddingThreads(
+                SettingsRepository(context).knowledgeEmbeddingThreads.value
+            )
+        )
+    }
+
+    private fun recoverLiteRtEmbeddingModel(
+        models: List<com.example.llamadroid.data.model.LiteRtModelEntity>,
+        modelLabel: String?
+    ): com.example.llamadroid.data.model.LiteRtModelEntity? {
+        val normalizedLabel = modelLabel
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.lowercase(Locale.US)
+            ?: return null
+        val embeddingModels = models
+            .filter { model -> model.supportsEmbedding && model.kbEmbeddingRunnable && File(model.path).exists() }
+            .sortedWith(compareByDescending<com.example.llamadroid.data.model.LiteRtModelEntity> { it.updatedAt }.thenBy { it.displayName.lowercase(Locale.US) })
+        return embeddingModels.firstOrNull { model ->
+            model.displayName.equals(modelLabel, ignoreCase = true) ||
+                model.filename.equals(modelLabel, ignoreCase = true)
+        } ?: embeddingModels.firstOrNull { model ->
+            val haystack = listOf(model.displayName, model.filename, model.repoId.orEmpty())
+                .joinToString(" ")
+                .lowercase(Locale.US)
+            normalizedLabel in haystack || haystack in normalizedLabel
         }
     }
 
@@ -2214,4 +2300,25 @@ class KnowledgeEmbeddingService(private val context: Context) {
         val threads: Int,
         val host: String
     )
+}
+
+private fun liteRtKbEmbeddingStatusLabel(context: Context, status: String?): String =
+    when (status) {
+        "missing_sentencepiece_tokenizer" -> context.getString(R.string.kb_litert_embedding_status_missing_sentencepiece)
+        "sentencepiece_runtime_pending" -> context.getString(R.string.kb_litert_embedding_status_sentencepiece_pending)
+        "missing_wordpiece_tokenizer" -> context.getString(R.string.kb_litert_embedding_status_missing_wordpiece)
+        "unsupported_tensor_contract" -> context.getString(R.string.kb_litert_embedding_status_unsupported_contract)
+        "manual_recheck_required",
+        "needs_recheck" -> context.getString(R.string.kb_litert_embedding_status_recheck)
+        else -> status?.takeIf { it.isNotBlank() } ?: context.getString(R.string.kb_litert_embedding_status_not_runnable)
+    }
+
+private fun Throwable.knowledgeBaseRepositoryFailureDetail(): String {
+    var current: Throwable = this
+    while (current is java.lang.reflect.InvocationTargetException) {
+        current = current.targetException ?: current.cause ?: break
+    }
+    return current.message?.takeIf { it.isNotBlank() }
+        ?: current.cause?.message?.takeIf { it.isNotBlank() }
+        ?: current::class.java.simpleName
 }

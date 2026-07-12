@@ -9,6 +9,7 @@ import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
 import com.example.llamadroid.data.model.LlamaScheduledTaskEntity
 import com.example.llamadroid.data.model.LlamaScheduledTaskLogEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
+import com.example.llamadroid.data.model.LlamaSpeculativeRunEntity
 
 @Dao
 interface LlamaServerDao {
@@ -95,6 +96,9 @@ interface LlamaChatDao {
     @Query("SELECT * FROM llama_chats ORDER BY lastModified DESC")
     fun getAllChats(): Flow<List<LlamaChatEntity>>
 
+    @Query("SELECT * FROM llama_chats WHERE pinnedToAiHub = 1 ORDER BY pinnedAt DESC, lastModified DESC")
+    fun getPinnedAiHubChats(): Flow<List<LlamaChatEntity>>
+
     @Query("SELECT * FROM llama_chats WHERE id = :id")
     suspend fun getChatById(id: Long): LlamaChatEntity?
 
@@ -124,6 +128,66 @@ interface LlamaChatDao {
 
     @Query("UPDATE llama_chats SET folderId = NULL WHERE folderId = :folderId")
     suspend fun clearFolder(folderId: Long)
+
+    @Query(
+        "UPDATE llama_chats " +
+            "SET pinnedToAiHub = :pinned, pinnedServerId = :serverId, pinnedAt = :pinnedAt " +
+            "WHERE id = :id"
+    )
+    suspend fun updateAiHubPin(
+        id: Long,
+        pinned: Boolean,
+        serverId: Long?,
+        pinnedAt: Long?
+    )
+}
+
+@Dao
+interface LlamaSpeculativeRunDao {
+    @Query("SELECT * FROM llama_speculative_runs ORDER BY savedForever DESC, createdAt DESC")
+    fun observeRuns(): Flow<List<LlamaSpeculativeRunEntity>>
+
+    @Query("SELECT * FROM llama_speculative_runs WHERE id = :id")
+    suspend fun getRunById(id: Long): LlamaSpeculativeRunEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRun(run: LlamaSpeculativeRunEntity): Long
+
+    @Query(
+        "UPDATE llama_speculative_runs " +
+            "SET sampleCount = :sampleCount, acceptanceRate = :acceptanceRate, " +
+            "promptTokensPerSecond = :promptTokensPerSecond, " +
+            "generationTokensPerSecond = :generationTokensPerSecond, rawMetrics = :rawMetrics, " +
+            "updatedAt = :updatedAt WHERE id = :id"
+    )
+    suspend fun updateRunMetrics(
+        id: Long,
+        sampleCount: Int,
+        acceptanceRate: Double?,
+        promptTokensPerSecond: Double?,
+        generationTokensPerSecond: Double?,
+        rawMetrics: String,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
+    @Query("UPDATE llama_speculative_runs SET name = :name, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun renameRun(id: Long, name: String?, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE llama_speculative_runs SET savedForever = :savedForever, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun setSavedForever(id: Long, savedForever: Boolean, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("DELETE FROM llama_speculative_runs WHERE id = :id")
+    suspend fun deleteRun(id: Long)
+
+    @Query(
+        "SELECT id FROM llama_speculative_runs " +
+            "WHERE savedForever = 0 AND (name IS NULL OR TRIM(name) = '') " +
+            "ORDER BY createdAt DESC"
+    )
+    suspend fun getPrunableRunIdsNewestFirst(): List<Long>
+
+    @Query("DELETE FROM llama_speculative_runs WHERE id IN (:ids)")
+    suspend fun deleteRuns(ids: List<Long>)
 }
 
 @Dao

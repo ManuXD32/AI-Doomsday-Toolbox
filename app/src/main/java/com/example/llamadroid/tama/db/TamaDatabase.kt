@@ -36,7 +36,7 @@ import com.example.llamadroid.util.DebugLog
         AdventureGateNightArenaRunEntity::class,
         TamaArtworkEntity::class
     ],
-    version = 42,
+    version = 43,
     exportSchema = true
 )
 abstract class TamaDatabase : RoomDatabase() {

@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
-import com.example.llamadroid.util.FilePathResolver
 import java.io.File
 
 data class QuadtrixWorkspaceSelection(
@@ -35,23 +34,21 @@ object QuadtrixWorkspaceManager {
             )
         }
 
-        val directPath = FilePathResolver.getPathFromTreeUri(context, treeUri)
-            ?: FilePathResolver.getPathFromUri(context, treeUri)
         setupSafTree(context, treeUri)
-        directPath?.let { setupFileRoot(context, File(it)) }
-        QuadtrixWorkspaceSelection(treeUri.toString(), directPath)
+        val runtimeRoot = rootForRuntime(context, null)
+        QuadtrixWorkspaceSelection(treeUri.toString(), runtimeRoot.absolutePath)
     }
 
     fun rootForRuntime(context: Context, directPath: String?): File {
-        val root = directPath
-            ?.takeIf { it.isNotBlank() }
-            ?.let { File(it) }
-            ?: File(context.filesDir, QuadtrixPaths.ROOT)
+        val preferred = directPath
+            ?.takeIf { it.isNotBlank() && isManagedRuntimePath(context, it) }
+            ?.let(::File)
+        val root = preferred ?: managedRuntimeRoot(context)
         return runCatching {
             setupFileRoot(context, root)
             root
         }.getOrElse {
-            File(context.filesDir, QuadtrixPaths.ROOT).also { fallback ->
+            managedRuntimeRoot(context).also { fallback ->
                 setupFileRoot(context, fallback)
             }
         }
@@ -61,6 +58,22 @@ object QuadtrixWorkspaceManager {
         root.mkdirs()
         requiredFolders.forEach { File(root, it).mkdirs() }
         copyTokenizerToFile(context, File(root, TOKENIZER_FILE))
+    }
+
+    private fun managedRuntimeRoot(context: Context): File {
+        val external = context.getExternalFilesDir(null)
+        return if (external != null) {
+            File(external, QuadtrixPaths.ROOT)
+        } else {
+            File(context.filesDir, QuadtrixPaths.ROOT)
+        }
+    }
+
+    private fun isManagedRuntimePath(context: Context, path: String): Boolean {
+        val candidates = listOfNotNull(context.filesDir, context.getExternalFilesDir(null))
+            .mapNotNull { runCatching { it.canonicalPath }.getOrNull() }
+        val canonical = runCatching { File(path).canonicalPath }.getOrNull() ?: return false
+        return candidates.any { canonical.startsWith(it) }
     }
 
     private fun setupSafTree(context: Context, treeUri: Uri) {

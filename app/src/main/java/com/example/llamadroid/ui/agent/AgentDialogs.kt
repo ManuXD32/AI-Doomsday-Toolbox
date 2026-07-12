@@ -34,6 +34,7 @@ import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.KnowledgeBaseEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
@@ -804,10 +805,14 @@ fun ConnectionSettingsDialog(
 fun AgentSettingsDialog(
     settingsRepository: SettingsRepository,
     availableModels: List<String>,
+    knowledgeBases: List<KnowledgeBaseEntity>,
+    selectedKnowledgeBaseIds: List<Long>,
     availableImageGenerationModels: List<String>,
     availableSdImageMainModels: List<ModelEntity>,
     availableSdImageSupportModels: List<ModelEntity>,
     availableBackgroundRemovalModels: List<String>,
+    onKnowledgeBaseSelectionChange: (List<Long>) -> Unit,
+    onManageKnowledgeBases: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val agentBackend by settingsRepository.agentBackend.collectAsState()
@@ -886,6 +891,13 @@ fun AgentSettingsDialog(
                     text = stringResource(R.string.agent_settings_desc),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                AgentKnowledgeBaseSelector(
+                    knowledgeBases = knowledgeBases,
+                    selectedIds = selectedKnowledgeBaseIds,
+                    onSelectionChange = onKnowledgeBaseSelectionChange,
+                    onManage = onManageKnowledgeBases
                 )
                 
                 // Load disabled agents state

@@ -83,11 +83,13 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalRiskClass
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalStorage
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.onnx.OnnxRuntimeOptions
+import com.example.llamadroid.onnx.backgroundRemovalRiskClass
 import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.OnnxBackgroundRemovalService
@@ -335,6 +337,31 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                             }
                                         }
                                     }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        stringResource(R.string.bgr_catalog_play_safe_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        stringResource(R.string.bgr_catalog_recommended_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    val selectedRisk = selectedModel?.backgroundRemovalRiskClass()
+                                    when (selectedRisk) {
+                                        OnnxBackgroundRemovalRiskClass.HEAVY -> Text(
+                                            stringResource(R.string.bgr_catalog_heavy_warning),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.tertiary
+                                        )
+                                        OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY -> Text(
+                                            stringResource(R.string.bgr_catalog_legacy_unsupported_hint),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        else -> Unit
+                                    }
                                 }
                             }
                         }
@@ -488,6 +515,18 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                 Button(
                                     onClick = {
                                         val model = selectedModel ?: return@Button
+                                        val validationError = OnnxBackgroundRemovalService.validateManagedModelPath(
+                                            context,
+                                            File(model.path),
+                                            model.filename
+                                        )
+                                        if (validationError != null) {
+                                            OnnxBackgroundRemovalStateStore.updateState(
+                                                OnnxBackgroundRemovalState.Error(validationError)
+                                            )
+                                            Toast.makeText(context, validationError, Toast.LENGTH_LONG).show()
+                                            return@Button
+                                        }
                                         OnnxBackgroundRemovalService.start(
                                             context,
                                             OnnxBackgroundRemovalConfig(

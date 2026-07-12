@@ -39,4 +39,14 @@ class LlamaChatModelsTest {
         assertNull(parsed.messages[1].imagePath)
         assertNull(parsed.messages[1].audioPath)
     }
+
+    @Test
+    fun `display model name strips storage paths`() {
+        assertEquals(
+            "qwen2.5-7b-instruct-q4_k_m.gguf",
+            displayLlamaModelName("/storage/emulated/0/Android/data/com.example/files/models/qwen2.5-7b-instruct-q4_k_m.gguf")
+        )
+        assertEquals("llama3.2:latest", displayLlamaModelName("llama3.2:latest"))
+    }
+
 }

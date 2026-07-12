@@ -1476,7 +1476,7 @@ fun LlamaServerCard(
 
             server.modelName?.takeIf { it.isNotBlank() }?.let { modelName ->
                 Text(
-                    text = modelName,
+                    text = displayLlamaModelName(modelName),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,

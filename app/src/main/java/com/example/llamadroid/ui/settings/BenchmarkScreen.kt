@@ -22,6 +22,7 @@ import com.example.llamadroid.data.db.BenchmarkResult
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.BenchmarkService
+import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.navigation.Screen
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
@@ -53,6 +54,8 @@ fun BenchmarkScreen(navController: NavController) {
     var maxThreads by remember { mutableIntStateOf(8) }
     var promptTokens by remember { mutableIntStateOf(512) }
     var genTokens by remember { mutableIntStateOf(128) }
+    var waitBetweenTestsEnabled by remember { mutableStateOf(false) }
+    var waitBetweenTestsSeconds by remember { mutableIntStateOf(0) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var queueModelPaths by remember { mutableStateOf<Set<String>>(emptySet()) }
     var queueSelectionInitialized by remember { mutableStateOf(false) }
@@ -344,6 +347,43 @@ fun BenchmarkScreen(navController: NavController) {
                             steps = 14,
                             enabled = !isRunning
                         )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.benchmark_wait_between_tests),
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    stringResource(R.string.benchmark_wait_between_tests_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = waitBetweenTestsEnabled,
+                                onCheckedChange = { waitBetweenTestsEnabled = it },
+                                enabled = !isRunning
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        DraftIntTextField(
+                            value = waitBetweenTestsSeconds,
+                            onValueChange = { waitBetweenTestsSeconds = it.coerceAtLeast(0) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.benchmark_wait_seconds)) },
+                            suffix = { Text(stringResource(R.string.benchmark_wait_seconds_suffix)) },
+                            blankValue = 0,
+                            enabled = !isRunning && waitBetweenTestsEnabled
+                        )
                     }
                 }
             }
@@ -400,7 +440,8 @@ fun BenchmarkScreen(navController: NavController) {
                                     maxThreads = maxThreads,
                                     promptTokens = promptTokens,
                                     genTokens = genTokens,
-                                    runName = runName
+                                    runName = runName,
+                                    waitBetweenTestsSeconds = if (waitBetweenTestsEnabled) waitBetweenTestsSeconds.coerceAtLeast(0) else 0
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -425,7 +466,8 @@ fun BenchmarkScreen(navController: NavController) {
                                     maxThreads = maxThreads,
                                     promptTokens = promptTokens,
                                     genTokens = genTokens,
-                                    runName = runName
+                                    runName = runName,
+                                    waitBetweenTestsSeconds = if (waitBetweenTestsEnabled) waitBetweenTestsSeconds.coerceAtLeast(0) else 0
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),

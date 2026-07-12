@@ -2,6 +2,8 @@ package com.example.llamadroid.ui.ai
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -58,6 +61,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -81,6 +85,7 @@ import com.example.llamadroid.data.db.LiveTranslatorTurnEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.LiveTranslatorPhase
+import com.example.llamadroid.service.LiveTranslatorLiteRtEngineManager
 import com.example.llamadroid.service.LiveTranslatorSamplePhase
 import com.example.llamadroid.service.LiveTranslatorService
 import com.example.llamadroid.service.RemoteSummaryClientFactory
@@ -154,6 +159,7 @@ private fun AppScreenScaffold(
 fun LiveTranslatorScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
     val templates by db.liveTranslatorTemplateDao().observeTemplates().collectAsState(initial = emptyList())
     val sessions by db.liveTranslatorSessionDao().observeSessions().collectAsState(initial = emptyList())
@@ -333,7 +339,9 @@ fun LiveTranslatorScreen(navController: NavController) {
         scope.launch {
             val id = db.liveTranslatorTemplateDao().upsert(buildTemplate())
             selectedTemplateId = id
-            context.startForegroundService(LiveTranslatorService.startIntent(context, id))
+            startupGuard.run("live_translator_start") {
+                context.startForegroundService(LiveTranslatorService.startIntent(context, id))
+            }
         }
     }
 
@@ -473,7 +481,8 @@ fun LiveTranslatorScreen(navController: NavController) {
                     temperature = temperature,
                     onTemperatureChange = { temperature = it },
                     timeoutSeconds = timeoutSeconds,
-                    onTimeoutSecondsChange = { timeoutSeconds = it }
+                    onTimeoutSecondsChange = { timeoutSeconds = it },
+                    liveTranslatorActive = serviceState.isActive
                 )
             }
             item {
@@ -794,9 +803,34 @@ internal fun LiveTranslatorBackendCard(
     temperature: Float,
     onTemperatureChange: (Float) -> Unit,
     timeoutSeconds: String,
-    onTimeoutSecondsChange: (String) -> Unit
+    onTimeoutSecondsChange: (String) -> Unit,
+    liveTranslatorActive: Boolean = false
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val startupGuard = rememberAiJobStartupGuard()
+    val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == liteRtModelId }
+    val parsedContextSize = contextSize.toIntOrNull()?.coerceAtLeast(512) ?: 4096
+    val liteRtPreloadMaxTokens = maxTokens.toIntOrNull()?.coerceIn(1, 8192) ?: 1
+    var liteRtLoaded by remember { mutableStateOf(false) }
+    var liteRtLoading by remember { mutableStateOf(false) }
+    var liteRtLoadError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(backendEngine, liteRtModelId, liteRtBackend, parsedContextSize, liteRtMtpEnabled) {
+        if (backendEngine == LIVE_TRANSLATOR_ENGINE_LITERT && selectedLiteRtModel != null) {
+            liteRtLoaded = LiveTranslatorLiteRtEngineManager.isLoaded(
+                context = context,
+                model = selectedLiteRtModel,
+                backendMode = liteRtBackend,
+                contextSize = parsedContextSize,
+                mtpEnabled = liteRtMtpEnabled
+            )
+        } else {
+            liteRtLoaded = false
+            liteRtLoadError = null
+        }
+    }
+
     SectionCard(title = stringResource(R.string.live_translator_backend)) {
         DropdownField(
             label = stringResource(R.string.live_translator_backend_engine),
@@ -807,7 +841,7 @@ internal fun LiveTranslatorBackendCard(
         if (backendEngine == LIVE_TRANSLATOR_ENGINE_LITERT) {
             DropdownField(
                 label = stringResource(R.string.litert_model_label),
-                selected = liteRtModels.firstOrNull { it.id == liteRtModelId }?.displayName ?: stringResource(R.string.litert_error_model_missing),
+                selected = selectedLiteRtModel?.displayName ?: stringResource(R.string.litert_error_model_missing),
                 values = liteRtModels.map { it.displayName },
                 onSelected = { name -> onLiteRtModelIdChange(liteRtModels.firstOrNull { it.displayName == name }?.id) }
             )
@@ -865,6 +899,119 @@ internal fun LiveTranslatorBackendCard(
                     )
                 }
                 Switch(checked = liteRtThinkingEnabled, onCheckedChange = onLiteRtThinkingEnabledChange)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = stringResource(R.string.live_translator_litert_engine_status),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val statusColor = if (liteRtLoaded) Color(0xFF2E7D32) else Color(0xFFC62828)
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .background(statusColor, CircleShape)
+                    )
+                    Text(
+                        text = when {
+                            liteRtLoading -> stringResource(R.string.live_translator_litert_loading)
+                            liteRtLoaded -> stringResource(R.string.live_translator_litert_loaded)
+                            else -> stringResource(R.string.live_translator_litert_unloaded)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val controlsEnabled = !liveTranslatorActive && !liteRtLoading && selectedLiteRtModel != null
+                    if (liteRtLoaded) {
+                        OutlinedButton(
+                            enabled = controlsEnabled,
+                            onClick = {
+                                val model = selectedLiteRtModel ?: return@OutlinedButton
+                                liteRtLoading = true
+                                liteRtLoadError = null
+                                scope.launch {
+                                    LiveTranslatorLiteRtEngineManager.unload(
+                                        context = context,
+                                        model = model,
+                                        backendMode = liteRtBackend,
+                                        contextSize = parsedContextSize,
+                                        mtpEnabled = liteRtMtpEnabled
+                                    )
+                                    liteRtLoaded = false
+                                    liteRtLoading = false
+                                }
+                            }
+                        ) {
+                            Text(stringResource(R.string.live_translator_litert_unload_engine))
+                        }
+                    } else {
+                        Button(
+                            enabled = controlsEnabled,
+                            onClick = {
+                                val model = selectedLiteRtModel ?: return@Button
+                                liteRtLoading = true
+                                liteRtLoadError = null
+                                scope.launch {
+                                    runCatching {
+                                        startupGuard.runSuspending("live_translator_litert_preload") {
+                                            LiveTranslatorLiteRtEngineManager.preload(
+                                                context = context,
+                                                model = model,
+                                                backendMode = liteRtBackend,
+                                                contextSize = parsedContextSize,
+                                                maxTokens = liteRtPreloadMaxTokens,
+                                                temperature = temperature,
+                                                thinkingEnabled = liteRtThinkingEnabled,
+                                                mtpEnabled = liteRtMtpEnabled
+                                            )
+                                        }
+                                    }.onSuccess {
+                                        liteRtLoaded = LiveTranslatorLiteRtEngineManager.isLoaded(
+                                            context = context,
+                                            model = model,
+                                            backendMode = liteRtBackend,
+                                            contextSize = parsedContextSize,
+                                            mtpEnabled = liteRtMtpEnabled
+                                        )
+                                    }.onFailure { error ->
+                                        liteRtLoaded = false
+                                        liteRtLoadError = context.getString(
+                                            R.string.live_translator_litert_load_error,
+                                            error.message ?: error.javaClass.simpleName
+                                        )
+                                    }
+                                    liteRtLoading = false
+                                }
+                            }
+                        ) {
+                            Text(stringResource(R.string.live_translator_litert_load_engine))
+                        }
+                    }
+                }
+                if (selectedLiteRtModel == null) {
+                    Text(
+                        text = stringResource(R.string.live_translator_litert_no_model),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                liteRtLoadError?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         } else {
             val remoteBackend = when (backendEngine) {

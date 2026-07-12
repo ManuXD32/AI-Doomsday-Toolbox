@@ -49,6 +49,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 - The Dashboard is the control surface for the app's local services and infrastructure tools.
 - It brings together server start and stop controls, knowledge bases, local file sharing, Kiwix, and distributed inference entry points.
+- The file server browser can now receive uploads from connected devices too, including whole folders that stay grouped under the selected folder name, plus progress, speed, and remaining-time feedback behind a compact `+` upload picker.
 
 ### AI HUB
 

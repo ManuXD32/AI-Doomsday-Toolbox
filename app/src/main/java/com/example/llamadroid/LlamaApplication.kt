@@ -8,6 +8,9 @@ import androidx.work.WorkManager
 import com.example.llamadroid.R
 import com.example.llamadroid.data.AppContainer
 import com.example.llamadroid.data.DefaultAppContainer
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.OrganizerAlarmScheduler
@@ -20,6 +23,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Locale
 import kotlin.system.exitProcess
@@ -42,6 +46,7 @@ class LlamaApplication : Application() {
         installCrashBreadcrumbHandler()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runRemovedLlmTrainingCleanupOnce()
+            pruneLegacyPortableModelRows()
             val staleJobs = AiRuntimeJobStore.markStaleActiveJobsTerminal(this@LlamaApplication)
             runCatching {
                 GenerationDiagnosticsStore.recordBreadcrumb(
@@ -185,5 +190,42 @@ class LlamaApplication : Application() {
                     file.delete()
                 }
             }
+    }
+
+    private suspend fun pruneLegacyPortableModelRows() {
+        val db = AppDatabase.getDatabase(this)
+        val onnxRoot = OnnxStorage.managedModelsRoot(this)
+        val onnxTypes = listOf(
+            ModelType.ONNX_IMAGE_GEN,
+            ModelType.ONNX_TTS,
+            ModelType.ONNX_BACKGROUND_REMOVAL,
+            ModelType.ONNX_IMAGE_UPSCALER
+        )
+        var removedOnnx = 0
+        db.modelDao().getModelsByTypesSync(onnxTypes).forEach { model ->
+            if (!isWithinRoot(File(model.path), onnxRoot)) {
+                db.modelDao().deleteModel(model)
+                removedOnnx += 1
+            }
+        }
+        val liteRtRoot = File(applicationContext.noBackupFilesDir, "litert_models")
+        var removedLiteRt = 0
+        db.liteRtModelDao().observeAll().first().forEach { model ->
+            if (!isWithinRoot(File(model.path), liteRtRoot)) {
+                db.liteRtModelDao().deleteById(model.id)
+                removedLiteRt += 1
+            }
+        }
+        if (removedOnnx > 0 || removedLiteRt > 0) {
+            DebugLog.log(
+                "[StartupCleanup] Removed $removedOnnx legacy ONNX row(s) and $removedLiteRt legacy LiteRT row(s); re-import required."
+            )
+        }
+    }
+
+    private fun isWithinRoot(file: File, root: File): Boolean {
+        val filePath = runCatching { file.canonicalFile.absolutePath }.getOrDefault(file.absolutePath)
+        val rootPath = runCatching { root.canonicalFile.absolutePath }.getOrDefault(root.absolutePath)
+        return filePath == rootPath || filePath.startsWith("$rootPath${File.separator}")
     }
 }

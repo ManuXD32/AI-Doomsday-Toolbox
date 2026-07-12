@@ -23,6 +23,7 @@ import com.example.llamadroid.ui.pdf.PDFToolboxScreen
 import com.example.llamadroid.ui.pdf.PDFSummaryScreen
 import com.example.llamadroid.ui.ai.AIHubScreen
 import com.example.llamadroid.ui.ai.AiServersHubScreen
+import com.example.llamadroid.ui.ai.ToolCatalog
 import com.example.llamadroid.ui.ai.ImageGenScreen
 import com.example.llamadroid.ui.ai.LegacyUpscaleScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
@@ -302,16 +303,8 @@ fun LlamaApp(
                 tonalElevation = 0.dp
             ) {
                 items.forEach { screen ->
-                    // For AI Hub, also highlight when on Chat or ImageGen screens
-                    val isAIRoute = screen == Screen.AIHub && 
-                        currentRoute in listOf(
-                            Screen.AIHub.route, Screen.Chat.route, Screen.ImageGen.route,
-                            Screen.ImageGenUpscale.route,
-                            Screen.OnnxImageGen.route, Screen.OnnxBackgroundRemoval.route, Screen.VideoGen.route,
-                            Screen.OnnxTts.route, Screen.OnnxTtsGallery.route, Screen.LiveTranslator.route,
-                            Screen.AudioTranscription.route, Screen.VideoUpscaler.route,
-                            Screen.SubtitleBurn.route, Screen.AiServersHub.route, Screen.Workflows.route
-                        )
+                    // For AI Hub, highlight any route owned by the centralized tool catalog.
+                    val isAIRoute = screen == Screen.AIHub && ToolCatalog.matchesRoute(currentRoute)
                     
                     // For Model Hub, also highlight when on LLMModels or SDModels screens
                     val isModelRoute = screen == Screen.ModelManager && 

@@ -2,17 +2,19 @@ package com.example.llamadroid.util
 
 import android.content.Context
 import android.os.PowerManager
+import com.example.llamadroid.data.model.DownloadProgressHolder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
 import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.coroutineContext
@@ -21,19 +23,20 @@ object Downloader {
     
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.SECONDS)
-        .writeTimeout(0, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
         .callTimeout(0, TimeUnit.SECONDS)
         .build()
     
-    // Track active downloads by filename for cancellation
+    // Track active downloads by exact task id for cancellation.
     private val activeDownloads = ConcurrentHashMap<String, Call>()
     
     fun download(
         url: String,
         destFile: File,
         context: Context? = null,
-        bearerToken: String? = null
+        bearerToken: String? = null,
+        downloadId: String = destFile.absolutePath
     ): Flow<Float> = flow {
         // Acquire WakeLock to prevent CPU sleep during download
         val wakeLock = context?.let {
@@ -41,57 +44,101 @@ object Downloader {
             powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LlamaDroid:DownloadWakeLock")
         }
         
-        val downloadId = destFile.name
+        val partFile = File(destFile.parentFile, "${destFile.name}.part")
         
         try {
             wakeLock?.acquire()
             DebugLog.log("Downloader: Starting download of $url")
-            
-            val requestBuilder = Request.Builder().url(url)
-            bearerToken?.trim()?.takeIf { it.isNotBlank() }?.let { token ->
-                requestBuilder.header("Authorization", "Bearer $token")
-            }
-            val request = requestBuilder.build()
-            val call = client.newCall(request)
-            activeDownloads[downloadId] = call
-            
-            val response = call.execute()
-            
-            if (!response.isSuccessful) throw Exception("Download failed: $url (${response.code})")
-            
-            val body = response.body ?: throw Exception("Empty body")
-            val totalBytes = body.contentLength()
-            val inputStream: InputStream = body.byteStream()
-            
-            val outputStream = FileOutputStream(destFile)
-            val buffer = ByteArray(8 * 1024)
-            var bytesRead: Int
-            var totalRead = 0L
-            
-            emit(0f)
-            try {
-                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                    // Check if cancelled
-                    if (call.isCanceled()) {
-                        DebugLog.log("Downloader: Download cancelled for ${destFile.name}")
-                        destFile.delete()
-                        throw Exception("Download cancelled")
-                    }
-                    
-                    outputStream.write(buffer, 0, bytesRead)
-                    totalRead += bytesRead
-                    if (totalBytes > 0) {
-                        emit(totalRead.toFloat() / totalBytes.toFloat())
-                    }
+
+            var attempt = 0
+            var completed = false
+            var lastError: Exception? = null
+            emit(if (partFile.length() > 0L) DownloadProgressHolder.INDETERMINATE else 0f)
+
+            while (attempt < MAX_DOWNLOAD_ATTEMPTS && !completed) {
+                coroutineContext.ensureActive()
+                val resumeFrom = partFile.length().coerceAtLeast(0L)
+                val requestBuilder = Request.Builder().url(url)
+                bearerToken?.trim()?.takeIf { it.isNotBlank() }?.let { token ->
+                    requestBuilder.header("Authorization", "Bearer $token")
                 }
-                outputStream.flush()
-                emit(1f)
-                DebugLog.log("Downloader: Completed download of ${destFile.name}")
-            } finally {
-                inputStream.close()
-                outputStream.close()
-                body.close()
+                if (resumeFrom > 0L) {
+                    requestBuilder.header("Range", "bytes=$resumeFrom-")
+                }
+                val call = client.newCall(requestBuilder.build())
+                activeDownloads[downloadId] = call
+
+                try {
+                    val response = call.execute()
+                    if (resumeFrom > 0L && response.code == 200) {
+                        partFile.delete()
+                    }
+                    if (!response.isSuccessful || (resumeFrom > 0L && response.code != 206 && response.code != 200)) {
+                        throw Exception("Download failed: $url (${response.code})")
+                    }
+                    val body = response.body ?: throw Exception("Empty body")
+                    val responseResumeFrom = if (resumeFrom > 0L && response.code == 206) resumeFrom else 0L
+                    val remainingBytes = body.contentLength()
+                    val totalBytes = if (remainingBytes > 0L) responseResumeFrom + remainingBytes else -1L
+                    val inputStream: InputStream = body.byteStream()
+                    val outputStream = FileOutputStream(partFile, responseResumeFrom > 0L)
+                    val buffer = ByteArray(64 * 1024)
+                    var bytesRead: Int
+                    var totalRead = responseResumeFrom
+
+                    if (totalBytes <= 0L) {
+                        emit(DownloadProgressHolder.INDETERMINATE)
+                    } else {
+                        emit((totalRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f))
+                    }
+                    try {
+                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                            coroutineContext.ensureActive()
+                            if (call.isCanceled()) {
+                                DebugLog.log("Downloader: Download cancelled for ${destFile.name}")
+                                partFile.delete()
+                                destFile.delete()
+                                throw Exception("Download cancelled")
+                            }
+
+                            outputStream.write(buffer, 0, bytesRead)
+                            totalRead += bytesRead
+                            if (totalBytes > 0) {
+                                emit((totalRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f))
+                            } else {
+                                emit(DownloadProgressHolder.INDETERMINATE)
+                            }
+                        }
+                        outputStream.flush()
+                    } finally {
+                        inputStream.close()
+                        outputStream.close()
+                        body.close()
+                        response.close()
+                    }
+                    if (destFile.exists()) destFile.delete()
+                    if (!partFile.renameTo(destFile)) {
+                        partFile.inputStream().use { input ->
+                            FileOutputStream(destFile).use { output -> input.copyTo(output) }
+                        }
+                        partFile.delete()
+                    }
+                    emit(1f)
+                    completed = true
+                    DebugLog.log("Downloader: Completed download of ${destFile.name}")
+                } catch (e: InterruptedIOException) {
+                    lastError = e
+                    attempt += 1
+                    DebugLog.log("Downloader: idle/read timeout for ${destFile.name}; retry $attempt/$MAX_DOWNLOAD_ATTEMPTS")
+                    if (attempt >= MAX_DOWNLOAD_ATTEMPTS) throw e
+                } catch (e: Exception) {
+                    lastError = e
+                    throw e
+                } finally {
+                    activeDownloads.remove(downloadId, call)
+                }
             }
+            if (!completed) throw lastError ?: Exception("Download did not complete")
         } catch (e: Exception) {
             DebugLog.log("Downloader: ERROR - ${e.message}")
             throw e
@@ -199,4 +246,6 @@ object Downloader {
     fun isDownloading(filename: String): Boolean {
         return activeDownloads.containsKey(filename)
     }
+
+    private const val MAX_DOWNLOAD_ATTEMPTS = 4
 }

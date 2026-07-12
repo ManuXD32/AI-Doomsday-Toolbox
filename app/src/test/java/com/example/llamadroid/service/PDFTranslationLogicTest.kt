@@ -63,7 +63,10 @@ class PDFTranslationLogicTest {
                     x = 10f,
                     y = 20f,
                     width = 100f,
-                    height = 40f
+                    height = 40f,
+                    readingOrder = 1,
+                    sourceBlockCount = 1,
+                    sourceLineCount = 1
                 )
             )
         )

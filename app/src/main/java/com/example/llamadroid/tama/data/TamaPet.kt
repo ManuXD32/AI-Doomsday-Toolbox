@@ -33,6 +33,8 @@ data class TamaPet(
     val rightDecorationId: String? = null,
     val growthLocked: Boolean = false,
     val growthLockStartedAt: Long? = null,
+    val cycleFrozen: Boolean = false,
+    val cycleFreezeStartedAt: Long? = null,
     val money: Long = 100,
     val inventory: List<InventoryItem> = emptyList(),
     // Activity states (persist when app closed)

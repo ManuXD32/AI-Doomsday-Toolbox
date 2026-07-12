@@ -832,6 +832,18 @@ object TamaMigrations {
         }
     }
 
+    val MIGRATION_42_43 = object : Migration(42, 43) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[TamaDB] Running migration 42 -> 43: Tama full-cycle freeze")
+            if (!columnExists(db, "tama_pets", "cycleFrozen")) {
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN cycleFrozen INTEGER NOT NULL DEFAULT 0")
+            }
+            if (!columnExists(db, "tama_pets", "cycleFreezeStartedAt")) {
+                db.execSQL("ALTER TABLE tama_pets ADD COLUMN cycleFreezeStartedAt INTEGER")
+            }
+        }
+    }
+
     private enum class AdventureGateProfileStat {
         MAX_HP,
         MAX_MANA,
@@ -958,7 +970,8 @@ object TamaMigrations {
         MIGRATION_38_39,
         MIGRATION_39_40,
         MIGRATION_40_41,
-        MIGRATION_41_42
+        MIGRATION_41_42,
+        MIGRATION_42_43
     )
     
     // ========== HELPER FUNCTIONS ==========

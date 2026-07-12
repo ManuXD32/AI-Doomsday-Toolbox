@@ -73,6 +73,7 @@ import java.util.*
 @Composable
 fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val context = LocalContext.current
+    val startupGuard = rememberAiJobStartupGuard()
 
 
     val db = remember { AppDatabase.getDatabase(context) }
@@ -630,10 +631,12 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         details = launchDetails
                     )
                     runCatching {
-                        ContextCompat.startForegroundService(
-                            context,
-                            StableDiffusionService.createStartUpscaleIntent(context, config)
-                        )
+                        startupGuard.run("sd_upscale_start") {
+                            ContextCompat.startForegroundService(
+                                context,
+                                StableDiffusionService.createStartUpscaleIntent(context, config)
+                            )
+                        }
                         GenerationDiagnosticsStore.recordBreadcrumb(
                             source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
                             mode = mode.name,
@@ -712,10 +715,12 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         details = launchDetails
                     )
                     runCatching {
-                        ContextCompat.startForegroundService(
-                            context,
-                            StableDiffusionService.createStartIntent(context, config)
-                        )
+                        startupGuard.run("sd_${mode.name.lowercase()}_start") {
+                            ContextCompat.startForegroundService(
+                                context,
+                                StableDiffusionService.createStartIntent(context, config)
+                            )
+                        }
                         GenerationDiagnosticsStore.recordBreadcrumb(
                             source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
                             mode = mode.name,

@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
+import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.UpscalerAssetPackSupport
@@ -429,13 +430,47 @@ class VideoUpscalerService : Service() {
             if (!binary.exists()) {
                 return@withContext Result.failure(Exception("${config.engine.name} binary not found"))
             }
+
+            val modelCapability = UpscalerModels.getByName(config.model)
+                ?: return@withContext Result.failure(
+                    Exception(getString(R.string.upscaler_error_model_unknown, config.model))
+                )
+            val modelValidation = UpscalerModelFiles.validate(
+                modelsRoot = modelsDir,
+                model = modelCapability,
+                scale = config.scale,
+                denoise = config.denoise
+            )
+            val resolvedModelFiles = when (modelValidation) {
+                is UpscalerModelValidationResult.Success -> modelValidation.files
+                is UpscalerModelValidationResult.MissingModelDirectory -> {
+                    val message = getString(
+                        R.string.upscaler_error_model_dir_missing,
+                        modelCapability.displayName,
+                        modelValidation.modelDir.absolutePath
+                    )
+                    DebugLog.log("[UPSCALER] $message")
+                    return@withContext Result.failure(Exception(message))
+                }
+
+                is UpscalerModelValidationResult.MissingModelFiles -> {
+                    val message = getString(
+                        R.string.upscaler_error_model_files_missing,
+                        modelCapability.displayName,
+                        modelValidation.files.paramFile.name,
+                        modelValidation.files.binFile.name
+                    )
+                    DebugLog.log("[UPSCALER] $message")
+                    return@withContext Result.failure(Exception(message))
+                }
+            }
             
             // Use the class-level modelsDir (extracted from assets)
             val args = mutableListOf(
                 binary.absolutePath,
                 "-i", inputDir.absolutePath,
                 "-o", outputDir.absolutePath,
-                "-m", File(modelsDir, config.model).absolutePath,
+                "-m", resolvedModelFiles.modelDir.absolutePath,
                 "-s", config.scale.toString(),
                 "-f", "jpg"
             )

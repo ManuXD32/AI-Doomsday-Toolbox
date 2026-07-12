@@ -14,6 +14,8 @@ import com.example.llamadroid.onnx.OnnxBackgroundRemovalPipeline
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalRuntimeState
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalStage
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalStorage
+import com.example.llamadroid.onnx.OnnxStorage
+import com.example.llamadroid.onnx.isUnsupportedLegacyOnnxBackgroundRemovalBundleId
 import com.example.llamadroid.onnx.toDisplayLines
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.getParcelableExtraCompat
@@ -127,6 +129,26 @@ class OnnxBackgroundRemovalService : Service() {
         val startedAt = System.currentTimeMillis()
         runStartedAt = startedAt
         DebugLog.log("[ONNX-BGR] Start ${buildSessionDetails(config)}")
+        val modelFile = File(config.modelPath)
+        val validationError = validateManagedModelPath(this, modelFile, config.modelName)
+        if (validationError != null) {
+            publishState(
+                OnnxBackgroundRemovalState.Error(validationError),
+                runtimeState = "ERROR",
+                message = validationError
+            )
+            DebugLog.log(
+                "[ONNX-BGR] Model preflight failed path=${modelFile.absolutePath} " +
+                    "exists=${modelFile.exists()} readable=${modelFile.canRead()} isFile=${modelFile.isFile}"
+            )
+            stopSelf()
+            return
+        }
+        DebugLog.log(
+            "[ONNX-BGR] Model resolved path=${modelFile.absolutePath} exists=${modelFile.exists()} " +
+                "readable=${modelFile.canRead()} isFile=${modelFile.isFile} size=${modelFile.length()} " +
+                "backend=${config.backend.name} runtime=${config.runtimeOptions.toDisplayLines().joinToString(";")}"
+        )
         publishState(
             OnnxBackgroundRemovalState.Running(0f, getString(R.string.bgr_status_starting), 0, total),
             runtimeState = "RUNNING"
@@ -389,7 +411,56 @@ class OnnxBackgroundRemovalService : Service() {
         private const val ACTION_CANCEL = "com.example.llamadroid.action.CANCEL_ONNX_BGR"
         private const val EXTRA_CONFIG = "config"
 
+        fun validateManagedModelPath(
+            context: Context,
+            modelFile: File,
+            modelName: String? = null
+        ): String? {
+            val managedRoot = OnnxStorage.managedModelsRoot(context)
+            val isWithinManagedRoot = runCatching {
+                val filePath = modelFile.canonicalFile.absolutePath
+                val rootPath = managedRoot.canonicalFile.absolutePath
+                filePath == rootPath || filePath.startsWith("$rootPath${File.separator}")
+            }.getOrDefault(false)
+            val looksUnsupportedLegacy = listOf(
+                modelName,
+                modelFile.nameWithoutExtension,
+                modelFile.parentFile?.name
+            ).any { token ->
+                val normalized = token?.trim().orEmpty()
+                isUnsupportedLegacyOnnxBackgroundRemovalBundleId(normalized) ||
+                    normalized.contains("fp16", ignoreCase = true) ||
+                    normalized.contains("q4f16", ignoreCase = true)
+            }
+            return when {
+                looksUnsupportedLegacy -> context.getString(R.string.bgr_error_model_unsupported_legacy)
+                modelFile.path.isBlank() -> context.getString(R.string.bgr_error_model_missing_file)
+                !isWithinManagedRoot -> context.getString(R.string.bgr_error_model_reimport_needed)
+                !modelFile.exists() -> context.getString(R.string.bgr_error_model_missing_file)
+                !modelFile.isFile -> context.getString(R.string.bgr_error_model_invalid_file)
+                !modelFile.canRead() -> context.getString(R.string.bgr_error_model_unreadable)
+                else -> null
+            }
+        }
+
         fun start(context: Context, config: OnnxBackgroundRemovalConfig) {
+            val validationError = validateManagedModelPath(context, File(config.modelPath), config.modelName)
+            if (validationError != null) {
+                OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(validationError))
+                OnnxBackgroundRemovalStorage.writeRuntimeState(
+                    context,
+                    OnnxBackgroundRemovalRuntimeState(
+                        state = "ERROR",
+                        progress = 0f,
+                        status = validationError,
+                        message = validationError,
+                        total = config.inputPaths.size,
+                        startedAtEpochMs = System.currentTimeMillis()
+                    )
+                )
+                DebugLog.log("[ONNX-BGR] Refused start: $validationError path=${config.modelPath}")
+                return
+            }
             val queuedState = OnnxBackgroundRemovalRuntimeState(
                 state = "RUNNING",
                 progress = 0f,

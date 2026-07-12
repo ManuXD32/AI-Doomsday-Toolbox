@@ -6,14 +6,14 @@ import org.junit.Test
 
 class ModelBackupPolicyTest {
     @Test
-    fun `local imported model rows are kept`() {
+    fun `local imported model rows are skipped`() {
         val model = model(
             type = ModelType.LLM,
             repoId = "local-import",
             isDownloaded = false
         )
 
-        assertTrue(ModelBackupPolicy.shouldKeepInPortableBackup(model))
+        assertFalse(ModelBackupPolicy.shouldKeepInPortableBackup(model))
     }
 
     @Test
@@ -36,11 +36,11 @@ class ModelBackupPolicyTest {
         )
 
         assertFalse(ModelBackupPolicy.shouldKeepInPortableBackup(model))
-        assertTrue(ModelBackupPolicy.IMPORTED_MODEL_SQL_PREDICATE.contains("isDownloaded = 0"))
+        assertTrue(ModelBackupPolicy.IMPORTED_MODEL_SQL_PREDICATE.contains("1 = 0"))
     }
 
     @Test
-    fun `downloaded whisper model rows are skipped unless locally imported`() {
+    fun `downloaded and imported whisper model rows are skipped`() {
         val downloaded = model(
             type = ModelType.WHISPER,
             repoId = "ggerganov/whisper.cpp",
@@ -53,11 +53,11 @@ class ModelBackupPolicyTest {
         )
 
         assertFalse(ModelBackupPolicy.shouldKeepInPortableBackup(downloaded))
-        assertTrue(ModelBackupPolicy.shouldKeepInPortableBackup(imported))
+        assertFalse(ModelBackupPolicy.shouldKeepInPortableBackup(imported))
     }
 
     @Test
-    fun `custom ONNX imports are kept but catalog ONNX downloads are skipped`() {
+    fun `catalog and custom ONNX model rows are skipped`() {
         val catalog = model(
             type = ModelType.ONNX_IMAGE_GEN,
             repoId = "ShiftHackZ/Local-Diffusion-Models-SDAI-ONXX",
@@ -72,7 +72,12 @@ class ModelBackupPolicyTest {
         )
 
         assertFalse(ModelBackupPolicy.shouldKeepInPortableBackup(catalog))
-        assertTrue(ModelBackupPolicy.shouldKeepInPortableBackup(custom))
+        assertFalse(ModelBackupPolicy.shouldKeepInPortableBackup(custom))
+    }
+
+    @Test
+    fun `sql predicate excludes every model row`() {
+        assertTrue(ModelBackupPolicy.IMPORTED_MODEL_SQL_PREDICATE.contains("1 = 0"))
     }
 
     private fun model(

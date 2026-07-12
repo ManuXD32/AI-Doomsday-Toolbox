@@ -79,7 +79,16 @@ data class LlamaChatPromptProfileEntity(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "llama_chats", indices = [Index("lastModified"), Index("folderId")])
+@Entity(
+    tableName = "llama_chats",
+    indices = [
+        Index("lastModified"),
+        Index("folderId"),
+        Index("pinnedToAiHub"),
+        Index("pinnedServerId"),
+        Index("pinnedAt")
+    ]
+)
 data class LlamaChatEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val title: String,
@@ -87,7 +96,36 @@ data class LlamaChatEntity(
     val contextSize: Int = 8192,
     val systemPrompt: String? = null,
     val apiParams: String? = null, // JSON string for overrides like temperature, etc.
-    val folderId: Long? = null
+    val folderId: Long? = null,
+    val pinnedToAiHub: Boolean = false,
+    val pinnedServerId: Long? = null,
+    val pinnedAt: Long? = null
+)
+
+@Entity(
+    tableName = "llama_speculative_runs",
+    indices = [
+        Index("createdAt"),
+        Index("savedForever"),
+        Index("speculativeMode")
+    ]
+)
+data class LlamaSpeculativeRunEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String? = null,
+    val savedForever: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+    val modelPath: String,
+    val modelName: String,
+    val speculativeMode: String,
+    val draftModelPath: String? = null,
+    val draftModelName: String? = null,
+    val acceptanceRate: Double? = null,
+    val promptTokensPerSecond: Double? = null,
+    val generationTokensPerSecond: Double? = null,
+    val sampleCount: Int = 0,
+    val rawMetrics: String = ""
 )
 
 @Entity(

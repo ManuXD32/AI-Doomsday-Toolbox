@@ -154,6 +154,40 @@ class NativeProcessCleanupTest {
         }
     }
 
+    @Test
+    fun nonLlamaSameUidListenerIsReportedButNotSelectedForLlamaCleanup() {
+        val root = createTempDirectory(prefix = "proc-test").toFile()
+        try {
+            writeTcpListener(root, portHex = "1F91", uid = 10042, inode = "12345")
+            writeProcWithSocket(
+                root = root,
+                pid = 10,
+                uid = 10042,
+                cmdline = "/data/app/lib/arm64/libkiwix_serve_dotprod.so\u0000--port\u00008081",
+                inode = "12345"
+            )
+
+            val cleanupCandidates = NativeProcessCleanup.findSameUidLlamaServers(
+                procRoot = root,
+                myPid = 99,
+                myUid = 10042,
+                port = 8081
+            )
+            val description = NativeProcessCleanup.describeSameUidPortOccupationSync(
+                port = 8081,
+                procRoot = root,
+                myPid = 99,
+                myUid = 10042
+            )
+
+            assertTrue(cleanupCandidates.isEmpty())
+            assertTrue(description.contains("pid=10"))
+            assertTrue(description.contains("libkiwix_serve_dotprod.so"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun writeProc(root: File, pid: Int, uid: Int, cmdline: String) {
         val dir = File(root, pid.toString()).apply { mkdirs() }
         File(dir, "cmdline").writeBytes(cmdline.toByteArray())

@@ -14,9 +14,9 @@ import kotlin.io.path.createTempDirectory
 class OnnxImportSupportTest {
 
     @Test
-    fun `choose import strategy links only when path is resolved and accessible`() {
+    fun `choose import strategy always copies into managed storage`() {
         assertEquals(
-            OnnxImportStrategy.LINK_IN_PLACE,
+            OnnxImportStrategy.COPY_TO_MANAGED,
             OnnxImportSupport.chooseImportStrategy(
                 resolvedPath = "/storage/emulated/0/Download/SDAI/model/demo",
                 hasAllFilesAccess = true,

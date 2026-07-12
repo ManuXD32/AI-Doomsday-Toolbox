@@ -5,13 +5,7 @@ object ModelBackupPolicy {
     const val CUSTOM_IMPORT_REPO_PREFIX = "custom-import/"
     const val ONNX_CUSTOM_IMPORT_ASSET_KIND = "custom_import_bundle"
 
-    const val IMPORTED_MODEL_SQL_PREDICATE =
-        "((repoId = '$LOCAL_IMPORT_REPO_ID' AND isDownloaded = 0) " +
-            "OR repoId LIKE '$CUSTOM_IMPORT_REPO_PREFIX%' " +
-            "OR onnxAssetKind = '$ONNX_CUSTOM_IMPORT_ASSET_KIND')"
+    const val IMPORTED_MODEL_SQL_PREDICATE = "1 = 0"
 
-    fun shouldKeepInPortableBackup(model: ModelEntity): Boolean =
-        (model.repoId == LOCAL_IMPORT_REPO_ID && !model.isDownloaded) ||
-            model.repoId.startsWith(CUSTOM_IMPORT_REPO_PREFIX) ||
-            model.onnxAssetKind == ONNX_CUSTOM_IMPORT_ASSET_KIND
+    fun shouldKeepInPortableBackup(@Suppress("UNUSED_PARAMETER") model: ModelEntity): Boolean = false
 }

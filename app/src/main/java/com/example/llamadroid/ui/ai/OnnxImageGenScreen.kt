@@ -125,7 +125,6 @@ import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
-import com.example.llamadroid.util.StoragePermissionHelper
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -139,6 +138,7 @@ import java.util.Locale
 @Composable
 fun OnnxImageGenScreen(navController: NavController) {
     val context = LocalContext.current
+    val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { SettingsRepository(context) }
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
@@ -398,7 +398,9 @@ fun OnnxImageGenScreen(navController: NavController) {
             return
         }
         holder.updateState(OnnxImageGenerationState.Preparing(context.getString(R.string.onnx_image_gen_status_preparing)))
-        context.startForegroundService(OnnxImageGenerationService.createStartIntent(context, config))
+        startupGuard.run("onnx_image_generation_start") {
+            context.startForegroundService(OnnxImageGenerationService.createStartIntent(context, config))
+        }
     }
 
     fun cancelGeneration() {
@@ -548,32 +550,6 @@ fun OnnxImageGenScreen(navController: NavController) {
                         }
                     }
                 } else {
-                    if (StoragePermissionHelper.shouldRequestAllFilesAccess()) {
-                        Card(
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                            shape = RoundedCornerShape(18.dp)
-                        ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    stringResource(R.string.onnx_image_gen_setup_title),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(stringResource(R.string.onnx_image_gen_setup_desc))
-                                Spacer(modifier = Modifier.height(12.dp))
-                                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = { StoragePermissionHelper.requestAllFilesAccess(context) }) {
-                                        Text(stringResource(R.string.onnx_image_gen_setup_permission))
-                                    }
-                                    FilledTonalButton(onClick = { navController.navigate(Screen.OnnxModels.route) }) {
-                                        Text(stringResource(R.string.onnx_image_gen_open_models))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     OnnxHeroCard(
                         modeLabel = when (selectedMode) {
                             OnnxImageGenMode.TXT2IMG -> stringResource(R.string.imagegen_mode_txt2img)

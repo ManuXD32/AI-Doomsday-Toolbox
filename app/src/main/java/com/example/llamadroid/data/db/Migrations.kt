@@ -1790,6 +1790,183 @@ object Migrations {
         }
     }
 
+    val MIGRATION_81_82 = object : Migration(81, 82) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 81 -> 82: LiteRT embedding support")
+
+            if (tableExists(db, "litert_models") && !columnExists(db, "litert_models", "supportsEmbedding")) {
+                db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `supportsEmbedding` INTEGER NOT NULL DEFAULT 0")
+            }
+
+            if (tableExists(db, "litert_models")) {
+                db.execSQL(
+                    """
+                    UPDATE `litert_models`
+                    SET `supportsEmbedding` = 1
+                    WHERE LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%embed%'
+                       OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%embedding%'
+                       OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%gte%'
+                       OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%bge%'
+                       OR LOWER(COALESCE(`displayName`, '') || ' ' || COALESCE(`filename`, '') || ' ' || COALESCE(`repoId`, '')) LIKE '%e5%'
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 81 -> 82 complete")
+        }
+    }
+
+    val MIGRATION_82_83 = object : Migration(82, 83) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 82 -> 83: LiteRT KB embedding runnable metadata")
+
+            if (tableExists(db, "litert_models")) {
+                if (!columnExists(db, "litert_models", "kbEmbeddingRunnable")) {
+                    db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `kbEmbeddingRunnable` INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!columnExists(db, "litert_models", "kbEmbeddingRuntime")) {
+                    db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `kbEmbeddingRuntime` TEXT")
+                }
+                if (!columnExists(db, "litert_models", "kbEmbeddingStatus")) {
+                    db.execSQL("ALTER TABLE `litert_models` ADD COLUMN `kbEmbeddingStatus` TEXT")
+                }
+                db.execSQL(
+                    """
+                    UPDATE `litert_models`
+                    SET `kbEmbeddingRunnable` = 0,
+                        `kbEmbeddingStatus` = 'needs_recheck'
+                    WHERE `supportsEmbedding` = 1
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 82 -> 83 complete")
+        }
+    }
+
+    val MIGRATION_83_84 = object : Migration(83, 84) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 83 -> 84: AI Hub chat pins and speculative run history")
+
+            if (tableExists(db, "llama_chats")) {
+                if (!columnExists(db, "llama_chats", "pinnedToAiHub")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `pinnedToAiHub` INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!columnExists(db, "llama_chats", "pinnedServerId")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `pinnedServerId` INTEGER")
+                }
+                if (!columnExists(db, "llama_chats", "pinnedAt")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `pinnedAt` INTEGER")
+                }
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_chats_pinnedToAiHub` ON `llama_chats` (`pinnedToAiHub`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_chats_pinnedServerId` ON `llama_chats` (`pinnedServerId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_chats_pinnedAt` ON `llama_chats` (`pinnedAt`)")
+            }
+
+            if (tableExists(db, "saved_commands") && !columnExists(db, "saved_commands", "nativeToolsEnabled")) {
+                db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `nativeToolsEnabled` INTEGER NOT NULL DEFAULT 0")
+            }
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `llama_speculative_runs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT,
+                    `savedForever` INTEGER NOT NULL DEFAULT 0,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `modelPath` TEXT NOT NULL,
+                    `modelName` TEXT NOT NULL,
+                    `speculativeMode` TEXT NOT NULL,
+                    `draftModelPath` TEXT,
+                    `draftModelName` TEXT,
+                    `acceptanceRate` REAL,
+                    `promptTokensPerSecond` REAL,
+                    `generationTokensPerSecond` REAL,
+                    `rawMetrics` TEXT NOT NULL DEFAULT ''
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_speculative_runs_createdAt` ON `llama_speculative_runs` (`createdAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_speculative_runs_savedForever` ON `llama_speculative_runs` (`savedForever`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_speculative_runs_speculativeMode` ON `llama_speculative_runs` (`speculativeMode`)")
+
+            DebugLog.log("[DB] Migration 83 -> 84 complete")
+        }
+    }
+
+    val MIGRATION_84_85 = object : Migration(84, 85) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 84 -> 85: speculative run live aggregate sample count")
+
+            if (tableExists(db, "llama_speculative_runs") &&
+                !columnExists(db, "llama_speculative_runs", "sampleCount")
+            ) {
+                db.execSQL("ALTER TABLE `llama_speculative_runs` ADD COLUMN `sampleCount` INTEGER NOT NULL DEFAULT 0")
+            }
+
+            DebugLog.log("[DB] Migration 84 -> 85 complete")
+        }
+    }
+
+    val MIGRATION_85_86 = object : Migration(85, 86) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 85 -> 86: saved command n-gram speculative settings")
+
+            if (tableExists(db, "saved_commands")) {
+                if (!columnExists(db, "saved_commands", "ngramModNMatch")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramModNMatch` INTEGER NOT NULL DEFAULT 24")
+                }
+                if (!columnExists(db, "saved_commands", "ngramModNMin")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramModNMin` INTEGER NOT NULL DEFAULT 48")
+                }
+                if (!columnExists(db, "saved_commands", "ngramModNMax")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramModNMax` INTEGER NOT NULL DEFAULT 64")
+                }
+                if (!columnExists(db, "saved_commands", "ngramSimpleSizeN")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramSimpleSizeN` INTEGER NOT NULL DEFAULT 12")
+                }
+                if (!columnExists(db, "saved_commands", "ngramSimpleSizeM")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramSimpleSizeM` INTEGER NOT NULL DEFAULT 48")
+                }
+                if (!columnExists(db, "saved_commands", "ngramSimpleMinHits")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramSimpleMinHits` INTEGER NOT NULL DEFAULT 1")
+                }
+            }
+
+            DebugLog.log("[DB] Migration 85 -> 86 complete")
+        }
+    }
+
+    val MIGRATION_86_87 = object : Migration(86, 87) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 86 -> 87: saved command advanced n-gram speculative settings")
+
+            if (tableExists(db, "saved_commands")) {
+                if (!columnExists(db, "saved_commands", "ngramMapKSizeN")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramMapKSizeN` INTEGER NOT NULL DEFAULT 12")
+                }
+                if (!columnExists(db, "saved_commands", "ngramMapKSizeM")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramMapKSizeM` INTEGER NOT NULL DEFAULT 48")
+                }
+                if (!columnExists(db, "saved_commands", "ngramMapKMinHits")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramMapKMinHits` INTEGER NOT NULL DEFAULT 1")
+                }
+                if (!columnExists(db, "saved_commands", "ngramMapK4VSizeN")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramMapK4VSizeN` INTEGER NOT NULL DEFAULT 12")
+                }
+                if (!columnExists(db, "saved_commands", "ngramMapK4VSizeM")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramMapK4VSizeM` INTEGER NOT NULL DEFAULT 48")
+                }
+                if (!columnExists(db, "saved_commands", "ngramMapK4VMinHits")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `ngramMapK4VMinHits` INTEGER NOT NULL DEFAULT 1")
+                }
+            }
+
+            DebugLog.log("[DB] Migration 86 -> 87 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -1844,7 +2021,13 @@ object Migrations {
         MIGRATION_77_78,
         MIGRATION_78_79,
         MIGRATION_79_80,
-        MIGRATION_80_81
+        MIGRATION_80_81,
+        MIGRATION_81_82,
+        MIGRATION_82_83,
+        MIGRATION_83_84,
+        MIGRATION_84_85,
+        MIGRATION_85_86,
+        MIGRATION_86_87
     )
     /**
      * Check if a column exists in a table.

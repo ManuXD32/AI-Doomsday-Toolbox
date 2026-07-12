@@ -287,6 +287,8 @@ class BinaryRepository(private val context: Context) {
             }
         }
 
+        val exactLibName = "lib${name}.so"
+
         for (dir in nativeLibDirs) {
             for (tryTier in tiersToTry) {
                 val libName = "lib${name}_${tryTier}.so"
@@ -296,6 +298,11 @@ class BinaryRepository(private val context: Context) {
                     DebugLog.log("$TAG: Found $name at ${file.absolutePath} (tier: $tryTier)")
                     return file
                 }
+            }
+            val exactFile = File(dir, exactLibName)
+            if (exactFile.exists()) {
+                DebugLog.log("$TAG: Found non-tiered $name at ${exactFile.absolutePath}")
+                return exactFile
             }
         }
         
@@ -338,6 +345,11 @@ class BinaryRepository(private val context: Context) {
                             DebugLog.log("$TAG: Found $name in feature dir at ${sourceFile.absolutePath}")
                             return sourceFile
                         }
+                    }
+                    val exactFile = File(featureLibDir, exactLibName)
+                    if (exactFile.exists()) {
+                        DebugLog.log("$TAG: Found non-tiered $name in feature dir at ${exactFile.absolutePath}")
+                        return exactFile
                     }
                 }
             } catch (e: Exception) {
@@ -383,6 +395,11 @@ class BinaryRepository(private val context: Context) {
                                     return file
                                 }
                             }
+                            val exactFile = File(dir, exactLibName)
+                            if (exactFile.exists()) {
+                                DebugLog.log("$TAG: Found non-tiered $name in split dir at ${exactFile.absolutePath}")
+                                return exactFile
+                            }
                         }
                     }
                 }
@@ -412,6 +429,11 @@ class BinaryRepository(private val context: Context) {
                  DebugLog.log("$TAG: Found $name in deployed dir at ${file.absolutePath} (May fail with Permission Denied)")
                 return file
             }
+        }
+        val exactDeployed = File(deployedBinDir, exactLibName)
+        if (exactDeployed.exists()) {
+            DebugLog.log("$TAG: Found non-tiered $name in deployed dir at ${exactDeployed.absolutePath} (May fail with Permission Denied)")
+            return exactDeployed
         }
 
         Log.w(TAG, "Binary not found: $name (selected tier: $selectedTier, tried tiers: $tiersToTry)")

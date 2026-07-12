@@ -35,7 +35,7 @@ class ModelManagerViewModel(
     
     private val _isSearching = MutableStateFlow(false)
     val isSearching = _isSearching.asStateFlow()
-    
+
     // For file selection dialog
     private val _selectedRepoId = MutableStateFlow<String?>(null)
     val selectedRepoId = _selectedRepoId.asStateFlow()
@@ -136,7 +136,7 @@ class ModelManagerViewModel(
                 DebugLog.log("Download complete: $filename")
                 
                 // After main model download, check if we should prompt for vision projector
-                if (_hasVisionSupport.value && _visionFiles.value.isNotEmpty()) {
+                if (type == ModelType.LLM && _hasVisionSupport.value && _visionFiles.value.isNotEmpty()) {
                     val visionFile = _visionFiles.value.first()
                     _pendingVisionDownload.value = Pair(repoId, visionFile)
                     _showVisionPrompt.value = true
@@ -147,7 +147,7 @@ class ModelManagerViewModel(
             }
         }
     }
-    
+
     fun downloadVisionProjector() {
         viewModelScope.launch {
             // Try pending download first (from post-download prompt), otherwise use visionFiles (from checkbox)

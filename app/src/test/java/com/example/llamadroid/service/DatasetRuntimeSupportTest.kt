@@ -135,6 +135,21 @@ class DatasetRuntimeSupportTest {
         assertTrue(AiRuntimeJobStore.isJobStale(staleJob, now))
     }
 
+    @Test
+    fun `agent runtime uses six hour stale timeout`() {
+        val now = 30_000_000L
+        val freshJob = runtimeJob(
+            type = AiRuntimeJobStore.TYPE_AGENT_CHAT,
+            payloadJson = "{}",
+            updatedAt = now - AiRuntimeJobStore.staleWindowMsForType(AiRuntimeJobStore.TYPE_AGENT_CHAT) + 1L
+        )
+        val staleJob = freshJob.copy(updatedAt = now - AiRuntimeJobStore.staleWindowMsForType(AiRuntimeJobStore.TYPE_AGENT_CHAT) - 1L)
+
+        assertEquals(6L * 60L * 60L * 1000L, AiRuntimeJobStore.staleWindowMsForType(AiRuntimeJobStore.TYPE_AGENT_CHAT))
+        assertFalse(AiRuntimeJobStore.isJobStale(freshJob, now))
+        assertTrue(AiRuntimeJobStore.isJobStale(staleJob, now))
+    }
+
     private fun runtimeJob(
         type: String,
         payloadJson: String,

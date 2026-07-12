@@ -11,6 +11,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.PendingDownload
 import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.data.repository.LiteRtModelRepository
@@ -41,15 +42,23 @@ class DownloadService : Service() {
         const val EXTRA_URL = "url"
         const val EXTRA_DEST_PATH = "dest_path"
         const val EXTRA_FILENAME = "filename"
+        const val EXTRA_DOWNLOAD_ID = "download_id"
         
         private val activeDownloads = mutableMapOf<String, Job>()
         
-        fun startDownload(context: Context, url: String, destPath: String, filename: String) {
+        fun startDownload(
+            context: Context,
+            url: String,
+            destPath: String,
+            filename: String,
+            downloadId: String = filename
+        ) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 action = ACTION_START_DOWNLOAD
                 putExtra(EXTRA_URL, url)
                 putExtra(EXTRA_DEST_PATH, destPath)
                 putExtra(EXTRA_FILENAME, filename)
+                putExtra(EXTRA_DOWNLOAD_ID, downloadId)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -58,10 +67,11 @@ class DownloadService : Service() {
             }
         }
         
-        fun cancelDownload(context: Context, filename: String) {
+        fun cancelDownload(context: Context, filename: String, downloadId: String = filename) {
             val intent = Intent(context, DownloadService::class.java).apply {
                 action = ACTION_CANCEL_DOWNLOAD
                 putExtra(EXTRA_FILENAME, filename)
+                putExtra(EXTRA_DOWNLOAD_ID, downloadId)
             }
             context.startService(intent)
         }
@@ -82,6 +92,7 @@ class DownloadService : Service() {
                 val url = intent.getStringExtra(EXTRA_URL) ?: return START_NOT_STICKY
                 val destPath = intent.getStringExtra(EXTRA_DEST_PATH) ?: return START_NOT_STICKY
                 val filename = intent.getStringExtra(EXTRA_FILENAME) ?: return START_NOT_STICKY
+                val downloadId = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: filename
                 
                 val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
                     UnifiedNotificationManager.TaskType.DOWNLOAD,
@@ -89,11 +100,12 @@ class DownloadService : Service() {
                 )
                 notificationTaskId = taskId
                 startForeground(taskId, notification)
-                startDownloadInternal(url, destPath, filename)
+                startDownloadInternal(url, destPath, filename, downloadId)
             }
             ACTION_CANCEL_DOWNLOAD -> {
                 val filename = intent.getStringExtra(EXTRA_FILENAME) ?: return START_NOT_STICKY
-                cancelDownloadInternal(filename)
+                val downloadId = intent.getStringExtra(EXTRA_DOWNLOAD_ID) ?: filename
+                cancelDownloadInternal(filename, downloadId)
             }
             ACTION_CANCEL_ALL -> {
                 activeDownloads.forEach { (_, job) -> job.cancel() }
@@ -106,10 +118,11 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
     
-    private fun startDownloadInternal(url: String, destPath: String, filename: String) {
+    private fun startDownloadInternal(url: String, destPath: String, filename: String, downloadId: String) {
         val destFile = File(destPath)
-        val pending = PendingDownloadHolder.getPending(filename)
-        val progressKey = pending?.progressKey ?: DownloadProgressHolder.findRepoIdByFilename(filename) ?: filename
+        val pending = PendingDownloadHolder.getPending(downloadId)
+            ?: PendingDownloadHolder.getPending(filename)
+        val progressKey = pending?.progressKey ?: downloadId
         
         // Ensure parent directory exists
         destFile.parentFile?.mkdirs()
@@ -144,8 +157,8 @@ class DownloadService : Service() {
                     DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_download_failed))
                     DownloadProgressHolder.removeProgress(progressKey)
                 } finally {
-                    PendingDownloadHolder.removePending(filename)
-                    activeDownloads.remove(filename)
+                    PendingDownloadHolder.removePending(downloadId)
+                    activeDownloads.remove(downloadId)
                     if (activeDownloads.isEmpty()) {
                         completionError?.let { error ->
                             notificationTaskId?.let { UnifiedNotificationManager.failTask(it, error) }
@@ -158,17 +171,31 @@ class DownloadService : Service() {
                 return@launch
             }
             
-            Downloader.download(url, destFile, this@DownloadService, pending?.huggingFaceToken)
+            Downloader.download(
+                url = url,
+                destFile = destFile,
+                context = this@DownloadService,
+                bearerToken = pending?.huggingFaceToken,
+                downloadId = downloadId
+            )
                 .catch { e ->
                     DebugLog.log("DownloadService: Download failed - ${e.message}")
+                    val failureStatus = if (pending?.liteRtDisplayName != null && e.isHuggingFaceAccessFailure()) {
+                        if (pending.huggingFaceToken.isNullOrBlank()) {
+                            getString(R.string.litert_hf_token_required_error, e.huggingFaceStatusCode())
+                        } else {
+                            getString(R.string.litert_hf_access_denied_error, e.huggingFaceStatusCode())
+                        }
+                    } else {
+                        getString(R.string.onnx_models_download_failed)
+                    }
                     DownloadProgressHolder.updateProgress(progressKey, -1f)
-                    DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_download_failed))
-                    PendingDownloadHolder.removePending(filename)
-                    DownloadProgressHolder.removeProgress(progressKey)
+                    DownloadProgressHolder.updateStatus(progressKey, failureStatus)
+                    PendingDownloadHolder.removePending(downloadId)
                 }
                 .collect { progress ->
                     val mappedProgress = if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
-                        progress * 0.9f
+                        if (progress >= 0f) progress * 0.9f else progress
                     } else {
                         progress
                     }
@@ -176,8 +203,8 @@ class DownloadService : Service() {
                     if (pending?.onnxInstallKind == ONNX_INSTALL_KIND_ARCHIVE_BUNDLE) {
                         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_downloading))
                     }
-                    val progressPercent = (mappedProgress * 100).toInt()
-                    if (progressPercent >= lastProgress + 5 || progress == 1f) {
+                    val progressPercent = if (mappedProgress >= 0f) (mappedProgress * 100).toInt() else lastProgress
+                    if (mappedProgress >= 0f && (progressPercent >= lastProgress + 5 || progress == 1f)) {
                         lastProgress = progressPercent
                         updateNotification(filename, progressPercent)
                     }
@@ -223,19 +250,21 @@ class DownloadService : Service() {
                             db.modelDao().insertModel(entity)
                             DebugLog.log("DownloadService: Saved $filename to DB as ${pending.type}")
                         }
+                        DownloadProgressHolder.updateProgress(progressKey, 1f)
+                        DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_phase_completed))
+                        delay(1200)
                         DownloadProgressHolder.removeProgress(progressKey)
                     } catch (e: Exception) {
                         DebugLog.log("DownloadService: Failed to save to DB - ${e.message}")
                         completionError = e.message ?: "Failed to finalize download"
                         DownloadProgressHolder.updateProgress(progressKey, -1f)
-                        DownloadProgressHolder.removeProgress(progressKey)
                     }
-                    PendingDownloadHolder.removePending(filename)
+                    PendingDownloadHolder.removePending(downloadId)
                 }
             }
             
-                activeDownloads.remove(filename)
-                if (activeDownloads.isEmpty()) {
+            activeDownloads.remove(downloadId)
+            if (activeDownloads.isEmpty()) {
                 completionError?.let { error ->
                     notificationTaskId?.let { UnifiedNotificationManager.failTask(it, error) }
                 } ?: updateNotification("Downloads complete", 100)
@@ -245,19 +274,26 @@ class DownloadService : Service() {
             }
         }
         
-        activeDownloads[filename] = job
+        activeDownloads[downloadId] = job
     }
     
-    private fun cancelDownloadInternal(filename: String) {
-        activeDownloads[filename]?.cancel()
-        activeDownloads.remove(filename)
-        Downloader.cancelDownload(filename)
-        val pending = PendingDownloadHolder.getPending(filename)
-        val progressKey = pending?.progressKey ?: DownloadProgressHolder.findRepoIdByFilename(filename) ?: filename
+    private fun cancelDownloadInternal(filename: String, downloadId: String) {
+        activeDownloads[downloadId]?.cancel()
+        activeDownloads.remove(downloadId)
+        Downloader.cancelDownload(downloadId)
+        val pending = PendingDownloadHolder.getPending(downloadId)
+            ?: PendingDownloadHolder.getPending(filename)
+        val progressKey = pending?.progressKey ?: downloadId
         DownloadProgressHolder.updateProgress(progressKey, -1f)
         DownloadProgressHolder.updateStatus(progressKey, getString(R.string.onnx_models_download_cancelled))
-        pending?.destPath?.let { runCatching { File(it).delete() } }
-        PendingDownloadHolder.removePending(filename)
+        pending?.destPath?.let { path ->
+            runCatching { File(path).delete() }
+            runCatching {
+                val destFile = File(path)
+                File(destFile.parentFile, "${destFile.name}.part").delete()
+            }
+        }
+        PendingDownloadHolder.removePending(downloadId)
         DownloadProgressHolder.removeProgress(progressKey)
         
         if (activeDownloads.isEmpty()) {
@@ -354,6 +390,22 @@ class DownloadService : Service() {
             } else {
                 pending.onnxCapabilities
             }
+            if (ModelLibraryManager.usesManagedExternalCanonicalStorage(pending.type)) {
+                // Single-copy path: the managed external destination is already the canonical runtime file.
+            } else if (pending.type == ModelType.ONNX_IMAGE_GEN ||
+                pending.type == ModelType.ONNX_BACKGROUND_REMOVAL ||
+                pending.type == ModelType.ONNX_IMAGE_UPSCALER ||
+                pending.type == ModelType.ONNX_TTS
+            ) {
+                // ONNX payloads now stay in internal app-managed storage only.
+            } else {
+                ModelLibraryManager.copyFileToLibrary(
+                    context = this@DownloadService,
+                    relativeDir = ModelLibraryManager.relativeDirFor(pending.type),
+                    filename = pending.filename,
+                    sourceFile = downloadedFile
+                ).getOrThrow()
+            }
             ModelEntity(
                 filename = pending.filename,
                 path = downloadedFile.absolutePath,
@@ -443,4 +495,15 @@ class DownloadService : Service() {
             runCatching { File(pending.destPath).delete() }
         }
     }
+
+    private fun Throwable.isHuggingFaceAccessFailure(): Boolean {
+        val message = message.orEmpty()
+        return "huggingface.co" in message && ("(401)" in message || "(403)" in message)
+    }
+
+    private fun Throwable.huggingFaceStatusCode(): Int =
+        when {
+            "(401)" in message.orEmpty() -> 401
+            else -> 403
+        }
 }

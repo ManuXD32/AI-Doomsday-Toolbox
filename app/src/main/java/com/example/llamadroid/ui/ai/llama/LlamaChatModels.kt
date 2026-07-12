@@ -2,6 +2,12 @@ package com.example.llamadroid.ui.ai.llama
 
 import androidx.annotation.Keep
 
+internal fun displayLlamaModelName(modelName: String): String {
+    val trimmed = modelName.trim()
+    if (trimmed.isEmpty()) return trimmed
+    return trimmed.substringAfterLast('/').substringAfterLast('\\').ifBlank { trimmed }
+}
+
 @Keep
 data class LlamaChatExportPayload(
     val title: String,

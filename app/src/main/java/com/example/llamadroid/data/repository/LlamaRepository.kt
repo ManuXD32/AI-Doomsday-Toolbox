@@ -67,6 +67,14 @@ class LlamaRepository(
     suspend fun updateChatSystemPrompt(id: Long, systemPrompt: String?) = chatDao.updateSystemPrompt(id, systemPrompt)
     suspend fun updateChatApiParams(id: Long, apiParams: String?) = chatDao.updateApiParams(id, apiParams)
     suspend fun updateChatFolder(id: Long, folderId: Long?) = chatDao.updateFolder(id, folderId)
+    suspend fun updateChatAiHubPin(id: Long, pinned: Boolean, serverId: Long?) =
+        chatDao.updateAiHubPin(
+            id = id,
+            pinned = pinned,
+            serverId = serverId.takeIf { pinned },
+            pinnedAt = if (pinned) System.currentTimeMillis() else null
+        )
+
     suspend fun createChatFolder(name: String): Long {
         val cleanName = name.trim()
         require(cleanName.isNotBlank()) { "Folder name is required." }

@@ -316,6 +316,33 @@ class TamaDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate42To43_addsCycleFreezeColumns() {
+        helper.createDatabase(TEST_DB, 42).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            43,
+            true,
+            TamaMigrations.MIGRATION_42_43
+        )
+
+        migratedDb.query("PRAGMA table_info(tama_pets)").use { cursor ->
+            val columns = mutableMapOf<String, Triple<String, Int, String?>>()
+            while (cursor.moveToNext()) {
+                columns[cursor.getString(cursor.getColumnIndexOrThrow("name"))] = Triple(
+                    cursor.getString(cursor.getColumnIndexOrThrow("type")),
+                    cursor.getInt(cursor.getColumnIndexOrThrow("notnull")),
+                    cursor.getString(cursor.getColumnIndexOrThrow("dflt_value"))
+                )
+            }
+            assertEquals(Triple("INTEGER", 1, "0"), columns["cycleFrozen"])
+            assertEquals(Triple("INTEGER", 0, null), columns["cycleFreezeStartedAt"])
+        }
+    }
+
     private fun assertTableExists(
         db: androidx.sqlite.db.SupportSQLiteDatabase,
         tableName: String

@@ -749,6 +749,19 @@ fun TamaScreen(
             onInventory = { showInventoryDialog = true },
             onChecklist = { showQuestChecklistDialog = true },
             onArcade = { navController.navigate(Screen.Arcade.route) },
+            onFreezeToggle = {
+                if (actionCooldown) return@TamaControls
+                actionCooldown = true
+                scope.launch {
+                    val result = if (pet?.cycleFrozen == true) {
+                        gameEngine.unfreezeCycle()
+                    } else {
+                        gameEngine.freezeCycle()
+                    }
+                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    actionCooldown = false
+                }
+            },
             onMenu = { showMenu = true }
         )
 
@@ -5635,21 +5648,30 @@ fun TamaControls(
     onInventory: () -> Unit = {},
     onChecklist: () -> Unit = {},
     onArcade: () -> Unit = {},
+    onFreezeToggle: () -> Unit = {},
     onMenu: () -> Unit
 ) {
-    val canAct = pet != null && pet.stage != GrowthStage.EGG && !isSleeping && !isBusy
+    val isFrozen = pet?.cycleFrozen == true
+    val canAct = pet != null && pet.stage != GrowthStage.EGG && !isSleeping && !isBusy && !isFrozen
     val isDoingActivity = pet?.currentActivity != ActivityType.NONE
     val isHome = currentLocationId == "home" || currentLocationId.startsWith("home")
     val nightArenaAvailable = isSleeping && NightArenaGenerator.isActiveWindow(currentTime)
     val actions = buildList {
-        if (pet != null) {
+        if (isFrozen) {
+            add(TamaControlConfig(icon = "❄", label = stringResource(R.string.tama_btn_unfreeze), enabled = !isBusy, onClick = onFreezeToggle))
+        } else if (pet != null) {
             add(TamaControlConfig(icon = TAMA_INVENTORY_EMOJI, label = stringResource(R.string.tama_btn_inventory), enabled = true, onClick = onInventory))
             add(TamaControlConfig(icon = TAMA_CHECKLIST_EMOJI, label = stringResource(R.string.tama_btn_checklist), enabled = true, onClick = onChecklist))
         }
-        if (isDoingActivity) {
+        if (isFrozen) {
+            // Keep only Unfreeze and Menu available while game time is frozen.
+        } else if (isDoingActivity) {
             add(TamaControlConfig(icon = TAMA_STOP_EMOJI, label = stringResource(R.string.tama_btn_stop), enabled = !isBusy, onClick = onStopActivity))
             add(TamaControlConfig(icon = TAMA_CHAT_EMOJI, label = stringResource(R.string.tama_btn_chat), enabled = !isBusy && !isSleeping, onClick = onChat))
         } else if (isHome) {
+            if (pet != null) {
+                add(TamaControlConfig(icon = "❄", label = stringResource(R.string.tama_btn_freeze), enabled = !isBusy, onClick = onFreezeToggle))
+            }
             add(TamaControlConfig(icon = TAMA_FEED_EMOJI, label = stringResource(R.string.tama_btn_feed), enabled = canAct, onClick = onFeed))
             add(TamaControlConfig(icon = "🧽", label = stringResource(R.string.tama_btn_clean), enabled = canAct, onClick = onClean))
             add(TamaControlConfig(icon = "🎾", label = stringResource(R.string.tama_btn_play), enabled = canAct, onClick = onPlay))

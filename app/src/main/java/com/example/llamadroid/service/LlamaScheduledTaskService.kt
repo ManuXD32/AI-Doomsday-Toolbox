@@ -343,7 +343,7 @@ class LlamaScheduledTaskService : Service() {
             if (settingsRepo.speculativeEnabled.value) {
                 val speculativeMode = settingsRepo.speculativeMode.value
                 val shouldPassDraftModel =
-                    speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE ||
+                    speculativeMode.requiresDraftModel ||
                         (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
                 if (shouldPassDraftModel) {
                     putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)

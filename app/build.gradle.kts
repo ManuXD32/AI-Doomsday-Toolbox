@@ -32,7 +32,6 @@ val strippedParquetHadoopJar by tasks.registering(Jar::class) {
         exclude("shaded/parquet/it/unimi/dsi/fastutil/**")
     }
 }
-
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
@@ -54,8 +53,8 @@ android {
         applicationId = "com.manuxd32.aidoomsdaytoolbox"
         minSdk = 26
         targetSdk = 35
-        versionCode = 945
-        versionName = "0.945"
+        versionCode = 946
+        versionName = "0.946"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -230,7 +229,7 @@ dependencies {
     implementation("org.apache.hadoop:hadoop-client-runtime:3.4.1")
 
     // Official ONNX Runtime Android backend for local ONNX execution
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.21.0")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.26.0")
 
     // LiteRT-LM chat backend for CPU/GPU packaged models
     runtimeOnly("com.google.ai.edge.litertlm:litertlm-android:0.12.0") {
@@ -245,7 +244,8 @@ dependencies {
     implementation(libs.pdfbox)
     
     // ML Kit Text Recognition for OCR
-    implementation("com.google.mlkit:text-recognition:16.0.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     
     // Model Sharing - HTTP server
     implementation("org.nanohttpd:nanohttpd:2.3.1")
@@ -330,6 +330,37 @@ tasks.register("checkReleaseFeatureSplitSizes") {
     }
 }
 
+tasks.register<Exec>("repackReleaseBundleForSigning") {
+    group = "verification"
+    description = "Compresses the release AAB and removes bulky upload-only metadata before signing."
+    dependsOn("shrinkBundleReleaseResources")
+    val intermediaryBundle = layout.buildDirectory.file(
+        "intermediates/intermediary_bundle/release/shrinkBundleReleaseResources/intermediary-bundle.aab"
+    )
+    inputs.file(intermediaryBundle)
+    outputs.file(intermediaryBundle)
+    outputs.upToDateWhen { false }
+    commandLine(
+        "python3",
+        rootProject.file("tools/repack_aab_for_release.py").absolutePath,
+        intermediaryBundle.get().asFile.absolutePath,
+        intermediaryBundle.get().asFile.absolutePath
+    )
+}
+
+tasks.register<Exec>("checkReleaseBundle16KbAlignment") {
+    group = "verification"
+    description = "Fails release verification if any arm64 native library in the release bundle is not 16 KB page-size compatible."
+    mustRunAfter("bundleRelease")
+    commandLine(
+        "python3",
+        rootProject.file("tools/check_aab_16kb_alignment.py").absolutePath,
+        layout.buildDirectory.file("outputs/bundle/release/app-release.aab").get().asFile.absolutePath
+    )
+}
+tasks.matching { it.name == "signReleaseBundle" }.configureEach {
+    dependsOn("repackReleaseBundleForSigning")
+}
 tasks.matching { it.name == "bundleRelease" }.configureEach {
-    finalizedBy("checkReleaseFeatureSplitSizes")
+    finalizedBy("checkReleaseFeatureSplitSizes", "checkReleaseBundle16KbAlignment")
 }

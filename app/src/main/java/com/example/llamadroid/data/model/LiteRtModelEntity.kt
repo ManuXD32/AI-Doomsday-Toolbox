@@ -9,6 +9,10 @@ import java.util.Locale
 const val LITERT_BACKEND_AUTO = "auto"
 const val LITERT_BACKEND_CPU = "cpu"
 const val LITERT_BACKEND_GPU = "gpu"
+const val LITERT_KB_EMBED_RUNTIME_NONE = "none"
+const val LITERT_KB_EMBED_RUNTIME_STRING_TFLITE = "string-tflite"
+const val LITERT_KB_EMBED_RUNTIME_BERT_WORDPIECE = "bert-wordpiece"
+const val LITERT_KB_EMBED_RUNTIME_EMBEDDING_GEMMA = "embeddinggemma-sentencepiece"
 
 @Entity(
     tableName = "litert_models",
@@ -31,6 +35,10 @@ data class LiteRtModelEntity(
     val supportsNpu: Boolean = false,
     val supportsVision: Boolean = false,
     val supportsAudio: Boolean = false,
+    val supportsEmbedding: Boolean = false,
+    val kbEmbeddingRunnable: Boolean = false,
+    val kbEmbeddingRuntime: String? = null,
+    val kbEmbeddingStatus: String? = null,
     val maxContextTokens: Int? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
@@ -79,6 +87,12 @@ fun LiteRtModelEntity.supportsLiteRtVision(): Boolean =
 fun LiteRtModelEntity.supportsLiteRtAudio(): Boolean =
     supportsAudio
 
+fun LiteRtModelEntity.supportsLiteRtEmbedding(): Boolean =
+    supportsEmbedding
+
+fun LiteRtModelEntity.isKbLiteRtEmbeddingRunnable(): Boolean =
+    supportsEmbedding && kbEmbeddingRunnable
+
 fun liteRtVisionSupportFromText(text: String): Boolean {
     val lower = text.lowercase(Locale.US)
     return "gemma-4" in lower ||
@@ -100,6 +114,46 @@ fun liteRtAudioSupportFromText(text: String): Boolean {
         "gemma 3n" in lower ||
         "audio" in lower ||
         "speech" in lower
+}
+
+fun liteRtEmbeddingSupportFromText(text: String): Boolean {
+    val lower = text.lowercase(Locale.US)
+    return "embed" in lower ||
+        "embedding" in lower ||
+        "textembedding" in lower ||
+        "text-embedding" in lower ||
+        "gte" in lower ||
+        "bge" in lower ||
+        "e5" in lower ||
+        "sentence-transformer" in lower ||
+        "retrieval" in lower ||
+        "semantic" in lower
+}
+
+fun liteRtEmbeddingRuntimeSupportedFromText(text: String): Boolean {
+    val lower = text.lowercase(Locale.US)
+    val isEmbeddingGemmaRawTflite = (
+        "embeddinggemma" in lower ||
+            ("embedding" in lower && "gemma" in lower) ||
+            "embedding_gemma" in lower
+        ) && lower.endsWith(".tflite")
+    return !isEmbeddingGemmaRawTflite
+}
+
+fun liteRtKbEmbeddingRuntimeFromText(text: String): String? {
+    val lower = text.lowercase(Locale.US)
+    return when {
+        lower.endsWith(".task") ||
+            lower.contains("textembedder") ||
+            lower.contains("text-embedder") ||
+            lower.contains("_embedder") ||
+            lower.contains(" text embedder") -> LITERT_KB_EMBED_RUNTIME_STRING_TFLITE
+        "embeddinggemma" in lower ||
+            "embedding_gemma" in lower ||
+            ("embedding" in lower && "gemma" in lower) -> LITERT_KB_EMBED_RUNTIME_EMBEDDING_GEMMA
+        "bert" in lower || "wordpiece" in lower -> LITERT_KB_EMBED_RUNTIME_BERT_WORDPIECE
+        else -> null
+    }
 }
 
 fun liteRtDefaultChatContextTokensFromText(

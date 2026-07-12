@@ -7,11 +7,11 @@ import androidx.documentfile.provider.DocumentFile
 
 import com.example.llamadroid.data.api.HfModelDto
 import com.example.llamadroid.data.api.HuggingFaceService
+import com.example.llamadroid.data.db.ModelBackupPolicy
 import com.example.llamadroid.data.db.ModelDao
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.parseOnnxCapabilities
-import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
 import com.example.llamadroid.sd.buildSdCompatProfiles
 import com.example.llamadroid.sd.defaultCompatProfilesFor
@@ -31,11 +31,17 @@ import com.example.llamadroid.onnx.buildOnnxCatalogStableId
 import com.example.llamadroid.onnx.buildOnnxImageGenModelEntity
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -43,13 +49,12 @@ import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import java.io.File
 import com.example.llamadroid.data.db.buildOnnxCapabilities
+import java.util.Locale
 
 class ModelRepository(
     private val context: Context,
     private val modelDao: ModelDao
 ) {
-    private val settingsRepo = SettingsRepository(context)
-    
     // Use kotlinx.serialization for API responses to avoid reflection issues with R8
     private val json = Json { 
         ignoreUnknownKeys = true 
@@ -62,19 +67,42 @@ class ModelRepository(
         .build()
         
     private val hfService = retrofit.create(HuggingFaceService::class.java)
+    private val reconciliationMutex = Mutex()
+
+    init {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                pruneLegacyPortableModelRows()
+                reconcileManagedModelCopiesIfNeeded()
+            }.onFailure { error ->
+                Log.w("ModelRepository", "Managed model reconciliation skipped: ${error.message}", error)
+                DebugLog.log("ModelRepository: Managed model reconciliation skipped: ${error.message}")
+            }
+        }
+    }
 
     // Use singleton progress to persist across navigation
     val downloadProgress = DownloadProgressHolder.progress
 
-    fun getDownloadedModels(): Flow<List<ModelEntity>> = modelDao.getAllModels()
+    fun getDownloadedModels(): Flow<List<ModelEntity>> =
+        modelDao.getAllModels().onStart {
+            pruneLegacyPortableModelRows()
+            reconcileManagedModelCopiesIfNeeded()
+        }
     
     fun getLLMModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
         listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING)
-    )
+    ).onStart {
+        pruneLegacyPortableModelRows()
+        reconcileManagedModelCopiesIfNeeded()
+    }
 
     fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
         listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.QUADTRIX)
-    )
+    ).onStart {
+        pruneLegacyPortableModelRows()
+        reconcileManagedModelCopiesIfNeeded()
+    }
     
     suspend fun searchModels(query: String, filter: String? = null): List<HfModelDto> = withContext(Dispatchers.IO) {
         try {
@@ -120,7 +148,7 @@ class ModelRepository(
             emptyList()
         }
     }
-    
+
     /**
      * Get all files with vision support detection
      * Returns RepoFiles with GGUF models and any associated mmproj (vision projection) files
@@ -151,18 +179,19 @@ class ModelRepository(
             RepoFiles(emptyList(), emptyList(), false)
         }
     }
-    
+
     /**
-     * Get the model directory based on storage settings and model type.
-     * Uses app's external files directory if enabled, otherwise internal storage.
-     * Note: Native binaries (llama-server, sd) can only access app-specific directories.
+     * Returns the managed runtime directory for models that need a normal filesystem path.
+     * This is distinct from the user-picked model library folder.
      */
     fun getModelDir(type: ModelType): File {
-        val useExternalStorage = settingsRepo.modelStorageUri.value != null
+        val useExternalStorage =
+            ModelLibraryManager.usesManagedExternalCanonicalStorage(type)
         
         // Get subfolder based on type
         val subfolder = when (type) {
-            ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.VISION, ModelType.MMPROJ -> "llm"
+            ModelType.LLM, ModelType.EMBEDDING, ModelType.VISION -> "llm"
+            ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> "mmproj"
             ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
             ModelType.SD_DIFFUSION -> "sd/flux"
@@ -177,8 +206,8 @@ class ModelRepository(
             ModelType.ONNX_IMAGE_GEN,
             ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
-            ModelType.ONNX_IMAGE_UPSCALER -> return OnnxStorage.managedModelsRoot().apply {
-                OnnxStorage.ensureManagedRootsReady()
+            ModelType.ONNX_IMAGE_UPSCALER -> return OnnxStorage.managedModelsRoot(context).apply {
+                OnnxStorage.ensureManagedRootsReady(context)
             }
             ModelType.WHISPER -> "whisper"
         }
@@ -221,9 +250,14 @@ class ModelRepository(
         onnxReferenceUri: String? = null,
         onnxReferencePath: String? = null
     ) {
-        val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
         val modelDir = getModelDir(type)
-        val destFile = File(modelDir, filename)
+        val localFilename = chooseUniqueDownloadFilename(
+            requestedFilename = filename,
+            type = type,
+            modelDir = modelDir
+        )
+        val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
+        val destFile = File(modelDir, localFilename)
         val inferredFamily = inferSdFamily(type, repoId, filename)
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
         val resolvedVariant = sdVariant ?: inferredFamily.second
@@ -232,11 +266,10 @@ class ModelRepository(
             *defaultCompatProfilesFor(type).toTypedArray()
         )
         
-        // Use unique progress key: repoId for models, repoId:mmproj for vision projectors
-        val progressKey = if (type == ModelType.VISION_PROJECTOR) "$repoId:mmproj" else repoId
+        val progressKey = buildDownloadTaskId(repoId, localFilename, type)
         
         // Track progress under unique key for UI display
-        DownloadProgressHolder.updateProgress(progressKey, filename, 0f)
+        DownloadProgressHolder.updateProgress(progressKey, localFilename, 0f)
         
         // Start foreground service for background downloads with notification
         // Must be called on main thread for foreground service
@@ -245,7 +278,8 @@ class ModelRepository(
                 context = context,
                 url = modelUrl,
                 destPath = destFile.absolutePath,
-                filename = filename
+                filename = localFilename,
+                downloadId = progressKey
             )
         }
         
@@ -253,12 +287,12 @@ class ModelRepository(
         // Wait for completion (progress reaches 1.0 or -1.0 for error)
         var lastProgress = 0f
         while (true) {
-            kotlinx.coroutines.delay(500) // Check every 500ms
-            val progressMap = DownloadProgressHolder.progress.value
-            // Check by progressKey (set by us)
+                    kotlinx.coroutines.delay(500) // Check every 500ms
+                    val progressMap = DownloadProgressHolder.progress.value
+                    // Check by progressKey (set by us)
             val progress = progressMap[progressKey] ?: 0f
             
-            if (progress != lastProgress) {
+            if (progress != lastProgress && progress >= 0f) {
                 lastProgress = progress
                 DownloadProgressHolder.updateProgress(progressKey, progress)
             }
@@ -266,7 +300,7 @@ class ModelRepository(
             if (progress >= 1f) {
                 // Download complete - save to DB
                 val entity = ModelEntity(
-                    filename = filename,
+                    filename = localFilename,
                     path = destFile.absolutePath,
                     sizeBytes = destFile.length(),
                     type = type,
@@ -285,12 +319,12 @@ class ModelRepository(
                 )
                 modelDao.insertModel(entity)
                 DownloadProgressHolder.removeProgress(progressKey)
-                DebugLog.log("ModelRepository: Saved $filename to DB as $type")
+                DebugLog.log("ModelRepository: Saved $localFilename to DB as $type")
                 break
-            } else if (progress < 0f) {
+            } else if (progress < 0f && progress != DownloadProgressHolder.INDETERMINATE) {
                 // Download failed
                 DownloadProgressHolder.removeProgress(progressKey)
-                DebugLog.log("ModelRepository: Download failed for $filename")
+                DebugLog.log("ModelRepository: Download failed for $localFilename")
                 break
             }
         }
@@ -316,9 +350,14 @@ class ModelRepository(
         onnxReferenceUri: String? = null,
         onnxReferencePath: String? = null
     ) {
-        val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
         val modelDir = getModelDir(type)
-        val destFile = File(modelDir, filename)
+        val localFilename = chooseUniqueDownloadFilename(
+            requestedFilename = filename,
+            type = type,
+            modelDir = modelDir
+        )
+        val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
+        val destFile = File(modelDir, localFilename)
         val inferredFamily = inferSdFamily(type, repoId, filename)
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
         val resolvedVariant = sdVariant ?: inferredFamily.second
@@ -328,14 +367,15 @@ class ModelRepository(
         )
         
         // Use unique progress key
-        val progressKey = repoId
+        val progressKey = buildDownloadTaskId(repoId, localFilename, type)
         
         // Track progress under unique key for UI display
-        DownloadProgressHolder.updateProgress(progressKey, filename, 0f)
+        DownloadProgressHolder.updateProgress(progressKey, localFilename, 0f)
         
         // Store pending download info so DownloadService can save to DB on completion
         PendingDownloadHolder.addPending(
-            filename = filename,
+            downloadId = progressKey,
+            filename = localFilename,
             repoId = repoId,
             progressKey = progressKey,
             type = type,
@@ -357,14 +397,42 @@ class ModelRepository(
             context = context,
             url = modelUrl,
             destPath = destFile.absolutePath,
-            filename = filename
+            filename = localFilename,
+            downloadId = progressKey
         )
         
-        DebugLog.log("ModelRepository: Started async download for $filename")
+        DebugLog.log("ModelRepository: Started async download for $localFilename")
+    }
+
+    private fun chooseUniqueDownloadFilename(
+        requestedFilename: String,
+        type: ModelType,
+        modelDir: File
+    ): String {
+        val firstChoice = ModelLibraryManager.chooseUniqueFilename(
+            context = context,
+            relativeDir = ModelLibraryManager.relativeDirFor(type),
+            requestedFilename = requestedFilename,
+            runtimeDir = modelDir
+        )
+        if (!DownloadProgressHolder.isFilenameTracked(firstChoice)) return firstChoice
+
+        val clean = ModelLibraryManager.canonicalFilename(requestedFilename)
+        val base = clean.substringBeforeLast('.', clean)
+        val extensionSuffix = clean.substringAfterLast('.', "")
+            .takeIf { it.isNotBlank() }
+            ?.let { ".$it" }
+            .orEmpty()
+        return ModelLibraryManager.chooseUniqueFilename(
+            context = context,
+            relativeDir = ModelLibraryManager.relativeDirFor(type),
+            requestedFilename = "$base-${System.currentTimeMillis()}$extensionSuffix",
+            runtimeDir = modelDir
+        )
     }
 
     fun startOnnxCatalogDownload(entry: OnnxCatalogEntry) {
-        OnnxStorage.ensureManagedRootsReady()
+        OnnxStorage.ensureManagedRootsReady(context)
         val modelId = buildOnnxCatalogStableId(entry.provider, entry.bundleId)
         val progressKey = "onnx:$modelId"
         val installKind = when (entry.assetKind) {
@@ -373,7 +441,7 @@ class ModelRepository(
             else -> ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
         }
         val tempDownload = if (installKind == ONNX_INSTALL_KIND_FILE) {
-            File(OnnxStorage.managedBundleDir(modelId).apply { mkdirs() }, File(entry.assetName).name)
+            File(OnnxStorage.managedBundleDir(context, modelId).apply { mkdirs() }, File(entry.assetName).name)
         } else {
             File(
                 OnnxStorage.tempDownloadDir(context).apply { mkdirs() },
@@ -384,6 +452,7 @@ class ModelRepository(
         DownloadProgressHolder.updateProgress(progressKey, modelId, 0f)
         DownloadProgressHolder.updateStatus(progressKey, "Downloading")
         PendingDownloadHolder.addPending(
+            downloadId = progressKey,
             filename = modelId,
             repoId = entry.repoId,
             progressKey = progressKey,
@@ -395,7 +464,7 @@ class ModelRepository(
             onnxReferenceUri = entry.downloadUrl,
             onnxReferencePath = null,
             onnxInstallKind = installKind,
-            onnxInstallDirPath = if (installKind == ONNX_INSTALL_KIND_FILE) null else OnnxStorage.managedBundleDir(modelId).absolutePath,
+            onnxInstallDirPath = if (installKind == ONNX_INSTALL_KIND_FILE) null else OnnxStorage.managedBundleDir(context, modelId).absolutePath,
             huggingFaceToken = if (entry.gated) huggingFaceToken() else null
         )
 
@@ -403,20 +472,67 @@ class ModelRepository(
             context = context,
             url = entry.downloadUrl,
             destPath = tempDownload.absolutePath,
-            filename = modelId
+            filename = modelId,
+            downloadId = progressKey
         )
     }
     
     suspend fun deleteModel(model: ModelEntity) {
-        val file = File(model.path)
-        if (file.exists() && isManagedModelPath(file)) {
-            if (file.isDirectory) {
-                OnnxImportSupport.deleteRecursively(file)
-            } else {
-                file.delete()
+        reconcileManagedModelCopiesIfNeeded()
+        deleteModelArtifacts(model)
+        modelDao.deleteModel(model)
+    }
+
+    suspend fun deleteModelArtifacts(model: ModelEntity) {
+        val managedPaths = linkedSetOf<File>()
+        val directPaths = linkedSetOf<File>()
+        val currentPath = File(model.path)
+        if (currentPath.exists()) {
+            if (isManagedModelPath(currentPath)) {
+                managedPaths += currentPath
+            } else if (
+                ModelLibraryManager.usesManagedExternalCanonicalStorage(model.type) ||
+                model.repoId == ModelBackupPolicy.LOCAL_IMPORT_REPO_ID ||
+                model.repoId.startsWith("custom-import/")
+            ) {
+                directPaths += currentPath
             }
         }
-        modelDao.deleteModel(model)
+        if (ModelLibraryManager.requiresRuntimeMirror(model.type)) {
+            managedPaths += File(getModelDir(model.type), ModelLibraryManager.canonicalFilename(model.filename))
+        }
+        managedPaths.forEach { file ->
+            if (file.exists() && isManagedModelPath(file)) {
+                if (file.isDirectory) {
+                    OnnxImportSupport.deleteRecursively(file)
+                } else {
+                    file.delete()
+                }
+            }
+        }
+        directPaths.forEach { file ->
+            if (file.exists()) {
+                if (file.isDirectory) {
+                    OnnxImportSupport.deleteRecursively(file)
+                } else {
+                    file.delete()
+                }
+            }
+        }
+        if (
+            model.type == ModelType.ONNX_IMAGE_GEN ||
+            model.type == ModelType.ONNX_TTS ||
+            model.type == ModelType.ONNX_BACKGROUND_REMOVAL ||
+            model.type == ModelType.ONNX_IMAGE_UPSCALER
+        ) {
+            // ONNX payloads are now internal-only and no longer mirrored to a shared model library folder.
+        } else {
+            ModelLibraryManager.deleteFromLibrary(
+                context = context,
+                relativeDir = ModelLibraryManager.relativeDirFor(model.type),
+                filename = model.filename
+            )
+        }
     }
     
     suspend fun insertModel(model: ModelEntity) {
@@ -517,6 +633,31 @@ class ModelRepository(
                 modelDao.deleteByFilename(original.filename)
             }
 
+            val syncLibrary =
+                ModelLibraryManager.supportsCanonicalLibrary(original.type) ||
+                    ModelLibraryManager.supportsCanonicalLibrary(updated.type)
+            if (syncLibrary) {
+                if (sourceFile.isDirectory) {
+                    ModelLibraryManager.renameDirectoryInLibrary(
+                        context = context,
+                        oldRelativeDir = ModelLibraryManager.relativeDirFor(original.type),
+                        oldName = original.filename,
+                        newRelativeDir = ModelLibraryManager.relativeDirFor(updated.type),
+                        newName = updated.filename,
+                        sourceDir = finalFile
+                    ).getOrThrow()
+                } else {
+                    ModelLibraryManager.renameInLibrary(
+                        context = context,
+                        oldRelativeDir = ModelLibraryManager.relativeDirFor(original.type),
+                        oldFilename = original.filename,
+                        newRelativeDir = ModelLibraryManager.relativeDirFor(updated.type),
+                        newFilename = updated.filename,
+                        sourceFile = finalFile
+                    ).getOrThrow()
+                }
+            }
+
             Result.success(updated)
         } catch (e: Exception) {
             Result.failure(e)
@@ -526,7 +667,7 @@ class ModelRepository(
     private fun isManagedModelPath(file: File): Boolean {
         val internalRoot = context.filesDir
         val externalRoot = context.getExternalFilesDir(null)
-        val onnxRoot = OnnxStorage.managedModelsRoot()
+        val onnxRoot = OnnxStorage.managedModelsRoot(context)
         val legacyOnnxRoot = OnnxStorage.legacyManagedModelsRoot()
         return isWithinRoot(file, internalRoot) ||
             (externalRoot != null && isWithinRoot(file, externalRoot)) ||
@@ -543,6 +684,7 @@ class ModelRepository(
     companion object {
         private const val HF_PREFS_NAME = "litert_model_repository"
         private const val HF_TOKEN_KEY = "hugging_face_token"
+        private const val MANAGED_MODEL_STORAGE_RECONCILED_KEY = "managed_model_storage_reconciled_v2"
 
         fun resolveOnnxCapabilities(
             explicitCapabilities: String?,
@@ -585,17 +727,240 @@ class ModelRepository(
                 normalized.endsWith(".ort")
         }
     }
+
+    private suspend fun pruneLegacyPortableModelRows() = withContext(Dispatchers.IO) {
+        val onnxManagedRoot = OnnxStorage.managedModelsRoot(context)
+        val legacyPortableTypes = listOf(
+            ModelType.ONNX_IMAGE_GEN,
+            ModelType.ONNX_TTS,
+            ModelType.ONNX_BACKGROUND_REMOVAL,
+            ModelType.ONNX_IMAGE_UPSCALER
+        )
+        modelDao.getModelsByTypesSync(legacyPortableTypes).forEach { model ->
+            val modelFile = File(model.path)
+            if (!isWithinRoot(modelFile, onnxManagedRoot)) {
+                modelDao.deleteModel(model)
+                DebugLog.log(
+                    "ModelRepository: Removed legacy external ONNX row for ${model.filename}; please re-import or re-download it."
+                )
+            }
+        }
+    }
+
+    private suspend fun reconcileManagedModelCopiesIfNeeded() = withContext(Dispatchers.IO) {
+        val prefs = context.applicationContext.getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, false)) {
+            return@withContext
+        }
+
+        reconciliationMutex.withLock {
+            if (prefs.getBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, false)) {
+                return@withLock
+            }
+
+            val relevantTypes = listOf(
+                ModelType.LLM,
+                ModelType.EMBEDDING,
+                ModelType.VISION,
+                ModelType.VISION_PROJECTOR,
+                ModelType.MMPROJ,
+                ModelType.WHISPER,
+                ModelType.SD_CHECKPOINT,
+                ModelType.SD_UPSCALER,
+                ModelType.SD_DIFFUSION,
+                ModelType.SD_CLIP_L,
+                ModelType.SD_CLIP_G,
+                ModelType.SD_T5XXL,
+                ModelType.SD_TAE,
+                ModelType.SD_VAE,
+                ModelType.SD_LORA,
+                ModelType.SD_CONTROLNET,
+                ModelType.SD_PHOTOMAKER
+            )
+            modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
+                runCatching {
+                    reconcileModelCopy(model)
+                }.onFailure { error ->
+                    Log.w(
+                        "ModelRepository",
+                        "Skipping managed model reconciliation for ${model.filename}: ${error.message}",
+                        error
+                    )
+                    DebugLog.log(
+                        "ModelRepository: Skipping managed model reconciliation for ${model.filename}: ${error.message}"
+                    )
+                }
+            }
+            prefs.edit().putBoolean(MANAGED_MODEL_STORAGE_RECONCILED_KEY, true).apply()
+        }
+    }
+
+    private suspend fun reconcileModelCopy(model: ModelEntity) {
+        if (!ModelLibraryManager.usesManagedExternalCanonicalStorage(model.type)) return
+
+        val relativeDir = ModelLibraryManager.relativeDirFor(model.type)
+        val canonicalFilename = ModelLibraryManager.canonicalFilename(model.filename)
+        val targetFile = File(getModelDir(model.type), canonicalFilename)
+        val runtimeFile = File(model.path)
+        val runtimeExists = runtimeFile.exists() && runtimeFile.isFile
+        val runtimeReadable = runtimeExists && isReadableModelFile(runtimeFile)
+        val runtimeManaged = runtimeExists && isManagedModelPath(runtimeFile)
+        val targetExists = targetFile.exists() && targetFile.isFile
+        val libraryExists = ModelLibraryManager.hasLibraryFile(context, relativeDir, canonicalFilename)
+        val librarySize = ModelLibraryManager.libraryFileSize(context, relativeDir, canonicalFilename)
+
+        when {
+            runtimeReadable && samePhysicalPath(runtimeFile, targetFile) -> {
+                updateModelPathIfNeeded(model, targetFile)
+            }
+
+            runtimeReadable && runtimeManaged -> {
+                migrateManagedRuntimeCopy(model, runtimeFile, targetFile)
+            }
+
+            runtimeReadable -> {
+                copyFileIntoManagedRuntime(runtimeFile, targetFile)
+                updateModelPathIfNeeded(model, targetFile)
+            }
+
+            targetExists -> {
+                updateModelPathIfNeeded(model, targetFile)
+            }
+
+            libraryExists -> {
+                ModelLibraryManager.copyLibraryFileToManagedFile(
+                    context = context,
+                    relativeDir = relativeDir,
+                    filename = canonicalFilename,
+                    targetFile = targetFile
+                )
+                updateModelPathIfNeeded(model, targetFile)
+            }
+
+            runtimeExists && !runtimeReadable -> {
+                DebugLog.log(
+                    "ModelRepository: Skipping unreadable legacy model path for ${model.filename}: ${runtimeFile.absolutePath}"
+                )
+            }
+        }
+
+        deleteLegacyLibraryDuplicate(relativeDir, canonicalFilename, targetFile, librarySize)
+    }
+
+    private suspend fun migrateManagedRuntimeCopy(model: ModelEntity, sourceFile: File, targetFile: File) {
+        if (!samePhysicalPath(sourceFile, targetFile)) {
+            if (!targetFile.exists() || targetFile.length() != sourceFile.length()) {
+                targetFile.parentFile?.mkdirs()
+                val renamed = runCatching { sourceFile.renameTo(targetFile) }.getOrDefault(false)
+                if (!renamed) {
+                    sourceFile.inputStream().use { input ->
+                        targetFile.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    if (sourceFile.exists()) {
+                        sourceFile.delete()
+                    }
+                }
+            } else if (sourceFile.exists()) {
+                sourceFile.delete()
+            }
+        }
+        updateModelPathIfNeeded(model, targetFile)
+    }
+
+    private fun copyFileIntoManagedRuntime(sourceFile: File, targetFile: File) {
+        targetFile.parentFile?.mkdirs()
+        val tempFile = File(targetFile.parentFile, "${targetFile.name}.migrating")
+        if (tempFile.exists()) {
+            tempFile.delete()
+        }
+        sourceFile.inputStream().use { input ->
+            tempFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        replaceFileAtomically(tempFile, targetFile)
+    }
+
+    private suspend fun updateModelPathIfNeeded(model: ModelEntity, targetFile: File) {
+        if (!targetFile.exists()) return
+        val targetPath = targetFile.absolutePath
+        if (model.path == targetPath && model.sizeBytes == targetFile.length()) return
+        runCatching {
+            modelDao.insertModel(
+                model.copy(
+                    path = targetPath,
+                    sizeBytes = targetFile.length()
+                )
+            )
+        }.onFailure {
+            Log.w("ModelRepository", "Failed to update managed model path for ${model.filename}: ${it.message}")
+        }
+    }
+
+    private fun isReadableModelFile(file: File): Boolean {
+        if (!file.exists() || !file.isFile) return false
+        return runCatching {
+            file.inputStream().use { true }
+        }.getOrElse { false }
+    }
+
+    private fun deleteLegacyLibraryDuplicate(
+        relativeDir: String,
+        filename: String,
+        managedFile: File,
+        librarySize: Long?
+    ) {
+        if (!managedFile.exists()) return
+        if (!ModelLibraryManager.hasLibraryFile(context, relativeDir, filename)) return
+        if (librarySize == null || librarySize <= 0L || librarySize == managedFile.length()) {
+            ModelLibraryManager.deleteFromLibrary(context, relativeDir, filename)
+        }
+    }
+
+    private fun replaceFileAtomically(tempFile: File, targetFile: File) {
+        if (targetFile.exists()) {
+            targetFile.delete()
+        }
+        if (!tempFile.renameTo(targetFile)) {
+            tempFile.inputStream().use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            tempFile.delete()
+        }
+    }
+
+    private fun samePhysicalPath(first: File, second: File): Boolean {
+        return runCatching {
+            first.canonicalFile == second.canonicalFile
+        }.getOrDefault(first.absolutePath == second.absolutePath)
+    }
+}
+
+fun buildDownloadTaskId(repoId: String, filename: String, type: ModelType): String {
+    val repo = repoId.trim().ifBlank { "local" }
+    val normalizedFilename = filename.trim().ifBlank { "model" }
+    return listOf(
+        type.name.lowercase(Locale.US),
+        repo,
+        normalizedFilename
+    ).joinToString("|")
 }
 
 // Singleton to persist download progress across navigation
 object DownloadProgressHolder {
+    const val INDETERMINATE = -2f
+
     private val _progress = MutableStateFlow<Map<String, Float>>(emptyMap())
     val progress = _progress.asStateFlow()
 
     private val _status = MutableStateFlow<Map<String, String>>(emptyMap())
     val status = _status.asStateFlow()
     
-    // Track filename for each repoId for cancellation
+    // Track filename for each exact download task for cancellation and display.
     private val filenameMap = mutableMapOf<String, String>()
     
     fun updateProgress(repoId: String, filename: String, value: Float) {
@@ -626,6 +991,8 @@ object DownloadProgressHolder {
     }
     
     fun getFilename(repoId: String): String? = filenameMap[repoId]
+
+    fun isFilenameTracked(filename: String): Boolean = filenameMap.values.contains(filename)
 }
 
 /**
@@ -694,6 +1061,7 @@ data class PendingDownload(
     val liteRtSupportsGpu: Boolean? = null,
     val liteRtSupportsVision: Boolean? = null,
     val liteRtSupportsAudio: Boolean? = null,
+    val liteRtSupportsEmbedding: Boolean? = null,
     val liteRtMaxContextTokens: Int? = null
 )
 
@@ -701,6 +1069,7 @@ object PendingDownloadHolder {
     private val pendingDownloads = mutableMapOf<String, PendingDownload>()
     
     fun addPending(
+        downloadId: String? = null,
         filename: String,
         repoId: String,
         progressKey: String = repoId,
@@ -726,9 +1095,11 @@ object PendingDownloadHolder {
         liteRtSupportsGpu: Boolean? = null,
         liteRtSupportsVision: Boolean? = null,
         liteRtSupportsAudio: Boolean? = null,
+        liteRtSupportsEmbedding: Boolean? = null,
         liteRtMaxContextTokens: Int? = null
     ) {
-        pendingDownloads[filename] = PendingDownload(
+        val taskId = downloadId ?: progressKey
+        val pending = PendingDownload(
             filename = filename,
             repoId = repoId,
             progressKey = progressKey,
@@ -754,13 +1125,23 @@ object PendingDownloadHolder {
             liteRtSupportsGpu = liteRtSupportsGpu,
             liteRtSupportsVision = liteRtSupportsVision,
             liteRtSupportsAudio = liteRtSupportsAudio,
+            liteRtSupportsEmbedding = liteRtSupportsEmbedding,
             liteRtMaxContextTokens = liteRtMaxContextTokens
         )
+        pendingDownloads[taskId] = pending
+        if (taskId != filename) {
+            pendingDownloads[filename] = pending
+        }
     }
     
-    fun getPending(filename: String): PendingDownload? = pendingDownloads[filename]
+    fun getPending(downloadId: String): PendingDownload? = pendingDownloads[downloadId]
     
-    fun removePending(filename: String) {
-        pendingDownloads.remove(filename)
+    fun removePending(downloadId: String) {
+        val removed = pendingDownloads.remove(downloadId)
+        if (removed != null) {
+            pendingDownloads.entries.removeAll { (_, value) ->
+                value.progressKey == removed.progressKey && value.filename == removed.filename
+            }
+        }
     }
 }

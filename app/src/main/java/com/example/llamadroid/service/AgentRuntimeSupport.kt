@@ -224,6 +224,15 @@ fun shouldRecordPromptCompactionEvent(
     return omittedCount > 0 || packedEstimatedTokens < rawEstimatedTokens || compactionPasses > 1
 }
 
+fun shouldWriteRuntimeCheckpoint(
+    nowMs: Long,
+    lastCheckpointMs: Long,
+    intervalMs: Long,
+    force: Boolean
+): Boolean {
+    return force || nowMs - lastCheckpointMs >= intervalMs
+}
+
 fun isBackgroundCommandReminder(
     toolName: String?,
     content: String,
@@ -237,7 +246,7 @@ fun isBackgroundCommandReminder(
         "cancel_command",
         "send_command_input"
     )
-    if (!toolName.isNullOrBlank() && toolName !in commandToolNames) return false
+    if (toolName.isNullOrBlank() || toolName !in commandToolNames) return false
 
     val combinedText = buildString {
         append(content)
@@ -247,11 +256,36 @@ fun isBackgroundCommandReminder(
         }
     }
 
-    return combinedText.contains("Command ID:", ignoreCase = true) &&
+    return isStructuredCommandResult(combinedText) &&
         (
             combinedText.contains("Status: running", ignoreCase = true) ||
                 combinedText.contains("Command is still running", ignoreCase = true)
         )
+}
+
+fun isStructuredCommandResult(content: String): Boolean {
+    return content.contains("Command ID:", ignoreCase = true) &&
+        content.contains("Status:", ignoreCase = true) &&
+        content.contains("Requested tail lines:", ignoreCase = true) &&
+        content.contains("Output:", ignoreCase = true)
+}
+
+fun commandOutputTailLines(
+    completedLines: List<String>,
+    pendingLine: String,
+    requestedLines: Int
+): List<String> {
+    val boundedLines = requestedLines.coerceAtLeast(1)
+    val visiblePendingLine = pendingLine
+        .removeSuffix("\n")
+        .removeSuffix("\r")
+        .takeIf { it.isNotEmpty() }
+    return buildList {
+        addAll(completedLines)
+        if (visiblePendingLine != null) {
+            add(visiblePendingLine)
+        }
+    }.takeLast(boundedLines)
 }
 
 fun containsTraversalSegments(path: String): Boolean {

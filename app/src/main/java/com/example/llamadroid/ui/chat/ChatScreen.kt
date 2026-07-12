@@ -23,6 +23,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import androidx.navigation.NavController
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.ui.ai.applyKeyboardAwareInsetsFix
 import com.example.llamadroid.ui.ai.injectKeyboardViewportFix
 import androidx.lifecycle.LifecycleEventObserver
@@ -31,8 +32,12 @@ import androidx.lifecycle.LifecycleEventObserver
 object ChatWebViewHolder {
     var webView: WebView? = null
     var isLoaded: Boolean = false
+    var loadedUrl: String? = null
     @Volatile var shouldReload: Boolean = false
 }
+
+internal fun llamaChatWebViewUrl(port: Int): String =
+    "http://127.0.0.1:${port.coerceIn(1, 65535)}/"
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -41,8 +46,11 @@ fun ChatScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val settingsRepository = remember(context) { SettingsRepository(context.applicationContext) }
+    val serverPort by settingsRepository.serverPort.collectAsState()
+    val chatUrl = remember(serverPort) { llamaChatWebViewUrl(serverPort) }
     var fileUploadCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
-    var isLoading by remember { mutableStateOf(!ChatWebViewHolder.isLoaded) }
+    var isLoading by remember(chatUrl) { mutableStateOf(!ChatWebViewHolder.isLoaded || ChatWebViewHolder.loadedUrl != chatUrl) }
     var hasError by remember { mutableStateOf(false) }
     
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -58,17 +66,6 @@ fun ChatScreen(
         
         fileUploadCallback?.onReceiveValue(uris ?: arrayOf())
         fileUploadCallback = null
-    }
-    
-    // Check if reload was requested from navigation bar long press
-    LaunchedEffect(Unit) {
-        if (ChatWebViewHolder.shouldReload) {
-            ChatWebViewHolder.shouldReload = false
-            ChatWebViewHolder.isLoaded = false
-            isLoading = true
-            hasError = false
-            ChatWebViewHolder.webView?.loadUrl("http://127.0.0.1:8080/")
-        }
     }
     
     // Create or reuse WebView
@@ -102,9 +99,25 @@ fun ChatScreen(
             ChatWebViewHolder.webView = this
         }
     }
+
+    fun loadChatUrl() {
+        ChatWebViewHolder.loadedUrl = chatUrl
+        ChatWebViewHolder.isLoaded = false
+        isLoading = true
+        hasError = false
+        webView.loadUrl(chatUrl)
+    }
+
+    // Check if reload was requested from navigation bar long press, or if the configured server port changed.
+    LaunchedEffect(chatUrl) {
+        if (ChatWebViewHolder.shouldReload || ChatWebViewHolder.loadedUrl != chatUrl) {
+            ChatWebViewHolder.shouldReload = false
+            loadChatUrl()
+        }
+    }
     
     // Set up callbacks (needs to be done each recomposition since lambdas may change)
-    DisposableEffect(webView, lifecycleOwner) {
+    DisposableEffect(webView, lifecycleOwner, chatUrl) {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 return false
@@ -114,6 +127,7 @@ fun ChatScreen(
                 view?.injectKeyboardViewportFix()
                 isLoading = false
                 ChatWebViewHolder.isLoaded = true
+                ChatWebViewHolder.loadedUrl = url ?: chatUrl
             }
             
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
@@ -187,8 +201,8 @@ fun ChatScreen(
         webView.onResume()
 
         // Load URL only if not already loaded
-        if (!ChatWebViewHolder.isLoaded) {
-            webView.loadUrl("http://127.0.0.1:8080/")
+        if (!ChatWebViewHolder.isLoaded || ChatWebViewHolder.loadedUrl != chatUrl) {
+            loadChatUrl()
         }
         
         onDispose {
@@ -241,10 +255,7 @@ fun ChatScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(onClick = { 
-                        hasError = false
-                        isLoading = true
-                        ChatWebViewHolder.isLoaded = false
-                        webView.loadUrl("http://127.0.0.1:8080/")
+                        loadChatUrl()
                     }) {
                         Text(stringResource(R.string.action_retry))
                     }
@@ -282,10 +293,7 @@ fun ChatScreen(
                     text = { Text(stringResource(R.string.chat_clear)) },
                     onClick = {
                         showDropdown = false
-                        isLoading = true
-                        hasError = false
-                        ChatWebViewHolder.isLoaded = false
-                        webView.loadUrl("http://127.0.0.1:8080/")
+                        loadChatUrl()
                     },
                     leadingIcon = {
                         Icon(Icons.Default.Refresh, contentDescription = null)

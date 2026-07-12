@@ -74,6 +74,7 @@ import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.ApprovalQueueDialog
+import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 import java.text.SimpleDateFormat
@@ -146,6 +147,7 @@ fun AgentScreen(navController: NavController) {
     val runtimeActiveConversationId by AgentService.activeConversationId.collectAsStateWithLifecycle()
     val debugLog by AgentService.debugLog.collectAsStateWithLifecycle()
     val selectedKnowledgeBaseIds by AgentService.selectedKnowledgeBaseIds.collectAsStateWithLifecycle()
+    val currentProjectFolder by AgentService.currentProjectFolder.collectAsStateWithLifecycle()
 
     // UI Local state
     var inputText by rememberSaveable { mutableStateOf("") }
@@ -171,6 +173,7 @@ fun AgentScreen(navController: NavController) {
     var hydratingConversationTitle by remember { mutableStateOf<String?>(null) }
     var initialConversationRestorePending by remember { mutableStateOf(initialConversationId != null) }
     var showConversations by remember { mutableStateOf(false) }
+    val conversationSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var restoreToken by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(agentBackend, llamaServerUrl, llamaSwapUrl) {
@@ -902,6 +905,53 @@ fun AgentScreen(navController: NavController) {
             )
         }
     }
+    val backendConnected = when {
+        isAgentLlamaServer || isAgentLlamaSwap -> llamaServerRuntimeState.isConnected
+        isAgentLiteRt -> true
+        else -> isOllamaConnected
+    }
+    val backendRecovering = when {
+        isAgentLlamaServer || isAgentLlamaSwap -> llamaServerRuntimeState.isRefreshing
+        isAgentLiteRt -> false
+        else -> ollamaIsRecovering
+    }
+    val backendHasChecked = when {
+        isAgentLlamaServer || isAgentLlamaSwap -> llamaServerRuntimeState.hasChecked
+        isAgentLiteRt -> true
+        else -> ollamaHasChecked
+    }
+    val selectedContextSnapshot = when {
+        promptContextSnapshot?.agentRole == AgentService.Companion.AgentRole.ORCHESTRATOR.name -> promptContextSnapshot
+        else -> lastOrchestratorPromptSnapshot
+    }
+    val relevantRuntimeJob = resolveRelevantAgentJob()
+    val activeProjectConversation = conversations.firstOrNull { conv ->
+        conv.id == (activeUiConversationId ?: selectedConversationId)
+    }
+    val activeProjectTitle = activeProjectConversation?.title ?: hydratingConversationTitle
+    val activeProjectPath = if (activeUiConversationId != null || selectedConversationId != null) {
+        "/workspace/$currentProjectFolder"
+    } else {
+        null
+    }
+    val backendLabel = when {
+        isAgentLlamaSwap -> stringResource(R.string.agent_console_backend_llama_swap)
+        isAgentLlamaServer -> stringResource(R.string.agent_console_backend_llama_server)
+        isAgentLiteRt -> stringResource(R.string.agent_console_backend_litert)
+        isAgentOpenAiBackend -> stringResource(R.string.agent_console_backend_openai)
+        else -> stringResource(R.string.agent_console_backend_ollama)
+    }
+    val modelLabel = selectedModel.takeIf { it.isNotBlank() }
+        ?: stringResource(R.string.agent_console_model_unknown)
+    val consoleConnected = isAgentConnected && (isAgentLiteRt || backendConnected)
+    val connectionLabel = when {
+        backendRecovering || agentConnectionStatus == AgentService.Companion.ConnectionStatus.RECONNECTING ->
+            stringResource(R.string.agent_console_recovering)
+        agentConnectionStatus == AgentService.Companion.ConnectionStatus.CONNECTING ->
+            stringResource(R.string.agent_console_connecting)
+        consoleConnected -> stringResource(R.string.agent_console_connected)
+        else -> stringResource(R.string.agent_console_disconnected)
+    }
     val showSshWarning = !isAgentConnected &&
         agentConnectionStatus != AgentService.Companion.ConnectionStatus.CONNECTING &&
         agentConnectionStatus != AgentService.Companion.ConnectionStatus.RECONNECTING
@@ -1006,38 +1056,38 @@ fun AgentScreen(navController: NavController) {
             }
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .onGloballyPositioned { coordinates ->
-                    chatContentBottomInWindowPx = (
-                        coordinates.positionInWindow().y + coordinates.size.height
-                    ).roundToInt()
-                }
-        ) {
-            ConnectionStatusBar(
-                isBackendConnected = if (isAgentLlamaServer) {
-                    llamaServerRuntimeState.isConnected
-                } else if (isAgentLlamaSwap) {
-                    llamaServerRuntimeState.isConnected
-                } else {
-                    isOllamaConnected
-                },
-                backendIsRecovering = if (isAgentLlamaServer) {
-                    llamaServerRuntimeState.isRefreshing
-                } else if (isAgentLlamaSwap) {
-                    llamaServerRuntimeState.isRefreshing
-                } else {
-                    ollamaIsRecovering
-                },
-                backendHasChecked = if (isAgentLlamaServer) {
-                    llamaServerRuntimeState.hasChecked
-                } else if (isAgentLlamaSwap) {
-                    llamaServerRuntimeState.hasChecked
-                } else {
-                    ollamaHasChecked
-                },
+        AppPageBackground(modifier = Modifier.padding(padding)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .onGloballyPositioned { coordinates ->
+                        chatContentBottomInWindowPx = (
+                            coordinates.positionInWindow().y + coordinates.size.height
+                        ).roundToInt()
+                    }
+            ) {
+                AgentWorkspaceConsoleHeader(
+                    projectTitle = activeProjectTitle,
+                    projectPath = activeProjectPath,
+                    backendLabel = backendLabel,
+                    modelLabel = modelLabel,
+                    connectionLabel = connectionLabel,
+                    isConnected = consoleConnected,
+                    isRunning = isLoading,
+                    statusText = currentStatusText,
+                    contextSnapshot = selectedContextSnapshot,
+                    lastSavedAt = relevantRuntimeJob?.updatedAt,
+                    onShowConversations = { showConversations = true },
+                    onNavigateToWorkspace = { navController.navigate(Screen.AgentWorkspace.route) },
+                    onStopAll = { stopGeneration() },
+                    onShowAgentSettings = { showAgentSettings = true },
+                    onShowKnowledgeBases = { navController.navigate(Screen.KnowledgeBase.route) }
+                )
+
+                ConnectionStatusBar(
+                isBackendConnected = backendConnected,
+                backendIsRecovering = backendRecovering,
+                backendHasChecked = backendHasChecked,
                 backendOfflineMessage = if (isAgentLlamaServer) {
                     stringResource(R.string.agent_llama_server_offline)
                 } else if (isAgentLlamaSwap) {
@@ -1087,27 +1137,6 @@ fun AgentScreen(navController: NavController) {
                 )
             }
 
-            AgentActivityBanner(
-                statusText = currentStatusText,
-                isVisible = isLoading && currentStatusText.isNotBlank()
-            )
-
-            AgentContextWindowBanner(
-                snapshot = when {
-                    promptContextSnapshot?.agentRole == AgentService.Companion.AgentRole.ORCHESTRATOR.name -> promptContextSnapshot
-                    else -> lastOrchestratorPromptSnapshot
-                }
-            )
-
-            if (activeUiConversationId != null) {
-                AgentKnowledgeBaseSelector(
-                    knowledgeBases = knowledgeBases,
-                    selectedIds = selectedKnowledgeBaseIds,
-                    onSelectionChange = { updateActiveKnowledgeBases(it) },
-                    onManage = { navController.navigate(Screen.KnowledgeBase.route) }
-                )
-            }
-            
             if (showDebugPanel) {
                 DebugPanel(
                     debugLog = debugLog,
@@ -1156,6 +1185,7 @@ fun AgentScreen(navController: NavController) {
                             .weight(1f)
                             .then(if (editingMessageId != null) Modifier.imePadding() else Modifier)
                     )
+                }
                 }
             }
         }
@@ -1234,10 +1264,14 @@ fun AgentScreen(navController: NavController) {
             } else {
                 availableModels
             },
+            knowledgeBases = knowledgeBases,
+            selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
             availableImageGenerationModels = availableImageGenerationModels,
             availableSdImageMainModels = availableSdImageMainModels,
             availableSdImageSupportModels = availableSdImageSupportModels,
             availableBackgroundRemovalModels = availableBackgroundRemovalModels,
+            onKnowledgeBaseSelectionChange = { updateActiveKnowledgeBases(it) },
+            onManageKnowledgeBases = { navController.navigate(Screen.KnowledgeBase.route) },
             onDismiss = { showAgentSettings = false }
         )
     }
@@ -1374,86 +1408,121 @@ fun AgentScreen(navController: NavController) {
         )
     }
     
-    // Conversations drawer dialog
+    // Conversations picker sheet
     if (showConversations) {
-        AlertDialog(
+        ModalBottomSheet(
             onDismissRequest = { showConversations = false },
-            title = { Text(stringResource(R.string.agent_conversations_title)) },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                        .verticalScroll(rememberScrollState())
+            sheetState = conversationSheetState
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = stringResource(R.string.agent_conversations_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = stringResource(R.string.agent_conversations_sheet_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        newProjectName = ""
+                        showConversations = false
+                        showNewProjectDialog = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
                 ) {
-                    // New conversation button
-                    Button(
-                        onClick = { 
-                            newProjectName = ""
-                            showNewProjectDialog = true 
-                        },
-                        modifier = Modifier.fillMaxWidth()
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.agent_new_project_btn),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (conversations.isEmpty()) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
                     ) {
-                        Icon(Icons.Default.Add, null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.agent_new_project_btn))
-                    }
-                    
-                    Spacer(modifier = Modifier.height(16.dp))
-                    
-                    // List of conversations
-                    if (conversations.isEmpty()) {
                         Text(
                             stringResource(R.string.agent_no_conversations),
                             modifier = Modifier.padding(16.dp),
-                            style = MaterialTheme.typography.bodySmall,
+                            style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    } else {
-                        conversations.forEach { conv ->
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 520.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(conversations, key = { it.id }) { conv ->
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
                                     .clickable { loadConversation(conv.id) },
+                                shape = RoundedCornerShape(8.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (selectedConversationId == conv.id)
-                                        MaterialTheme.colorScheme.primaryContainer 
-                                    else 
+                                    containerColor = if (selectedConversationId == conv.id) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
                                         MaterialTheme.colorScheme.surfaceVariant
+                                    }
                                 )
                             ) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            conv.title,
+                                            text = conv.title,
                                             fontWeight = FontWeight.Bold,
-                                            fontSize = 14.sp
+                                            style = MaterialTheme.typography.titleSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            java.text.SimpleDateFormat("MMM dd, HH:mm")
+                                            text = java.text.SimpleDateFormat("MMM dd, HH:mm")
                                                 .format(java.util.Date(conv.updatedAt)),
-                                            fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
                                     IconButton(
-                                        onClick = { 
+                                        onClick = {
                                             showDeleteConfirmation = conv.id
                                             pendingDeleteFolder = conv.projectFolder
                                         },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier.size(40.dp)
                                     ) {
                                         Icon(
                                             Icons.Default.Delete,
                                             stringResource(R.string.action_delete),
-                                            modifier = Modifier.size(18.dp),
+                                            modifier = Modifier.size(20.dp),
                                             tint = MaterialTheme.colorScheme.error
                                         )
                                     }
@@ -1462,13 +1531,10 @@ fun AgentScreen(navController: NavController) {
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showConversations = false }) {
-                    Text(stringResource(R.string.action_close))
-                }
+
+                Spacer(modifier = Modifier.height(8.dp))
             }
-        )
+        }
     }
 
     imagePreviewPath?.let { previewPath ->
@@ -1616,7 +1682,7 @@ private fun AgentConversationStatePanel(
 }
 
 @Composable
-private fun AgentKnowledgeBaseSelector(
+fun AgentKnowledgeBaseSelector(
     knowledgeBases: List<KnowledgeBaseEntity>,
     selectedIds: List<Long>,
     onSelectionChange: (List<Long>) -> Unit,

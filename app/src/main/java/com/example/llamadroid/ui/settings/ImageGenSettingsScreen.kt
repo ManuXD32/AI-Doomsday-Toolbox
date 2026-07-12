@@ -34,7 +34,26 @@ import com.example.llamadroid.ui.components.DraftNullableIntTextField
 fun ImageGenSettingsScreen(navController: NavController) {
     val context = LocalContext.current
     val settingsRepo = remember { SettingsRepository(context) }
-    
+
+    AppScreenScaffold(
+        title = stringResource(R.string.imagegen_settings_title),
+        subtitle = stringResource(R.string.settings_imagegen_desc),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
+        ImageGenSettingsContent(
+            settingsRepo = settingsRepo,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        )
+    }
+}
+
+@Composable
+fun ImageGenSettingsContent(
+    settingsRepo: SettingsRepository,
+    modifier: Modifier = Modifier
+) {
     val sdTxt2imgThreads by settingsRepo.sdTxt2imgThreads.collectAsState()
     val sdImg2imgThreads by settingsRepo.sdImg2imgThreads.collectAsState()
     val sdUpscaleThreads by settingsRepo.sdUpscaleThreads.collectAsState()
@@ -44,16 +63,9 @@ fun ImageGenSettingsScreen(navController: NavController) {
     val sdVaeTileSize by settingsRepo.sdVaeTileSize.collectAsState()
     val sdVaeRelativeTileSize by settingsRepo.sdVaeRelativeTileSize.collectAsState()
     val sdTensorTypeRules by settingsRepo.sdTensorTypeRules.collectAsState()
-    
-    AppScreenScaffold(
-        title = stringResource(R.string.imagegen_settings_title),
-        subtitle = stringResource(R.string.settings_imagegen_desc),
-        onBack = { navController.popBackStack() }
-    ) { _ ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+
+    LazyColumn(
+            modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // txt2img Threads
@@ -245,7 +257,6 @@ fun ImageGenSettingsScreen(navController: NavController) {
                 }
             }
         }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

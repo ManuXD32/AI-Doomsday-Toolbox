@@ -62,36 +62,6 @@ fun SettingsHubScreen(navController: NavController) {
             route = "settings_llm"
         ),
         SettingsItem(
-            emoji = "🎨",
-            title = stringResource(R.string.settings_imagegen),
-            description = stringResource(R.string.settings_imagegen_desc),
-            gradientColors = listOf(
-                Color(0xFF2196F3).copy(alpha = 0.15f),
-                Color(0xFF1976D2).copy(alpha = 0.3f)
-            ),
-            route = "settings_imagegen"
-        ),
-        SettingsItem(
-            emoji = "🎤",
-            title = stringResource(R.string.settings_whisper),
-            description = stringResource(R.string.settings_whisper_desc),
-            gradientColors = listOf(
-                Color(0xFFFF9800).copy(alpha = 0.15f),
-                Color(0xFFF57C00).copy(alpha = 0.3f)
-            ),
-            route = "settings_whisper"
-        ),
-        SettingsItem(
-            emoji = "🎬",
-            title = stringResource(R.string.settings_upscaler),
-            description = stringResource(R.string.settings_upscaler_desc),
-            gradientColors = listOf(
-                Color(0xFF9C27B0).copy(alpha = 0.15f),
-                Color(0xFF7B1FA2).copy(alpha = 0.3f)
-            ),
-            route = "settings_upscaler"
-        ),
-        SettingsItem(
             emoji = "📝",
             title = stringResource(R.string.settings_prompts),
             description = stringResource(R.string.settings_prompts_desc),
@@ -100,16 +70,6 @@ fun SettingsHubScreen(navController: NavController) {
                 Color(0xFF00796B).copy(alpha = 0.3f)
             ),
             route = "settings_prompts"
-        ),
-        SettingsItem(
-            emoji = "📄",
-            title = stringResource(R.string.settings_pdf),
-            description = stringResource(R.string.settings_pdf_desc),
-            gradientColors = listOf(
-                Color(0xFF3F51B5).copy(alpha = 0.15f),
-                Color(0xFF1976D2).copy(alpha = 0.3f)
-            ),
-            route = "settings_pdf"
         ),
         SettingsItem(
             emoji = "🔧",

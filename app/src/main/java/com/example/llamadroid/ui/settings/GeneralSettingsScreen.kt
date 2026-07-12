@@ -68,9 +68,6 @@ fun GeneralSettingsScreen(navController: NavController) {
             result.onSuccess { selection ->
                 settingsRepo.setQuadtrixWorkspace(selection.uri, selection.directPath)
                 Toast.makeText(context, context.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
-                if (selection.directPath.isNullOrBlank()) {
-                    Toast.makeText(context, context.getString(R.string.quadtrix_workspace_direct_required), Toast.LENGTH_LONG).show()
-                }
             }.onFailure { error ->
                 Toast.makeText(
                     context,
@@ -514,8 +511,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         stats.notes,
                                         stats.organizerEvents,
                                         stats.organizerAlarms,
-                                        stats.mediaFiles,
-                                        stats.models
+                                        stats.mediaFiles
                                     ),
                                     Toast.LENGTH_LONG
                                 ).show()
@@ -613,8 +609,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                                     stats.notes,
                                                     stats.organizerEvents,
                                                     stats.organizerAlarms,
-                                                    stats.mediaFiles,
-                                                    stats.models
+                                                    stats.mediaFiles
                                                 ),
                                                 Toast.LENGTH_LONG
                                             ).show()
@@ -782,70 +777,6 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
             
-            // All Files Access (for direct SD card model access)
-            item {
-                var hasAllFilesAccess by remember { 
-                    mutableStateOf(com.example.llamadroid.util.StoragePermissionHelper.hasAllFilesAccess()) 
-                }
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (hasAllFilesAccess) 
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                        else 
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("📁", style = MaterialTheme.typography.headlineSmall)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                stringResource(R.string.general_all_files_title),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            if (hasAllFilesAccess) 
-                                stringResource(R.string.general_all_files_enabled)
-                            else 
-                                stringResource(R.string.general_all_files_disabled),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        if (!hasAllFilesAccess) {
-                            Button(
-                                onClick = {
-                                    com.example.llamadroid.util.StoragePermissionHelper.requestAllFilesAccess(context)
-                                    // Re-check after a delay
-                                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                        hasAllFilesAccess = com.example.llamadroid.util.StoragePermissionHelper.hasAllFilesAccess()
-                                    }, 1000)
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(R.string.general_all_files_grant_btn))
-                            }
-                            Text(
-                                stringResource(R.string.general_all_files_hint),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        } else {
-                            Text(
-                                stringResource(R.string.general_all_files_ok),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }

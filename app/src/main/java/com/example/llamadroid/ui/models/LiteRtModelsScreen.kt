@@ -80,10 +80,11 @@ import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.currentLiteRtDeviceTargetInfo
 import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import com.example.llamadroid.data.model.liteRtAudioSupportFromText
+import com.example.llamadroid.data.model.liteRtEmbeddingSupportFromText
 import com.example.llamadroid.data.model.liteRtVisionSupportFromText
+import com.example.llamadroid.data.model.supportsLiteRtEmbedding
 import com.example.llamadroid.data.model.supportsLiteRtAudio
 import com.example.llamadroid.data.model.supportsLiteRtVision
-import com.example.llamadroid.data.repository.LiteRtCatalogCategory
 import com.example.llamadroid.data.repository.LiteRtCatalogEntry
 import com.example.llamadroid.data.repository.LiteRtModelCatalog
 import com.example.llamadroid.data.repository.LiteRtModelRepository
@@ -101,6 +102,7 @@ import java.io.File
 private const val LITERT_PROGRESS_PREFIX = "litert:"
 private const val LITERT_CONTEXT_USER_MIN = 512
 private const val LITERT_CONTEXT_USER_MAX = 131_072
+private val LiteRtEmbeddingBlue = Color(0xFF2F80ED)
 
 @Composable
 @Suppress("UNUSED_PARAMETER")
@@ -126,10 +128,12 @@ fun LiteRtModelsScreen(navController: NavController) {
     var pendingModalityModel by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var modalityVisionValue by remember { mutableStateOf(false) }
     var modalityAudioValue by remember { mutableStateOf(false) }
+    var modalityEmbeddingValue by remember { mutableStateOf(false) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     var pendingImportName by remember { mutableStateOf("") }
     var importSupportsVision by remember { mutableStateOf(false) }
     var importSupportsAudio by remember { mutableStateOf(false) }
+    var importSupportsEmbedding by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var pendingExport by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var doctorDetails by remember { mutableStateOf<LiteRtBackendDoctorResult?>(null) }
@@ -159,6 +163,7 @@ fun LiteRtModelsScreen(navController: NavController) {
         pendingImportName = fileName.ifBlank { context.getString(R.string.litert_models_import) }
         importSupportsVision = liteRtVisionSupportFromText(inferenceText)
         importSupportsAudio = liteRtAudioSupportFromText(inferenceText)
+        importSupportsEmbedding = liteRtEmbeddingSupportFromText(inferenceText)
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -191,7 +196,8 @@ fun LiteRtModelsScreen(navController: NavController) {
     }
 
     val activeDownloads = progress.count { (key, value) ->
-        key.startsWith(LITERT_PROGRESS_PREFIX) && value < 1f
+        key.startsWith(LITERT_PROGRESS_PREFIX) &&
+            (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
     }
     val tabs = listOf(
         stringResource(R.string.models_tab_installed),
@@ -265,6 +271,7 @@ fun LiteRtModelsScreen(navController: NavController) {
                             pendingModalityModel = it
                             modalityVisionValue = it.supportsLiteRtVision()
                             modalityAudioValue = it.supportsLiteRtAudio()
+                            modalityEmbeddingValue = it.supportsLiteRtEmbedding()
                         },
                         onRemove = { pendingDelete = it },
                         onDoctorDetails = { doctorDetails = it }
@@ -274,8 +281,7 @@ fun LiteRtModelsScreen(navController: NavController) {
                         statuses = statuses,
                         onCancel = { key ->
                             val filename = DownloadProgressHolder.getFilename(key) ?: return@LiteRtDownloadingTab
-                            DownloadService.cancelDownload(context, filename)
-                            DownloadProgressHolder.removeProgress(key)
+                            DownloadService.cancelDownload(context, filename, key)
                         }
                     )
                     else -> LiteRtCatalogTab(
@@ -285,6 +291,7 @@ fun LiteRtModelsScreen(navController: NavController) {
                             huggingFaceToken = token
                             repository.saveHuggingFaceToken(token)
                         },
+                        repository = repository,
                         onDownload = ::download
                     )
                 }
@@ -405,16 +412,23 @@ fun LiteRtModelsScreen(navController: NavController) {
                         checked = modalityAudioValue,
                         onCheckedChange = { modalityAudioValue = it }
                     )
+                    LiteRtModalitySwitch(
+                        title = stringResource(R.string.litert_models_modality_embedding),
+                        description = stringResource(R.string.litert_models_supports_embedding_desc),
+                        checked = modalityEmbeddingValue,
+                        onCheckedChange = { modalityEmbeddingValue = it }
+                    )
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            repository.updateModalitySupport(
+                            repository.updateCapabilitySupport(
                                 model = model,
                                 supportsVision = modalityVisionValue,
-                                supportsAudio = modalityAudioValue
+                                supportsAudio = modalityAudioValue,
+                                supportsEmbedding = modalityEmbeddingValue
                             )
                             toast(context.getString(R.string.litert_models_modalities_saved))
                         }
@@ -455,6 +469,12 @@ fun LiteRtModelsScreen(navController: NavController) {
                         checked = importSupportsAudio,
                         onCheckedChange = { importSupportsAudio = it }
                     )
+                    LiteRtModalitySwitch(
+                        title = stringResource(R.string.litert_models_modality_embedding),
+                        description = stringResource(R.string.litert_models_supports_embedding_desc),
+                        checked = importSupportsEmbedding,
+                        onCheckedChange = { importSupportsEmbedding = it }
+                    )
                 }
             },
             confirmButton = {
@@ -466,7 +486,8 @@ fun LiteRtModelsScreen(navController: NavController) {
                             val result = repository.importFromUri(
                                 selectedUri,
                                 supportsVisionOverride = importSupportsVision,
-                                supportsAudioOverride = importSupportsAudio
+                                supportsAudioOverride = importSupportsAudio,
+                                supportsEmbeddingOverride = importSupportsEmbedding
                             )
                             toast(
                                 result.fold(
@@ -591,7 +612,16 @@ private fun LiteRtInstalledTab(
                 } ?: stringResource(R.string.litert_models_context_user_selected)
                 val modalityText = listOfNotNull(
                     if (model.supportsLiteRtVision()) stringResource(R.string.litert_models_modality_vision) else null,
-                    if (model.supportsLiteRtAudio()) stringResource(R.string.litert_models_modality_audio) else null
+                    if (model.supportsLiteRtAudio()) stringResource(R.string.litert_models_modality_audio) else null,
+                    if (model.supportsLiteRtEmbedding()) {
+                        if (model.kbEmbeddingRunnable) {
+                            stringResource(R.string.litert_models_modality_embedding_runnable)
+                        } else {
+                            stringResource(R.string.litert_models_modality_embedding_not_runnable)
+                        }
+                    } else {
+                        null
+                    }
                 ).ifEmpty {
                     listOf(stringResource(R.string.litert_models_modality_text_only))
                 }.joinToString(" / ")
@@ -620,7 +650,10 @@ private fun LiteRtDownloadingTab(
     onCancel: (String) -> Unit
 ) {
     val active = progress
-        .filter { (key, value) -> key.startsWith(LITERT_PROGRESS_PREFIX) && value < 1f }
+        .filter { (key, value) ->
+            key.startsWith(LITERT_PROGRESS_PREFIX) &&
+                (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
+        }
         .toSortedMap()
 
     LazyColumn(
@@ -663,11 +696,27 @@ private fun LiteRtCatalogTab(
     progress: Map<String, Float>,
     huggingFaceToken: String,
     onHuggingFaceTokenChange: (String) -> Unit,
+    repository: LiteRtModelRepository,
     onDownload: (LiteRtCatalogEntry) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
+    var liveResults by remember { mutableStateOf<List<LiteRtCatalogEntry>>(emptyList()) }
+    var liveError by remember { mutableStateOf<String?>(null) }
+    var isLiveSearching by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val normalizedQuery = query.trim()
     val deviceInfo = remember { currentLiteRtDeviceTargetInfo() }
+    fun searchLiveCatalog() {
+        if (normalizedQuery.length < 2) return
+        isLiveSearching = true
+        liveError = null
+        scope.launch {
+            val result = repository.searchLiveCatalog(normalizedQuery)
+            liveResults = result.getOrDefault(emptyList())
+            liveError = result.exceptionOrNull()?.message
+            isLiveSearching = false
+        }
+    }
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -723,16 +772,56 @@ private fun LiteRtCatalogTab(
 
         item {
             AppSectionCard {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = { query = it },
-                    label = { Text(stringResource(R.string.litert_catalog_search_label)) },
-                    placeholder = { Text(stringResource(R.string.litert_catalog_search_placeholder)) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        label = { Text(stringResource(R.string.litert_catalog_search_label)) },
+                        placeholder = { Text(stringResource(R.string.litert_catalog_search_placeholder)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            stringResource(R.string.litert_catalog_live_search_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(
+                            onClick = { searchLiveCatalog() },
+                            enabled = normalizedQuery.length >= 2 && !isLiveSearching
+                        ) {
+                            Text(
+                                if (isLiveSearching) {
+                                    stringResource(R.string.litert_catalog_live_searching)
+                                } else {
+                                    stringResource(R.string.litert_catalog_live_search)
+                                }
+                            )
+                        }
+                    }
+                    liveError?.let { error ->
+                        Text(
+                            stringResource(R.string.litert_catalog_live_error, error),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
             }
         }
+
+        val curatedEntries = LiteRtModelCatalog.defaultEntries
+            .filter { it.matchesCatalogQuery(normalizedQuery) }
+            .sortedWith(liteRtCatalogComparator())
+        val embeddingEntries = LiteRtModelCatalog.embeddingEntries
+            .filter { it.matchesCatalogQuery(normalizedQuery) }
+            .sortedWith(liteRtCatalogComparator())
 
         item {
             Text(
@@ -742,32 +831,60 @@ private fun LiteRtCatalogTab(
             )
         }
 
-        listOf(
-            LiteRtCatalogCategory.GPU,
-            LiteRtCatalogCategory.CPU
-        ).forEach { category ->
-            val entries = LiteRtModelCatalog.entriesFor(category)
-                .filter { it.matchesCatalogQuery(normalizedQuery) }
-                .sortedWith(liteRtCatalogComparator())
-            item(key = "catalog_header_${category.name}") {
+        items(curatedEntries, key = { it.catalogId }) { entry ->
+            val progressKey = "$LITERT_PROGRESS_PREFIX${entry.catalogId}"
+            LiteRtCatalogCard(
+                entry = entry,
+                description = localizedCatalogDescription(entry),
+                compatibility = entry.catalogCompatibility(huggingFaceToken),
+                progress = progress[progressKey],
+                onDownload = { onDownload(entry) }
+            )
+        }
+
+        if (embeddingEntries.isNotEmpty()) {
+            item {
                 LiteRtCatalogGroupHeader(
-                    title = localizedCatalogGroupTitle(category, entries.size),
-                    description = localizedCatalogGroupDescription(category)
+                    title = stringResource(R.string.litert_models_embedding_catalog_title),
+                    description = stringResource(R.string.litert_models_embedding_catalog_desc),
+                    accentColor = LiteRtEmbeddingBlue
                 )
             }
-            items(entries, key = { it.catalogId }) { entry ->
+            items(embeddingEntries, key = { it.catalogId }) { entry ->
                 val progressKey = "$LITERT_PROGRESS_PREFIX${entry.catalogId}"
                 LiteRtCatalogCard(
                     entry = entry,
                     description = localizedCatalogDescription(entry),
-                    compatibility = entry.catalogCompatibility(),
+                    compatibility = entry.catalogCompatibility(huggingFaceToken),
+                    progress = progress[progressKey],
+                    accentColor = LiteRtEmbeddingBlue,
+                    onDownload = { onDownload(entry) }
+                )
+            }
+        }
+
+        if (liveResults.isNotEmpty()) {
+            item {
+                Text(
+                    stringResource(R.string.litert_catalog_live_results_title, liveResults.size),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+            items(liveResults, key = { it.catalogId }) { entry ->
+                val progressKey = "$LITERT_PROGRESS_PREFIX${entry.catalogId}"
+                LiteRtCatalogCard(
+                    entry = entry,
+                    description = localizedCatalogDescription(entry),
+                    compatibility = entry.catalogCompatibility(huggingFaceToken),
                     progress = progress[progressKey],
                     onDownload = { onDownload(entry) }
                 )
             }
         }
 
-        if (normalizedQuery.isNotBlank() && LiteRtModelCatalog.defaultEntries.none { it.matchesCatalogQuery(normalizedQuery) }) {
+        if (normalizedQuery.isNotBlank() && curatedEntries.isEmpty() && embeddingEntries.isEmpty() && liveResults.isEmpty() && !isLiveSearching) {
             item {
                 EmptyModelState(
                     title = stringResource(R.string.litert_catalog_search_empty),
@@ -783,7 +900,8 @@ private fun LiteRtCatalogTab(
 @Composable
 private fun LiteRtCatalogGroupHeader(
     title: String,
-    description: String
+    description: String,
+    accentColor: Color = MaterialTheme.colorScheme.primary
 ) {
     Column(
         modifier = Modifier
@@ -795,6 +913,7 @@ private fun LiteRtCatalogGroupHeader(
             title,
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
+            color = accentColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -843,13 +962,21 @@ private fun LiteRtCatalogCard(
     description: String,
     compatibility: LiteRtCatalogCompatibility,
     progress: Float?,
+    accentColor: Color = MaterialTheme.colorScheme.primary,
     onDownload: () -> Unit
 ) {
-    val isDownloading = progress != null && progress in 0f..0.999f
+    val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
+    val isDownloading = progress != null && (isIndeterminate || progress in 0f..0.999f)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        colors = CardDefaults.cardColors(
+            containerColor = if (entry.supportsEmbedding) {
+                accentColor.copy(alpha = 0.08f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
@@ -867,7 +994,7 @@ private fun LiteRtCatalogCard(
                 Icon(
                     Icons.Default.Star,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = accentColor,
                     modifier = Modifier.size(40.dp)
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -888,9 +1015,25 @@ private fun LiteRtCatalogCard(
                         Text(
                             fileName,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = accentColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    entry.sizeBytes?.takeIf { it > 0L }?.let { sizeBytes ->
+                        AssistChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    stringResource(
+                                        R.string.litert_catalog_size_label,
+                                        FormatUtils.formatFileSize(sizeBytes)
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            enabled = false
                         )
                     }
                     AssistChip(
@@ -904,19 +1047,34 @@ private fun LiteRtCatalogCard(
                         },
                         enabled = false
                     )
-                    AssistChip(
-                        onClick = {},
-                        label = {
-                            Text(
-                                entry.maxContextTokens?.let {
-                                    stringResource(R.string.litert_models_context_value, it)
-                                } ?: stringResource(R.string.litert_models_context_user_selected),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        enabled = false
-                    )
+                    if (entry.gated) {
+                        AssistChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    stringResource(R.string.litert_catalog_gated_package),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            enabled = false
+                        )
+                    }
+                    if (!entry.supportsEmbedding) {
+                        AssistChip(
+                            onClick = {},
+                            label = {
+                                Text(
+                                    entry.maxContextTokens?.let {
+                                        stringResource(R.string.litert_models_context_value, it)
+                                    } ?: stringResource(R.string.litert_models_context_user_selected),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            enabled = false
+                        )
+                    }
                     Text(
                         description,
                         style = MaterialTheme.typography.bodySmall,
@@ -924,18 +1082,31 @@ private fun LiteRtCatalogCard(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
-                    progress?.takeIf { isDownloading }?.let {
-                        LinearProgressIndicator(
-                            progress = { it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(6.dp)
-                                .clip(RoundedCornerShape(3.dp))
-                        )
+                    progress?.takeIf { isDownloading }?.let { value ->
+                        if (isIndeterminate) {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { value.coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .clip(RoundedCornerShape(3.dp))
+                            )
+                        }
                         Text(
-                            stringResource(R.string.whisper_downloading_progress, (it * 100).toInt()),
+                            if (isIndeterminate) {
+                                stringResource(R.string.models_downloading)
+                            } else {
+                                stringResource(R.string.whisper_downloading_progress, (value * 100).toInt())
+                            },
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
+                            color = accentColor
                         )
                     }
                 }
@@ -944,7 +1115,7 @@ private fun LiteRtCatalogCard(
                 Icon(
                     Icons.Default.Download,
                     contentDescription = stringResource(R.string.action_download),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = accentColor
                 )
             }
         }
@@ -970,11 +1141,20 @@ private data class LiteRtCatalogCompatibility(
 )
 
 @Composable
-private fun LiteRtCatalogEntry.catalogCompatibility(): LiteRtCatalogCompatibility {
+private fun LiteRtCatalogEntry.catalogCompatibility(huggingFaceToken: String): LiteRtCatalogCompatibility {
+    val hasToken = huggingFaceToken.isNotBlank()
     return LiteRtCatalogCompatibility(
-        label = stringResource(R.string.litert_catalog_generic_package),
+        label = if (gated && !hasToken) {
+            stringResource(R.string.litert_catalog_gated_package)
+        } else if (gated) {
+            stringResource(R.string.litert_catalog_license_protected_package)
+        } else if (supportsEmbedding) {
+            stringResource(R.string.litert_catalog_embedding_package)
+        } else {
+            stringResource(R.string.litert_catalog_generic_package)
+        },
         recommended = false,
-        canDownload = true
+        canDownload = !gated || hasToken
     )
 }
 
@@ -998,6 +1178,7 @@ private fun LiteRtDownloadProgressCard(
     status: String?,
     onCancel: () -> Unit
 ) {
+    val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -1035,15 +1216,28 @@ private fun LiteRtDownloadProgressCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            LinearProgressIndicator(
-                progress = { progress.coerceIn(0f, 1f) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-            )
+            if (isIndeterminate) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                )
+            } else {
+                LinearProgressIndicator(
+                    progress = { progress.coerceIn(0f, 1f) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                )
+            }
             Text(
-                stringResource(R.string.whisper_downloading_progress, (progress * 100).toInt()),
+                if (isIndeterminate) {
+                    stringResource(R.string.models_downloading)
+                } else {
+                    stringResource(R.string.whisper_downloading_progress, (progress * 100).toInt())
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -1369,23 +1563,26 @@ private fun EmptyModelState(title: String, subtitle: String) {
 
 @Composable
 private fun localizedCatalogDescription(entry: LiteRtCatalogEntry): String =
-    when (entry.category) {
-        LiteRtCatalogCategory.GPU -> stringResource(R.string.litert_catalog_gpu_entry_desc)
-        LiteRtCatalogCategory.CPU -> stringResource(R.string.litert_catalog_cpu_entry_desc)
-    }
-
-@Composable
-private fun localizedCatalogGroupTitle(category: LiteRtCatalogCategory, count: Int): String =
-    when (category) {
-        LiteRtCatalogCategory.GPU -> stringResource(R.string.litert_catalog_group_gpu, count)
-        LiteRtCatalogCategory.CPU -> stringResource(R.string.litert_catalog_group_cpu, count)
-    }
-
-@Composable
-private fun localizedCatalogGroupDescription(category: LiteRtCatalogCategory): String =
-    when (category) {
-        LiteRtCatalogCategory.GPU -> stringResource(R.string.litert_catalog_group_gpu_desc)
-        LiteRtCatalogCategory.CPU -> stringResource(R.string.litert_catalog_group_cpu_desc)
+    if (entry.supportsEmbedding) {
+        stringResource(R.string.litert_models_embedding_catalog_card_desc)
+    } else {
+        when (entry.repoId) {
+            "litert-community/Qwen3-0.6B" -> stringResource(R.string.litert_catalog_qwen3_06_desc)
+            "litert-community/Qwen3-4B" -> stringResource(R.string.litert_catalog_qwen3_4b_desc)
+            "litert-community/Qwen3-8B" -> stringResource(R.string.litert_catalog_qwen3_8b_desc)
+            "litert-community/Qwen3-14B" -> stringResource(R.string.litert_catalog_qwen3_14b_desc)
+            "litert-community/Gemma3-1B-IT" -> stringResource(R.string.litert_catalog_gemma3_1b_desc)
+            "litert-community/gemma-4-E2B-it-litert-lm" -> stringResource(R.string.litert_catalog_gemma4_e2b_desc)
+            "litert-community/gemma-4-E4B-it-litert-lm" -> stringResource(R.string.litert_catalog_gemma4_e4b_desc)
+            "google/gemma-3n-E2B-it-litert-lm" -> stringResource(R.string.litert_catalog_gemma3n_e2b_desc)
+            "google/gemma-3n-E4B-it-litert-lm" -> stringResource(R.string.litert_catalog_gemma3n_e4b_desc)
+            "litert-community/Qwen2.5-1.5B-Instruct" -> stringResource(R.string.litert_catalog_qwen25_15b_desc)
+            "litert-community/DeepSeek-R1-Distill-Qwen-1.5B" -> stringResource(R.string.litert_catalog_deepseek_qwen15_desc)
+            "litert-community/Phi-4-mini-instruct" -> stringResource(R.string.litert_catalog_phi4_mini_desc)
+            "litert-community/SmolLM2-360M-Instruct" -> stringResource(R.string.litert_catalog_smollm2_360_desc)
+            "litert-community/functiongemma-mobile-actions_q8_ekv1024.litertlm" -> stringResource(R.string.litert_catalog_functiongemma_desc)
+            else -> entry.description
+        }
     }
 
 private data class LiteRtStorageSnapshot(

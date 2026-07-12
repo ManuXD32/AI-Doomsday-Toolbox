@@ -96,6 +96,7 @@ data class OnnxRuntimeFeatureSupport(
     val memoryPatternOptimization: Boolean,
     val cpuArenaAllocator: Boolean,
     val nnapi: Boolean,
+    val xnnpack: Boolean,
     val nnapiCpuDisabled: Boolean,
     val nnapiUseFp16: Boolean
 )
@@ -143,6 +144,7 @@ fun detectOnnxRuntimeFeatureSupport(): OnnxRuntimeFeatureSupport {
         memoryPatternOptimization = methodNames.contains("setMemoryPatternOptimization"),
         cpuArenaAllocator = methodNames.contains("setCPUArenaAllocator"),
         nnapi = methodNames.contains("addNnapi"),
+        xnnpack = methodNames.contains("addXnnpack"),
         nnapiCpuDisabled = nnapiFlagNames.contains("CPU_DISABLED"),
         nnapiUseFp16 = nnapiFlagNames.contains("USE_FP16")
     )
@@ -245,6 +247,29 @@ fun createOnnxSessionWithBackend(
             )
         )
     }
+}
+
+fun createOnnxSessionWithXnnpack(
+    environment: OrtEnvironment,
+    modelFile: File,
+    runtimeOptions: OnnxRuntimeOptions,
+    componentLabel: String,
+    requestedBackendLabel: String,
+    warningMessage: String? = null,
+    loadOrtFormat: Boolean = true
+): OnnxSessionLoadResult {
+    val options = createOnnxSessionOptions(runtimeOptions, loadOrtFormat)
+    val enabled = tryEnableXnnpack(options, runtimeOptions)
+    require(enabled) { "XNNPACK provider is not available in this ONNX Runtime build" }
+    return OnnxSessionLoadResult(
+        session = environment.createSession(modelFile.absolutePath, options),
+        summary = OnnxRuntimeComponentSummary(
+            component = componentLabel,
+            requestedBackend = requestedBackendLabel,
+            resolvedBackend = "XNNPACK",
+            warningMessage = warningMessage
+        )
+    )
 }
 
 private fun createOnnxSessionOptions(
@@ -358,6 +383,22 @@ private fun tryEnableNnapi(
         }
     }
     method.invoke(options, enumSet)
+    return true
+}
+
+private fun tryEnableXnnpack(
+    options: OrtSession.SessionOptions,
+    runtimeOptions: OnnxRuntimeOptions
+): Boolean {
+    val method = options.javaClass.methods.firstOrNull {
+        it.name == "addXnnpack" && it.parameterTypes.size == 1
+    } ?: return false
+    val threadCount = runtimeOptions.intraOpThreads ?: runtimeOptions.runtimeThreadCount
+    val config = linkedMapOf<String, String>()
+    if (threadCount != null && threadCount > 0) {
+        config["intra_op_num_threads"] = threadCount.toString()
+    }
+    method.invoke(options, config)
     return true
 }
 

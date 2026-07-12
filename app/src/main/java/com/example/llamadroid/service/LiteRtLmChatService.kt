@@ -161,6 +161,30 @@ class LiteRtLmChatService(
     private val allowGpuBackend: Boolean = false,
     private val onDiagnostic: ((String) -> Unit)? = null
 ) {
+    fun isEngineLoaded(
+        model: LiteRtModelEntity,
+        backendMode: String,
+        contextSize: Int,
+        mtpEnabled: Boolean
+    ): Boolean = LiteRtLmReflectionBridge(context).hasLoadedEngine(
+        model = model,
+        backendMode = normalizeLiteRtBackend(backendMode),
+        contextSize = contextSize,
+        mtpEnabled = mtpEnabled
+    )
+
+    fun unloadEngines(
+        model: LiteRtModelEntity,
+        backendMode: String,
+        contextSize: Int,
+        mtpEnabled: Boolean
+    ): Int = LiteRtLmReflectionBridge(context).unloadLoadedEngines(
+        model = model,
+        backendMode = normalizeLiteRtBackend(backendMode),
+        contextSize = contextSize,
+        mtpEnabled = mtpEnabled
+    )
+
     suspend fun streamGalleryStyleGpuChat(
         request: LiteRtLmChatRequest,
         onStatus: suspend (String) -> Unit,
@@ -886,6 +910,41 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         else -> loadClass("com.google.ai.edge.litertlm.Backend\$CPU")
             .getConstructor()
             .newInstance()
+    }
+
+    fun hasLoadedEngine(
+        model: LiteRtModelEntity,
+        backendMode: String,
+        contextSize: Int,
+        mtpEnabled: Boolean
+    ): Boolean = synchronized(engineCacheLock) {
+        engineCache.keys.any { it.matchesModelRequest(model, backendMode, contextSize, mtpEnabled) }
+    }
+
+    fun unloadLoadedEngines(
+        model: LiteRtModelEntity,
+        backendMode: String,
+        contextSize: Int,
+        mtpEnabled: Boolean
+    ): Int {
+        val cached = synchronized(engineCacheLock) {
+            val matches = engineCache
+                .filterKeys { it.matchesModelRequest(model, backendMode, contextSize, mtpEnabled) }
+                .values
+                .toList()
+            matches.forEach { cached ->
+                cached.closeJob?.cancel()
+                engineCache.remove(cached.key)
+            }
+            matches
+        }
+        cached.forEach { engine ->
+            runCatching { engine.engineClass.getMethod("close").invoke(engine.engine) }
+                .onFailure { error ->
+                    DebugLog.log("LiteRT-LM Engine manual unload failed: ${error.liteRtDiagnosticMessage()}")
+                }
+        }
+        return cached.size
     }
 
     fun runtimeDiagnosticLines(backend: Any): List<String> = buildList {
@@ -1702,15 +1761,6 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
                 .truncateLiteRtDiagnostic(900)
         }.getOrElse { "error:${it.liteRtDiagnosticMessage()}" }
 
-    private companion object {
-        val coreLibrariesLoaded = AtomicBoolean(false)
-        val gpuAcceleratorLoaded = AtomicBoolean(false)
-        const val ENGINE_IDLE_TIMEOUT_MS = 5 * 60 * 1000L
-        val engineCacheLock = Any()
-        val engineCacheScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val engineCache = mutableMapOf<EngineCacheKey, CachedEngine>()
-    }
-
     private data class EngineCacheKey(
         val modelPath: String,
         val backendLabel: String,
@@ -1729,6 +1779,36 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
         @Volatile var lastUsedAtMs: Long,
         @Volatile var closeJob: Job? = null
     )
+
+    private companion object {
+        val coreLibrariesLoaded = AtomicBoolean(false)
+        val gpuAcceleratorLoaded = AtomicBoolean(false)
+        const val ENGINE_IDLE_TIMEOUT_MS = 5 * 60 * 1000L
+        val engineCacheLock = Any()
+        val engineCacheScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val engineCache = mutableMapOf<EngineCacheKey, CachedEngine>()
+
+        private fun EngineCacheKey.matchesModelRequest(
+            model: LiteRtModelEntity,
+            backendMode: String,
+            contextSize: Int,
+            mtpEnabled: Boolean
+        ): Boolean {
+            val requestedFile = File(model.path)
+            val cachedFile = File(modelPath)
+            val modelMatches = modelPath == requestedFile.absolutePath ||
+                modelPath == model.path ||
+                cachedFile.name == requestedFile.name
+            if (!modelMatches || speculativeDecodingEnabled != mtpEnabled) return false
+            val backendMatches = when (backendMode) {
+                LITERT_BACKEND_CPU -> backendLabel == "CPU"
+                LITERT_BACKEND_GPU -> backendLabel == "GPU"
+                else -> backendLabel == "CPU" || backendLabel == "GPU"
+            }
+            if (!backendMatches) return false
+            return contextSize <= 0 || maxTokens == null || maxTokens > 0
+        }
+    }
 }
 
 private fun Class<*>.liteRtTypeName(): String =

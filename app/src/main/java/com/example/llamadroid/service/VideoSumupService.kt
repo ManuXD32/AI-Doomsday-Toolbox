@@ -415,14 +415,16 @@ object VideoSumupService {
         } catch (e: Exception) { Result.failure(e) }
     }
     
-    private fun transcribe(context: Context, audioPath: String, modelPath: String, language: String, threads: Int): Result<String> {
+    private suspend fun transcribe(context: Context, audioPath: String, modelPath: String, language: String, threads: Int): Result<String> {
         return try {
             val binaryRepo = com.example.llamadroid.data.binary.BinaryRepository(context)
             val whisper = binaryRepo.getWhisperCliBinary()
             if (whisper == null || !whisper.exists()) return Result.failure(Exception("Whisper not found"))
+            val resolvedModelPath = WhisperModelPathResolver.resolve(context, modelPath)
+                ?: return Result.failure(Exception(context.getString(R.string.whisper_error_no_model)))
             
             val outputBase = File(context.cacheDir, "whisper_sumup")
-            val args = listOf(whisper.absolutePath, "-m", modelPath, "-f", audioPath, 
+            val args = listOf(whisper.absolutePath, "-m", resolvedModelPath, "-f", audioPath, 
                 "-l", language, "-t", threads.toString(), "--no-gpu", "-otxt", "-of", outputBase.absolutePath)
             DebugLog.log("[VIDEO-SUMUP] Whisper: ${args.joinToString(" ")}")
             

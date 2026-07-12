@@ -229,11 +229,16 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
     /**
      * Uses a shell channel to support persistence and interaction.
      */
-    suspend fun runInteractiveCommand(messageId: String, command: String, lines: Int = 10): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun runInteractiveCommand(
+        messageId: String,
+        command: String,
+        lines: Int = 10,
+        toolCallId: String? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         val requestedLines = clampCommandLines(lines)
         val projectFolder = _currentProjectFolder.value.ifBlank { "default_project" }
         val projectPath = "$WORKSPACE_PATH/$projectFolder"
-        val commandSession = createBackgroundCommand(messageId, command, projectPath, requestedLines)
+        val commandSession = createBackgroundCommand(messageId, command, projectPath, requestedLines, toolCallId)
             .getOrElse {
                 updateTerminalOutput(messageId, "\n[Error: ${it.message}]")
                 return@withContext Result.failure(it)
@@ -264,6 +269,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             }
 
             if (commandSession.isRunning) {
+                commandSession.notifyOnCompletion = true
                 startCommandAutoUpdates(commandSession)
             }
 
@@ -1463,7 +1469,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         messageId: String,
         command: String,
         projectPath: String,
-        requestedLines: Int
+        requestedLines: Int,
+        toolCallId: String? = null
     ): Result<BackgroundCommand> = withContext(Dispatchers.IO) {
         val commandSession = openDedicatedCommandSession().getOrElse { return@withContext Result.failure(it) }
         try {
@@ -1477,6 +1484,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 id = commandId,
                 command = command,
                 terminalMessageId = messageId,
+                toolCallId = toolCallId,
                 projectPath = projectPath,
                 sentinel = "__CMD_DONE_${commandId}__",
                 session = commandSession,
@@ -1499,8 +1507,21 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         return object : java.io.OutputStream() {
             override fun write(b: Int) {
                 val char = b.toChar()
-                if (char == '\r') return
                 synchronized(command.stateLock) {
+                    if (command.pendingCarriageReturn) {
+                        if (char == '\n') {
+                            command.pendingCarriageReturn = false
+                        } else {
+                            command.pendingLine.setLength(0)
+                            command.pendingCarriageReturn = false
+                        }
+                    }
+                    if (char == '\r') {
+                        command.pendingCarriageReturn = true
+                        command.lastActivityAt = System.currentTimeMillis()
+                        command.outputVersion += 1
+                        return
+                    }
                     command.pendingLine.append(char)
                     if (char == '\n') {
                         flushPendingCommandLine(command)
@@ -1529,6 +1550,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             if (command.exitCode == 0 && shouldMarkCommandAsMemoryDirty(command.command)) {
                 markMemoryDirty("Command `${command.command.take(80)}` changed project state.")
             }
+            appendVisibleCommandOutput(command, "[Command finished with exit code ${command.exitCode}]\n")
+            notifyBackgroundCommandCompletion(command)
             closeBackgroundCommand(command)
             return
         }
@@ -1596,7 +1619,13 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         includeGuidance: Boolean,
         markAsDelivered: Boolean
     ): String {
-        val tailLines = synchronized(command.stateLock) { command.tailLines.takeLast(requestedLines) }
+        val tailLines = synchronized(command.stateLock) {
+            commandOutputTailLines(
+                completedLines = command.tailLines,
+                pendingLine = command.pendingLine.toString(),
+                requestedLines = requestedLines
+            )
+        }
         val status = if (command.isRunning) {
             "running"
         } else {
@@ -1622,6 +1651,22 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         }.trim()
     }
 
+    private fun notifyBackgroundCommandCompletion(command: BackgroundCommand) {
+        if (!command.notifyOnCompletion || command.completionNoticeSent) return
+        command.completionNoticeSent = true
+        val snapshot = formatCommandSnapshot(
+            command = command,
+            requestedLines = command.lastRequestedLines,
+            includeGuidance = false,
+            markAsDelivered = true
+        )
+        AgentService.pushBackgroundCommandCompletion(
+            toolCallId = command.toolCallId,
+            commandId = command.id,
+            snapshot = snapshot
+        )
+    }
+
     private fun clampCommandLines(lines: Int): Int = lines.coerceIn(1, MAX_COMMAND_TAIL_LINES)
 
     private fun formatCommandTimestamp(timestamp: Long): String {
@@ -1637,13 +1682,10 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 if (!command.isRunning) break
                 refreshBackgroundCommandHealth(command, "command watchdog")
                 if (!command.isRunning) break
-                val update = formatCommandSnapshot(
-                    command = command,
-                    requestedLines = command.lastRequestedLines,
-                    includeGuidance = true,
-                    markAsDelivered = false
+                checkpointRuntimeState(
+                    status = "Background command running: ${command.id}",
+                    reason = "Background command watchdog ${command.id}"
                 )
-                pushBackgroundCommandUpdate(update)
             }
         }
     }
@@ -2040,6 +2082,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         private const val BACKGROUND_COMMAND_SESSION_TIMEOUT_MS = 15_000L
         private const val BACKGROUND_COMMAND_CHANNEL_CONNECT_TIMEOUT_MS = 10_000
         private const val BACKGROUND_COMMAND_WATCHDOG_INTERVAL_MS = 15_000L
+        private const val RUNTIME_CHECKPOINT_INTERVAL_MS = 30_000L
         private const val TOOL_READ_FILE_DEFAULT_LINES = 160
         private const val TOOL_READ_FILE_MAX_LINES = 400
         private const val REFLECTION_MAX_CALLS = 2
@@ -2160,6 +2203,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             if (loadingRefCount.get() > 0) {
                 val appContext = com.example.llamadroid.LlamaApplication.instance
                 AgentForegroundService.updateStatus(appContext, status)
+                checkpointRuntimeState(status = status, reason = "Agent status update")
             }
         }
 
@@ -3319,6 +3363,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         private val activeAgentWorkJobs = mutableSetOf<Job>()
         private val activeRunEpoch = AtomicLong(0L)
         private val automaticContinuationBlocked = AtomicBoolean(false)
+        private val runtimeCheckpointLock = Any()
+        @Volatile private var lastRuntimeCheckpointAt = 0L
 
         private fun trackCurrentChatJob(job: Job) {
             synchronized(currentChatJobLock) {
@@ -3393,14 +3439,73 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         val agentScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         private var heartbeatJob: Job? = null
 
-        private fun pushBackgroundCommandUpdate(content: String) {
+        private fun checkpointRuntimeState(
+            status: String? = null,
+            reason: String? = null,
+            force: Boolean = false
+        ) {
+            val instance = activeInstance ?: return
+            if (_activeConversationId.value == null) return
+            val now = System.currentTimeMillis()
+            synchronized(runtimeCheckpointLock) {
+                if (!shouldWriteRuntimeCheckpoint(
+                        nowMs = now,
+                        lastCheckpointMs = lastRuntimeCheckpointAt,
+                        intervalMs = RUNTIME_CHECKPOINT_INTERVAL_MS,
+                        force = force
+                    )
+                ) return
+                lastRuntimeCheckpointAt = now
+            }
+            val checkpointStatus = status ?: _statusText.value.ifBlank {
+                idleStatusText(com.example.llamadroid.LlamaApplication.instance)
+            }
+            instance.persistAgentRuntimeState(checkpointStatus)
+            agentScope.launch(Dispatchers.IO) {
+                instance.persistVisibleRuntimeStateNow(reason ?: checkpointStatus)
+            }
+        }
+
+        private fun pushBackgroundCommandCompletion(
+            toolCallId: String?,
+            commandId: String,
+            snapshot: String
+        ) {
             if (areAutomaticContinuationsBlocked()) {
-                addDebugLog("🧱 Suppressing background command auto-resume while stop fence is active.")
+                addDebugLog("🧱 Suppressing background command completion continuation while stop fence is active.")
+                checkpointRuntimeState(
+                    status = "Command completed: $commandId",
+                    reason = "Background command $commandId completed while continuations were blocked.",
+                    force = true
+                )
                 return
             }
-            val refs = lastRuntimeRefs ?: return
-            addMessage(ChatMessage(role = "system", content = content))
-            sendMessage(refs.context, refs.ollamaService, refs.settingsRepo, refs.agentService)
+            val refs = lastRuntimeRefs ?: run {
+                checkpointRuntimeState(
+                    status = "Command completed: $commandId",
+                    reason = "Background command $commandId completed without runtime refs.",
+                    force = true
+                )
+                return
+            }
+            addMessage(ChatMessage(
+                role = "tool",
+                content = snapshot,
+                toolName = "run_command",
+                toolCallId = toolCallId
+            ))
+            checkpointRuntimeState(
+                status = "Command completed: $commandId",
+                reason = "Background command $commandId completed.",
+                force = true
+            )
+            sendMessage(
+                refs.context,
+                refs.ollamaService,
+                refs.settingsRepo,
+                refs.agentService,
+                queueBehindActiveJob = false
+            )
         }
 
         /**
@@ -3574,6 +3679,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         fun addMessage(message: ChatMessage) {
             _messages.value = _messages.value + message
+            checkpointRuntimeState(reason = "Agent message added", force = message.needsApproval || (message.isPlan && message.isPlanApproved != true))
             // AUTOMATICALLY add to current session history if one is active
             getCurrentSession()?.addMessage(message)
             if (message.role == "user" && !isTransientCompactionStatusMessage(message)) {
@@ -3643,6 +3749,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         fun updateMessage(id: String, update: (ChatMessage) -> ChatMessage) {
             _messages.value = _messages.value.map { if (it.id == id) update(it) else it }
+            checkpointRuntimeState(reason = "Agent message updated")
             // ALSO update in session list if it exists there - use safe replacement
             getCurrentSession()?.let { session ->
                 synchronized(session.messages) {
@@ -3705,6 +3812,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         private fun updateTerminalOutput(id: String, output: String) {
             updateMessage(id) { it.copy(terminalOutput = (it.terminalOutput ?: "") + output) }
+            checkpointRuntimeState(reason = "Terminal output updated")
         }
 
         private fun updateWorkspaceTerminalState(
@@ -4360,12 +4468,14 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 if (isAgentRunActive(runEpoch)) {
                                     fullContent += chunk
                                     _streamingContent.value = fullContent
+                                    checkpointRuntimeState(reason = "Agent streaming content")
                                 }
                             },
                             onThinkingChunk = { thinkingChunk ->
                                 if (isAgentRunActive(runEpoch) && thinkingEnabled) {
                                     fullThinking += thinkingChunk
                                     _streamingThinking.value = fullThinking
+                                    checkpointRuntimeState(reason = "Agent streaming thinking")
                                 }
                             }
                         ).let { result ->
@@ -4410,6 +4520,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                         if (thinkingEnabled) {
                                             fullThinking += it
                                             _streamingThinking.value = fullThinking
+                                            checkpointRuntimeState(reason = "Agent streaming thinking")
                                         }
                                     }
                                 }
@@ -4910,6 +5021,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                     content = context.getString(R.string.agent_executing_command, command),
                                     toolName = toolCall.name,
                                     toolArgs = toolCall.arguments,
+                                    toolCallId = toolCall.id,
+                                    pendingToolCall = toolCall,
                                     isTerminalVisible = true,
                                     isOutputExpanded = true,
                                     agentRole = assistantAgentRole,
@@ -4925,7 +5038,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                     "cd '${sanitizePath(workingDirectory)}' && $command"
                                 }
 
-                                agentService.runInteractiveCommand(terminalId, safeCommand, requestedLines).getOrThrow()
+                                agentService.runInteractiveCommand(terminalId, safeCommand, requestedLines, toolCall.id).getOrThrow()
                             }
                             "check_command" -> {
                                 val commandId = toolCall.arguments["command_id"] ?: ""
@@ -9490,17 +9603,6 @@ sys.exit(proc.returncode)
                     }
                 }
                 addAll(buildRecentToolContextItems(queryTokens))
-                _lastCommandOutput.value.takeIf { it.isNotBlank() }?.let { output ->
-                    add(
-                        RetrievedContextItem(
-                            sourceClass = RetrievedContextSourceClass.TRUSTED_RUNTIME_STATE,
-                            title = "Latest command output",
-                            content = compactResumeSection(output, 8, 520),
-                            sourceRef = "command_output",
-                            score = AgentRuntimeSupport.scoreContextItem(queryTokens, "command output", output, 15)
-                        )
-                    )
-                }
                 listCommands().getOrNull()
                     ?.takeIf { it.isNotBlank() && it != "No tracked commands." }
                     ?.let { commands ->
@@ -10201,6 +10303,7 @@ sys.exit(proc.returncode)
         val id: String,
         val command: String,
         val terminalMessageId: String,
+        val toolCallId: String? = null,
         val projectPath: String,
         val sentinel: String,
         val session: com.jcraft.jsch.Session,
@@ -10208,6 +10311,7 @@ sys.exit(proc.returncode)
         val stdin: java.io.PipedOutputStream,
         val stateLock: Any = Any(),
         val pendingLine: StringBuilder = StringBuilder(),
+        var pendingCarriageReturn: Boolean = false,
         val fullTranscript: StringBuilder = StringBuilder(),
         val tailLines: MutableList<String> = mutableListOf(),
         val startedAt: Long,
@@ -10218,6 +10322,8 @@ sys.exit(proc.returncode)
         @Volatile var deliveredVersion: Int = 0,
         @Volatile var lastRequestedLines: Int = 10,
         @Volatile var retainsForegroundRuntime: Boolean = false,
+        @Volatile var notifyOnCompletion: Boolean = false,
+        @Volatile var completionNoticeSent: Boolean = false,
         var autoUpdateJob: Job? = null
     )
 

@@ -46,6 +46,8 @@ data class TamaPetEntity(
     val rightDecorationId: String? = null,
     val growthLocked: Boolean = false,
     val growthLockStartedAt: Long? = null,
+    val cycleFrozen: Boolean = false,
+    val cycleFreezeStartedAt: Long? = null,
     val money: Long,
     val inventoryJson: String,
     // Activity system
@@ -623,6 +625,15 @@ interface TamaDao {
     @Query("SELECT * FROM tama_locations WHERE cityId = :cityId")
     suspend fun getLocationsInCity(cityId: String): List<TamaLocationEntity>
 
+    @Query("SELECT * FROM tama_locations ORDER BY id ASC")
+    suspend fun getAllLocations(): List<TamaLocationEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveLocations(locations: List<TamaLocationEntity>)
+
+    @Query("DELETE FROM tama_locations")
+    suspend fun deleteAllLocations()
+
 
     // NPC operations
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -633,6 +644,15 @@ interface TamaDao {
 
     @Query("SELECT * FROM tama_npcs WHERE currentLocationId = :locationId")
     suspend fun getNpcsAtLocation(locationId: String): List<TamaNpcEntity>
+
+    @Query("SELECT * FROM tama_npcs ORDER BY id ASC")
+    suspend fun getAllNpcs(): List<TamaNpcEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveNpcs(npcs: List<TamaNpcEntity>)
+
+    @Query("DELETE FROM tama_npcs")
+    suspend fun deleteAllNpcs()
 
     // Summary operations
     @Insert(onConflict = OnConflictStrategy.REPLACE)

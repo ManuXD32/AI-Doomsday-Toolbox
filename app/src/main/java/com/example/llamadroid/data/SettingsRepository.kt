@@ -46,11 +46,24 @@ data class PdfTranslationOptionsSnapshot(
     val usePageScreenshotContext: Boolean,
     val screenshotMaxSide: Int,
     val screenshotJpegQuality: Int,
-    val textOnlyFallbackEnabled: Boolean
+    val textOnlyFallbackEnabled: Boolean,
+    val qualityMode: PdfTranslationQualityMode
 )
+
+enum class PdfTranslationQualityMode {
+    BEST_QUALITY,
+    BALANCED,
+    FASTER
+}
 
 class SettingsRepository(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+
+    init {
+        if (prefs.contains("model_storage_uri")) {
+            prefs.edit().remove("model_storage_uri").apply()
+        }
+    }
 
     private inline fun <reified T : Enum<T>> enumPref(key: String, defaultValue: T): T {
         val stored = prefs.getString(key, defaultValue.name)
@@ -537,6 +550,31 @@ class SettingsRepository(private val context: Context) {
         _knowledgeEmbeddingOllamaModel.value = model
     }
 
+    private val _knowledgeEmbeddingLiteRtModelId = MutableStateFlow(
+        prefs.getLong("knowledge_embedding_litert_model_id", -1L)
+    )
+    val knowledgeEmbeddingLiteRtModelId = _knowledgeEmbeddingLiteRtModelId.asStateFlow()
+
+    private val _knowledgeEmbeddingLiteRtModelLabel = MutableStateFlow(
+        prefs.getString("knowledge_embedding_litert_model_label", null)
+    )
+    val knowledgeEmbeddingLiteRtModelLabel = _knowledgeEmbeddingLiteRtModelLabel.asStateFlow()
+
+    fun setKnowledgeEmbeddingLiteRtModelId(modelId: Long?, modelLabel: String? = null) {
+        prefs.edit().apply {
+            if (modelId == null || modelId <= 0L) {
+                remove("knowledge_embedding_litert_model_id")
+                remove("knowledge_embedding_litert_model_label")
+            } else {
+                putLong("knowledge_embedding_litert_model_id", modelId)
+                putString("knowledge_embedding_litert_model_label", modelLabel?.trim()?.takeIf { it.isNotEmpty() })
+            }
+        }.apply()
+        _knowledgeEmbeddingLiteRtModelId.value = modelId?.takeIf { it > 0L } ?: -1L
+        _knowledgeEmbeddingLiteRtModelLabel.value =
+            modelLabel?.trim()?.takeIf { modelId != null && modelId > 0L && it.isNotEmpty() }
+    }
+
     private val _knowledgeEmbeddingLlamaSwapUrl = MutableStateFlow(
         prefs.getString("knowledge_embedding_llama_swap_url", PDF_LLAMA_SWAP_DEFAULT_URL)
             ?: PDF_LLAMA_SWAP_DEFAULT_URL
@@ -755,9 +793,9 @@ class SettingsRepository(private val context: Context) {
         _outputFolderUri.value = uri
     }
 
-    // Quadtrix WebUI/worker workspace. The URI is the SAF permission source; the
-    // direct path is used as the native process working directory when Android
-    // can resolve it.
+    // Quadtrix WebUI/worker workspace. The URI points at the shared sync/export
+    // folder the user picked. The stored path is the app-managed runtime
+    // workspace used by the native process.
     private val _quadtrixWorkspaceUri = MutableStateFlow(prefs.getString("quadtrix_workspace_uri", null))
     val quadtrixWorkspaceUri = _quadtrixWorkspaceUri.asStateFlow()
 
@@ -979,7 +1017,7 @@ class SettingsRepository(private val context: Context) {
 
     fun setServerPort(port: Int) {
         val normalized = port.coerceIn(1, 65535)
-        prefs.edit().putInt("server_port", normalized).apply()
+        prefs.edit().putInt("server_port", normalized).commit()
         _serverPort.value = normalized
     }
 
@@ -1385,12 +1423,22 @@ class SettingsRepository(private val context: Context) {
         _pdfTranslationTextFallback.value = enabled
     }
 
+    private val _pdfTranslationQualityMode = MutableStateFlow(
+        enumPref("pdf_translation_quality_mode", PdfTranslationQualityMode.BEST_QUALITY)
+    )
+    val pdfTranslationQualityMode = _pdfTranslationQualityMode.asStateFlow()
+    fun setPdfTranslationQualityMode(mode: PdfTranslationQualityMode) {
+        prefs.edit().putString("pdf_translation_quality_mode", mode.name).apply()
+        _pdfTranslationQualityMode.value = mode
+    }
+
     fun pdfTranslationOptionsSnapshot(): PdfTranslationOptionsSnapshot {
         return PdfTranslationOptionsSnapshot(
             usePageScreenshotContext = pdfTranslationScreenshotContext.value,
             screenshotMaxSide = pdfTranslationScreenshotMaxSide.value,
             screenshotJpegQuality = pdfTranslationScreenshotJpegQuality.value,
-            textOnlyFallbackEnabled = pdfTranslationTextFallback.value
+            textOnlyFallbackEnabled = pdfTranslationTextFallback.value,
+            qualityMode = pdfTranslationQualityMode.value
         )
     }
     
@@ -1423,13 +1471,13 @@ class SettingsRepository(private val context: Context) {
         }
     }
     
-    // External Model Storage URI (SAF)
-    private val _modelStorageUri = MutableStateFlow(prefs.getString("model_storage_uri", null))
+    // Legacy model library folder URI (deprecated/no-op for Play-safe storage)
+    private val _modelStorageUri = MutableStateFlow<String?>(null)
     val modelStorageUri = _modelStorageUri.asStateFlow()
     
-    fun setModelStorageUri(uri: String?) {
-        prefs.edit().putString("model_storage_uri", uri).apply()
-        _modelStorageUri.value = uri
+    fun setModelStorageUri(@Suppress("UNUSED_PARAMETER") uri: String?) {
+        prefs.edit().remove("model_storage_uri").apply()
+        _modelStorageUri.value = null
     }
     
     // ZIM Files Storage URI (SAF) for Kiwix
@@ -1577,6 +1625,110 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putBoolean("mtp_use_draft_model", enabled).apply()
         _mtpUseDraftModel.value = enabled
     }
+
+    private val _ngramModNMatch = MutableStateFlow(prefs.getInt("spec_ngram_mod_n_match", 24).coerceAtLeast(1))
+    val ngramModNMatch = _ngramModNMatch.asStateFlow()
+    fun setNgramModNMatch(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_mod_n_match", normalized).apply()
+        _ngramModNMatch.value = normalized
+    }
+
+    private val _ngramModNMin = MutableStateFlow(prefs.getInt("spec_ngram_mod_n_min", 48).coerceAtLeast(1))
+    val ngramModNMin = _ngramModNMin.asStateFlow()
+    fun setNgramModNMin(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_mod_n_min", normalized).apply()
+        _ngramModNMin.value = normalized
+        if (_ngramModNMax.value < normalized) setNgramModNMax(normalized)
+    }
+
+    private val _ngramModNMax = MutableStateFlow(prefs.getInt("spec_ngram_mod_n_max", 64).coerceAtLeast(1))
+    val ngramModNMax = _ngramModNMax.asStateFlow()
+    fun setNgramModNMax(value: Int) {
+        val normalized = value.coerceAtLeast(_ngramModNMin.value.coerceAtLeast(1))
+        prefs.edit().putInt("spec_ngram_mod_n_max", normalized).apply()
+        _ngramModNMax.value = normalized
+    }
+
+    private val _ngramSimpleSizeN = MutableStateFlow(prefs.getInt("spec_ngram_simple_size_n", 12).coerceAtLeast(1))
+    val ngramSimpleSizeN = _ngramSimpleSizeN.asStateFlow()
+    fun setNgramSimpleSizeN(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_simple_size_n", normalized).apply()
+        _ngramSimpleSizeN.value = normalized
+    }
+
+    private val _ngramSimpleSizeM = MutableStateFlow(prefs.getInt("spec_ngram_simple_size_m", 48).coerceAtLeast(1))
+    val ngramSimpleSizeM = _ngramSimpleSizeM.asStateFlow()
+    fun setNgramSimpleSizeM(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_simple_size_m", normalized).apply()
+        _ngramSimpleSizeM.value = normalized
+    }
+
+    private val _ngramSimpleMinHits = MutableStateFlow(prefs.getInt("spec_ngram_simple_min_hits", 1).coerceAtLeast(1))
+    val ngramSimpleMinHits = _ngramSimpleMinHits.asStateFlow()
+    fun setNgramSimpleMinHits(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_simple_min_hits", normalized).apply()
+        _ngramSimpleMinHits.value = normalized
+    }
+
+    private val _ngramMapKSizeN = MutableStateFlow(prefs.getInt("spec_ngram_map_k_size_n", 12).coerceAtLeast(1))
+    val ngramMapKSizeN = _ngramMapKSizeN.asStateFlow()
+    fun setNgramMapKSizeN(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_map_k_size_n", normalized).apply()
+        _ngramMapKSizeN.value = normalized
+    }
+
+    private val _ngramMapKSizeM = MutableStateFlow(prefs.getInt("spec_ngram_map_k_size_m", 48).coerceAtLeast(1))
+    val ngramMapKSizeM = _ngramMapKSizeM.asStateFlow()
+    fun setNgramMapKSizeM(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_map_k_size_m", normalized).apply()
+        _ngramMapKSizeM.value = normalized
+    }
+
+    private val _ngramMapKMinHits = MutableStateFlow(prefs.getInt("spec_ngram_map_k_min_hits", 1).coerceAtLeast(1))
+    val ngramMapKMinHits = _ngramMapKMinHits.asStateFlow()
+    fun setNgramMapKMinHits(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_map_k_min_hits", normalized).apply()
+        _ngramMapKMinHits.value = normalized
+    }
+
+    private val _ngramMapK4VSizeN = MutableStateFlow(prefs.getInt("spec_ngram_map_k4v_size_n", 12).coerceAtLeast(1))
+    val ngramMapK4VSizeN = _ngramMapK4VSizeN.asStateFlow()
+    fun setNgramMapK4VSizeN(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_map_k4v_size_n", normalized).apply()
+        _ngramMapK4VSizeN.value = normalized
+    }
+
+    private val _ngramMapK4VSizeM = MutableStateFlow(prefs.getInt("spec_ngram_map_k4v_size_m", 48).coerceAtLeast(1))
+    val ngramMapK4VSizeM = _ngramMapK4VSizeM.asStateFlow()
+    fun setNgramMapK4VSizeM(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_map_k4v_size_m", normalized).apply()
+        _ngramMapK4VSizeM.value = normalized
+    }
+
+    private val _ngramMapK4VMinHits = MutableStateFlow(prefs.getInt("spec_ngram_map_k4v_min_hits", 1).coerceAtLeast(1))
+    val ngramMapK4VMinHits = _ngramMapK4VMinHits.asStateFlow()
+    fun setNgramMapK4VMinHits(value: Int) {
+        val normalized = value.coerceAtLeast(1)
+        prefs.edit().putInt("spec_ngram_map_k4v_min_hits", normalized).apply()
+        _ngramMapK4VMinHits.value = normalized
+    }
+
+    private val _llamaNativeToolsEnabled = MutableStateFlow(prefs.getBoolean("llama_native_tools_enabled", false))
+    val llamaNativeToolsEnabled = _llamaNativeToolsEnabled.asStateFlow()
+    fun setLlamaNativeToolsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("llama_native_tools_enabled", enabled).apply()
+        _llamaNativeToolsEnabled.value = enabled
+    }
     
     // Flash Attention global flag
     private val _flashAttentionEnabled = MutableStateFlow(prefs.getBoolean("flash_attention_enabled", false))
@@ -1693,7 +1845,7 @@ class SettingsRepository(private val context: Context) {
     /**
      * Check if external model storage is configured
      */
-    fun isExternalStorageConfigured(): Boolean = _modelStorageUri.value != null
+    fun isExternalStorageConfigured(): Boolean = false
     
     /**
      * Model type enum for folder organization
@@ -2967,6 +3119,7 @@ class SettingsRepository(private val context: Context) {
         const val KB_EMBED_BACKEND_LLAMA_SERVER = "llama-server"
         const val KB_EMBED_BACKEND_OLLAMA = "ollama"
         const val KB_EMBED_BACKEND_LLAMA_SWAP = "llama-swap"
+        const val KB_EMBED_BACKEND_LITERT = "litert"
         const val PDF_LLAMA_SERVER_DEFAULT_URL = "http://localhost:8080"
         const val PDF_LLAMA_SWAP_DEFAULT_URL = "http://localhost:9292"
         const val KB_DEFAULT_CHUNK_SIZE = 1_000
@@ -3058,6 +3211,11 @@ class SettingsRepository(private val context: Context) {
                 "llamacpp",
                 "custom-llama-server" -> KB_EMBED_BACKEND_LLAMA_SERVER
                 KB_EMBED_BACKEND_OLLAMA -> KB_EMBED_BACKEND_OLLAMA
+                KB_EMBED_BACKEND_LITERT,
+                "litert-lm",
+                "litertlm",
+                "lite-rt",
+                "lite-rt-lm" -> KB_EMBED_BACKEND_LOCAL
                 KB_EMBED_BACKEND_LLAMA_SWAP,
                 "llamaswap",
                 "openai" -> KB_EMBED_BACKEND_LLAMA_SWAP
