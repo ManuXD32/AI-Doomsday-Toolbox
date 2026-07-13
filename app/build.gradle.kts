@@ -53,8 +53,8 @@ android {
         applicationId = "com.manuxd32.aidoomsdaytoolbox"
         minSdk = 26
         targetSdk = 35
-        versionCode = 946
-        versionName = "0.946"
+        versionCode = 947
+        versionName = "0.947"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
