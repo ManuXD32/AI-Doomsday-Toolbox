@@ -113,6 +113,13 @@ class MediaTranslationWorkflowServiceTest {
     }
 
     @Test
+    fun translatedSubtitleFileNameIncludesSourceAndTimestamp() {
+        val fileName = mediaTranslationTranslatedSubtitleFileName("My Video!.mp4", 1_234_567_890L)
+
+        assertEquals("translated_My_Video_1234567890.srt", fileName)
+    }
+
+    @Test
     fun latestTranscriptTimestampParsesWhisperOutputAndSrtTimestamps() {
         val raw = """
             [00:00:00.000 --> 00:00:02.000] hello

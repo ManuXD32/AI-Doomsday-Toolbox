@@ -1471,7 +1471,8 @@ object MediaTranslationWorkflowService {
             val translated = translatedResult.segments
             checkpoint = translatedResult.checkpoint
             translationMs = System.currentTimeMillis() - stageStartedAt
-            val translatedSrt = File(outputDir, "translated.srt").apply { writeText(SrtWriter.write(translated)) }
+            val translatedSrt = File(outputDir, mediaTranslationTranslatedSubtitleFileName(spec.sourceName, timestamp))
+                .apply { writeText(SrtWriter.write(translated)) }
             checkpoint = checkpoint.withStage(STAGE_TRANSLATED).copy(
                 translatedSrtPath = translatedSrt.absolutePath,
                 translatedSegmentCount = translated.size,
@@ -1661,7 +1662,8 @@ object MediaTranslationWorkflowService {
                     )
                 }
             }
-            val translatedSrt = File(outputDir, "translated.srt").apply { writeText(SrtWriter.write(translated)) }
+            val translatedSrt = File(outputDir, mediaTranslationTranslatedSubtitleFileName(spec.videoName, timestamp))
+                .apply { writeText(SrtWriter.write(translated)) }
             checkpoint = checkpoint.withStage(STAGE_TRANSLATED).copy(
                 translatedSrtPath = translatedSrt.absolutePath,
                 translatedSegmentCount = translated.size,
@@ -2576,10 +2578,7 @@ object MediaTranslationWorkflowService {
         isVideo && spec.outputMode != MediaTranslationOutputMode.AUDIO_ONLY
 
     private fun safeBaseName(name: String): String =
-        name.substringBeforeLast('.')
-            .replace(Regex("[^A-Za-z0-9._-]+"), "_")
-            .trim('_')
-            .ifBlank { "media" }
+        mediaTranslationSafeOutputBaseName(name)
 
     private fun ensureActive() {
         if (cancelled) throw CancellationException("Cancelled")
@@ -2631,6 +2630,15 @@ internal fun mediaTranslationLineProgressPercent(translatedCount: Int, totalCoun
     if (translatedCount <= 0 || totalCount <= 0) return 0
     return ((translatedCount.toDouble() / totalCount.toDouble()).coerceIn(0.0, 1.0) * 100.0).roundToInt()
 }
+
+internal fun mediaTranslationTranslatedSubtitleFileName(sourceName: String, timestamp: Long): String =
+    "translated_${mediaTranslationSafeOutputBaseName(sourceName)}_$timestamp.srt"
+
+internal fun mediaTranslationSafeOutputBaseName(name: String): String =
+    name.substringBeforeLast('.')
+        .replace(Regex("[^A-Za-z0-9._-]+"), "_")
+        .trim('_')
+        .ifBlank { "media" }
 
 internal fun mediaTranslationResumeStartMs(latestCheckpointMs: Long, backupMs: Long = 60_000L): Long =
     (latestCheckpointMs - backupMs).coerceAtLeast(0L)
