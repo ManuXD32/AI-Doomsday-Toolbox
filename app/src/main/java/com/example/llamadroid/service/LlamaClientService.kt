@@ -99,6 +99,33 @@ private fun LlamaChatEntity.withDefaultLiteRtContext(model: LiteRtModelEntity): 
 internal fun nativeChatLocalHostForServer(host: String): String =
     if (normalizeNativeChatServerHost(host).contains(":")) "::1" else "127.0.0.1"
 
+internal fun shouldAutoStartLocalLlamaServer(
+    server: LlamaServerEntity,
+    state: ServerState
+): Boolean =
+    server.isLlamaServerEngine() &&
+        isNativeChatLoopbackHost(server.host) &&
+        state is ServerState.Stopped
+
+internal fun shouldAttachMmprojForLocalAutoStart(
+    server: LlamaServerEntity,
+    imagePath: String?,
+    visionEnabled: Boolean,
+    selectedMmprojPath: String?
+): Boolean =
+    server.supportsVision &&
+        visionEnabled &&
+        !imagePath.isNullOrBlank() &&
+        !selectedMmprojPath.isNullOrBlank()
+
+internal fun liteRtAutoGpuWorkerMaxAttempts(model: LiteRtModelEntity): Int =
+    if (model.isKnownStableLiteRtGpuFamily()) 2 else 1
+
+private fun LiteRtModelEntity.isKnownStableLiteRtGpuFamily(): Boolean {
+    val lower = listOf(displayName, filename, repoId.orEmpty()).joinToString(" ").lowercase()
+    return "gemma" in lower
+}
+
 internal fun normalizeNativeChatServerHost(host: String): String {
     val trimmed = host.trim()
     return runCatching {
@@ -488,7 +515,11 @@ class LlamaClientService : Service() {
                 }
 
                 val chat = repository.getChat(chatId) ?: throw Exception("Chat with ID $chatId not found")
-                ensureLocalLlamaServerReadyIfNeeded(chatId = chatId, server = server)
+                ensureLocalLlamaServerReadyIfNeeded(
+                    chatId = chatId,
+                    server = server,
+                    imagePath = imagePath
+                )
 
                 val preparedUserTurn = prepareUserTurnForServer(
                     chatId = chatId,
@@ -656,13 +687,15 @@ class LlamaClientService : Service() {
 
     private suspend fun ensureLocalLlamaServerReadyIfNeeded(
         chatId: Long,
-        server: LlamaServerEntity
+        server: LlamaServerEntity,
+        imagePath: String?
     ) {
         if (!server.isLlamaServerEngine() || !isNativeChatLoopbackHost(server.host)) return
         val baseUrl = server.baseUrl()
         if (llamaServerChatService.checkConnection(baseUrl)) return
 
-        if (LlamaService.state.value is ServerState.Starting || LlamaService.state.value is ServerState.Loading) {
+        val serverState = LlamaService.state.value
+        if (serverState is ServerState.Starting || serverState is ServerState.Loading) {
             updateLocalLlamaServerStartupStatus(
                 chatId,
                 getString(R.string.llama_client_status_waiting_local_server)
@@ -671,19 +704,32 @@ class LlamaClientService : Service() {
                 return
             }
         }
+        if (!shouldAutoStartLocalLlamaServer(server, serverState) || LlamaService.hasRecentStartupFailure()) {
+            throw IllegalStateException(getString(R.string.llama_client_error_local_server_not_running))
+        }
 
         val modelPath = settingsRepo.selectedModelPath.value
             ?: throw IllegalStateException(getString(R.string.llama_client_error_no_selected_model))
+        val shouldPassVisionProjector = shouldAttachMmprojForLocalAutoStart(
+            server = server,
+            imagePath = imagePath,
+            visionEnabled = settingsRepo.enableVision.value,
+            selectedMmprojPath = settingsRepo.selectedMmprojPath.value
+        )
         val startIntent = Intent(applicationContext, LlamaService::class.java).apply {
             action = LlamaService.ACTION_START
             putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
             putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
             putExtra(LlamaService.EXTRA_HOST, nativeChatLocalHostForServer(server.host))
             putExtra(LlamaService.EXTRA_PORT, server.port)
+            putExtra(LlamaService.EXTRA_ALLOW_SETTINGS_MMPROJ, false)
+            if (shouldPassVisionProjector) {
+                putExtra(LlamaService.EXTRA_MMPROJ_PATH, settingsRepo.selectedMmprojPath.value)
+            }
             if (settingsRepo.speculativeEnabled.value) {
                 val speculativeMode = settingsRepo.speculativeMode.value
                 val shouldPassDraftModel =
-                    speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE ||
+                    speculativeMode.requiresDraftModel ||
                         (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && settingsRepo.mtpUseDraftModel.value)
                 if (shouldPassDraftModel) {
                     putExtra(LlamaService.EXTRA_DRAFT_MODEL_PATH, settingsRepo.draftModelPath.value)
@@ -2133,7 +2179,7 @@ class LlamaClientService : Service() {
                 onStatus(getString(R.string.litert_status_gpu_disabled_auto))
             } else {
                 try {
-                    return runGpuWorkerWithRetry(maxAttempts = 2)
+                    return runGpuWorkerWithRetry(maxAttempts = liteRtAutoGpuWorkerMaxAttempts(model))
                 } catch (e: LiteRtLmWorkerCrashedException) {
                     val detail = e.diagnosticDetail()
                     LiteRtLmAcceleratorHealth.recordGpuCrash(applicationContext, model, detail)

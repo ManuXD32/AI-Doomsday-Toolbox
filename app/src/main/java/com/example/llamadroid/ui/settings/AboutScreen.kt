@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -31,6 +32,13 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 @Composable
 fun AboutScreen(navController: NavController) {
     val context = LocalContext.current
+    val nativeBuildCommits = remember(context) {
+        runCatching {
+            context.assets.open("native_build_commits.txt").bufferedReader().use { reader ->
+                reader.readText().trim()
+            }
+        }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
     
     AppScreenScaffold(
         title = stringResource(R.string.about_title),
@@ -287,8 +295,45 @@ fun AboutScreen(navController: NavController) {
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colorScheme.primary
                 )
+            }
+
+            item {
+                NativeBuildCommitsCard(nativeBuildCommits)
                 Spacer(modifier = Modifier.height(24.dp))
             }
+        }
+    }
+}
+
+@Composable
+private fun NativeBuildCommitsCard(nativeBuildCommits: String?) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = stringResource(R.string.about_native_build_commits),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = nativeBuildCommits ?: stringResource(R.string.about_native_build_commits_unavailable),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -299,8 +344,6 @@ private fun DonationButton(
     text: String,
     onClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    
     OutlinedButton(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),

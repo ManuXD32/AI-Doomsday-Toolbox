@@ -1,5 +1,6 @@
 package com.example.llamadroid.onnx
 
+import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OnnxValue
 import ai.onnxruntime.TensorInfo
@@ -21,6 +22,9 @@ import java.nio.FloatBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
@@ -28,6 +32,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 private const val BGR_INPUT_SIZE = 1024
+private const val BGR_RUN_HEARTBEAT_MS = 5_000L
 private val BGR_IMAGE_MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
 private val BGR_IMAGE_STD = floatArrayOf(0.229f, 0.224f, 0.225f)
 
@@ -213,13 +218,10 @@ class OnnxBackgroundRemovalPipeline {
         val environment = OrtEnvironmentProvider.environment
         try {
             onProgress(OnnxBackgroundRemovalStage.LOADING_MODEL, 0.10f)
-            createOnnxSessionWithBackend(
+            createBackgroundRemovalSession(
                 environment = environment,
                 modelFile = File(config.modelPath),
-                requestedBackend = config.backend,
-                runtimeOptions = config.runtimeOptions,
-                componentLabel = "background_removal",
-                loadOrtFormat = false
+                config = config,
             ).use { sessionResult ->
                 onDiagnostic(
                     "session loaded model=${config.modelName} requested=${config.backend.name} " +
@@ -235,7 +237,12 @@ class OnnxBackgroundRemovalPipeline {
                 ).use { tensor ->
                     onDiagnostic("running input=$inputName source=${sourceBitmap.width}x${sourceBitmap.height}")
                     onProgress(OnnxBackgroundRemovalStage.RUNNING_MODEL, 0.38f)
-                    sessionResult.session.run(mapOf(inputName to tensor)).use { result ->
+                    runBackgroundRemovalSession(
+                        session = sessionResult.session,
+                        inputs = mapOf(inputName to tensor),
+                        modelName = config.modelName,
+                        onDiagnostic = onDiagnostic
+                    ).use { result ->
                         onProgress(OnnxBackgroundRemovalStage.READING_MASK, 0.72f)
                         val outputInfos = result.mapIndexed { index, entry ->
                             BgrOutputInfo(
@@ -323,6 +330,46 @@ class OnnxBackgroundRemovalPipeline {
         } finally {
             if (!sourceBitmap.isRecycled) sourceBitmap.recycle()
         }
+    }
+}
+
+private fun createBackgroundRemovalSession(
+    environment: OrtEnvironment,
+    modelFile: File,
+    config: OnnxBackgroundRemovalConfig
+): OnnxSessionLoadResult {
+    return createOnnxSessionWithBackend(
+        environment = environment,
+        modelFile = modelFile,
+        requestedBackend = config.backend,
+        runtimeOptions = config.runtimeOptions,
+        componentLabel = "background_removal",
+        loadOrtFormat = false
+    )
+}
+
+private fun runBackgroundRemovalSession(
+    session: ai.onnxruntime.OrtSession,
+    inputs: Map<String, OnnxTensor>,
+    modelName: String,
+    onDiagnostic: (String) -> Unit
+): ai.onnxruntime.OrtSession.Result {
+    val executor = Executors.newSingleThreadExecutor()
+    try {
+        val start = System.currentTimeMillis()
+        val future = executor.submit<ai.onnxruntime.OrtSession.Result> {
+            session.run(inputs)
+        }
+        while (true) {
+            try {
+                return future.get(BGR_RUN_HEARTBEAT_MS, TimeUnit.MILLISECONDS)
+            } catch (_: TimeoutException) {
+                val elapsedMs = System.currentTimeMillis() - start
+                onDiagnostic("running_model heartbeat elapsedMs=$elapsedMs model=$modelName")
+            }
+        }
+    } finally {
+        executor.shutdownNow()
     }
 }
 

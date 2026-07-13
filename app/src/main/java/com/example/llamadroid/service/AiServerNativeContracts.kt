@@ -70,6 +70,7 @@ object AiServerNativeContracts {
         AiServerType.LLAMA_CHAT -> listOf(
             contract("web_chat_send", "LlamaChatScreen", "LlamaClientService-compatible web runner", "LlamaChatEntity + LlamaServerEntity + NativeChatToolConfig", "AiServerWebMessageEntity + AiServerWebToolEventEntity", "Web providers + ModelRepository/LiteRT/Ollama/llama-swap", "NativeChatToolConfig + web provider params")
         )
+        AiServerType.AI_HUB -> emptyList()
     }
 
     fun serverJson(type: AiServerType): JSONObject = JSONObject()

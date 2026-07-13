@@ -148,6 +148,11 @@ class ProcessController {
             args.addAll(flags)
         }
 
+        if (config.nativeToolsEnabled && !hasAnyCommandFlag(customFlagsText, setOf("--tools"))) {
+            args.add("--tools")
+            args.add("all")
+        }
+
         return args
     }
 
@@ -195,8 +200,14 @@ class ProcessController {
         if (template.isBlank()) return getCommand(binaryPath, config)
 
         val defaultArgs = getCommand(binaryPath, config)
+        val templateContainsNativeToolsPlaceholder = template.contains("{native_tools_args}")
         val substituted = substituteTemplateValues(template, binaryPath, config, defaultArgs)
-        val renderedArgs = splitCommandLine(substituted).filter { it.isNotBlank() }
+        val renderedArgs = splitCommandLine(substituted).filter { it.isNotBlank() }.let { args ->
+            appendNativeToolsArgsIfNeeded(
+                args = args,
+                enabled = config.nativeToolsEnabled && !templateContainsNativeToolsPlaceholder
+            )
+        }
         if (renderedArgs.isEmpty()) return defaultArgs
 
         val hasExplicitBinary = template.contains("{binary}") ||
@@ -214,7 +225,8 @@ class ProcessController {
     ): String {
         val customFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
         val speculativeArgs = buildSpeculativeArgs(config)
-        val mtpArgs = emptyList<String>()
+        val mtpArgs = if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) speculativeArgs else emptyList()
+        val nativeToolsArgs = buildNativeToolsArgs(config.nativeToolsEnabled)
         val kvCacheArgs = if (config.kvCacheEnabled) {
             buildList {
                 add("--cache-type-k")
@@ -255,6 +267,7 @@ class ProcessController {
             "{default_args}" to buildCommandString(defaultArgs.drop(1)),
             "{speculative_args}" to buildCommandString(speculativeArgs),
             "{mtp_args}" to buildCommandString(mtpArgs),
+            "{native_tools_args}" to buildCommandString(nativeToolsArgs),
             "{kv_cache_args}" to buildCommandString(kvCacheArgs)
         )
 
@@ -292,12 +305,60 @@ class ProcessController {
                 add("--spec-draft-p-min")
                 add(String.format(java.util.Locale.US, "%.2f", config.mtpDraftPMin.coerceIn(0f, 1f)))
             }
+            LlamaSpeculativeMode.DRAFT_DFLASH -> {
+                val draftModel = config.draftModelPath ?: return emptyList()
+                listOf(
+                    "--spec-type", config.speculativeMode.flagValue,
+                    "-md", draftModel,
+                    "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString()
+                )
+            }
+            LlamaSpeculativeMode.NGRAM_MOD -> listOf(
+                "--spec-type", config.speculativeMode.flagValue,
+                "--spec-ngram-mod-n-min", config.ngramModNMin.coerceAtLeast(1).toString(),
+                "--spec-ngram-mod-n-max", config.ngramModNMax.coerceAtLeast(config.ngramModNMin.coerceAtLeast(1)).toString(),
+                "--spec-ngram-mod-n-match", config.ngramModNMatch.coerceAtLeast(1).toString()
+            )
+            LlamaSpeculativeMode.NGRAM_SIMPLE -> listOf(
+                "--spec-type", config.speculativeMode.flagValue,
+                "--spec-ngram-simple-size-n", config.ngramSimpleSizeN.coerceAtLeast(1).toString(),
+                "--spec-ngram-simple-size-m", config.ngramSimpleSizeM.coerceAtLeast(1).toString(),
+                "--spec-ngram-simple-min-hits", config.ngramSimpleMinHits.coerceAtLeast(1).toString()
+            )
+            LlamaSpeculativeMode.NGRAM_MAP_K -> listOf(
+                "--spec-type", config.speculativeMode.flagValue,
+                "--spec-ngram-map-k-size-n", config.ngramMapKSizeN.coerceAtLeast(1).toString(),
+                "--spec-ngram-map-k-size-m", config.ngramMapKSizeM.coerceAtLeast(1).toString(),
+                "--spec-ngram-map-k-min-hits", config.ngramMapKMinHits.coerceAtLeast(1).toString()
+            )
+            LlamaSpeculativeMode.NGRAM_MAP_K4V -> listOf(
+                "--spec-type", config.speculativeMode.flagValue,
+                "--spec-ngram-map-k4v-size-n", config.ngramMapK4VSizeN.coerceAtLeast(1).toString(),
+                "--spec-ngram-map-k4v-size-m", config.ngramMapK4VSizeM.coerceAtLeast(1).toString(),
+                "--spec-ngram-map-k4v-min-hits", config.ngramMapK4VMinHits.coerceAtLeast(1).toString()
+            )
+            LlamaSpeculativeMode.NGRAM_CACHE -> listOf(
+                "--spec-type", config.speculativeMode.flagValue
+            )
         }
+    }
+
+    private fun buildNativeToolsArgs(enabled: Boolean): List<String> =
+        if (enabled) listOf("--tools", "all") else emptyList()
+
+    private fun appendNativeToolsArgsIfNeeded(args: List<String>, enabled: Boolean): List<String> {
+        if (!enabled || hasAnyCommandFlag(args, setOf("--tools"))) return args
+        return args + buildNativeToolsArgs(enabled = true)
     }
 
     fun binarySupportsMtpSpeculative(binaryFile: File): Boolean {
         if (!binaryFile.isFile || !binaryFile.canRead()) return false
         return binaryContainsMarker(binaryFile, MTP_SPEC_TYPE_MARKER)
+    }
+
+    fun binarySupportsDflashSpeculative(binaryFile: File): Boolean {
+        if (!binaryFile.isFile || !binaryFile.canRead()) return false
+        return DFLASH_SPEC_MARKERS.any { marker -> binaryContainsMarker(binaryFile, marker) }
     }
 
     private fun binaryContainsMarker(binaryFile: File, marker: ByteArray): Boolean {
@@ -334,7 +395,10 @@ class ProcessController {
     }
 
     private fun hasAnyCommandFlag(command: String, flags: Set<String>): Boolean =
-        splitCommandLine(command).any { token ->
+        hasAnyCommandFlag(splitCommandLine(command), flags)
+
+    private fun hasAnyCommandFlag(args: List<String>, flags: Set<String>): Boolean =
+        args.any { token ->
             flags.any { flag -> token == flag || token.startsWith("$flag=") }
         }
 
@@ -348,12 +412,19 @@ class ProcessController {
     private companion object {
         private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
         private val MTP_SPEC_TYPE_MARKER = "draft-mtp".toByteArray(Charsets.US_ASCII)
+        private val DFLASH_SPEC_MARKERS = listOf(
+            "draft-dflash",
+            "common_speculative_impl_draft_dflash",
+            "llama_model_dflash",
+            "dflash"
+        ).map { it.toByteArray(Charsets.US_ASCII) }
     }
 
     suspend fun start(
         binaryPath: String, 
         config: LlamaConfig, 
         filesDir: File, 
+        nativeToolsWorkspaceDir: File? = null,
         customArgs: List<String>? = null,
         onLog: ((String) -> Unit)? = null,
         onReady: (() -> Unit)? = null,
@@ -377,11 +448,14 @@ class ProcessController {
             val nativeLibDir = File(binaryPath).parentFile
             setupLibrarySymlinks(nativeLibDir, libDir, binaryPath)
             
+            val workingDir = nativeToolsWorkspaceDir?.takeIf { config.nativeToolsEnabled } ?: filesDir
+            workingDir.mkdirs()
+
             val pb = ProcessBuilder(args)
             pb.redirectErrorStream(true)
             
             // Set working directory to app's files dir (like Termux does)
-            pb.directory(filesDir)
+            pb.directory(workingDir)
             
             // Set LD_LIBRARY_PATH to include both native lib dir and our symlink dir
             val ldPath = buildList {
@@ -397,9 +471,9 @@ class ProcessController {
             DebugLog.log("ProcessController: LD_LIBRARY_PATH=$ldPath")
             
             // Set environment variables like Termux does
-            pb.environment()["HOME"] = filesDir.absolutePath
-            pb.environment()["PWD"] = filesDir.absolutePath
-            pb.environment()["TMPDIR"] = filesDir.absolutePath
+            pb.environment()["HOME"] = workingDir.absolutePath
+            pb.environment()["PWD"] = workingDir.absolutePath
+            pb.environment()["TMPDIR"] = workingDir.absolutePath
             pb.environment()["PREFIX"] = filesDir.absolutePath
             if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath))) {
                 pb.environment()["GGML_BACKEND_PATH"] = nativeLibDir?.absolutePath.orEmpty()
@@ -415,7 +489,7 @@ class ProcessController {
                 pb.environment()["GGML_BACKEND_PATH"] = ""
                 pb.environment().remove("ADSP_LIBRARY_PATH")
             }
-            DebugLog.log("ProcessController: Working dir=${filesDir.absolutePath}")
+            DebugLog.log("ProcessController: Working dir=${workingDir.absolutePath}")
             
             process = pb.start()
             

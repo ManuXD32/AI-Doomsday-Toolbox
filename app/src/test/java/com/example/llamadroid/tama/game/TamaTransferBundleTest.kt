@@ -91,6 +91,48 @@ class TamaTransferBundleTest {
                     lastHeartbeatAt = 62L
                 )
             ),
+            marketQuotes = listOf(
+                TamaTransferMarketQuote(
+                    petId = pet.id,
+                    itemId = "crop_turnip",
+                    quoteWeekKey = "2026-W14",
+                    currentPrice = 42,
+                    unitsSoldSinceRefresh = 7,
+                    updatedAt = 63L
+                )
+            ),
+            locations = listOf(
+                TamaTransferLocation(
+                    id = "park_center",
+                    name = "Park Center",
+                    type = "PARK",
+                    description = "A cheerful plaza",
+                    cityId = "pet_town",
+                    x = 12,
+                    y = 34,
+                    isDiscovered = true,
+                    npcIdsJson = """["npc-1"]""",
+                    shopInventoryJson = """["seed_turnip"]""",
+                    jobsJson = """["park_ranger"]"""
+                )
+            ),
+            npcs = listOf(
+                TamaTransferNpc(
+                    id = "npc-1",
+                    name = "Luna",
+                    species = "cat",
+                    personality = "kind",
+                    geneticsJson = """{"eyeStyle":1}""",
+                    homeLocationId = "park_center",
+                    currentLocationId = "park_center",
+                    job = "park_ranger",
+                    age = 9,
+                    marriedToPetId = null,
+                    childrenIdsJson = "[]",
+                    likesJson = """["flowers"]""",
+                    dislikesJson = """["mud"]"""
+                )
+            ),
             adventureSessions = listOf(
                 TamaTransferAdventureSession(
                     id = "session-1",
@@ -176,6 +218,14 @@ class TamaTransferBundleTest {
                 phaseNumber = 8,
                 stateJson = """{"petId":"pet-1","skillCooldowns":{"quick_claw":1},"guardUses":2}""",
                 updatedAt = 101L
+            ),
+            adventureGateNightArenaRun = TamaTransferAdventureGateNightArenaRun(
+                petId = pet.id,
+                nightKey = "2026-04-03-night",
+                levelsJson = """[{"levelIndex":0,"levelId":"night-0"}]""",
+                clearedLevelIdsJson = """["night-0"]""",
+                createdAt = 102L,
+                updatedAt = 103L
             )
         )
 
@@ -190,6 +240,12 @@ class TamaTransferBundleTest {
         assertEquals(1, parsed.farmTiles.size)
         assertEquals(1, parsed.farmUpgrades.size)
         assertEquals(1, parsed.deepDreamRuns.size)
+        assertEquals(1, parsed.marketQuotes.size)
+        assertEquals(42, parsed.marketQuotes.first().currentPrice)
+        assertEquals(1, parsed.locations.size)
+        assertEquals("park_center", parsed.locations.first().id)
+        assertEquals(1, parsed.npcs.size)
+        assertEquals("npc-1", parsed.npcs.first().id)
         assertEquals(1, parsed.adventureSessions.size)
         assertEquals(1, parsed.adventureStages.size)
         assertEquals("adventure_worlds/session-1.png", parsed.adventureSessions.first().relativeWorldImagePath)
@@ -202,6 +258,7 @@ class TamaTransferBundleTest {
         assertEquals(7, parsed.adventureGateWorldProgress.first().highestClearedPhase)
         assertEquals("sproutvale_gate", parsed.adventureGateBattleState?.worldId)
         assertTrue(parsed.adventureGateBattleState?.stateJson.orEmpty().contains("skillCooldowns"))
+        assertEquals("2026-04-03-night", parsed.adventureGateNightArenaRun?.nightKey)
     }
 
     @Test
@@ -285,9 +342,13 @@ class TamaTransferBundleTest {
         assertTrue(parsed.farmUpgrades.isEmpty())
         assertNull(parsed.settings)
         assertTrue(parsed.deepDreamRuns.isEmpty())
+        assertTrue(parsed.marketQuotes.isEmpty())
+        assertTrue(parsed.locations.isEmpty())
+        assertTrue(parsed.npcs.isEmpty())
         assertTrue(parsed.adventureSessions.isEmpty())
         assertTrue(parsed.adventureStages.isEmpty())
         assertEquals(null, parsed.dungeonProgress)
+        assertEquals(null, parsed.adventureGateNightArenaRun)
     }
 
     @Test

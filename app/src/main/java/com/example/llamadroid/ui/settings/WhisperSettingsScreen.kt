@@ -26,18 +26,30 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 fun WhisperSettingsScreen(navController: NavController) {
     val context = LocalContext.current
     val settingsRepo = remember { SettingsRepository(context) }
-    
-    val whisperThreads by settingsRepo.whisperThreads.collectAsState()
-    
+
     AppScreenScaffold(
         title = stringResource(R.string.whisper_settings_title),
         subtitle = stringResource(R.string.settings_whisper_desc),
         onBack = { navController.popBackStack() }
     ) { _ ->
-        LazyColumn(
+        WhisperSettingsContent(
+            settingsRepo = settingsRepo,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        )
+    }
+}
+
+@Composable
+fun WhisperSettingsContent(
+    settingsRepo: SettingsRepository,
+    modifier: Modifier = Modifier
+) {
+    val whisperThreads by settingsRepo.whisperThreads.collectAsState()
+
+    LazyColumn(
+            modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Whisper Threads
@@ -98,5 +110,4 @@ fun WhisperSettingsScreen(navController: NavController) {
                 }
             }
         }
-    }
 }

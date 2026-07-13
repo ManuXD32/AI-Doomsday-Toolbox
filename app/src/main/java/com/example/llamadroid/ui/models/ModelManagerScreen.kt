@@ -33,12 +33,14 @@ import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
-import com.example.llamadroid.util.Downloader
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -80,7 +82,9 @@ fun ModelManagerScreen(navController: NavController) {
     )
     
     val progressMap by viewModel.downloadProgress.collectAsState()
-    val activeDownloads = progressMap.filter { it.value < 1f }.size
+    val activeDownloads = progressMap.count {
+        it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f
+    }
 
     AppPageBackground {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -315,6 +319,13 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                             Text(stringResource(R.string.models_cap_embedding))
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        stringResource(R.string.models_import_delete_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             },
             confirmButton = {
@@ -897,67 +908,38 @@ private suspend fun importModel(
     isVision: Boolean,
     sdCaps: String?
 ) {
+    var tempFile: File? = null
     try {
-        val settingsRepo = com.example.llamadroid.data.SettingsRepository(context)
-        val modelStorageUri = settingsRepo.modelStorageUri.value
-        val targetFilename = filename.ifBlank { "imported_model.gguf" }
-        
-        // Determine subfolder based on type
-        val subfolder = when (type) {
-            ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.VISION, ModelType.MMPROJ -> "llm"
-            ModelType.QUADTRIX -> "quadtrix"
-            ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
-            ModelType.SD_DIFFUSION -> "sd/flux"
-            ModelType.SD_CLIP_L -> "sd/clip_l"
-            ModelType.SD_CLIP_G -> "sd/clip_g"
-            ModelType.SD_T5XXL -> "sd/t5xxl"
-            ModelType.SD_TAE -> "sd/tae"
-            ModelType.SD_VAE -> "sd/vae"
-            ModelType.SD_LORA -> "sd/lora"
-            ModelType.SD_CONTROLNET -> "sd/controlnet"
-            ModelType.SD_PHOTOMAKER -> "sd/photomaker"
-            ModelType.ONNX_IMAGE_GEN,
-            ModelType.ONNX_TTS,
-            ModelType.ONNX_BACKGROUND_REMOVAL,
-            ModelType.ONNX_IMAGE_UPSCALER -> "legacy/unsupported_media"
-            ModelType.WHISPER -> "whisper"
-        }
-        
-        var finalPath: String
-        
-        // Use app's external files directory if enabled, otherwise internal
-        // Note: Native binaries can only access app-specific directories
-        val useExternalStorage = modelStorageUri != null
-        
-        val modelsDir = if (useExternalStorage) {
-            val externalDir = context.getExternalFilesDir(null)
-            if (externalDir != null) {
-                File(externalDir, "models/$subfolder").apply { mkdirs() }
-            } else {
-                File(context.filesDir, "models").apply { mkdirs() }
-            }
-        } else {
-            File(context.filesDir, "models").apply { mkdirs() }
-        }
-        
-        val targetFile = File(modelsDir, targetFilename)
+        val db = AppDatabase.getDatabase(context)
+        val repository = ModelRepository(context, db.modelDao())
+        val requestedFilename = filename.ifBlank { "imported_model.gguf" }
+        val targetFilename = ModelLibraryManager.canonicalFilename(requestedFilename)
+        val runtimeDir = repository.getModelDir(type).apply { mkdirs() }
+        val targetFile = File(runtimeDir, targetFilename)
+        tempFile = File(runtimeDir, "$targetFilename.importing")
         context.contentResolver.openInputStream(uri)?.use { input ->
-            targetFile.outputStream().use { output ->
+            tempFile!!.outputStream().use { output ->
                 input.copyTo(output)
             }
+        } ?: error("Unable to open selected model")
+        replaceImportedFile(tempFile!!, targetFile)
+        val finalPath = targetFile.absolutePath
+        val existing = db.modelDao().getModelByFilename(targetFilename)
+        if (existing != null && existing.path != finalPath) {
+            repository.deleteModelArtifacts(existing)
         }
-        finalPath = targetFile.absolutePath
         com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Saved to: $finalPath")
-        
+
         viewModel.importLocalModel(
             path = finalPath,
-            filename = filename,
+            filename = targetFilename,
             modelType = type,
             hasVision = isVision,
             hasEmbedding = false,
             sdCapabilities = sdCaps
         )
     } catch (e: Exception) {
+        tempFile?.takeIf { it.exists() }?.delete()
         com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Error: ${e.message}")
         e.printStackTrace()
     }
@@ -975,128 +957,57 @@ private suspend fun importModelWithProgress(
     onProgress: (Float) -> Unit,
     onComplete: () -> Unit
 ) {
+    var tempFile: File? = null
     try {
-        val settingsRepo = com.example.llamadroid.data.SettingsRepository(context)
-        val modelStorageUri = settingsRepo.modelStorageUri.value
-        val targetFilename = filename.ifBlank { "imported_model.gguf" }
-        
-        // Determine subfolder based on type
-        val subfolder = when (type) {
-            ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.VISION, ModelType.MMPROJ -> "llm"
-            ModelType.QUADTRIX -> "quadtrix"
-            ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
-            ModelType.SD_DIFFUSION -> "sd/flux"
-            ModelType.SD_CLIP_L -> "sd/clip_l"
-            ModelType.SD_CLIP_G -> "sd/clip_g"
-            ModelType.SD_T5XXL -> "sd/t5xxl"
-            ModelType.SD_TAE -> "sd/tae"
-            ModelType.SD_VAE -> "sd/vae"
-            ModelType.SD_LORA -> "sd/lora"
-            ModelType.SD_CONTROLNET -> "sd/controlnet"
-            ModelType.SD_PHOTOMAKER -> "sd/photomaker"
-            ModelType.ONNX_IMAGE_GEN,
-            ModelType.ONNX_TTS,
-            ModelType.ONNX_BACKGROUND_REMOVAL,
-            ModelType.ONNX_IMAGE_UPSCALER -> "legacy/unsupported_media"
-            ModelType.WHISPER -> "whisper"
-        }
-        
-        var finalPath: String
-        var didCopy = false
-        
-        // Check if we have "All files access" permission for direct path access
-        val hasAllFilesAccess = com.example.llamadroid.util.StoragePermissionHelper.hasAllFilesAccess()
-        
-        // FIRST: Try to resolve SAF URI to a real file path (for SD card/external storage)
-        val directPath = com.example.llamadroid.util.FilePathResolver.getPathFromUri(context, uri)
-        
-        if (directPath != null && hasAllFilesAccess && com.example.llamadroid.util.FilePathResolver.isPathAccessible(directPath)) {
-            // We can access the file directly! No copy needed.
-            com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Using direct path (no copy): $directPath")
-            finalPath = directPath
-            didCopy = false
-            
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                onProgress(1f)  // Instant completion
-            }
-        } else {
-            // Check if direct path found but no permission
-            if (directPath != null && !hasAllFilesAccess) {
-                com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Direct path available but missing 'All files access' permission, copying...")
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    android.widget.Toast.makeText(
-                        context, 
-                        context.getString(R.string.models_tip_all_files), 
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-            
-            // Fallback: Copy the file to app storage
-            com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Direct path not available, copying file...")
-            
-            // Use app's external files directory if enabled, otherwise internal
-            val useExternalStorage = modelStorageUri != null
-            
-            val modelsDir = if (useExternalStorage) {
-                val externalDir = context.getExternalFilesDir(null)
-                if (externalDir != null) {
-                    File(externalDir, "models/$subfolder").apply { mkdirs() }
-                } else {
-                    File(context.filesDir, "models").apply { mkdirs() }
-                }
-            } else {
-                File(context.filesDir, "models").apply { mkdirs() }
-            }
-            
-            val targetFile = File(modelsDir, targetFilename)
-            
-            // Get total file size for progress tracking
-            val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { 
-                it.length 
-            } ?: 0L
-            
-            com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Starting copy: $filename (${fileSize / (1024*1024)} MB)")
-            
-            // Copy with progress tracking
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                targetFile.outputStream().use { output ->
-                    val buffer = ByteArray(8192)
-                    var bytesRead: Int
-                    var totalBytesRead = 0L
-                    var lastProgressUpdate = 0L
-                    
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        totalBytesRead += bytesRead
-                        
-                        // Update progress every 100KB to avoid too many UI updates
-                        if (totalBytesRead - lastProgressUpdate > 100_000) {
-                            val progress = if (fileSize > 0) {
-                                (totalBytesRead.toFloat() / fileSize).coerceIn(0f, 1f)
-                            } else {
-                                0f
-                            }
-                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                onProgress(progress)
-                            }
-                            lastProgressUpdate = totalBytesRead
+        val db = AppDatabase.getDatabase(context)
+        val repository = ModelRepository(context, db.modelDao())
+        val requestedFilename = filename.ifBlank { "imported_model.gguf" }
+        val targetFilename = ModelLibraryManager.canonicalFilename(requestedFilename)
+        val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
+            it.length
+        } ?: 0L
+
+        com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Starting copy: $targetFilename (${fileSize / (1024 * 1024)} MB)")
+
+        val runtimeDir = repository.getModelDir(type).apply { mkdirs() }
+        val targetFile = File(runtimeDir, targetFilename)
+        tempFile = File(runtimeDir, "$targetFilename.importing")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            tempFile!!.outputStream().use { output ->
+                val buffer = ByteArray(8192)
+                var bytesRead: Int
+                var totalBytesRead = 0L
+                var lastProgressUpdate = 0L
+
+                while (input.read(buffer).also { bytesRead = it } != -1) {
+                    output.write(buffer, 0, bytesRead)
+                    totalBytesRead += bytesRead
+                    if (totalBytesRead - lastProgressUpdate > 100_000) {
+                        val progress = if (fileSize > 0) {
+                            (totalBytesRead.toFloat() / fileSize).coerceIn(0f, 1f)
+                        } else {
+                            0f
                         }
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                            onProgress(progress)
+                        }
+                        lastProgressUpdate = totalBytesRead
                     }
                 }
             }
-            
-            finalPath = targetFile.absolutePath
-            didCopy = true
-            com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Saved to: $finalPath")
-            
-            // Final progress update
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                onProgress(1f)
-            }
+        } ?: error("Unable to open selected model")
+        replaceImportedFile(tempFile!!, targetFile)
+        val finalPath = targetFile.absolutePath
+        val existing = db.modelDao().getModelByFilename(targetFilename)
+        if (existing != null && existing.path != finalPath) {
+            repository.deleteModelArtifacts(existing)
         }
-        
-        // Parse GGUF to detect layer count
+        com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Saved to: $finalPath")
+
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            onProgress(1f)
+        }
+
         var layerCount = 0
         if (type == ModelType.LLM && finalPath.endsWith(".gguf")) {
             try {
@@ -1109,27 +1020,18 @@ private suspend fun importModelWithProgress(
                 com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Failed to parse GGUF for layers: ${e.message}")
             }
         }
-        
+
         viewModel.importLocalModel(
             path = finalPath,
-            filename = filename,
+            filename = targetFilename,
             modelType = type,
             hasVision = isVision,
             hasEmbedding = false,
             sdCapabilities = sdCaps,
             layerCount = layerCount
         )
-        
-        if (!didCopy) {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                android.widget.Toast.makeText(
-                    context, 
-                    context.getString(R.string.models_linked_success), 
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
     } catch (e: Exception) {
+        tempFile?.takeIf { it.exists() }?.delete()
         com.example.llamadroid.util.DebugLog.log("[MODEL-IMPORT] Error: ${e.message}")
         e.printStackTrace()
     } finally {
@@ -1139,10 +1041,26 @@ private suspend fun importModelWithProgress(
     }
 }
 
+private fun replaceImportedFile(tempFile: File, targetFile: File) {
+    if (targetFile.exists()) {
+        targetFile.delete()
+    }
+    if (!tempFile.renameTo(targetFile)) {
+        tempFile.inputStream().use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        tempFile.delete()
+    }
+}
 @Composable
 fun DownloadingTab(viewModel: ModelManagerViewModel) {
+    val context = LocalContext.current
     val progressMap by viewModel.downloadProgress.collectAsState()
-    val activeDownloads = progressMap.filter { it.value < 1f }
+    val activeDownloads = progressMap.filter {
+        it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f
+    }
     
     if (activeDownloads.isEmpty()) {
         Box(
@@ -1175,6 +1093,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             items(activeDownloads.toList()) { (repoId, progress) ->
+                val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -1200,7 +1119,11 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                 )
                             }
                             Text(
-                                "${(progress * 100).toInt()}%",
+                                if (isIndeterminate) {
+                                    stringResource(R.string.models_downloading)
+                                } else {
+                                    "${(progress * 100).toInt()}%"
+                                },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -1208,11 +1131,11 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                             // Cancel button
                             IconButton(
                                 onClick = { 
-                                    val filename = com.example.llamadroid.data.model.DownloadProgressHolder.getFilename(repoId)
+                                    val filename = DownloadProgressHolder.getFilename(repoId)
                                     if (filename != null) {
-                                        Downloader.cancelDownload(filename)
+                                        DownloadService.cancelDownload(context, filename, repoId)
                                     }
-                                    com.example.llamadroid.data.model.DownloadProgressHolder.removeProgress(repoId)
+                                    DownloadProgressHolder.removeProgress(repoId)
                                 }
                             ) {
                                 Icon(
@@ -1225,15 +1148,26 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                         
                         Spacer(modifier = Modifier.height(12.dp))
                         
-                        LinearProgressIndicator(
-                            progress = { progress },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(8.dp)
-                                .clip(RoundedCornerShape(4.dp)),
-                            color = MaterialTheme.colorScheme.primary,
-                            trackColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        if (isIndeterminate) {
+                            LinearProgressIndicator(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        } else {
+                            LinearProgressIndicator(
+                                progress = { progress.coerceIn(0f, 1f) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp)),
+                                color = MaterialTheme.colorScheme.primary,
+                                trackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        }
                     }
                 }
             }
@@ -1341,7 +1275,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
     LaunchedEffect(selectedRepoId) {
         downloadMmproj = true
     }
-    
+
     // File selection dialog
     if (selectedRepoId != null && availableFiles.isNotEmpty()) {
         AlertDialog(
@@ -1403,6 +1337,14 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
             },
             text = {
                 LazyColumn {
+                    item {
+                        Text(
+                            stringResource(R.string.models_model_files_section),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    }
                     items(availableFiles) { fileInfo ->
                         Card(
                             onClick = {
@@ -1439,6 +1381,59 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                     color = MaterialTheme.colorScheme.primary,
                                     fontWeight = FontWeight.Bold
                                 )
+                            }
+                        }
+                    }
+                    if (visionFiles.isNotEmpty()) {
+                        item {
+                            Text(
+                                stringResource(R.string.models_vision_files_section),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(top = 14.dp, bottom = 6.dp)
+                            )
+                        }
+                        items(visionFiles) { fileInfo ->
+                            Card(
+                                onClick = {
+                                    viewModel.downloadModel(selectedRepoId!!, fileInfo.filename, ModelType.VISION_PROJECTOR)
+                                    viewModel.closeFileSelectionDialog()
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            fileInfo.filename,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            stringResource(R.string.models_download_mmproj_only),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.75f)
+                                        )
+                                    }
+                                    Text(
+                                        fileInfo.formattedSize(),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                             }
                         }
                     }
@@ -1499,6 +1494,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
         }
         
         LazyColumn(
+            modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(top = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {

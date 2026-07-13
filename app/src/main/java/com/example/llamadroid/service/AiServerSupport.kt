@@ -29,7 +29,8 @@ enum class AiServerType(
     TTS("tts", 10104, "Voice Studio", "🔊"),
     VIDEO_UPSCALE("video_upscale", 10105, "Video Upscale", "🎬"),
     DOCS_DATASETS("docs_datasets", 10106, "Docs and Datasets", "📄"),
-    LLAMA_CHAT("llama_chat", 10107, "Llama Chat", "🦙");
+    LLAMA_CHAT("llama_chat", 10107, "Llama Chat", "🦙"),
+    AI_HUB("ai_hub", 10108, "AI HUB", "🧭");
 
     companion object {
         fun fromId(id: String): AiServerType? = entries.firstOrNull { it.id == id }
@@ -71,6 +72,40 @@ data class AiServerRuntimeState(
     val urls: List<Pair<String, String>> = emptyList(),
     val error: String? = null
 )
+
+data class AiHubServerEntry(
+    val serverType: String,
+    val displayName: String,
+    val emoji: String,
+    val port: Int,
+    val running: Boolean,
+    val lanVisible: Boolean
+)
+
+object AiHubDirectory {
+    fun entries(
+        configs: List<AiServerConfigEntity>,
+        runtimeStates: List<AiServerRuntimeState>
+    ): List<AiHubServerEntry> {
+        val configsByType = configs.associateBy { it.serverType }
+        val runtimeByType = runtimeStates.associateBy { it.serverType }
+        return AiServerType.entries
+            .filterNot { it == AiServerType.AI_HUB }
+            .map { type ->
+                val config = configsByType[type.id]
+                val runtime = runtimeByType[type.id]
+                AiHubServerEntry(
+                    serverType = type.id,
+                    displayName = config?.displayName?.takeIf { it.isNotBlank() } ?: type.displayName,
+                    emoji = type.emoji,
+                    port = config?.port ?: runtime?.port ?: type.defaultPort,
+                    running = runtime?.running == true,
+                    lanVisible = config?.lanVisible ?: runtime?.lanVisible ?: false
+                )
+            }
+            .sortedBy { it.port }
+    }
+}
 
 data class AiServerJob(
     val id: String,

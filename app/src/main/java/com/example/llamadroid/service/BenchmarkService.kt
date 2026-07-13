@@ -8,6 +8,7 @@ import com.example.llamadroid.data.db.BenchmarkResult
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.WakeLockManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -115,7 +116,8 @@ class BenchmarkService(private val context: Context) {
         maxThreads: Int,
         promptTokens: Int,
         genTokens: Int,
-        runName: String
+        runName: String,
+        waitBetweenTestsSeconds: Int = 0
     ) {
         // Cancel any existing job
         benchmarkJob?.cancel()
@@ -129,6 +131,7 @@ class BenchmarkService(private val context: Context) {
                 promptTokens = promptTokens,
                 genTokens = genTokens,
                 runName = runName,
+                waitBetweenTestsSeconds = waitBetweenTestsSeconds,
                 onProgress = { _, _ -> }  // Progress handled by global state
             )
         }
@@ -140,7 +143,8 @@ class BenchmarkService(private val context: Context) {
         maxThreads: Int,
         promptTokens: Int,
         genTokens: Int,
-        runName: String
+        runName: String,
+        waitBetweenTestsSeconds: Int = 0
     ) {
         val queuedModels = models.distinctBy { it.modelPath }.filter { it.modelPath.isNotBlank() }
         if (queuedModels.isEmpty()) return
@@ -177,6 +181,7 @@ class BenchmarkService(private val context: Context) {
                         promptTokens = promptTokens,
                         genTokens = genTokens,
                         runName = queueRunName,
+                        waitBetweenTestsSeconds = waitBetweenTestsSeconds,
                         runStartedAtOverride = runStartedAt,
                         resetCancel = index == 0,
                         finalizeState = false,
@@ -402,6 +407,7 @@ class BenchmarkService(private val context: Context) {
         promptTokens: Int = 512,
         genTokens: Int = 128,
         runName: String = "",
+        waitBetweenTestsSeconds: Int = 0,
         runStartedAtOverride: Long? = null,
         resetCancel: Boolean = true,
         finalizeState: Boolean = true,
@@ -419,6 +425,7 @@ class BenchmarkService(private val context: Context) {
         val runStartedAt = runStartedAtOverride ?: System.currentTimeMillis()
         val trimmedRunName = runName.trim()
         val safeProgressSpan = progressSpan.coerceIn(0f, 1f)
+        val safeWaitBetweenTestsSeconds = waitBetweenTestsSeconds.coerceAtLeast(0)
 
         fun scaleProgress(localProgress: Float): Float {
             return (progressBase + localProgress.coerceIn(0f, 1f) * safeProgressSpan).coerceIn(0f, 1f)
@@ -507,6 +514,20 @@ class BenchmarkService(private val context: Context) {
                     results.add(dbResult)
                     DebugLog.log("Benchmark: Saved result for $threads threads: pp=${result.promptTokensPerSecond}, tg=${result.genTokensPerSecond}")
                 }
+
+                if (shouldWaitBetweenThreadTests(safeWaitBetweenTestsSeconds, threads, safeMaxThreads, isCancelled)) {
+                    val waitStatus = context.getString(R.string.benchmark_progress_cooling_down, safeWaitBetweenTestsSeconds)
+                    val decoratedWaitStatus = decorateStatus(waitStatus)
+                    _progressText.value = decoratedWaitStatus
+                    _progress.value = scaleProgress(overallProgress + (1f / totalTests.toFloat()))
+                    onProgress(decoratedWaitStatus, _progress.value)
+                    UnifiedNotificationManager.updateProgress(
+                        taskId,
+                        overallProgress + (1f / totalTests.toFloat()),
+                        waitStatus
+                    )
+                    waitForCooldown(safeWaitBetweenTestsSeconds)
+                }
             }
             
             // Complete notification
@@ -533,4 +554,20 @@ class BenchmarkService(private val context: Context) {
     private fun queueTimestampFormatter(): SimpleDateFormat {
         return SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US)
     }
+
+    private suspend fun waitForCooldown(seconds: Int) {
+        repeat(seconds.coerceAtLeast(0)) {
+            if (isCancelled || !coroutineContext.isActive) return
+            delay(1000L)
+        }
+    }
+}
+
+internal fun shouldWaitBetweenThreadTests(
+    waitBetweenTestsSeconds: Int,
+    currentThreads: Int,
+    maxThreads: Int,
+    isCancelled: Boolean
+): Boolean {
+    return waitBetweenTestsSeconds > 0 && currentThreads < maxThreads && !isCancelled
 }

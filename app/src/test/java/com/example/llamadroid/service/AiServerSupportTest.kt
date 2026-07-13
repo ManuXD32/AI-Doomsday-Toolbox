@@ -17,7 +17,7 @@ class AiServerSupportTest {
         val configs = AiServerType.defaultConfigs(now = 42L)
 
         assertEquals(AiServerType.entries.size, configs.size)
-        assertEquals((10101..10107).toList(), configs.map { it.port })
+        assertEquals((10101..10108).toList(), configs.map { it.port })
         assertTrue(configs.all { it.accessMode == AiServerAccessMode.PUBLIC })
         assertTrue(configs.all { !it.enabled && !it.lanVisible })
         assertTrue(configs.all { it.createdAt == 42L && it.updatedAt == 42L })
@@ -218,6 +218,24 @@ class AiServerSupportTest {
     }
 
     @Test
+    fun `browser webui supports ai hub launcher mode`() {
+        val assetDir = listOf(
+            File("app/src/main/assets/ai_servers_webui"),
+            File("src/main/assets/ai_servers_webui")
+        ).first { it.exists() }
+        val app = File(assetDir, "app.js").readText()
+
+        assertTrue(app.contains("const isHubServer = serverType === \"ai_hub\""))
+        assertTrue(app.contains("hubServers: \"Servers\""))
+        assertTrue(app.contains("hubServers: \"Servidores\""))
+        assertTrue(app.contains("window.location.protocol"))
+        assertTrue(app.contains("window.location.hostname"))
+        assertTrue(app.contains("target=\"_blank\""))
+        assertTrue(app.contains("hub-server-card \${server.running ? \"active\" : \"inactive\"}"))
+        assertTrue(app.contains("hubInactiveHint"))
+    }
+
+    @Test
     fun `native web contracts cover every exposed server action`() {
         val expected = mapOf(
             AiServerType.IMAGE to setOf("sd_txt2img", "sd_img2img", "sd_upscale", "onnx_txt2img", "onnx_img2img", "onnx_bgr"),
@@ -257,6 +275,31 @@ class AiServerSupportTest {
                 assertTrue(contract.defaultsSource.isNotBlank())
             }
         }
+
+        assertTrue(AiServerNativeContracts.forServer(AiServerType.AI_HUB).isEmpty())
+    }
+
+    @Test
+    fun `ai hub directory excludes itself and mirrors runtime state`() {
+        val configs = listOf(
+            AiServerConfigEntity(serverType = AiServerType.IMAGE.id, displayName = "Image Studio", port = 10121, lanVisible = false),
+            AiServerConfigEntity(serverType = AiServerType.AI_HUB.id, displayName = "AI HUB", port = 10108, lanVisible = true),
+            AiServerConfigEntity(serverType = AiServerType.LLAMA_CHAT.id, displayName = "Llama Chat", port = 10177, lanVisible = true)
+        )
+        val runtimeStates = listOf(
+            AiServerRuntimeState(serverType = AiServerType.IMAGE.id, running = true, port = 10121, lanVisible = false),
+            AiServerRuntimeState(serverType = AiServerType.AI_HUB.id, running = true, port = 10108, lanVisible = true),
+            AiServerRuntimeState(serverType = AiServerType.LLAMA_CHAT.id, running = false, port = 10177, lanVisible = true)
+        )
+
+        val entries = AiHubDirectory.entries(configs, runtimeStates)
+
+        assertFalse(entries.any { it.serverType == AiServerType.AI_HUB.id })
+        assertEquals(7, entries.size)
+        assertEquals(10121, entries.first { it.serverType == AiServerType.IMAGE.id }.port)
+        assertTrue(entries.first { it.serverType == AiServerType.IMAGE.id }.running)
+        assertEquals(10177, entries.first { it.serverType == AiServerType.LLAMA_CHAT.id }.port)
+        assertFalse(entries.first { it.serverType == AiServerType.LLAMA_CHAT.id }.running)
     }
 
     @Test

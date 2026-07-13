@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Square
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.*
@@ -440,7 +441,7 @@ fun LlamaChatScreen(
                         context.getString(R.string.llama_engine_llama_server)
                     }
                 )
-                server.modelName?.takeIf { it.isNotBlank() }?.let(::add)
+                server.modelName?.takeIf { it.isNotBlank() }?.let { add(displayLlamaModelName(it)) }
             }.joinToString(separator = " · ")
         } ?: context.getString(R.string.llama_no_servers)
     }
@@ -1639,6 +1640,47 @@ fun LlamaChatScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(
+                                            if (currentChat?.pinnedToAiHub == true) {
+                                                R.string.llama_unpin_ai_hub
+                                            } else {
+                                                R.string.llama_pin_ai_hub
+                                            }
+                                        )
+                                    )
+                                },
+                                enabled = currentChat != null && (currentChat?.pinnedToAiHub == true || activeServer != null),
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Star,
+                                        contentDescription = null,
+                                        tint = if (currentChat?.pinnedToAiHub == true) {
+                                            Color(0xFFFFC107)
+                                        } else {
+                                            LocalContentColor.current
+                                        }
+                                    )
+                                },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    val chat = currentChat ?: return@DropdownMenuItem
+                                    if (chat.pinnedToAiHub) {
+                                        viewModel.setChatPinnedToAiHub(chat, pinned = false, serverId = null)
+                                        Toast.makeText(context, context.getString(R.string.llama_unpin_ai_hub_done), Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        val serverId = activeServer?.id
+                                        if (serverId == null) {
+                                            Toast.makeText(context, context.getString(R.string.llama_pin_ai_hub_requires_server), Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            viewModel.setChatPinnedToAiHub(chat, pinned = true, serverId = serverId)
+                                            Toast.makeText(context, context.getString(R.string.llama_pin_ai_hub_done), Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.llama_clear_chat)) },
                                 enabled = messages.isNotEmpty() && !isGeneratingAnyChat,

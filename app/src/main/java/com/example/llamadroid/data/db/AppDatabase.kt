@@ -105,6 +105,7 @@ class Converters {
         com.example.llamadroid.data.model.LlamaMessageEntity::class,
         com.example.llamadroid.data.model.LlamaScheduledTaskEntity::class,
         com.example.llamadroid.data.model.LlamaScheduledTaskLogEntity::class,
+        com.example.llamadroid.data.model.LlamaSpeculativeRunEntity::class,
         OrganizerEventEntity::class,
         OrganizerAlarmEntity::class,
         OrganizerLlmSettingsEntity::class,
@@ -130,7 +131,7 @@ class Converters {
         AiServerWebMessageAttachmentEntity::class,
         AiServerWebToolEventEntity::class
     ], 
-    version = 81,
+    version = 87,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -158,6 +159,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun llamaChatDao(): com.example.llamadroid.data.dao.LlamaChatDao
     abstract fun llamaMessageDao(): com.example.llamadroid.data.dao.LlamaMessageDao
     abstract fun llamaScheduledTaskDao(): com.example.llamadroid.data.dao.LlamaScheduledTaskDao
+    abstract fun llamaSpeculativeRunDao(): com.example.llamadroid.data.dao.LlamaSpeculativeRunDao
     abstract fun organizerDao(): OrganizerDao
     abstract fun quadtrixProfileDao(): QuadtrixProfileDao
     abstract fun quadtrixRunDao(): QuadtrixRunDao

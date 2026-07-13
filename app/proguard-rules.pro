@@ -71,9 +71,7 @@
 # LiteRT-LM is loaded through a reflection bridge because the current app Kotlin
 # toolchain cannot compile directly against its newer metadata yet.
 -keep class com.google.ai.edge.litertlm.** { *; }
--keep class com.google.ai.edge.litert.** { *; }
 -dontwarn com.google.ai.edge.litertlm.**
--dontwarn com.google.ai.edge.litert.**
 
 # Parquet/Hadoop local dataset imports reference optional desktop/server JVM APIs.
 -dontwarn com.fasterxml.jackson.core.JsonFactory

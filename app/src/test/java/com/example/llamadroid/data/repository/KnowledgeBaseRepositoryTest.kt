@@ -172,11 +172,22 @@ class KnowledgeBaseRepositoryTest {
             url = "http://127.0.0.1:11434",
             remoteModel = "nomic-embed-text"
         )
-
         assertTrue(local.isConfigured)
         assertTrue(remote.isConfigured)
         assertTrue(local.hash != otherLocalModel.hash)
         assertTrue(local.hash != remote.hash)
+    }
+
+    @Test
+    fun normalizeKnowledgeEmbeddingBackend_fallsBackFromLiteRtToLocal() {
+        assertEquals(
+            SettingsRepository.KB_EMBED_BACKEND_LOCAL,
+            SettingsRepository.normalizeKnowledgeEmbeddingBackend(SettingsRepository.KB_EMBED_BACKEND_LITERT)
+        )
+        assertEquals(
+            SettingsRepository.KB_EMBED_BACKEND_LOCAL,
+            SettingsRepository.normalizeKnowledgeEmbeddingBackend("litertlm")
+        )
     }
 
     @Test

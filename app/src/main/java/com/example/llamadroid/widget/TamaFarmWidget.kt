@@ -114,7 +114,9 @@ class TamaFarmWidgetProvider : AppWidgetProvider() {
             val pet = database.tamaDao().getActivePet()?.let(PetMapper::toDomain)
                 ?: return TamaFarmWidgetState(null, emptyList(), unlockedPageCount = 1)
             val repository = FarmRepository(database.farmDao(), context)
-            FarmEngine(repository).updateFarm(pet.id)
+            if (!pet.cycleFrozen) {
+                FarmEngine(repository).updateFarm(pet.id)
+            }
             val farmlandUpgrade = repository.getUpgrade(pet.id, FARMLAND_UPGRADE_ID)
             val farmlandLevel = farmlandUpgrade?.takeIf { it.isPurchased }?.level ?: 0
             return TamaFarmWidgetState(

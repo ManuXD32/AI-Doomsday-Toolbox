@@ -53,6 +53,10 @@ class TamaNotificationReceiver : BroadcastReceiver() {
         val database = TamaDatabase.getInstance(context)
         val petEntity = database.tamaDao().getPet(petId) ?: return
         val pet = PetMapper.toDomain(petEntity)
+        if (pet.cycleFrozen) {
+            TamaNotificationScheduler.cancelPetAlarms(context, pet.id)
+            return
+        }
         val farmRepository = FarmRepository(database.farmDao(), context)
         val farmEngine = FarmEngine(farmRepository)
         farmEngine.updateFarm(pet.id)

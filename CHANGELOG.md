@@ -2,6 +2,62 @@
 
 All notable user-facing changes are documented here in English and Spanish.
 
+## [0.946] - 2026-07-12
+
+Baseline: latest public GitHub release `v0.945` from June 18, 2026.
+
+APK artifact: fill in the final sideload APK filename, timestamp, and size during release upload.
+
+### English
+
+#### Added
+
+- Expanded llama.cpp speculative decoding controls in LLM Settings, including grouped strategy selection for draft-simple, draft-mtp, draft-dflash, ngram-mod, ngram-simple, ngram-map-k, ngram-map-k4v, and ngram-cache modes, plus per-mode parameter inputs and saved speculative run history.
+- A redesigned AI Hub with a centralized tool catalog, search, grouped categories, pinned tools, pinned chats, and per-tool settings sheets for shared AI workflows.
+- A restyled Settings Hub that now matches the shared hub shell and keeps General, LLM/runtime defaults, Prompts, Debug/Logs, and About as the main app-wide settings entry points.
+- More explicit LiteRT model capability and routing controls, including editable vision/audio support flags, per-server Whisper-audio preference, and fuller saved backend URLs for Live Translator templates.
+
+#### Changed
+
+- Manga and PDF translation quality was upgraded with stronger Japanese OCR cleanup, better same-bubble grouping, chunk retry/recovery, page-aware correction, translated-image export fallback, and translated CBZ/PDF rendering that preserves the original page artwork more reliably.
+- LiteRT runtime handling now retains engines for reuse, isolates GPU work in the protected worker process, namespaces compiled caches by backend/context/MTP mode, unloads idle engines after the retention window, and quarantines crashing GPU model/device pairs before falling back to CPU in Auto mode.
+- Live Translator now preserves full backend URLs in templates, keeps URL drafts while editing, supports LiteRT thinking persistence, and exposes clearer backend/audio-routing behavior across llama-server, llama-swap, Ollama, and LiteRT.
+- The AI Servers browser layer and bundled Web UI were refined with a calmer responsive layout, descriptor-driven controls, task retry/cancel handling, better upload progress, user-scoped web chat/provider state, and chat-first tooling panels for browser Llama Chat.
+- Native chat and llama-server command generation now surface the newer speculative decoding flags more accurately, including upstream-style `--spec-type` handling, MTP-specific fallback behavior, and clearer generated runtime argument structure.
+- Release packaging and runtime compatibility were updated again, including newer native payload metadata, refined LiteRT/OpenCL packaging rules, and additional migrations for translator, LiteRT, server-audio, and web-chat storage.
+
+#### Compatibility
+
+- App database schema is now `87`.
+- Tama database schema is now `43`.
+- New migrations since `v0.945` include newer Live Translator template fields, LiteRT model capability metadata, server audio-routing preferences, AI server web ownership/tool-event storage, and later release-stage app/Tama storage updates.
+- Users upgrading from older `0.945`-era installs should keep their data through migrations, but a backup is still recommended before installing `0.946` because translation, LiteRT, AI server, and database state all changed again.
+
+### Español
+
+#### Añadido
+
+- Controles ampliados de decodificación especulativa de llama.cpp en Ajustes LLM, incluyendo selección agrupada de estrategias para draft-simple, draft-mtp, draft-dflash, ngram-mod, ngram-simple, ngram-map-k, ngram-map-k4v y ngram-cache, además de parámetros por modo e historial guardado de ejecuciones especulativas.
+- Un AI Hub rediseñado con catálogo centralizado de herramientas, búsqueda, categorías agrupadas, herramientas fijadas, chats fijados y hojas de ajustes por herramienta para flujos compartidos de IA.
+- Un Settings Hub rediseñado que ahora coincide con el shell compartido de los hubs y mantiene General, valores por defecto de LLM/runtime, Prompts, Debug/Logs y About como entradas principales de ajustes globales.
+- Controles más explícitos para capacidades y enrutado de modelos LiteRT, incluyendo flags editables de soporte de visión/audio, preferencia por servidor para usar Whisper con audio y URLs completas guardadas en las plantillas del Traductor en vivo.
+
+#### Cambiado
+
+- La calidad de traducción de Manga y PDF mejoró con limpieza OCR japonesa más fuerte, mejor agrupación de bocadillos, reintentos y recuperación por fragmentos, corrección contextual por página, fallback de exportación basada en imágenes y renderizado de CBZ/PDF traducido que preserva mejor el arte original de cada página.
+- El manejo del runtime LiteRT ahora retiene engines para reutilización, aísla el trabajo GPU en el worker protegido, separa las caches compiladas por backend/contexto/modo MTP, descarga engines inactivos tras la ventana de retención y pone en cuarentena combinaciones modelo/dispositivo GPU que fallan antes de caer a CPU en modo Auto.
+- El Traductor en vivo ahora conserva URLs completas de backend en las plantillas, mantiene borradores de URL mientras se editan, guarda el estado de thinking de LiteRT y expone con más claridad el comportamiento de backend y enrutado de audio entre llama-server, llama-swap, Ollama y LiteRT.
+- La capa web de AI Servers y su Web UI integrada se pulieron con un diseño responsive más limpio, controles guiados por descriptores, reintento/cancelación de tareas, mejor progreso de subidas, estado por usuario para chats/proveedores web y paneles de herramientas orientados al chat para Llama Chat en navegador.
+- El chat nativo y la generación de comandos de llama-server ahora reflejan mejor los nuevos flags de decodificación especulativa, incluyendo manejo estilo upstream de `--spec-type`, fallback específico de MTP y una estructura más clara de argumentos runtime generados.
+- El empaquetado de release y la compatibilidad del runtime se actualizaron otra vez, incluyendo metadatos más nuevos de binarios nativos, reglas más afinadas de empaquetado LiteRT/OpenCL y migraciones adicionales para traductor, LiteRT, audio por servidor y almacenamiento web-chat.
+
+#### Compatibilidad
+
+- La base de datos principal ahora usa el esquema `87`.
+- La base de datos Tama ahora usa el esquema `43`.
+- Las nuevas migraciones desde `v0.945` incluyen campos más nuevos para plantillas del Traductor en vivo, metadatos de capacidades LiteRT, preferencias de enrutado de audio por servidor, almacenamiento de propiedad y eventos de herramientas del chat web de AI Servers, y otras actualizaciones posteriores del almacenamiento principal y Tama.
+- Quien actualice desde instalaciones antiguas de la era `0.945` debería conservar sus datos mediante migraciones, pero sigue siendo recomendable hacer una copia de seguridad antes de instalar `0.946` porque la traducción, LiteRT, AI Servers y el estado de base de datos volvieron a cambiar.
+
 ## [0.942] - 2026-05-27
 
 Baseline: latest public GitHub release `v0.938` from May 1, 2026.

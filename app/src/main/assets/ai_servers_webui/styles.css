@@ -325,6 +325,17 @@ textarea:focus {
   box-shadow: none;
 }
 
+.hub-mode .field-row,
+.hub-mode .sticky-action,
+.hub-mode .tab[data-tab="gallery"],
+.hub-mode #galleryTab {
+  display: none !important;
+}
+
+.hub-mode .tabs {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .prompt-field > span {
   display: flex;
   gap: 8px;
@@ -494,6 +505,93 @@ textarea:focus {
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.hub-intro {
+  display: grid;
+  gap: 10px;
+}
+
+.hub-server-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.hub-server-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+  transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+
+.hub-server-link:hover .hub-server-card,
+.hub-server-link:focus-visible .hub-server-card {
+  transform: translateY(-2px);
+  border-color: var(--server-accent);
+  box-shadow: 0 16px 34px rgba(38, 50, 76, 0.12);
+}
+
+.hub-server-card.inactive {
+  filter: grayscale(1);
+  opacity: 0.68;
+}
+
+.hub-server-header,
+.hub-server-footer {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.hub-server-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.hub-server-copy p,
+.hub-server-open {
+  margin: 0;
+  color: var(--muted);
+}
+
+.hub-server-badge {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  border-radius: 14px;
+  font-size: 26px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 2px var(--server-accent);
+}
+
+.hub-server-state {
+  flex: 0 0 auto;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--server-accent);
+  box-shadow: inset 0 0 0 1px var(--server-accent);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.hub-server-card.inactive .hub-server-state,
+.hub-server-card.inactive .hub-server-badge {
+  background: rgba(32, 36, 44, 0.08);
+  color: var(--muted);
+  box-shadow: inset 0 0 0 1px rgba(45, 58, 78, 0.12);
+}
+
+.hub-server-footer {
+  align-items: flex-start;
+  flex-wrap: wrap;
 }
 
 .chat-layout {

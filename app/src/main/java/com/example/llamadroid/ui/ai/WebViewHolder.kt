@@ -3,7 +3,9 @@ package com.example.llamadroid.ui.ai
 import android.annotation.SuppressLint
 import android.content.Context
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebResourceError
@@ -107,6 +109,31 @@ object WebViewHolder {
      */
     fun reload(url: String) {
         webViews[url]?.reload()
+    }
+
+    /**
+     * Clear all retained browser state for this WebView surface and destroy the
+     * in-memory instance so the next open starts from a fresh WebView.
+     */
+    fun clearBrowserState(url: String) {
+        webViews[url]?.let { webView ->
+            (webView.parent as? ViewGroup)?.removeView(webView)
+            webView.clearCache(true)
+            webView.clearHistory()
+            webView.clearFormData()
+            webView.clearSslPreferences()
+            webView.destroy()
+        }
+        webViews.remove(url)
+        loadingCallbacks.remove(url)
+        errorCallbacks.remove(url)
+        runCatching {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        }
+        runCatching {
+            WebStorage.getInstance().deleteAllData()
+        }
     }
     
     /**

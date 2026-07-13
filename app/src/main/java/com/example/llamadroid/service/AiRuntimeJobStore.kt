@@ -19,9 +19,10 @@ object AiRuntimeJobStore {
     const val STATUS_FAILED = "FAILED"
     const val STATUS_CANCELLED = "CANCELLED"
 
-    private const val STALE_AGENT_CHAT_MS = 30L * 60L * 1000L
-    private const val STALE_DATASET_RUNTIME_MS = 6L * 60L * 60L * 1000L
-    private const val STALE_OLLAMA_RUNTIME_MS = 6L * 60L * 60L * 1000L
+    private const val STALE_LONG_RUNNING_RUNTIME_MS = 6L * 60L * 60L * 1000L
+    private const val STALE_AGENT_CHAT_MS = STALE_LONG_RUNNING_RUNTIME_MS
+    private const val STALE_DATASET_RUNTIME_MS = STALE_LONG_RUNNING_RUNTIME_MS
+    private const val STALE_OLLAMA_RUNTIME_MS = STALE_LONG_RUNNING_RUNTIME_MS
 
     suspend fun upsert(context: Context, job: AiRuntimeJobEntity) = withContext(Dispatchers.IO) {
         AppDatabase.getDatabase(context).aiRuntimeJobDao().upsert(job)
@@ -81,14 +82,15 @@ object AiRuntimeJobStore {
                 .filterNot { isJobStale(it, now) }
         }
 
+    fun staleWindowMsForType(type: String): Long = when (type) {
+        TYPE_AGENT_CHAT -> STALE_AGENT_CHAT_MS
+        TYPE_DATASET_PIPELINE -> STALE_DATASET_RUNTIME_MS
+        TYPE_OLLAMA_PULL, TYPE_OLLAMA_CREATE_REMOTE, TYPE_OLLAMA_CREATE_LOCAL -> STALE_OLLAMA_RUNTIME_MS
+        else -> STALE_AGENT_CHAT_MS
+    }
+
     fun isJobStale(job: AiRuntimeJobEntity, now: Long = System.currentTimeMillis()): Boolean {
-        val maxAge = when (job.type) {
-            TYPE_AGENT_CHAT -> STALE_AGENT_CHAT_MS
-            TYPE_DATASET_PIPELINE -> STALE_DATASET_RUNTIME_MS
-            TYPE_OLLAMA_PULL, TYPE_OLLAMA_CREATE_REMOTE, TYPE_OLLAMA_CREATE_LOCAL -> STALE_OLLAMA_RUNTIME_MS
-            else -> STALE_AGENT_CHAT_MS
-        }
-        return now - job.updatedAt > maxAge
+        return now - job.updatedAt > staleWindowMsForType(job.type)
     }
 
     private suspend fun pruneOldTerminalJobs(context: Context) {

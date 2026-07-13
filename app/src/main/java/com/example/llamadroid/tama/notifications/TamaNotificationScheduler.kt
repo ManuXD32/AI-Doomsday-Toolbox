@@ -98,6 +98,10 @@ object TamaNotificationScheduler {
 
         val now = System.currentTimeMillis()
         val pet = PetMapper.toDomain(petEntity)
+        if (pet.cycleFrozen) {
+            cancelPetAlarms(appContext, pet.id)
+            return@withContext
+        }
         val farmRepository = FarmRepository(database.farmDao(), appContext)
         val farmEngine = FarmEngine(farmRepository)
         farmEngine.updateFarm(pet.id)

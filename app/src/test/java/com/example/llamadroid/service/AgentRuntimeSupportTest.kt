@@ -159,19 +159,75 @@ class AgentRuntimeSupportTest {
     }
 
     @Test
-    fun `running command reminders are detected from tool output`() {
+    fun `running command reminders are detected only from command tool output`() {
         assertTrue(
             isBackgroundCommandReminder(
                 "run_command",
-                "Command ID: cmd_123\nStatus: running\nOutput:\nhello",
+                "Command ID: cmd_123\nStatus: running\nRequested tail lines: 10\nOutput:\nhello",
+                null
+            )
+        )
+        assertFalse(
+            isBackgroundCommandReminder(
+                null,
+                "Command ID: cmd_123\nStatus: running\nRequested tail lines: 10\nOutput:\nhello",
                 null
             )
         )
         assertFalse(
             isBackgroundCommandReminder(
                 "run_command",
-                "Command ID: cmd_123\nStatus: finished (exit code: 0)\nOutput:\nhello",
+                "Command ID: cmd_123\nStatus: finished (exit code: 0)\nRequested tail lines: 10\nOutput:\nhello",
                 null
+            )
+        )
+    }
+
+    @Test
+    fun `runtime checkpoints are throttled unless forced`() {
+        assertTrue(shouldWriteRuntimeCheckpoint(nowMs = 30_000L, lastCheckpointMs = 0L, intervalMs = 30_000L, force = false))
+        assertFalse(shouldWriteRuntimeCheckpoint(nowMs = 29_999L, lastCheckpointMs = 0L, intervalMs = 30_000L, force = false))
+        assertTrue(shouldWriteRuntimeCheckpoint(nowMs = 1L, lastCheckpointMs = 0L, intervalMs = 30_000L, force = true))
+    }
+
+    @Test
+    fun `structured command result requires command id status requested tail and output`() {
+        assertTrue(
+            isStructuredCommandResult(
+                "Command ID: cmd_123\nStatus: finished (exit code: 0)\nRequested tail lines: 20\nOutput:\nDone"
+            )
+        )
+        assertFalse(
+            isStructuredCommandResult(
+                "Command ID: cmd_123\nStatus: finished (exit code: 0)\nOutput:\nDone"
+            )
+        )
+    }
+
+    @Test
+    fun `command output tail keeps newest completed lines`() {
+        val completedLines = (1..12).map { "line $it" }
+
+        assertEquals(
+            listOf("line 9", "line 10", "line 11", "line 12"),
+            commandOutputTailLines(
+                completedLines = completedLines,
+                pendingLine = "",
+                requestedLines = 4
+            )
+        )
+    }
+
+    @Test
+    fun `command output tail includes newest pending progress line`() {
+        val completedLines = listOf("configure", "compile")
+
+        assertEquals(
+            listOf("compile", "linking 73%"),
+            commandOutputTailLines(
+                completedLines = completedLines,
+                pendingLine = "linking 73%",
+                requestedLines = 2
             )
         )
     }

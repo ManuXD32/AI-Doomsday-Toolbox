@@ -29,14 +29,13 @@ import com.example.llamadroid.data.db.ModelBackupPolicy
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.service.WhisperModel
 import com.example.llamadroid.util.DebugLog
-import com.example.llamadroid.util.FilePathResolver
 import com.example.llamadroid.util.FormatUtils
-import com.example.llamadroid.util.StoragePermissionHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -74,7 +73,7 @@ fun WhisperModelsScreen(navController: NavController) {
     var pendingExportModel by remember { mutableStateOf<ModelEntity?>(null) }
     
     // Models directory
-    val modelsDir = remember { File(context.filesDir, "whisper_models").apply { mkdirs() } }
+    val modelsDir = remember { repository.getModelDir(ModelType.WHISPER).apply { mkdirs() } }
 
     val exportPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -245,6 +244,12 @@ fun WhisperModelsScreen(navController: NavController) {
                         Text(stringResource(R.string.whisper_models_title), fontWeight = FontWeight.Bold)
                         Text(
                             stringResource(R.string.whisper_models_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.models_import_delete_note),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -561,62 +566,45 @@ private suspend fun importWhisperModel(
     filename: String,
     onProgress: (Float) -> Unit
 ): Result<WhisperImportResult> = withContext(Dispatchers.IO) {
+    var tempFile: File? = null
     runCatching {
-        val targetFilename = filename.ifBlank { "imported_whisper_model.bin" }
-        val hasAllFilesAccess = StoragePermissionHelper.hasAllFilesAccess()
-        val directPath = FilePathResolver.getPathFromUri(context, uri)
-        var didCopy = false
-        val finalPath = if (
-            directPath != null &&
-            hasAllFilesAccess &&
-            FilePathResolver.isPathAccessible(directPath)
-        ) {
-            DebugLog.log("[WHISPER-IMPORT] Using direct path (no copy): $directPath")
-            withContext(Dispatchers.Main) { onProgress(1f) }
-            directPath
-        } else {
-            if (directPath != null && !hasAllFilesAccess) {
-                DebugLog.log("[WHISPER-IMPORT] Direct path available but missing all-files access, copying")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.models_tip_all_files),
-                        Toast.LENGTH_LONG
-                    ).show()
+        val repository = ModelRepository(context, db.modelDao())
+        val requestedFilename = filename.ifBlank { "imported_whisper_model.bin" }
+        val targetFilename = ModelLibraryManager.canonicalFilename(requestedFilename)
+        val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
+            it.length
+        } ?: 0L
+        val runtimeDir = repository.getModelDir(ModelType.WHISPER).apply { mkdirs() }
+        val targetFile = File(runtimeDir, targetFilename)
+        tempFile = File(runtimeDir, "$targetFilename.importing")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            tempFile!!.outputStream().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                var copied = 0L
+                var bytesRead = input.read(buffer)
+                while (bytesRead >= 0) {
+                    output.write(buffer, 0, bytesRead)
+                    copied += bytesRead
+                    if (fileSize > 0L) {
+                        withContext(Dispatchers.Main) {
+                            onProgress((copied.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f))
+                        }
+                    }
+                    bytesRead = input.read(buffer)
                 }
             }
+        } ?: error(context.getString(R.string.whisper_import_failed_open_input))
+        replaceImportedWhisperFile(tempFile!!, targetFile)
+        val finalPath = targetFile.absolutePath
 
-            val modelsDir = File(context.filesDir, "whisper_models").apply { mkdirs() }
-            val targetFile = File(modelsDir, targetFilename)
-            val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
-                it.length
-            } ?: 0L
-
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                targetFile.outputStream().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    var copied = 0L
-                    var bytesRead = input.read(buffer)
-                    while (bytesRead >= 0) {
-                        output.write(buffer, 0, bytesRead)
-                        copied += bytesRead
-                        if (fileSize > 0L) {
-                            withContext(Dispatchers.Main) {
-                                onProgress((copied.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f))
-                            }
-                        }
-                        bytesRead = input.read(buffer)
-                    }
-                }
-            } ?: error(context.getString(R.string.whisper_import_failed_open_input))
-
-            didCopy = true
-            withContext(Dispatchers.Main) { onProgress(1f) }
-            targetFile.absolutePath
+        withContext(Dispatchers.Main) { onProgress(1f) }
+        val existing = db.modelDao().getModelByFilename(targetFilename)
+        if (existing != null && existing.path != finalPath) {
+            repository.deleteModelArtifacts(existing)
         }
 
-        val file = File(finalPath)
-        val sizeBytes = if (file.exists()) file.length() else 0L
+        val finalFile = File(finalPath)
+        val sizeBytes = if (finalFile.exists()) finalFile.length() else 0L
         db.modelDao().insertModel(
             ModelEntity(
                 filename = targetFilename,
@@ -628,7 +616,23 @@ private suspend fun importWhisperModel(
             )
         )
 
-        WhisperImportResult(filename = targetFilename, didCopy = didCopy)
+        WhisperImportResult(filename = targetFilename, didCopy = true)
+    }.onFailure {
+        tempFile?.takeIf { file -> file.exists() }?.delete()
+    }
+}
+
+private fun replaceImportedWhisperFile(tempFile: File, targetFile: File) {
+    if (targetFile.exists()) {
+        targetFile.delete()
+    }
+    if (!tempFile.renameTo(targetFile)) {
+        tempFile.inputStream().use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        tempFile.delete()
     }
 }
 

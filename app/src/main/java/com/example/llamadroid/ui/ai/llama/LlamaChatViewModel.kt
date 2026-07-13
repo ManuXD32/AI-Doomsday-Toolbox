@@ -106,6 +106,12 @@ class LlamaChatViewModel(
         }
     }
 
+    fun setChatPinnedToAiHub(chat: LlamaChatEntity, pinned: Boolean, serverId: Long?) {
+        viewModelScope.launch {
+            repository.updateChatAiHubPin(chat.id, pinned, serverId)
+        }
+    }
+
     fun createPromptProfile(name: String, content: String, onResult: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             val success = runCatching { repository.createChatPromptProfile(name, content) }.isSuccess

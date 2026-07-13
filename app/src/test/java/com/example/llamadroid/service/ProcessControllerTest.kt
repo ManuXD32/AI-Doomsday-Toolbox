@@ -135,6 +135,178 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `generated command uses DFlash speculative decoding flags`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                draftModelPath = "/models/dflash-draft.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_DFLASH,
+                draftMax = 15,
+                temperature = 0.7f
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "draft-dflash")
+        assertArgValue(args, "-md", "/models/dflash-draft.gguf")
+        assertArgValue(args, "--spec-draft-n-max", "15")
+        assertArgValue(args, "--temp", "0.7")
+        assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-n-min"))
+        assertFalse(args.contains("--spec-draft-p-min"))
+    }
+
+    @Test
+    fun `DFlash omits speculative args without draft model`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_DFLASH
+            )
+        )
+
+        assertFalse(args.contains("--spec-type"))
+        assertFalse(args.contains("-md"))
+    }
+
+    @Test
+    fun `n-gram mod command uses no draft model args`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                draftModelPath = "/models/ignored-draft.gguf",
+                speculativeMode = LlamaSpeculativeMode.NGRAM_MOD,
+                ngramModNMatch = 24,
+                ngramModNMin = 48,
+                ngramModNMax = 64
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "ngram-mod")
+        assertArgValue(args, "--spec-ngram-mod-n-min", "48")
+        assertArgValue(args, "--spec-ngram-mod-n-max", "64")
+        assertArgValue(args, "--spec-ngram-mod-n-match", "24")
+        assertFalse(args.contains("-md"))
+        assertFalse(args.contains("--spec-draft-model"))
+    }
+
+    @Test
+    fun `n-gram simple command uses no draft model args`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                draftModelPath = "/models/ignored-draft.gguf",
+                speculativeMode = LlamaSpeculativeMode.NGRAM_SIMPLE,
+                ngramSimpleSizeN = 12,
+                ngramSimpleSizeM = 48,
+                ngramSimpleMinHits = 1
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "ngram-simple")
+        assertArgValue(args, "--spec-ngram-simple-size-n", "12")
+        assertArgValue(args, "--spec-ngram-simple-size-m", "48")
+        assertArgValue(args, "--spec-ngram-simple-min-hits", "1")
+        assertFalse(args.contains("-md"))
+        assertFalse(args.contains("--spec-draft-model"))
+    }
+
+    @Test
+    fun `n-gram map-k command uses no draft model args`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                draftModelPath = "/models/ignored-draft.gguf",
+                speculativeMode = LlamaSpeculativeMode.NGRAM_MAP_K,
+                ngramMapKSizeN = 8,
+                ngramMapKSizeM = 32,
+                ngramMapKMinHits = 2
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "ngram-map-k")
+        assertArgValue(args, "--spec-ngram-map-k-size-n", "8")
+        assertArgValue(args, "--spec-ngram-map-k-size-m", "32")
+        assertArgValue(args, "--spec-ngram-map-k-min-hits", "2")
+        assertFalse(args.contains("-md"))
+        assertFalse(args.contains("--spec-draft-model"))
+    }
+
+    @Test
+    fun `n-gram map-k4v command uses no draft model args`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                speculativeMode = LlamaSpeculativeMode.NGRAM_MAP_K4V,
+                ngramMapK4VSizeN = 6,
+                ngramMapK4VSizeM = 16,
+                ngramMapK4VMinHits = 3
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "ngram-map-k4v")
+        assertArgValue(args, "--spec-ngram-map-k4v-size-n", "6")
+        assertArgValue(args, "--spec-ngram-map-k4v-size-m", "16")
+        assertArgValue(args, "--spec-ngram-map-k4v-min-hits", "3")
+        assertFalse(args.contains("-md"))
+        assertFalse(args.contains("--spec-draft-model"))
+    }
+
+    @Test
+    fun `n-gram cache command uses no draft model args`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                draftModelPath = "/models/ignored-draft.gguf",
+                speculativeMode = LlamaSpeculativeMode.NGRAM_CACHE
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "ngram-cache")
+        assertFalse(args.contains("-md"))
+        assertFalse(args.contains("--spec-draft-model"))
+    }
+
+    @Test
+    fun `n-gram command template placeholder uses selected speculative args`() {
+        val controller = ProcessController()
+
+        val args = controller.renderCommandTemplate(
+            template = "{speculative_args}",
+            binaryPath = "/bin/llama-server",
+            config = LlamaConfig(
+                modelPath = "/models/main.gguf",
+                speculativeMode = LlamaSpeculativeMode.NGRAM_MOD
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "ngram-mod")
+        assertArgValue(args, "--spec-ngram-mod-n-min", "48")
+        assertArgValue(args, "--spec-ngram-mod-n-max", "64")
+        assertArgValue(args, "--spec-ngram-mod-n-match", "24")
+    }
+
+    @Test
     fun `MTP command template placeholder uses MTP speculative decoding flags`() {
         val controller = ProcessController()
 
@@ -179,6 +351,53 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `native tools are appended after custom flags in generated command`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                customFlags = "--jinja",
+                nativeToolsEnabled = true
+            )
+        )
+
+        val jinjaIndex = args.indexOf("--jinja")
+        val toolsIndex = args.indexOf("--tools")
+        assertTrue(jinjaIndex >= 0)
+        assertTrue(toolsIndex > jinjaIndex)
+        assertEquals("all", args[toolsIndex + 1])
+    }
+
+    @Test
+    fun `native tools template appends unless template handles native tools`() {
+        val controller = ProcessController()
+        val config = LlamaConfig(modelPath = "/models/main.gguf", nativeToolsEnabled = true)
+
+        val appended = controller.renderCommandTemplate(
+            template = "{binary} -m {model} --jinja",
+            binaryPath = "/bin/llama-server",
+            config = config
+        )
+        assertArgValue(appended, "--tools", "all")
+
+        val explicit = controller.renderCommandTemplate(
+            template = "{binary} -m {model} --tools search",
+            binaryPath = "/bin/llama-server",
+            config = config
+        )
+        assertArgValue(explicit, "--tools", "search")
+
+        val placeholder = controller.renderCommandTemplate(
+            template = "{binary} -m {model} {native_tools_args}",
+            binaryPath = "/bin/llama-server",
+            config = config
+        )
+        assertArgValue(placeholder, "--tools", "all")
+    }
+
+    @Test
     fun `MTP binary capability check detects advertised draft-mtp marker`() {
         val controller = ProcessController()
         val supported = File.createTempFile("llama-server-mtp", ".so")
@@ -191,6 +410,27 @@ class ProcessControllerTest {
             assertFalse(controller.binarySupportsMtpSpeculative(unsupported))
         } finally {
             supported.delete()
+            unsupported.delete()
+        }
+    }
+
+    @Test
+    fun `DFlash binary capability check detects stable speculative markers`() {
+        val controller = ProcessController()
+        val supportedByFlag = File.createTempFile("llama-server-dflash-flag", ".so")
+        val supportedByModel = File.createTempFile("llama-server-dflash-model", ".so")
+        val unsupported = File.createTempFile("llama-server-no-dflash", ".so")
+        try {
+            supportedByFlag.writeText("common_speculative_impl_draft_dflash draft-dflash")
+            supportedByModel.writeText("llama_model_dflash dflash.block_size")
+            unsupported.writeText("common_speculative_impl_draft")
+
+            assertTrue(controller.binarySupportsDflashSpeculative(supportedByFlag))
+            assertTrue(controller.binarySupportsDflashSpeculative(supportedByModel))
+            assertFalse(controller.binarySupportsDflashSpeculative(unsupported))
+        } finally {
+            supportedByFlag.delete()
+            supportedByModel.delete()
             unsupported.delete()
         }
     }

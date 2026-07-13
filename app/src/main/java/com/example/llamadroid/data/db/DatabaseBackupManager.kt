@@ -38,9 +38,18 @@ object DatabaseBackupManager {
     private const val SHARED_PREFS_PREFIX = "shared_prefs/"
     private const val SHARED_PREFS_DIR_NAME = "shared_prefs"
     private val PORTABLE_MEDIA_ROOTS = listOf(
+        "ai_server_artifacts",
+        "bgr_output",
+        "live_translator_audio",
         "onnx_image_output",
+        "onnx_tts_output",
         "sd_output",
+        "video_upscale_output",
         "video_gen_output",
+        "workflow_media_inputs",
+        "workflow_media_translation",
+        "workflow_subtitle_translation",
+        "media_translation_runtime",
         "tama_gallery",
         "tama_chat_images",
         "tama_chat_audio",
@@ -251,6 +260,9 @@ object DatabaseBackupManager {
             }
 
             cleanupMissingJournalFiles(dbDir, restoredFileNames)
+            if (APP_DB_NAME in restoredFileNames) {
+                sanitizePortableAppDatabase(File(dbDir, APP_DB_NAME))
+            }
             validateRestoredDatabases(context, dbDir, restoredFileNames)
             
             DebugLog.log("$TAG Restore completed: $restoredCount files")
@@ -355,7 +367,7 @@ object DatabaseBackupManager {
             val after = countRows(db, "models")
             DebugLog.log(
                 "$TAG Portable backup model audit kept=$after excluded=${before - after} total=$before " +
-                    "(manual imports and custom ONNX imports only)"
+                    "(all model rows excluded)"
             )
             runCatching { db.execSQL("VACUUM") }
         } finally {

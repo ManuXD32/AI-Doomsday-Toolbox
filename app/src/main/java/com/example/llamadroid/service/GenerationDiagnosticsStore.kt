@@ -5,6 +5,7 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import com.example.llamadroid.R
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -506,21 +507,25 @@ object GenerationDiagnosticsStore {
         return readableCount >= (length * 0.9).toInt()
     }
 
-    private fun exitReasonLabel(reason: Int): String = when (reason) {
-        ApplicationExitInfo.REASON_ANR -> "ANR"
-        ApplicationExitInfo.REASON_CRASH -> "Crash"
-        ApplicationExitInfo.REASON_CRASH_NATIVE -> "Native crash"
-        ApplicationExitInfo.REASON_DEPENDENCY_DIED -> "Dependency died"
-        ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> "Excessive resource usage"
-        ApplicationExitInfo.REASON_EXIT_SELF -> "Exited normally"
-        ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> "Initialization failure"
-        ApplicationExitInfo.REASON_LOW_MEMORY -> "Low memory"
-        ApplicationExitInfo.REASON_OTHER -> "Other"
-        ApplicationExitInfo.REASON_PERMISSION_CHANGE -> "Permission change"
-        ApplicationExitInfo.REASON_SIGNALED -> "Signaled"
-        ApplicationExitInfo.REASON_USER_REQUESTED -> "User requested"
-        ApplicationExitInfo.REASON_USER_STOPPED -> "User stopped"
-        else -> "Reason $reason"
+    private fun exitReasonLabel(reason: Int): String {
+        val context = appContext
+        return when (reason) {
+            ApplicationExitInfo.REASON_ANR -> context?.getString(R.string.logs_exit_reason_anr) ?: "ANR"
+            ApplicationExitInfo.REASON_CRASH -> context?.getString(R.string.logs_exit_reason_crash) ?: "Crash"
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> context?.getString(R.string.logs_exit_reason_native_crash) ?: "Native crash"
+            ApplicationExitInfo.REASON_DEPENDENCY_DIED -> context?.getString(R.string.logs_exit_reason_dependency_died) ?: "Dependency died"
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE -> context?.getString(R.string.logs_exit_reason_excessive_resource_usage) ?: "Excessive resource usage"
+            ApplicationExitInfo.REASON_EXIT_SELF -> context?.getString(R.string.logs_exit_reason_exit_self) ?: "Exited normally"
+            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE -> context?.getString(R.string.logs_exit_reason_initialization_failure) ?: "Initialization failure"
+            ApplicationExitInfo.REASON_LOW_MEMORY -> context?.getString(R.string.logs_exit_reason_low_memory) ?: "Low memory"
+            ApplicationExitInfo.REASON_OTHER -> context?.getString(R.string.logs_exit_reason_other) ?: "Other"
+            ApplicationExitInfo.REASON_PACKAGE_UPDATED -> context?.getString(R.string.logs_exit_reason_package_updated) ?: "Package updated"
+            ApplicationExitInfo.REASON_PERMISSION_CHANGE -> context?.getString(R.string.logs_exit_reason_permission_change) ?: "Permission change"
+            ApplicationExitInfo.REASON_SIGNALED -> context?.getString(R.string.logs_exit_reason_signaled) ?: "Signaled"
+            ApplicationExitInfo.REASON_USER_REQUESTED -> context?.getString(R.string.logs_exit_reason_user_requested) ?: "User requested"
+            ApplicationExitInfo.REASON_USER_STOPPED -> context?.getString(R.string.logs_exit_reason_user_stopped) ?: "User stopped"
+            else -> context?.getString(R.string.logs_exit_reason_unknown, reason) ?: "Reason $reason"
+        }
     }
 
     private fun breadcrumbsFileLocked(): File = File(diagnosticsDirLocked(), BREADCRUMBS_FILE)

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
@@ -26,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.data.PdfTranslationQualityMode
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.PDFTranslationLogic
 import com.example.llamadroid.service.RemoteSummaryClientFactory
@@ -84,6 +86,7 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
     val screenshotMaxSide by settingsRepo.pdfTranslationScreenshotMaxSide.collectAsState()
     val screenshotQuality by settingsRepo.pdfTranslationScreenshotJpegQuality.collectAsState()
     val textFallback by settingsRepo.pdfTranslationTextFallback.collectAsState()
+    val qualityMode by settingsRepo.pdfTranslationQualityMode.collectAsState()
 
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
         if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
@@ -166,6 +169,11 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
 
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
                     Column(modifier = Modifier.padding(16.dp)) {
+                        PdfTranslationQualityModeSelector(
+                            value = qualityMode,
+                            onValueChange = settingsRepo::setPdfTranslationQualityMode
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
                         OutlinedTextField(
                             value = prompt ?: PDFTranslationLogic.DEFAULT_PAGE_TRANSLATION_SYSTEM_PROMPT,
                             onValueChange = settingsRepo::setPdfTranslationPrompt,
@@ -206,6 +214,52 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                         )
                     }
                 }
+    }
+}
+
+@Composable
+fun PdfTranslationQualityModeSelector(
+    value: PdfTranslationQualityMode,
+    onValueChange: (PdfTranslationQualityMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val description = when (value) {
+        PdfTranslationQualityMode.BEST_QUALITY -> stringResource(R.string.pdf_translation_quality_best_desc)
+        PdfTranslationQualityMode.BALANCED -> stringResource(R.string.pdf_translation_quality_balanced_desc)
+        PdfTranslationQualityMode.FASTER -> stringResource(R.string.pdf_translation_quality_faster_desc)
+    }
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            stringResource(R.string.pdf_translation_quality_title),
+            fontWeight = FontWeight.Bold
+        )
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            PdfTranslationQualityMode.values().forEach { mode ->
+                FilterChip(
+                    modifier = Modifier.fillMaxWidth(),
+                    selected = value == mode,
+                    onClick = { onValueChange(mode) },
+                    label = {
+                        Text(
+                            when (mode) {
+                                PdfTranslationQualityMode.BEST_QUALITY -> stringResource(R.string.pdf_translation_quality_best)
+                                PdfTranslationQualityMode.BALANCED -> stringResource(R.string.pdf_translation_quality_balanced)
+                                PdfTranslationQualityMode.FASTER -> stringResource(R.string.pdf_translation_quality_faster)
+                            },
+                            maxLines = 1
+                        )
+                    }
+                )
+            }
+        }
+        Text(
+            description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

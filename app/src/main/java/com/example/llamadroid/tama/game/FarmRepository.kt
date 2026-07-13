@@ -186,6 +186,16 @@ class FarmRepository(
         FarmEngine(this).updateFarm(petId, now)
     }
 
+    suspend fun shiftCycleTimestamps(petId: String, durationMs: Long) {
+        if (durationMs <= 0L) return
+        val shiftedTiles = getTiles(petId).map { it.withCycleTimestampsShifted(durationMs) }
+        val shiftedUpgrades = getUpgrades(petId).map { it.withCycleTimestampsShifted(durationMs) }
+        val shiftedLivestock = getLivestock(petId).map { it.withCycleTimestampsShifted(durationMs) }
+        farmDao.saveTiles(shiftedTiles.map { tileToEntity(petId, it) })
+        farmDao.saveUpgrades(shiftedUpgrades)
+        farmDao.saveLivestock(shiftedLivestock)
+    }
+
     @Suppress("UNUSED_PARAMETER")
     suspend fun buyUpgrade(petId: String, type: String, price: Int, rescheduleNotifications: Boolean = true) {
         val existing = farmDao.getUpgrade(petId, type)

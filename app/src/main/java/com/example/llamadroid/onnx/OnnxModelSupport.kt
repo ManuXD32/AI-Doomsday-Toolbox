@@ -119,6 +119,12 @@ enum class OnnxImportStrategy {
     COPY_TO_MANAGED
 }
 
+enum class OnnxBackgroundRemovalRiskClass {
+    RECOMMENDED,
+    HEAVY,
+    UNSUPPORTED_LEGACY
+}
+
 @Parcelize
 data class OnnxImageGenConfig(
     val modelPath: String,
@@ -374,14 +380,6 @@ object OnnxCatalog {
 
     private val backgroundRemovalEntries: List<OnnxCatalogEntry> = listOf(
         bgrEntry(
-            bundleId = "ben2_fp16",
-            title = "BEN2 FP16",
-            repoId = "onnx-community/BEN2-ONNX",
-            path = "onnx/model_fp16.onnx",
-            summary = "MIT-licensed BEN2 background-removal model optimized for ONNX Runtime.",
-            sizeBytes = 219_000_000L
-        ),
-        bgrEntry(
             bundleId = "rmbg_2_0_full",
             title = "RMBG 2.0 Full",
             repoId = "briaai/RMBG-2.0",
@@ -390,18 +388,14 @@ object OnnxCatalog {
             sizeBytes = 1_020_000_000L,
             gated = true
         ),
-        bgrEntry("rmbg_2_0_fp16", "RMBG 2.0 FP16", "briaai/RMBG-2.0", "onnx/model_fp16.onnx", "BRIA RMBG 2.0 FP16 ONNX model. Requires accepted Hugging Face access and a token.", 514_000_000L, gated = true),
         bgrEntry("rmbg_2_0_bnb4", "RMBG 2.0 BNB4", "briaai/RMBG-2.0", "onnx/model_bnb4.onnx", "BRIA RMBG 2.0 BNB4 ONNX variant. Requires accepted Hugging Face access and a token.", 355_000_000L, gated = true),
         bgrEntry("rmbg_2_0_int8", "RMBG 2.0 INT8", "briaai/RMBG-2.0", "onnx/model_int8.onnx", "BRIA RMBG 2.0 INT8 ONNX variant. Requires accepted Hugging Face access and a token.", 366_000_000L, gated = true),
         bgrEntry("rmbg_2_0_q4", "RMBG 2.0 Q4", "briaai/RMBG-2.0", "onnx/model_q4.onnx", "BRIA RMBG 2.0 Q4 ONNX variant. Requires accepted Hugging Face access and a token.", 367_000_000L, gated = true),
-        bgrEntry("rmbg_2_0_q4f16", "RMBG 2.0 Q4F16", "briaai/RMBG-2.0", "onnx/model_q4f16.onnx", "BRIA RMBG 2.0 Q4F16 ONNX variant. Requires accepted Hugging Face access and a token.", 234_000_000L, gated = true),
         bgrEntry("rmbg_2_0_quantized", "RMBG 2.0 Quantized", "briaai/RMBG-2.0", "onnx/model_quantized.onnx", "BRIA RMBG 2.0 quantized ONNX variant. Requires accepted Hugging Face access and a token.", 366_000_000L, gated = true),
         bgrEntry("rmbg_2_0_uint8", "RMBG 2.0 UINT8", "briaai/RMBG-2.0", "onnx/model_uint8.onnx", "BRIA RMBG 2.0 UINT8 ONNX variant. Requires accepted Hugging Face access and a token.", 366_000_000L, gated = true),
         bgrEntry("rmbg_1_4_full", "RMBG 1.4 Full", "briaai/RMBG-1.4", "onnx/model.onnx", "BRIA RMBG 1.4 full ONNX model. Requires accepted Hugging Face access and a token.", 176_000_000L, gated = true),
-        bgrEntry("rmbg_1_4_fp16", "RMBG 1.4 FP16", "briaai/RMBG-1.4", "onnx/model_fp16.onnx", "BRIA RMBG 1.4 FP16 ONNX model. Requires accepted Hugging Face access and a token.", 88_200_000L, gated = true),
         bgrEntry("rmbg_1_4_quantized", "RMBG 1.4 Quantized", "briaai/RMBG-1.4", "onnx/model_quantized.onnx", "BRIA RMBG 1.4 quantized ONNX model. Requires accepted Hugging Face access and a token.", 44_400_000L, gated = true),
-        bgrEntry("inspyrenet_swinb_full", "InSPyReNet SwinB Full", "OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX", "onnx/model.onnx", "MIT-licensed InSPyReNet SwinB Plus Ultra ONNX segmentation model.", 395_000_000L),
-        bgrEntry("inspyrenet_swinb_fp16", "InSPyReNet SwinB FP16", "OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX", "onnx/model_fp16.onnx", "MIT-licensed InSPyReNet SwinB Plus Ultra FP16 ONNX model.", 199_000_000L)
+        bgrEntry("inspyrenet_swinb_full", "InSPyReNet SwinB Full", "OS-Software/InSPyReNet-SwinB-Plus-Ultra-ONNX", "onnx/model.onnx", "MIT-licensed InSPyReNet SwinB Plus Ultra ONNX segmentation model.", 395_000_000L)
     )
 
     val entries: List<OnnxCatalogEntry> = (sdaiEntries + manuEntries + supertonicEntries + backgroundRemovalEntries)
@@ -465,14 +459,12 @@ object OnnxStorage {
         "SDAI/model"
     )
 
-    fun managedModelsRoot(): File = File(
-        Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
-        "ADT/onnx"
-    )
+    fun managedModelsRoot(context: Context): File =
+        File(context.applicationContext.noBackupFilesDir, "onnx_models")
 
-    fun ensureManagedRootsReady() {
-        val adtRoot = managedModelsRoot().parentFile
-        listOfNotNull(adtRoot, managedModelsRoot(), stagingRoot()).forEach { dir ->
+    fun ensureManagedRootsReady(context: Context) {
+        val managedRoot = managedModelsRoot(context)
+        listOfNotNull(managedRoot, stagingRoot(context)).forEach { dir ->
             dir.mkdirs()
             runCatching {
                 File(dir, ".nomedia").apply {
@@ -482,11 +474,14 @@ object OnnxStorage {
         }
     }
 
-    fun managedBundleDir(bundleId: String): File = File(managedModelsRoot(), bundleId)
+    fun managedBundleDir(context: Context, bundleId: String): File =
+        File(managedModelsRoot(context), bundleId)
 
-    fun stagingRoot(): File = File(managedModelsRoot(), ".staging")
+    fun stagingRoot(context: Context): File =
+        File(managedModelsRoot(context), ".staging")
 
-    fun stagingBundleDir(bundleId: String): File = File(stagingRoot(), bundleId)
+    fun stagingBundleDir(context: Context, bundleId: String): File =
+        File(stagingRoot(context), bundleId)
 
     fun tempDownloadDir(context: Context): File = File(context.cacheDir, "onnx_downloads")
 
@@ -656,11 +651,7 @@ object OnnxImportSupport {
         hasAllFilesAccess: Boolean,
         isPathAccessible: Boolean
     ): OnnxImportStrategy {
-        return if (!resolvedPath.isNullOrBlank() && hasAllFilesAccess && isPathAccessible) {
-            OnnxImportStrategy.LINK_IN_PLACE
-        } else {
-            OnnxImportStrategy.COPY_TO_MANAGED
-        }
+        return OnnxImportStrategy.COPY_TO_MANAGED
     }
 
     fun makeUniqueBundleId(baseId: String, existingIds: Collection<String>): String {
@@ -763,7 +754,9 @@ object OnnxImportSupport {
         ensureActive: () -> Unit = {},
         onProgress: (Float) -> Unit = {}
     ): Long {
-        val stagingRoot = installDir.parentFile?.let { File(it, ".staging") } ?: OnnxStorage.stagingRoot()
+        val stagingRoot = installDir.parentFile?.let { File(it, ".staging") }
+            ?: archiveFile.parentFile?.let { File(it, ".staging") }
+            ?: error("Missing staging root for ${installDir.absolutePath}")
         val stagingDir = File(stagingRoot, installDir.name)
         deleteRecursively(stagingDir)
         deleteRecursively(installDir)
@@ -961,6 +954,60 @@ fun ModelEntity.isOnnxBackgroundRemovalModel(): Boolean {
     return type == ModelType.ONNX_BACKGROUND_REMOVAL &&
         onnxPipelineFamily == ONNX_PIPELINE_FAMILY_BACKGROUND_REMOVAL &&
         hasOnnxCapability(ONNX_CAPABILITY_BACKGROUND_REMOVAL)
+}
+
+private val unsupportedLegacyBackgroundRemovalBundleIds = setOf(
+    "ben2_fp16",
+    "rmbg_2_0_fp16",
+    "rmbg_1_4_fp16",
+    "inspyrenet_swinb_fp16",
+    "rmbg_2_0_q4f16"
+)
+
+private val recommendedBackgroundRemovalBundleIds = setOf(
+    "rmbg_1_4_quantized",
+    "rmbg_1_4_full",
+    "rmbg_2_0_int8",
+    "rmbg_2_0_quantized"
+)
+
+private val heavyBackgroundRemovalBundleIds = setOf(
+    "rmbg_2_0_full",
+    "rmbg_2_0_bnb4"
+)
+
+fun isUnsupportedLegacyOnnxBackgroundRemovalBundleId(bundleId: String?): Boolean {
+    val normalized = bundleId?.trim()?.lowercase(Locale.US).orEmpty()
+    return normalized in unsupportedLegacyBackgroundRemovalBundleIds
+}
+
+fun OnnxCatalogEntry.backgroundRemovalRiskClass(): OnnxBackgroundRemovalRiskClass? {
+    if (provider != OnnxCatalogProvider.BACKGROUND_REMOVAL || modelType != ModelType.ONNX_BACKGROUND_REMOVAL) {
+        return null
+    }
+    return when {
+        isUnsupportedLegacyOnnxBackgroundRemovalBundleId(bundleId) -> OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY
+        bundleId.lowercase(Locale.US) in recommendedBackgroundRemovalBundleIds -> OnnxBackgroundRemovalRiskClass.RECOMMENDED
+        bundleId.lowercase(Locale.US) in heavyBackgroundRemovalBundleIds -> OnnxBackgroundRemovalRiskClass.HEAVY
+        else -> null
+    }
+}
+
+fun ModelEntity.backgroundRemovalRiskClass(): OnnxBackgroundRemovalRiskClass? {
+    if (!isOnnxBackgroundRemovalModel()) return null
+    resolveOnnxCatalogEntry(this)?.backgroundRemovalRiskClass()?.let { return it }
+    val repoBundleId = parseOnnxCatalogBundleId(repoId)
+    return when {
+        isUnsupportedLegacyOnnxBackgroundRemovalBundleId(repoBundleId) ||
+            isUnsupportedLegacyOnnxBackgroundRemovalBundleId(filename) ||
+            filename.contains("fp16", ignoreCase = true) ||
+            filename.contains("q4f16", ignoreCase = true) -> OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY
+        repoBundleId?.lowercase(Locale.US) in recommendedBackgroundRemovalBundleIds ||
+            filename.lowercase(Locale.US) in recommendedBackgroundRemovalBundleIds -> OnnxBackgroundRemovalRiskClass.RECOMMENDED
+        repoBundleId?.lowercase(Locale.US) in heavyBackgroundRemovalBundleIds ||
+            filename.lowercase(Locale.US) in heavyBackgroundRemovalBundleIds -> OnnxBackgroundRemovalRiskClass.HEAVY
+        else -> null
+    }
 }
 
 fun ModelEntity.isTamaDefaultPicGenModel(): Boolean {

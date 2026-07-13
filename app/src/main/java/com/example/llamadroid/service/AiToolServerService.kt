@@ -508,6 +508,7 @@ class AiToolServerService : Service() {
                 AiServerType.VIDEO_UPSCALE -> startVideoUpscaleJob(queued.jobId, queued.params, queued.ownerUserId)
                 AiServerType.DOCS_DATASETS -> startDocsDatasetJob(queued.jobId, queued.action, queued.params, queued.ownerUserId)
                 AiServerType.LLAMA_CHAT -> startLlamaChatJob(queued.jobId, queued.action, queued.params, queued.ownerUserId)
+                AiServerType.AI_HUB -> Result.failure(IllegalStateException("AI HUB does not run queued jobs"))
             }
 
         private suspend fun waitForTerminalJob(jobId: String) {
@@ -637,6 +638,7 @@ class AiToolServerService : Service() {
                             StableDiffusionService.createCancelWorkflowIntent(applicationContext)
                         )
                         "transcribe_summary" -> VideoSumupService.cancel()
+                        "manga_translation" -> PDFTranslationJobService.cancel()
                         "media_translation", "subtitle_translation" -> MediaTranslationWorkflowService.cancel(applicationContext)
                         else -> Unit
                     }
@@ -645,10 +647,12 @@ class AiToolServerService : Service() {
                     AiServerType.DOCS_DATASETS -> when (action) {
                         "pdf_summary" -> PDFSummaryService.cancel()
                         "video_summary" -> VideoSumupService.cancel()
+                        "pdf_translate_ocr", "pdf_translate_text_layer" -> PDFTranslationJobService.cancel()
                         "dataset_import", "dataset_pipeline" -> DatasetForegroundService.cancelCurrent(applicationContext)
                         else -> Unit
                     }
                     AiServerType.LLAMA_CHAT -> Unit
+                    AiServerType.AI_HUB -> Unit
                 }
             }.onFailure { error ->
                 AiServerLogStore.append(type.id, "Cancel dispatch failed: ${error.message}")
@@ -667,6 +671,7 @@ class AiToolServerService : Service() {
                 AiServerType.VIDEO_UPSCALE -> require(action == "video_upscale") { "Choose a valid video upscale action." }
                 AiServerType.DOCS_DATASETS -> require(action in docsActions) { "Choose a valid docs or dataset action." }
                 AiServerType.LLAMA_CHAT -> require(action in chatActions) { "Choose a valid chat action." }
+                AiServerType.AI_HUB -> error("AI HUB is a launcher and does not accept jobs.")
             }
             if (type == AiServerType.LLAMA_CHAT && action != "web_chat_send") {
                 require(params.optLong("chatId", -1L) > 0L) { "Choose a chat." }
@@ -1417,6 +1422,7 @@ class AiToolServerService : Service() {
                 AiServerType.VIDEO_UPSCALE -> "video_upscale"
                 AiServerType.DOCS_DATASETS -> serverMode.ifBlank { "pdf_summary" }
                 AiServerType.LLAMA_CHAT -> "web_chat_send"
+                AiServerType.AI_HUB -> ""
             }
         }
 
@@ -3603,7 +3609,7 @@ class AiToolServerService : Service() {
 
         private fun optionsJson(type: AiServerType, user: AiServerUserEntity? = null): JSONObject = runBlocking {
             val ownerUserId = webOwnerUserId(user)
-            val models = sharedModelBuckets(type, ownerUserId)
+            val models = if (type == AiServerType.AI_HUB) JSONObject() else sharedModelBuckets(type, ownerUserId)
             val descriptor = JSONObject()
                 .put("ok", true)
                 .put("serverType", type.id)
@@ -3790,8 +3796,28 @@ class AiToolServerService : Service() {
                         .put("topK", 40)
                         .put("repeatPenalty", 1.1)
                         .put("thinkingEnabled", false)))
+
+                AiServerType.AI_HUB -> descriptor
+                    .put("hubServers", hubServersJson())
             }
             finalizeNativeDescriptor(type, descriptor)
+        }
+
+        private suspend fun hubServersJson(): JSONArray {
+            val configs = db.aiServerDao().getConfigs()
+            val entries = AiHubDirectory.entries(configs, runtimeStates.value)
+            return JSONArray(entries.map { entry ->
+                val type = AiServerType.fromId(entry.serverType) ?: return@map JSONObject()
+                JSONObject()
+                    .put("serverType", entry.serverType)
+                    .put("label", localizedServerName(type))
+                    .put("description", localizedServerDescription(type))
+                    .put("displayName", entry.displayName)
+                    .put("emoji", entry.emoji)
+                    .put("port", entry.port)
+                    .put("running", entry.running)
+                    .put("lanVisible", entry.lanVisible)
+            })
         }
 
         private fun finalizeNativeDescriptor(type: AiServerType, descriptor: JSONObject): JSONObject {
@@ -3859,6 +3885,52 @@ class AiToolServerService : Service() {
 
         private fun localized(en: String, es: String): JSONObject =
             JSONObject().put("en", en).put("es", es)
+
+        private fun localizedServerName(type: AiServerType): JSONObject = when (type) {
+            AiServerType.IMAGE -> localized("Image Studio", "Estudio de imagen")
+            AiServerType.VIDEO -> localized("Video Studio", "Estudio de video")
+            AiServerType.WORKFLOWS -> localized("Workflows", "Flujos de trabajo")
+            AiServerType.TTS -> localized("Voice Studio", "Estudio de voz")
+            AiServerType.VIDEO_UPSCALE -> localized("Video Upscale", "Escalar video")
+            AiServerType.DOCS_DATASETS -> localized("Docs and Datasets", "Docs y datasets")
+            AiServerType.LLAMA_CHAT -> localized("Llama Chat", "Chat Llama")
+            AiServerType.AI_HUB -> localized("AI HUB", "AI HUB")
+        }
+
+        private fun localizedServerDescription(type: AiServerType): JSONObject = when (type) {
+            AiServerType.IMAGE -> localized(
+                "SD, ONNX, background removal, img2img, scaling, and per-user images.",
+                "SD, ONNX, quitar fondo, img2img, escalado e imagenes por usuario."
+            )
+            AiServerType.VIDEO -> localized(
+                "Stable Diffusion text-to-video and image-to-video with saved outputs.",
+                "Stable Diffusion de texto a video e imagen a video con salidas guardadas."
+            )
+            AiServerType.WORKFLOWS -> localized(
+                "Browser access for built-in workflow templates and queued runs.",
+                "Acceso desde navegador a plantillas integradas y ejecuciones en cola."
+            )
+            AiServerType.TTS -> localized(
+                "ONNX TTS with voices, languages, speed, and saved audio.",
+                "TTS ONNX con voces, idiomas, velocidad y audio guardado."
+            )
+            AiServerType.VIDEO_UPSCALE -> localized(
+                "RealSR and RealCUGAN options for browser-uploaded videos.",
+                "Opciones RealSR y RealCUGAN para videos subidos desde el navegador."
+            )
+            AiServerType.DOCS_DATASETS -> localized(
+                "PDF tools, summaries, translation paths, video summaries, and dataset projects.",
+                "Herramientas PDF, resumenes, traduccion, resumen de video y proyectos de datasets."
+            )
+            AiServerType.LLAMA_CHAT -> localized(
+                "Native Llama chats, server status, attachments, and chat history from the browser.",
+                "Chats nativos de Llama, estado del servidor, adjuntos e historial desde el navegador."
+            )
+            AiServerType.AI_HUB -> localized(
+                "One web launcher that links to the active built-in AI servers.",
+                "Un lanzador web que enlaza a los servidores de IA integrados que estan activos."
+            )
+        }
 
         private fun fieldJson(
             id: String,

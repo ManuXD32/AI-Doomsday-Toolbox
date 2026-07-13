@@ -14,8 +14,14 @@ interface LiteRtModelDao {
     @Query("SELECT * FROM litert_models ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC")
     fun observeAll(): Flow<List<LiteRtModelEntity>>
 
+    @Query("SELECT * FROM litert_models ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC")
+    suspend fun getAllOnce(): List<LiteRtModelEntity>
+
     @Query("SELECT * FROM litert_models WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): LiteRtModelEntity?
+
+    @Query("SELECT * FROM litert_models WHERE id = :id LIMIT 1")
+    fun getByIdImmediate(id: Long): LiteRtModelEntity?
 
     @Query("SELECT * FROM litert_models WHERE path = :path LIMIT 1")
     suspend fun getByPath(path: String): LiteRtModelEntity?
@@ -45,11 +51,45 @@ interface LiteRtModelDao {
         updatedAt: Long = System.currentTimeMillis()
     )
 
-    @Query("UPDATE litert_models SET supportsVision = :supportsVision, supportsAudio = :supportsAudio, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateModalitySupport(
+    @Query(
+        """
+        UPDATE litert_models
+        SET supportsVision = :supportsVision,
+            supportsAudio = :supportsAudio,
+            supportsEmbedding = :supportsEmbedding,
+            kbEmbeddingRunnable = 0,
+            kbEmbeddingRuntime = NULL,
+            kbEmbeddingStatus = 'manual_recheck_required',
+            updatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateCapabilitySupport(
         id: Long,
         supportsVision: Boolean,
         supportsAudio: Boolean,
+        supportsEmbedding: Boolean,
+        updatedAt: Long = System.currentTimeMillis()
+    )
+
+    @Query("SELECT * FROM litert_models WHERE supportsEmbedding = 1 AND kbEmbeddingRunnable = 1 ORDER BY updatedAt DESC, displayName COLLATE NOCASE ASC")
+    fun observeEmbeddingCapableModels(): Flow<List<LiteRtModelEntity>>
+
+    @Query(
+        """
+        UPDATE litert_models
+        SET kbEmbeddingRunnable = :runnable,
+            kbEmbeddingRuntime = :runtime,
+            kbEmbeddingStatus = :status,
+            updatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun updateKbEmbeddingRuntime(
+        id: Long,
+        runnable: Boolean,
+        runtime: String?,
+        status: String?,
         updatedAt: Long = System.currentTimeMillis()
     )
 }

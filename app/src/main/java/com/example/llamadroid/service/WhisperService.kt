@@ -149,11 +149,18 @@ class WhisperService : Service() {
                 _state.value = WhisperState.Error(error)
                 return@withContext Result.failure(Exception(error))
             }
+
+            val resolvedModelPath = WhisperModelPathResolver.resolve(applicationContext, config.modelPath)
+            if (resolvedModelPath == null) {
+                val error = getString(R.string.whisper_error_no_model)
+                _state.value = WhisperState.Error(error)
+                return@withContext Result.failure(Exception(error))
+            }
             
             // Build command
             val args = mutableListOf<String>()
             args.add(whisperBinary.absolutePath)
-            args.addAll(listOf("-m", config.modelPath))
+            args.addAll(listOf("-m", resolvedModelPath))
             args.addAll(listOf("-f", wavFile.absolutePath))
             args.addAll(listOf("-l", config.language))
             args.addAll(listOf("-t", config.threads.toString()))

@@ -5,9 +5,6 @@ import android.net.Uri
 import androidx.annotation.Keep
 import androidx.room.withTransaction
 import com.example.llamadroid.data.db.AppDatabase
-import com.example.llamadroid.data.db.ModelBackupPolicy
-import com.example.llamadroid.data.db.ModelEntity
-import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.NoteEntity
 import com.example.llamadroid.data.db.NoteType
 import com.example.llamadroid.data.db.OrganizerAlarmEntity
@@ -49,9 +46,6 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
-private const val MODEL_PATH_KIND_FILE = "file"
-private const val MODEL_PATH_KIND_DIRECTORY = "directory"
-
 object NativeChatNotesBackupManager {
     private const val TAG = "[NativeBackup]"
     private const val MANIFEST_ENTRY = "manifest.json"
@@ -73,7 +67,6 @@ object NativeChatNotesBackupManager {
     ): Result<NativeChatNotesBackupExportResult> = withContext(Dispatchers.IO) {
         runCatching {
             val collector = MediaCollector()
-            val modelCollector = ModelFileCollector()
             val servers = database.llamaServerDao().getAllServers().first()
             val folders = database.llamaChatFolderDao().getAllFolders().first()
             val profiles = database.llamaChatPromptProfileDao().getAllProfiles().first()
@@ -157,26 +150,7 @@ object NativeChatNotesBackupManager {
                 )
             }
 
-            val backupModels = database.modelDao()
-                .getAllModels()
-                .first()
-                .filter(ModelBackupPolicy::shouldKeepInPortableBackup)
-                .mapNotNull { model ->
-                    val modelGroup = modelCollector.register(
-                        originalPath = model.path,
-                        owner = "model_${model.filename}"
-                    )
-                    if (modelGroup == null) {
-                        DebugLog.log("$TAG Skipping imported model with missing files: ${model.filename}")
-                        return@mapNotNull null
-                    }
-                    val mmprojGroup = modelCollector.register(
-                        originalPath = model.mmprojPath,
-                        owner = "model_${model.filename}_mmproj"
-                    )
-                    model.toBackup(modelGroup, mmprojGroup)
-                }
-            val modelFiles = modelCollector.fileEntries()
+            val backupModels = emptyList<ModelBackup>()
             val media = collector.entries().map { it.entry }
             val manifest = NativeChatNotesBackupManifest(
                 schemaVersion = SCHEMA_VERSION,
@@ -195,7 +169,7 @@ object NativeChatNotesBackupManager {
                 onnxGalleryImages = onnxGalleryImages,
                 tamaBackup = tamaBackup?.entry,
                 models = backupModels,
-                modelFiles = modelFiles,
+                modelFiles = emptyList(),
                 media = media
             )
 
@@ -221,13 +195,6 @@ object NativeChatNotesBackupManager {
                             zipOut.closeEntry()
                         }
                     }
-                    modelCollector.fileWorks().forEach { modelWork ->
-                        zipOut.putNextEntry(ZipEntry(modelWork.entry.zipPath))
-                        FileInputStream(modelWork.file).use { input ->
-                            input.copyTo(zipOut)
-                        }
-                        zipOut.closeEntry()
-                    }
                     tamaBackup?.let { backup ->
                         zipOut.putNextEntry(ZipEntry(backup.entry.zipPath))
                         zipOut.write(backup.bytes)
@@ -238,7 +205,7 @@ object NativeChatNotesBackupManager {
 
             DebugLog.log(
                 "$TAG Exported ${chats.size} chats, ${messages.size} messages, " +
-                    "${notes.size} notes, ${media.size} media files, ${backupModels.size} imported models, " +
+                    "${notes.size} notes, ${media.size} media files, model export disabled, " +
                     "${scheduledTasks.size} scheduled tasks, ${scheduledTaskLogs.size} scheduler logs, " +
                     "${onnxGalleryImages.size} ONNX gallery images, tamaBackup=${tamaBackup != null}"
             )
@@ -268,10 +235,8 @@ object NativeChatNotesBackupManager {
             val timestamp = System.currentTimeMillis()
             val tempDir = File(context.cacheDir, "native_chat_notes_import_$timestamp")
             val mediaRoot = File(context.filesDir, "native_chat_notes_imports/import_$timestamp")
-            val modelRoot = File(mediaRoot, "models")
             tempDir.mkdirs()
             mediaRoot.mkdirs()
-            modelRoot.mkdirs()
             try {
                 extractZipToTemp(context, sourceUri, tempDir)
                 val manifestFile = File(tempDir, MANIFEST_ENTRY)
@@ -296,12 +261,11 @@ object NativeChatNotesBackupManager {
                     images = manifest.onnxGalleryImages.orEmpty(),
                     mediaEntries = manifest.media
                 )
-                val importedModelPaths = copyImportedModelFiles(
-                    tempDir = tempDir,
-                    modelRoot = modelRoot,
-                    models = manifest.models,
-                    modelFiles = manifest.modelFiles
-                )
+                if (manifest.models.isNotEmpty() || manifest.modelFiles.isNotEmpty()) {
+                    DebugLog.log(
+                        "$TAG Ignoring ${manifest.models.size} model entries and ${manifest.modelFiles.size} model files from backup import"
+                    )
+                }
 
                 val existingFolderNames = database.llamaChatFolderDao()
                     .getAllFolders()
@@ -324,16 +288,10 @@ object NativeChatNotesBackupManager {
                 var importedOrganizerAlarms = 0
                 var importedScheduledTasks = 0
                 var importedScheduledTaskLogs = 0
-                var importedModels = 0
+                val importedModels = 0
                 val importedTasksToSchedule = mutableListOf<LlamaScheduledTaskEntity>()
 
                 database.withTransaction {
-                    manifest.models.forEach { model ->
-                        val entity = model.toEntity(importedModelPaths) ?: return@forEach
-                        database.modelDao().insertModel(entity)
-                        importedModels += 1
-                    }
-
                     val serverIdMap = mutableMapOf<Long, Long>()
                     manifest.servers.forEach { server ->
                         val newId = database.llamaServerDao().insertServer(server.toEntity())
@@ -537,42 +495,6 @@ object NativeChatNotesBackupManager {
                 }
             }
             importedPaths[media.key] = target.absolutePath
-        }
-        return importedPaths
-    }
-
-    private fun copyImportedModelFiles(
-        tempDir: File,
-        modelRoot: File,
-        models: List<ModelBackup>,
-        modelFiles: List<ModelFileBackupEntry>
-    ): Map<String, String> {
-        val pathKinds = mutableMapOf<String, String>()
-        models.forEach { model ->
-            model.modelFileGroupKey?.let { pathKinds[it] = model.modelPathKind }
-            model.mmprojFileGroupKey?.let { pathKinds[it] = model.mmprojPathKind ?: MODEL_PATH_KIND_FILE }
-        }
-
-        val importedPaths = mutableMapOf<String, String>()
-        modelFiles.groupBy { it.modelKey }.forEach { (modelKey, entries) ->
-            val targetBase = File(modelRoot, NativeChatNotesBackupSupport.sanitizeZipName(modelKey))
-            entries.forEach entryLoop@ { entry ->
-                if (!NativeChatNotesBackupSupport.isSafeZipEntryName(entry.zipPath)) return@entryLoop
-                if (!NativeChatNotesBackupSupport.isSafeZipEntryName("models/${entry.relativePath}")) return@entryLoop
-                val source = File(tempDir, entry.zipPath)
-                if (!source.isFile) return@entryLoop
-                val target = File(targetBase, entry.relativePath)
-                target.parentFile?.mkdirs()
-                source.copyTo(target, overwrite = true)
-            }
-
-            val pathKind = pathKinds[modelKey] ?: MODEL_PATH_KIND_DIRECTORY
-            importedPaths[modelKey] = if (pathKind == MODEL_PATH_KIND_FILE) {
-                val firstEntry = entries.minByOrNull { it.relativePath.count { char -> char == '/' } }
-                firstEntry?.let { File(targetBase, it.relativePath).absolutePath } ?: targetBase.absolutePath
-            } else {
-                targetBase.absolutePath
-            }
         }
         return importedPaths
     }
@@ -965,63 +887,6 @@ object NativeChatNotesBackupManager {
         createdAt = createdAt
     )
 
-    private fun ModelEntity.toBackup(
-        modelGroup: ModelFileGroupWork,
-        mmprojGroup: ModelFileGroupWork?
-    ): ModelBackup = ModelBackup(
-        filename = filename,
-        path = path,
-        sizeBytes = sizeBytes,
-        type = type.name,
-        repoId = repoId,
-        isDownloaded = isDownloaded,
-        isVision = isVision,
-        mmprojPath = mmprojPath,
-        mmprojFileGroupKey = mmprojGroup?.key,
-        mmprojPathKind = mmprojGroup?.pathKind,
-        sdCapabilities = sdCapabilities,
-        sdFamily = sdFamily,
-        sdVariant = sdVariant,
-        sdCompatProfiles = sdCompatProfiles,
-        onnxCapabilities = onnxCapabilities,
-        onnxAssetKind = onnxAssetKind,
-        onnxPipelineFamily = onnxPipelineFamily,
-        onnxReferenceUri = onnxReferenceUri,
-        onnxReferencePath = onnxReferencePath,
-        layerCount = layerCount,
-        modelFileGroupKey = modelGroup.key,
-        modelPathKind = modelGroup.pathKind
-    )
-
-    private fun ModelBackup.toEntity(importedModelPaths: Map<String, String>): ModelEntity? {
-        val typeValue = runCatching { ModelType.valueOf(type) }.getOrNull() ?: return null
-        val resolvedPath = modelFileGroupKey?.let { importedModelPaths[it] } ?: return null
-        val resolvedFile = File(resolvedPath)
-        if (!resolvedFile.exists()) return null
-        val resolvedMmprojPath = mmprojFileGroupKey?.let { importedModelPaths[it] } ?: mmprojPath
-        val resolvedSize = NativeChatNotesBackupSupport.fileOrDirectorySize(resolvedFile).takeIf { it > 0L }
-            ?: sizeBytes
-        return ModelEntity(
-            filename = filename,
-            path = resolvedPath,
-            sizeBytes = resolvedSize,
-            type = typeValue,
-            repoId = repoId,
-            isDownloaded = isDownloaded,
-            isVision = isVision,
-            mmprojPath = resolvedMmprojPath,
-            sdCapabilities = sdCapabilities,
-            sdFamily = sdFamily,
-            sdVariant = sdVariant,
-            sdCompatProfiles = sdCompatProfiles,
-            onnxCapabilities = onnxCapabilities,
-            onnxAssetKind = onnxAssetKind,
-            onnxPipelineFamily = onnxPipelineFamily,
-            onnxReferenceUri = onnxReferenceUri,
-            onnxReferencePath = onnxReferencePath,
-            layerCount = layerCount
-        )
-    }
 }
 
 object NativeChatNotesBackupSupport {
@@ -1173,102 +1038,6 @@ private data class MediaWork(
     val entry: MediaBackupEntry,
     val file: File,
     val metadataFile: File? = null
-)
-
-private class ModelFileCollector {
-    private val groupsByCanonicalPath = linkedMapOf<String, ModelFileGroupWork>()
-
-    fun register(originalPath: String?, owner: String): ModelFileGroupWork? {
-        val root = localFileOrDirectory(originalPath) ?: return null
-        val canonicalPath = runCatching { root.canonicalPath }.getOrElse { root.absolutePath }
-        groupsByCanonicalPath[canonicalPath]?.let { return it }
-
-        val key = "model_${shortHash(canonicalPath)}"
-        val zipBase = "models/${key}_${NativeChatNotesBackupSupport.sanitizeZipName(owner)}"
-        val pathKind = if (root.isDirectory) {
-            MODEL_PATH_KIND_DIRECTORY
-        } else {
-            MODEL_PATH_KIND_FILE
-        }
-        val files = if (root.isDirectory) {
-            root.walkTopDown()
-                .filter { it.isFile }
-                .mapNotNull { file ->
-                    val relativePath = runCatching {
-                        root.toPath().relativize(file.toPath()).toString()
-                            .replace(File.separatorChar, '/')
-                    }.getOrNull()
-                        ?.takeIf { NativeChatNotesBackupSupport.isSafeZipEntryName("models/$it") }
-                        ?: return@mapNotNull null
-                    ModelFileWork(
-                        entry = ModelFileBackupEntry(
-                            modelKey = key,
-                            relativePath = relativePath,
-                            zipPath = "$zipBase/$relativePath",
-                            sizeBytes = file.length()
-                        ),
-                        file = file
-                    )
-                }
-                .toList()
-        } else {
-            val relativePath = root.name.takeIf {
-                NativeChatNotesBackupSupport.isSafeZipEntryName("models/$it")
-            } ?: return null
-            listOf(
-                ModelFileWork(
-                    entry = ModelFileBackupEntry(
-                        modelKey = key,
-                        relativePath = relativePath,
-                        zipPath = "$zipBase/$relativePath",
-                        sizeBytes = root.length()
-                    ),
-                    file = root
-                )
-            )
-        }
-        if (files.isEmpty()) return null
-
-        return ModelFileGroupWork(
-            key = key,
-            pathKind = pathKind,
-            files = files
-        ).also {
-            groupsByCanonicalPath[canonicalPath] = it
-        }
-    }
-
-    fun fileEntries(): List<ModelFileBackupEntry> =
-        groupsByCanonicalPath.values.flatMap { it.files.map { work -> work.entry } }
-
-    fun fileWorks(): List<ModelFileWork> =
-        groupsByCanonicalPath.values.flatMap { it.files }
-
-    private fun localFileOrDirectory(path: String?): File? {
-        val cleanPath = path?.trim()?.takeIf { it.isNotBlank() } ?: return null
-        if (cleanPath.startsWith("http://", ignoreCase = true)) return null
-        if (cleanPath.startsWith("https://", ignoreCase = true)) return null
-        if (cleanPath.startsWith("content://", ignoreCase = true)) return null
-        val filePath = cleanPath.removePrefix("file://")
-        val file = File(filePath)
-        return file.takeIf { it.isFile || it.isDirectory }
-    }
-
-    private fun shortHash(value: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-        return bytes.take(8).joinToString("") { "%02x".format(it) }
-    }
-}
-
-private data class ModelFileGroupWork(
-    val key: String,
-    val pathKind: String,
-    val files: List<ModelFileWork>
-)
-
-private data class ModelFileWork(
-    val entry: ModelFileBackupEntry,
-    val file: File
 )
 
 private enum class NativeBackupMediaKind(
@@ -1520,7 +1289,7 @@ data class ModelBackup(
     val filename: String = "",
     val path: String = "",
     val sizeBytes: Long = 0,
-    val type: String = ModelType.LLM.name,
+    val type: String = "LLM",
     val repoId: String = "",
     val isDownloaded: Boolean = false,
     val isVision: Boolean = false,

@@ -74,6 +74,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
+import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_IMG2IMG
@@ -84,21 +85,20 @@ import com.example.llamadroid.onnx.OnnxBundleValidationResult
 import com.example.llamadroid.onnx.OnnxCatalog
 import com.example.llamadroid.onnx.OnnxCatalogEntry
 import com.example.llamadroid.onnx.OnnxCatalogProvider
-import com.example.llamadroid.onnx.OnnxImportStrategy
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalRiskClass
 import com.example.llamadroid.onnx.OnnxImportSupport
 import com.example.llamadroid.onnx.OnnxInstallSource
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.onnx.OnnxTtsBundleValidator
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE
 import com.example.llamadroid.onnx.ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS
+import com.example.llamadroid.onnx.backgroundRemovalRiskClass
 import com.example.llamadroid.onnx.buildOnnxImageGenModelEntity
 import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
 import com.example.llamadroid.onnx.parseOnnxCatalogProvider
 import com.example.llamadroid.onnx.resolveOnnxCatalogEntry
-import com.example.llamadroid.util.FilePathResolver
 import com.example.llamadroid.util.FormatUtils
-import com.example.llamadroid.util.StoragePermissionHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -239,32 +239,6 @@ fun OnnxModelsScreen(navController: NavController) {
                 )
             }
 
-            if (StoragePermissionHelper.shouldRequestAllFilesAccess()) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.onnx_models_permission_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.onnx_models_permission_desc),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(onClick = { StoragePermissionHelper.requestAllFilesAccess(context) }) {
-                            Text(stringResource(R.string.onnx_models_permission_action))
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
 
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
@@ -401,8 +375,10 @@ private fun InstalledOnnxModelsTab(
             val validation = validationMap[model.filename]
             val catalogEntry = resolveOnnxCatalogEntry(model)
             val provider = parseOnnxCatalogProvider(model.repoId)
+            val bgrRisk = model.backgroundRemovalRiskClass()
             OnnxManagerCard(
                 accentColor = when {
+                    bgrRisk == OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY -> MaterialTheme.colorScheme.error
                     validation == null || validation.isValid -> MaterialTheme.colorScheme.primary
                     else -> MaterialTheme.colorScheme.error
                 }
@@ -466,6 +442,7 @@ private fun InstalledOnnxModelsTab(
                                     )
                                 )
                             }
+                            bgrRisk?.let { add(backgroundRemovalRiskBadge(it)) }
                         }
                     )
                     Spacer(modifier = Modifier.height(12.dp))
@@ -503,6 +480,18 @@ private fun InstalledOnnxModelsTab(
                             MaterialTheme.colorScheme.error
                         }
                     )
+                    backgroundRemovalRiskMessage(bgrRisk)?.let { message ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (bgrRisk == OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -691,6 +680,18 @@ private fun CatalogOnnxModelsTab(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            stringResource(R.string.bgr_catalog_play_safe_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            stringResource(R.string.bgr_catalog_recommended_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -698,6 +699,7 @@ private fun CatalogOnnxModelsTab(
         items(entries, key = { it.stableId }) { entry ->
             val isInstalled = entry.stableId in installedIds
             val isDownloading = entry.stableId in activeDownloadIds
+            val bgrRisk = entry.backgroundRemovalRiskClass()
             val capabilityBadges = buildList {
                 add(
                     OnnxBadgeModel(
@@ -728,12 +730,14 @@ private fun CatalogOnnxModelsTab(
                         )
                     )
                 }
+                bgrRisk?.let { add(backgroundRemovalRiskBadge(it)) }
             }
             OnnxManagerCard(
-                accentColor = if (entry.provider == OnnxCatalogProvider.MANUXD32 || entry.modelType == ModelType.ONNX_TTS) {
-                    MaterialTheme.colorScheme.tertiary
-                } else {
-                    MaterialTheme.colorScheme.primary
+                accentColor = when {
+                    bgrRisk == OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY -> MaterialTheme.colorScheme.error
+                    entry.provider == OnnxCatalogProvider.MANUXD32 || entry.modelType == ModelType.ONNX_TTS ->
+                        MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.primary
                 }
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -785,6 +789,18 @@ private fun CatalogOnnxModelsTab(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    backgroundRemovalRiskMessage(bgrRisk)?.let { message ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (bgrRisk == OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         stringResource(R.string.onnx_models_catalog_source, entry.sourceLabel),
@@ -858,6 +874,37 @@ private data class OnnxBadgeModel(
 )
 
 @Composable
+private fun backgroundRemovalRiskBadge(risk: OnnxBackgroundRemovalRiskClass): OnnxBadgeModel {
+    return when (risk) {
+        OnnxBackgroundRemovalRiskClass.RECOMMENDED -> OnnxBadgeModel(
+            label = stringResource(R.string.onnx_models_badge_recommended),
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+        )
+        OnnxBackgroundRemovalRiskClass.HEAVY -> OnnxBadgeModel(
+            label = stringResource(R.string.onnx_models_badge_heavy),
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+        )
+        OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY -> OnnxBadgeModel(
+            label = stringResource(R.string.onnx_models_badge_unsupported_legacy),
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer
+        )
+    }
+}
+
+@Composable
+private fun backgroundRemovalRiskMessage(risk: OnnxBackgroundRemovalRiskClass?): String? {
+    return when (risk) {
+        OnnxBackgroundRemovalRiskClass.RECOMMENDED -> stringResource(R.string.bgr_catalog_recommended_hint)
+        OnnxBackgroundRemovalRiskClass.HEAVY -> stringResource(R.string.bgr_catalog_heavy_warning)
+        OnnxBackgroundRemovalRiskClass.UNSUPPORTED_LEGACY -> stringResource(R.string.bgr_catalog_legacy_unsupported_hint)
+        null -> null
+    }
+}
+
+@Composable
 private fun OnnxBadge(
     label: String,
     containerColor: Color,
@@ -908,67 +955,36 @@ private suspend fun importOnnxBundleFromTree(
 ): Result<String> = runCatching {
     val sourceRoot = DocumentFile.fromTreeUri(context, treeUri)
         ?: error(context.getString(R.string.onnx_models_import_error_invalid_tree))
-    val resolvedPath = FilePathResolver.getPathFromTreeUri(context, treeUri)
-    val canDirectLink = resolvedPath?.let { FilePathResolver.isPathAccessible(it) } == true
-    val strategy = OnnxImportSupport.chooseImportStrategy(
-        resolvedPath = resolvedPath,
-        hasAllFilesAccess = StoragePermissionHelper.hasAllFilesAccess(),
-        isPathAccessible = canDirectLink
-    )
 
-    val rawName = sourceRoot.name ?: File(resolvedPath ?: "onnx_bundle").name
+    val rawName = sourceRoot.name ?: "onnx_bundle"
     val bundleId = OnnxImportSupport.makeUniqueBundleId(
         OnnxImportSupport.sanitizeBundleId(rawName),
         existingIds
     )
 
-    val finalPath = when (strategy) {
-        OnnxImportStrategy.LINK_IN_PLACE -> {
-            val directRoot = File(resolvedPath ?: error("Missing resolved path"))
-            val validation = validateAnyOnnxBundle(directRoot)
-            require(validation.isValid) {
-                context.getString(
-                    R.string.onnx_models_import_error_missing_files,
-                    validation.missingPaths.joinToString(", ")
-                )
-            }
-            onProgress(1f, context.getString(R.string.onnx_models_import_linked))
-            directRoot.absolutePath
-        }
-
-        OnnxImportStrategy.COPY_TO_MANAGED -> {
-            OnnxStorage.ensureManagedRootsReady()
-            val targetDir = OnnxStorage.managedBundleDir(bundleId)
-            OnnxImportSupport.deleteRecursively(targetDir)
-            targetDir.mkdirs()
-            if (!resolvedPath.isNullOrBlank() && StoragePermissionHelper.hasAllFilesAccess() && File(resolvedPath).isDirectory) {
-                OnnxImportSupport.copyDirectory(File(resolvedPath), targetDir) { progress ->
-                    onProgress(progress, context.getString(R.string.onnx_models_import_copying))
-                }
-            } else {
-                OnnxImportSupport.copyDocumentTreeToDirectory(context, sourceRoot, targetDir) { progress ->
-                    onProgress(progress, context.getString(R.string.onnx_models_import_copying))
-                }
-            }
-            val validation = validateAnyOnnxBundle(targetDir)
-            require(validation.isValid) {
-                context.getString(
-                    R.string.onnx_models_import_error_missing_files,
-                    validation.missingPaths.joinToString(", ")
-                )
-            }
-            targetDir.absolutePath
-        }
+    OnnxStorage.ensureManagedRootsReady(context)
+    val targetDir = OnnxStorage.managedBundleDir(context, bundleId)
+    OnnxImportSupport.deleteRecursively(targetDir)
+    targetDir.mkdirs()
+    OnnxImportSupport.copyDocumentTreeToDirectory(context, sourceRoot, targetDir) { progress ->
+        onProgress(progress, context.getString(R.string.onnx_models_import_copying))
     }
 
-    val sizeBytes = OnnxImportSupport.recursiveSize(File(finalPath))
-    val finalRoot = File(finalPath)
-    val ttsValidation = OnnxTtsBundleValidator.validateDirectory(finalRoot)
+    val validation = validateAnyOnnxBundle(targetDir)
+    require(validation.isValid) {
+        context.getString(
+            R.string.onnx_models_import_error_missing_files,
+            validation.missingPaths.joinToString(", ")
+        )
+    }
+
+    val sizeBytes = OnnxImportSupport.recursiveSize(targetDir)
+    val ttsValidation = OnnxTtsBundleValidator.validateDirectory(targetDir)
     repository.insertModel(
         if (ttsValidation.isValid) {
             ModelEntity(
                 filename = bundleId,
-                path = finalPath,
+                path = targetDir.absolutePath,
                 sizeBytes = sizeBytes,
                 type = ModelType.ONNX_TTS,
                 repoId = "custom-import/$bundleId",
@@ -977,30 +993,26 @@ private suspend fun importOnnxBundleFromTree(
                 onnxAssetKind = ONNX_ASSET_KIND_CUSTOM_IMPORT_BUNDLE,
                 onnxPipelineFamily = ONNX_PIPELINE_FAMILY_SUPERTONIC_TTS,
                 onnxReferenceUri = treeUri.toString(),
-                onnxReferencePath = resolvedPath
+                onnxReferencePath = null
             )
         } else {
             buildOnnxImageGenModelEntity(
                 filename = bundleId,
-                path = finalPath,
+                path = targetDir.absolutePath,
                 sizeBytes = sizeBytes,
                 repoId = "custom-import/$bundleId",
                 installSource = OnnxInstallSource.CUSTOM_IMPORT,
                 supportedCapabilities = com.example.llamadroid.onnx.OnnxBundleValidator
-                    .validateDirectory(finalRoot)
+                    .validateDirectory(targetDir)
                     .supportedCapabilities,
                 referenceUri = treeUri.toString(),
-                referencePath = resolvedPath
+                referencePath = null
             )
         }
     )
 
-    when (strategy) {
-        OnnxImportStrategy.LINK_IN_PLACE -> context.getString(R.string.onnx_models_import_success_linked, bundleId)
-        OnnxImportStrategy.COPY_TO_MANAGED -> context.getString(R.string.onnx_models_import_success_copied, bundleId)
-    }
+    context.getString(R.string.onnx_models_import_success_copied, bundleId)
 }
-
 private fun validateAnyOnnxBundle(root: File): OnnxBundleValidationResult {
     val imageValidation = com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(root)
     if (imageValidation.isValid) return imageValidation

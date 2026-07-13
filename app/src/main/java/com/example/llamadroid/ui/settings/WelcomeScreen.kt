@@ -31,10 +31,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
-import com.example.llamadroid.util.StoragePermissionHelper
 
 /**
  * First-run welcome screen with setup wizard.
@@ -48,7 +46,7 @@ fun WelcomeScreen(
     val settingsRepo = remember { SettingsRepository(context) }
     
     var currentStep by remember { mutableIntStateOf(0) }
-    val totalSteps = 5 // Welcome, Battery, All Files Access, Output Folder, Phantom Process
+    val totalSteps = 4 // Welcome, Battery, Output Folder, Phantom Process
     
     // Battery optimization state
     val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
@@ -58,6 +56,7 @@ fun WelcomeScreen(
     
     // Output folder state
     val outputFolderUri by settingsRepo.outputFolderUri.collectAsState()
+
     val folderPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
@@ -68,12 +67,7 @@ fun WelcomeScreen(
             settingsRepo.setOutputFolderUri(it.toString())
         }
     }
-    
-    // All Files Access state (for Android 11+)
-    var hasAllFilesAccess by remember { mutableStateOf(StoragePermissionHelper.hasAllFilesAccess()) }
-    
 
-    
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -138,32 +132,22 @@ fun WelcomeScreen(
                             }, 1000)
                         }
                     )
-                    2 -> AllFilesAccessStep(
-                        hasAccess = hasAllFilesAccess,
-                        onRequestPermission = {
-                            StoragePermissionHelper.requestAllFilesAccess(context)
-                            // Re-check after delay
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                hasAllFilesAccess = StoragePermissionHelper.hasAllFilesAccess()
-                            }, 1000)
-                        }
+                    2 -> FolderStep(
+                        selectedFolder = outputFolderUri?.let { uri ->
+                            try {
+                                androidx.documentfile.provider.DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
+                                    ?: context.getString(R.string.welcome_status_selected)
+                            } catch (e: Exception) { context.getString(R.string.welcome_status_selected) }
+                        },
+                        onSelectFolder = { folderPicker.launch(null) }
                     )
-                    4 -> PhantomProcessStep(
+                    3 -> PhantomProcessStep(
                         onCopyCommands = { commands ->
                             val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
                             clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.welcome_phantom_copy_label), commands))
                             Toast.makeText(context, context.getString(R.string.welcome_toast_commands_copied), Toast.LENGTH_SHORT).show()
                         }
                     )
-                    3 -> FolderStep(
-                        selectedFolder = outputFolderUri?.let { uri ->
-                            try {
-                                DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name ?: context.getString(R.string.welcome_status_selected)
-                            } catch (e: Exception) { context.getString(R.string.welcome_status_selected) }
-                        },
-                        onSelectFolder = { folderPicker.launch(null) }
-                    )
-
                 }
             }
             
@@ -346,110 +330,6 @@ private fun BatteryStep(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(stringResource(R.string.welcome_battery_allow))
             }
-        }
-    }
-}
-
-@Composable
-private fun AllFilesAccessStep(
-    hasAccess: Boolean,
-    onRequestPermission: () -> Unit
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = if (hasAccess) "✅" else "📁",
-            fontSize = 72.sp
-        )
-        
-        Spacer(modifier = Modifier.height(24.dp))
-        
-        Text(
-            text = stringResource(R.string.welcome_all_files_title),
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        Text(
-            text = stringResource(R.string.welcome_all_files_desc),
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        
-        Spacer(modifier = Modifier.height(32.dp))
-        
-        if (hasAccess) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(32.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = stringResource(R.string.welcome_all_files_granted),
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        } else {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = stringResource(R.string.welcome_all_files_benefits),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(stringResource(R.string.welcome_all_files_benefit_1), style = MaterialTheme.typography.bodyMedium)
-                    Text(stringResource(R.string.welcome_all_files_benefit_2), style = MaterialTheme.typography.bodyMedium)
-                    Text(stringResource(R.string.welcome_all_files_benefit_3), style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Button(
-                onClick = onRequestPermission,
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Icon(Icons.Default.Settings, null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.welcome_all_files_grant_btn))
-            }
-            
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            Text(
-                text = stringResource(R.string.welcome_all_files_skip_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
         }
     }
 }

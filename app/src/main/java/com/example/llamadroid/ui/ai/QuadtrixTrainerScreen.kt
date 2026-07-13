@@ -116,7 +116,9 @@ fun QuadtrixTrainerScreen(navController: NavController) {
     }
 
     suspend fun saveRuntimeProfile(overrideWorkspacePath: String? = null): Long {
-        val resolvedWorkspace = overrideWorkspacePath ?: workspacePath
+        val resolvedWorkspace = QuadtrixWorkspaceManager
+            .rootForRuntime(context, overrideWorkspacePath ?: workspacePath)
+            .absolutePath
         val webPortNumber = webPort.toPortOrDefault(8080)
         val workerPortNumber = workerPort.toPortOrDefault(9091)
         val workerThreadNumber = workerThreads.toPortOrDefault(4).coerceAtLeast(1)
@@ -176,12 +178,8 @@ fun QuadtrixTrainerScreen(navController: NavController) {
                 settingsRepo.setQuadtrixWorkspace(selection.uri, selection.directPath)
                 Toast.makeText(context, context.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
                 if (startWebUiAfterFolderPick) {
-                    if (selection.directPath.isNullOrBlank()) {
-                        Toast.makeText(context, context.getString(R.string.quadtrix_workspace_direct_required), Toast.LENGTH_LONG).show()
-                    } else {
-                        val profileId = saveRuntimeProfile(selection.directPath)
-                        QuadtrixTrainingService.startWebUi(context, profileId)
-                    }
+                    val profileId = saveRuntimeProfile(selection.directPath)
+                    QuadtrixTrainingService.startWebUi(context, profileId)
                 }
             }.onFailure { error ->
                 Toast.makeText(
@@ -340,15 +338,8 @@ private fun WebUiCard(
         )
         LabeledValue(
             label = stringResource(R.string.quadtrix_workspace_folder),
-            value = workspacePath ?: workspaceUri ?: stringResource(R.string.quadtrix_workspace_not_set)
+            value = workspaceUri ?: workspacePath ?: stringResource(R.string.quadtrix_workspace_not_set)
         )
-        if (workspacePath.isNullOrBlank()) {
-            Text(
-                text = stringResource(R.string.quadtrix_workspace_direct_required),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
             CompactTextField(
                 label = stringResource(R.string.quadtrix_web_host),

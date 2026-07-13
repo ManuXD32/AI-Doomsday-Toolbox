@@ -944,6 +944,7 @@ private fun localizedServerName(serverType: String): String = when (serverType) 
     AiServerType.VIDEO_UPSCALE.id -> stringResource(R.string.ai_servers_type_video_upscale)
     AiServerType.DOCS_DATASETS.id -> stringResource(R.string.ai_servers_type_docs_datasets)
     AiServerType.LLAMA_CHAT.id -> stringResource(R.string.ai_servers_type_llama_chat)
+    AiServerType.AI_HUB.id -> stringResource(R.string.ai_servers_type_ai_hub)
     else -> serverType
 }
 
@@ -956,6 +957,7 @@ private fun serverDescription(serverType: String): String = when (serverType) {
     AiServerType.VIDEO_UPSCALE.id -> stringResource(R.string.ai_servers_type_video_upscale_desc)
     AiServerType.DOCS_DATASETS.id -> stringResource(R.string.ai_servers_type_docs_datasets_desc)
     AiServerType.LLAMA_CHAT.id -> stringResource(R.string.ai_servers_type_llama_chat_desc)
+    AiServerType.AI_HUB.id -> stringResource(R.string.ai_servers_type_ai_hub_desc)
     else -> ""
 }
 

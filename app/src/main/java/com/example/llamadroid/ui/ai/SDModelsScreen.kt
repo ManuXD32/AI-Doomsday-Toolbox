@@ -43,6 +43,7 @@ import com.example.llamadroid.data.db.hasSdCapability
 import com.example.llamadroid.data.db.parseSdCapabilities
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.FileInfo
+import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdComponentRole
@@ -916,6 +917,12 @@ private fun InstalledSDModelsTab(
                             compatProfiles = importCompatProfiles,
                             onCompatProfilesChange = { importCompatProfiles = it }
                         )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            stringResource(R.string.models_import_delete_note),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
             },
@@ -1604,7 +1611,7 @@ private fun InstalledSDModelsTab(
     }
 }
 
-// Helper function to import SD model with progress (with direct path support)
+// Helper function to import SD model with progress
 private suspend fun importSDModel(
     context: android.content.Context,
     repository: ModelRepository,
@@ -1617,94 +1624,75 @@ private suspend fun importSDModel(
     sdCompatProfiles: String? = null,
     onProgress: (Float) -> Unit = {}
 ) {
+    var tempFile: File? = null
     try {
-        var finalPath: String
-        
-        // Check if we have "All files access" permission for direct path access
-        val hasAllFilesAccess = com.example.llamadroid.util.StoragePermissionHelper.hasAllFilesAccess()
-        
-        // Try to resolve SAF URI to a real file path (for SD card/external storage)
-        val directPath = com.example.llamadroid.util.FilePathResolver.getPathFromUri(context, uri)
-        
-        if (directPath != null && hasAllFilesAccess && com.example.llamadroid.util.FilePathResolver.isPathAccessible(directPath)) {
-            // We can access the file directly! No copy needed.
-            com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Using direct path (no copy): $directPath")
-            finalPath = directPath
-            
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                onProgress(1f)  // Instant completion
-                android.widget.Toast.makeText(
-                    context,
-                    context.getString(R.string.sd_models_linked_external),
-                    android.widget.Toast.LENGTH_SHORT
-                ).show()
-            }
-        } else {
-            // Fallback: Copy the file to app storage
-            if (directPath != null && !hasAllFilesAccess) {
-                com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Direct path available but missing 'All files access' permission, copying...")
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    android.widget.Toast.makeText(
-                        context, 
-                        context.getString(R.string.sd_models_permission_tip), 
-                        android.widget.Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-            
-            val modelsDir = repository.getModelDir(type).apply { mkdirs() }
-            val targetFile = File(modelsDir, filename.ifBlank { "imported_sd_model.safetensors" })
-            
-            // Get file size for progress calculation
-            val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
-                it.length
-            } ?: 0L
-            
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                targetFile.outputStream().use { output ->
-                    if (fileSize > 0) {
-                        // Copy with progress tracking
-                        val buffer = ByteArray(8192)
-                        var bytesCopied = 0L
-                        var bytes = input.read(buffer)
-                        while (bytes >= 0) {
-                            output.write(buffer, 0, bytes)
-                            bytesCopied += bytes
-                            onProgress(bytesCopied.toFloat() / fileSize.toFloat())
-                            bytes = input.read(buffer)
-                        }
-                    } else {
-                        // Fallback to simple copy if size unknown
-                        input.copyTo(output)
+        val requestedFilename = filename.ifBlank { "imported_sd_model.safetensors" }
+        val targetFilename = ModelLibraryManager.canonicalFilename(requestedFilename)
+        val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
+            it.length
+        } ?: 0L
+        val runtimeDir = repository.getModelDir(type).apply { mkdirs() }
+        val targetFile = File(runtimeDir, targetFilename)
+        tempFile = File(runtimeDir, "$targetFilename.importing")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            tempFile!!.outputStream().use { output ->
+                if (fileSize > 0) {
+                    val buffer = ByteArray(8192)
+                    var bytesCopied = 0L
+                    var bytes = input.read(buffer)
+                    while (bytes >= 0) {
+                        output.write(buffer, 0, bytes)
+                        bytesCopied += bytes
+                        onProgress((bytesCopied.toFloat() / fileSize.toFloat()).coerceIn(0f, 1f))
+                        bytes = input.read(buffer)
                     }
+                } else {
+                    input.copyTo(output)
                 }
             }
-            
-            onProgress(1f)
-            finalPath = targetFile.absolutePath
+        } ?: error("Unable to open selected SD model")
+        replaceImportedSdFile(tempFile!!, targetFile)
+        val finalPath = targetFile.absolutePath
+
+        onProgress(1f)
+        val existing = AppDatabase.getDatabase(context).modelDao().getModelByFilename(targetFilename)
+        if (existing != null && existing.path != finalPath) {
+            repository.deleteModelArtifacts(existing)
         }
-        
-        // Get file size
-        val file = File(finalPath)
-        val sizeBytes = if (file.exists()) file.length() else 0L
-        
+        val finalFile = File(finalPath)
+
         val modelEntity = ModelEntity(
-            repoId = "local-import",
-            filename = filename,
+            filename = targetFilename,
             path = finalPath,
-            sizeBytes = sizeBytes,
+            sizeBytes = finalFile.length(),
             type = type,
+            repoId = "custom-import/$targetFilename",
+            isDownloaded = false,
             sdCapabilities = capabilities,
             sdFamily = sdFamily,
             sdVariant = sdVariant,
             sdCompatProfiles = sdCompatProfiles
         )
-        
         repository.insertModel(modelEntity)
-        com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Imported: $filename as ${type.name}")
+        com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Imported: $targetFilename as ${type.name}")
     } catch (e: Exception) {
+        tempFile?.takeIf { it.exists() }?.delete()
         com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Failed: ${e.message}")
         e.printStackTrace()
+    }
+}
+
+private fun replaceImportedSdFile(tempFile: File, targetFile: File) {
+    if (targetFile.exists()) {
+        targetFile.delete()
+    }
+    if (!tempFile.renameTo(targetFile)) {
+        tempFile.inputStream().use { input ->
+            targetFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        tempFile.delete()
     }
 }
 

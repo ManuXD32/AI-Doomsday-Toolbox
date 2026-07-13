@@ -1893,6 +1893,146 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate83To84_addsAiHubPinsSpeculativeRunsAndNativeToolsPresetFlag() {
+        helper.createDatabase(TEST_DB, 83).apply {
+            execSQL(
+                """
+                INSERT INTO llama_chats (
+                    title,
+                    lastModified,
+                    contextSize,
+                    systemPrompt,
+                    apiParams,
+                    folderId
+                ) VALUES (
+                    'Pinned later',
+                    2000,
+                    8192,
+                    NULL,
+                    NULL,
+                    NULL
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            84,
+            true,
+            Migrations.MIGRATION_83_84
+        )
+
+        migratedDb.query(
+            """
+            SELECT pinnedToAiHub, pinnedServerId, pinnedAt
+            FROM llama_chats
+            WHERE title = 'Pinned later'
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+            assertTrue(cursor.isNull(1))
+            assertTrue(cursor.isNull(2))
+        }
+
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='llama_speculative_runs'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("llama_speculative_runs", cursor.getString(0))
+        }
+
+        migratedDb.query("PRAGMA table_info(saved_commands)").use { cursor ->
+            var foundNativeToolsColumn = false
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                foundNativeToolsColumn = foundNativeToolsColumn || cursor.getString(nameIndex) == "nativeToolsEnabled"
+            }
+            assertTrue(foundNativeToolsColumn)
+        }
+    }
+
+    @Test
+    fun migrate84To85_addsSpeculativeRunSampleCount() {
+        helper.createDatabase(TEST_DB, 84).apply {
+            execSQL(
+                """
+                INSERT INTO llama_speculative_runs (
+                    name,
+                    savedForever,
+                    createdAt,
+                    updatedAt,
+                    modelPath,
+                    modelName,
+                    speculativeMode,
+                    draftModelPath,
+                    draftModelName,
+                    acceptanceRate,
+                    promptTokensPerSecond,
+                    generationTokensPerSecond,
+                    rawMetrics
+                ) VALUES (
+                    NULL,
+                    0,
+                    1000,
+                    1000,
+                    '/models/main.gguf',
+                    'main.gguf',
+                    'draft-dflash',
+                    '/models/draft.gguf',
+                    'draft.gguf',
+                    NULL,
+                    NULL,
+                    NULL,
+                    ''
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            85,
+            true,
+            Migrations.MIGRATION_84_85
+        )
+
+        migratedDb.query("SELECT sampleCount FROM llama_speculative_runs WHERE modelName = 'main.gguf'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+    }
+
+    @Test
+    fun migrate86To87_addsAdvancedNgramSavedCommandFields() {
+        helper.createDatabase(TEST_DB, 86).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            87,
+            true,
+            Migrations.MIGRATION_86_87
+        )
+
+        migratedDb.query("PRAGMA table_info(saved_commands)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("ngramMapKSizeN"))
+            assertTrue(columns.contains("ngramMapKSizeM"))
+            assertTrue(columns.contains("ngramMapKMinHits"))
+            assertTrue(columns.contains("ngramMapK4VSizeN"))
+            assertTrue(columns.contains("ngramMapK4VSizeM"))
+            assertTrue(columns.contains("ngramMapK4VMinHits"))
+        }
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
     }

@@ -64,6 +64,7 @@ import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.settings.PdfTranslationQualityModeSelector
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -97,16 +98,19 @@ fun WorkflowsScreen(navController: NavController) {
     var mangaProgress by remember { mutableFloatStateOf(0f) }
     var mangaResults by remember { mutableStateOf<List<MangaTranslationFileResult>>(emptyList()) }
     var mangaError by remember { mutableStateOf<String?>(null) }
+    var mangaErrorDetails by remember { mutableStateOf<String?>(null) }
     var mangaExportPdf by remember { mutableStateOf(true) }
     var mangaExportCbz by remember { mutableStateOf(true) }
 
     LaunchedEffect(
         pdfTranslationJobState.isRunning,
         pdfTranslationJobState.kind,
+        pdfTranslationJobState.cancelled,
         pdfTranslationJobState.progressMessage,
         pdfTranslationJobState.progressFraction,
         pdfTranslationJobState.mangaResults,
-        pdfTranslationJobState.errorMessage
+        pdfTranslationJobState.errorMessage,
+        pdfTranslationJobState.errorDetails
     ) {
         if (pdfTranslationJobState.kind == PdfTranslationJobKind.MANGA_BATCH) {
             mangaIsRunning = pdfTranslationJobState.isRunning
@@ -114,13 +118,21 @@ fun WorkflowsScreen(navController: NavController) {
                 mangaStep = pdfTranslationJobState.progressMessage
                 mangaProgress = pdfTranslationJobState.progressFraction
                 mangaError = null
+                mangaErrorDetails = null
+            } else if (pdfTranslationJobState.cancelled) {
+                mangaResults = pdfTranslationJobState.mangaResults
+                mangaStep = context.getString(R.string.action_cancelled)
+                mangaError = null
+                mangaErrorDetails = null
             } else if (pdfTranslationJobState.mangaResults.isNotEmpty()) {
                 mangaResults = pdfTranslationJobState.mangaResults
                 mangaStep = context.getString(R.string.workflow_complete)
                 mangaProgress = 1f
                 mangaError = null
+                mangaErrorDetails = null
             } else if (pdfTranslationJobState.errorMessage != null) {
                 mangaError = pdfTranslationJobState.errorMessage
+                mangaErrorDetails = pdfTranslationJobState.errorDetails
                 mangaStep = ""
                 mangaProgress = 0f
             }
@@ -301,6 +313,8 @@ fun WorkflowsScreen(navController: NavController) {
     var mediaTranslationTtsSteps by remember { mutableIntStateOf(8) }
     var mediaTranslationOutputMode by remember { mutableStateOf(MediaTranslationOutputMode.AUTO) }
     var mediaTranslationReplaceAudio by remember { mutableStateOf(true) }
+    var mediaTranslationContextEnabled by remember { mutableStateOf(true) }
+    var mediaTranslationContextLines by remember { mutableIntStateOf(2) }
     var activeMediaWorkflow by remember { mutableIntStateOf(4) }
 
     // ===== Subtitle translation/subtitled video workflow state =====
@@ -313,6 +327,8 @@ fun WorkflowsScreen(navController: NavController) {
     var subtitleTranslationSrtName by remember { mutableStateOf("") }
     var subtitleTranslationTargetLanguage by remember(defaultTranslationTargetLanguage) { mutableStateOf(defaultTranslationTargetLanguage) }
     var subtitleTranslationTranslateSubtitles by remember { mutableStateOf(true) }
+    var subtitleTranslationContextEnabled by remember { mutableStateOf(true) }
+    var subtitleTranslationContextLines by remember { mutableIntStateOf(2) }
     var subtitleTranslationBurnIntoVideo by remember { mutableStateOf(true) }
     var subtitleTranslationFontSize by remember { mutableIntStateOf(24) }
     var subtitleTranslationAlignment by remember { mutableIntStateOf(2) }
@@ -857,12 +873,14 @@ fun WorkflowsScreen(navController: NavController) {
                 3 -> {
                     MangaTranslationWorkflowContent(
                         db = db,
+                        settingsRepo = settingsRepo,
                         selectedUris = mangaCbzUris,
                         isRunning = mangaIsRunning,
                         currentStep = mangaStep,
                         progress = mangaProgress,
                         results = mangaResults,
                         errorMessage = mangaError,
+                        errorDetails = mangaErrorDetails,
                         exportPdf = mangaExportPdf,
                         exportCbz = mangaExportCbz,
                         onExportPdfChange = { mangaExportPdf = it },
@@ -878,14 +896,18 @@ fun WorkflowsScreen(navController: NavController) {
                             )
                         },
                         onOpenSettings = { navController.navigate("settings_pdf_translation") },
+                        onCancel = { PDFTranslationJobService.cancel() },
                         onRun = {
                             if (mangaCbzUris.isEmpty()) {
                                 mangaError = context.getString(R.string.workflow_manga_select_first)
+                                mangaErrorDetails = null
                             } else if (!mangaExportPdf && !mangaExportCbz) {
                                 mangaError = context.getString(R.string.workflow_manga_select_output_first)
+                                mangaErrorDetails = null
                             } else {
                                 mangaIsRunning = true
                                 mangaError = null
+                                mangaErrorDetails = null
                                 mangaResults = emptyList()
                                 mangaStep = context.getString(R.string.workflow_step_starting)
                                 mangaProgress = 0f
@@ -949,6 +971,7 @@ fun WorkflowsScreen(navController: NavController) {
                         onOllamaModelChange = { summaryOllamaModel = it },
                         llamaSwapModel = summaryLlamaSwapModel,
                         onLlamaSwapModelChange = { summaryLlamaSwapModel = it },
+                        liteRtModelId = summaryLiteRtModelId,
                         llamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
                         llamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
                         llamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
@@ -957,6 +980,10 @@ fun WorkflowsScreen(navController: NavController) {
                         temperature = summaryTemperature,
                         timeoutMinutes = summaryTimeoutMinutes,
                         thinkingEnabled = summaryThinkingEnabled,
+                        translationContextEnabled = mediaTranslationContextEnabled,
+                        onTranslationContextEnabledChange = { mediaTranslationContextEnabled = it },
+                        translationContextLines = mediaTranslationContextLines,
+                        onTranslationContextLinesChange = { mediaTranslationContextLines = it },
                         ttsModelPath = mediaTranslationTtsModelPath,
                         ttsModelName = mediaTranslationTtsModelName,
                         onTtsModelChange = { path, name ->
@@ -975,12 +1002,15 @@ fun WorkflowsScreen(navController: NavController) {
                         onReplaceOriginalAudioChange = { mediaTranslationReplaceAudio = it },
                         state = mediaTranslationState,
                         onRun = {
-                            val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
-                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
-                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
-                                SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
-                                else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
-                            }
+                            val backendReady = isWorkflowTranslationBackendReady(
+                                backend = summaryBackend,
+                                ollamaUrl = summaryOllamaUrl,
+                                ollamaModel = summaryOllamaModel,
+                                llamaServerUrl = summaryLlamaUrl,
+                                llamaSwapUrl = summaryLlamaSwapUrl,
+                                llamaSwapModel = summaryLlamaSwapModel,
+                                liteRtModelId = summaryLiteRtModelId
+                            )
                             val sourceItems = mediaTranslationBatch.ifEmpty {
                                 val path = mediaTranslationPath
                                 val uri = mediaTranslationUri
@@ -1029,7 +1059,9 @@ fun WorkflowsScreen(navController: NavController) {
                                             targetLanguage = mediaTranslationTargetLanguage,
                                             summaryPrompt = null,
                                             mergePrompt = null
-                                        )
+                                        ),
+                                        translationContextEnabled = mediaTranslationContextEnabled,
+                                        translationContextLines = mediaTranslationContextLines
                                     )
                                 }
                                 MediaTranslationWorkflowService.startBatch(
@@ -1106,6 +1138,7 @@ fun WorkflowsScreen(navController: NavController) {
                         onOllamaModelChange = { summaryOllamaModel = it },
                         llamaSwapModel = summaryLlamaSwapModel,
                         onLlamaSwapModelChange = { summaryLlamaSwapModel = it },
+                        liteRtModelId = summaryLiteRtModelId,
                         llamaServerModelLabel = persistedWorkflowLlamaServerModelLabel,
                         llamaServerContextLabel = persistedWorkflowLlamaServerContextLabel,
                         llamaServerContextTokens = persistedWorkflowLlamaServerContextTokens,
@@ -1114,6 +1147,10 @@ fun WorkflowsScreen(navController: NavController) {
                         temperature = summaryTemperature,
                         timeoutMinutes = summaryTimeoutMinutes,
                         thinkingEnabled = summaryThinkingEnabled,
+                        translationContextEnabled = subtitleTranslationContextEnabled,
+                        onTranslationContextEnabledChange = { subtitleTranslationContextEnabled = it },
+                        translationContextLines = subtitleTranslationContextLines,
+                        onTranslationContextLinesChange = { subtitleTranslationContextLines = it },
                         burnIntoVideo = subtitleTranslationBurnIntoVideo,
                         onBurnIntoVideoChange = { subtitleTranslationBurnIntoVideo = it },
                         fontSize = subtitleTranslationFontSize,
@@ -1130,12 +1167,15 @@ fun WorkflowsScreen(navController: NavController) {
                         onFontNameChange = { subtitleTranslationFontName = it },
                         state = mediaTranslationState,
                         onRun = {
-                            val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
-                                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
-                                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
-                                SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
-                                else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
-                            }
+                            val backendReady = isWorkflowTranslationBackendReady(
+                                backend = summaryBackend,
+                                ollamaUrl = summaryOllamaUrl,
+                                ollamaModel = summaryOllamaModel,
+                                llamaServerUrl = summaryLlamaUrl,
+                                llamaSwapUrl = summaryLlamaSwapUrl,
+                                llamaSwapModel = summaryLlamaSwapModel,
+                                liteRtModelId = summaryLiteRtModelId
+                            )
                             val videoItems = subtitleTranslationVideoBatch.ifEmpty {
                                 val path = subtitleTranslationVideoPath
                                 val uri = subtitleTranslationVideoUri
@@ -1190,7 +1230,9 @@ fun WorkflowsScreen(navController: NavController) {
                                             targetLanguage = subtitleTranslationTargetLanguage,
                                             summaryPrompt = null,
                                             mergePrompt = null
-                                        )
+                                        ),
+                                        translationContextEnabled = subtitleTranslationContextEnabled,
+                                        translationContextLines = subtitleTranslationContextLines
                                     )
                                 }
                                 MediaTranslationWorkflowService.startSubtitleTranslationBatch(
@@ -1324,21 +1366,25 @@ fun WorkflowsScreen(navController: NavController) {
 @Composable
 private fun MangaTranslationWorkflowContent(
     db: AppDatabase,
+    settingsRepo: SettingsRepository,
     selectedUris: List<Uri>,
     isRunning: Boolean,
     currentStep: String,
     progress: Float,
     results: List<MangaTranslationFileResult>,
     errorMessage: String?,
+    errorDetails: String?,
     exportPdf: Boolean,
     exportCbz: Boolean,
     onExportPdfChange: (Boolean) -> Unit,
     onExportCbzChange: (Boolean) -> Unit,
     onPickFiles: () -> Unit,
     onOpenSettings: () -> Unit,
+    onCancel: () -> Unit,
     onRun: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
+    val qualityMode by settingsRepo.pdfTranslationQualityMode.collectAsState()
     val templates by db.workflowTemplateDao()
         .getByType(com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION)
         .collectAsState(initial = emptyList())
@@ -1367,6 +1413,10 @@ private fun MangaTranslationWorkflowContent(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(stringResource(R.string.pdf_translation_settings_title))
                 }
+                PdfTranslationQualityModeSelector(
+                    value = qualityMode,
+                    onValueChange = settingsRepo::setPdfTranslationQualityMode
+                )
                 Text(
                     stringResource(R.string.workflow_manga_output_title),
                     style = MaterialTheme.typography.labelLarge,
@@ -1468,17 +1518,33 @@ private fun MangaTranslationWorkflowContent(
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
                     Text(currentStep, style = MaterialTheme.typography.bodyMedium)
+                    OutlinedButton(
+                        onClick = onCancel,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_cancel), maxLines = 1)
+                    }
                 }
             }
         }
 
         errorMessage?.let {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Text(
-                    it,
-                    modifier = Modifier.padding(16.dp),
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    if (!errorDetails.isNullOrBlank()) {
+                        Text(
+                            errorDetails,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
             }
         }
 
@@ -1491,14 +1557,23 @@ private fun MangaTranslationWorkflowContent(
                         fontWeight = FontWeight.Bold
                     )
                     results.forEach { result ->
-                        Text(
-                            if (result.isSuccess) {
-                                stringResource(R.string.workflow_manga_result_success, result.sourceName)
-                            } else {
-                                stringResource(R.string.workflow_manga_result_failed, result.sourceName, result.errorMessage.orEmpty())
-                            },
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                if (result.isSuccess) {
+                                    stringResource(R.string.workflow_manga_result_success, result.sourceName)
+                                } else {
+                                    stringResource(R.string.workflow_manga_result_failed, result.sourceName, result.errorMessage.orEmpty())
+                                },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            if (!result.isSuccess && !result.errorDetails.isNullOrBlank()) {
+                                Text(
+                                    result.errorDetails.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1583,6 +1658,7 @@ private fun WorkflowOutputGalleryCard(
     folderName: String,
     refreshKey: Any?,
     isWorkflowRunning: Boolean = false,
+    resumeTranslationOverride: MediaTranslationResumeTranslationOverride? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1591,24 +1667,37 @@ private fun WorkflowOutputGalleryCard(
     var pendingDeleteSet by remember { mutableStateOf<WorkflowOutputGallerySet?>(null) }
     var pendingDeleteFile by remember { mutableStateOf<WorkflowOutputGalleryFile?>(null) }
     var selectedDirectories by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var hasRecoverableRuntime by remember(folderName) { mutableStateOf(false) }
+    var recoverableRuntimeInfo by remember(folderName) { mutableStateOf<MediaTranslationRecoverableInfo?>(null) }
+    var importedInputBytes by remember(folderName) { mutableLongStateOf(0L) }
+    var pendingClearImportedInputs by remember { mutableStateOf(false) }
+    var pendingDiscardRecoverable by remember { mutableStateOf<MediaTranslationRecoverableInfo?>(null) }
+    val scope = rememberCoroutineScope()
     val outputs = remember(folderName, refreshKey, refreshTick) {
         scanWorkflowOutputGallery(context, folderName)
     }
     val isSelectionMode = selectedDirectories.isNotEmpty()
     val resumeRequest: (() -> Unit)? = when (folderName) {
-        "workflow_media_translation" -> ({ MediaTranslationWorkflowService.requestResumeMedia(context) })
-        "workflow_subtitle_translation" -> ({ MediaTranslationWorkflowService.requestResumeSubtitle(context) })
+        "workflow_media_translation" -> ({ MediaTranslationWorkflowService.requestResumeMedia(context, resumeTranslationOverride) })
+        "workflow_subtitle_translation" -> ({ MediaTranslationWorkflowService.requestResumeSubtitle(context, resumeTranslationOverride) })
+        else -> null
+    }
+    val discardRecoverableRequest: (() -> Unit)? = when (folderName) {
+        "workflow_media_translation" -> ({ MediaTranslationWorkflowService.discardRecoverableMediaRuntime(context) })
+        "workflow_subtitle_translation" -> ({ MediaTranslationWorkflowService.discardRecoverableSubtitleRuntime(context) })
         else -> null
     }
 
     LaunchedEffect(folderName, refreshKey, refreshTick, isWorkflowRunning) {
-        hasRecoverableRuntime = withContext(Dispatchers.IO) {
+        recoverableRuntimeInfo = null
+        recoverableRuntimeInfo = withContext(Dispatchers.IO) {
             when (folderName) {
-                "workflow_media_translation" -> MediaTranslationWorkflowService.hasRecoverableMediaRuntime(context)
-                "workflow_subtitle_translation" -> MediaTranslationWorkflowService.hasRecoverableSubtitleRuntime(context)
-                else -> false
+                "workflow_media_translation" -> MediaTranslationWorkflowService.getRecoverableMediaRuntimeInfo(context)
+                "workflow_subtitle_translation" -> MediaTranslationWorkflowService.getRecoverableSubtitleRuntimeInfo(context)
+                else -> null
             }
+        }
+        importedInputBytes = withContext(Dispatchers.IO) {
+            MediaTranslationWorkflowService.workflowImportedInputBytes(context)
         }
     }
 
@@ -1620,63 +1709,140 @@ private fun WorkflowOutputGalleryCard(
 
     Card(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        if (isSelectionMode) stringResource(R.string.workflow_output_gallery_selected_count, selectedDirectories.size)
-                        else stringResource(R.string.workflow_output_gallery_title),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (!isSelectionMode) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            stringResource(R.string.workflow_output_gallery_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            if (isSelectionMode) stringResource(R.string.workflow_output_gallery_selected_count, selectedDirectories.size)
+                            else stringResource(R.string.workflow_output_gallery_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
                         )
-                    }
-                }
-                if (isSelectionMode) {
-                    IconButton(onClick = { selectedDirectories = emptySet() }) {
-                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_cancel))
-                    }
-                    IconButton(onClick = {
-                        outputs.firstOrNull { it.directory.absolutePath in selectedDirectories }?.let { pendingDeleteSet = it }
-                    }) {
-                        Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
-                    }
-                } else {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (hasRecoverableRuntime && resumeRequest != null) {
-                            OutlinedButton(
-                                onClick = {
-                                    resumeRequest()
-                                    refreshTick++
-                                },
-                                enabled = !isWorkflowRunning,
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text(stringResource(R.string.workflow_output_gallery_resume_button), maxLines = 1)
-                            }
+                        if (!isSelectionMode) {
+                            Text(
+                                stringResource(R.string.workflow_output_gallery_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
+                    }
+                    if (!isSelectionMode) {
                         TextButton(onClick = { refreshTick++ }) {
                             Text(stringResource(R.string.action_refresh))
                         }
                     }
                 }
-            }
-            if (!isSelectionMode && hasRecoverableRuntime) {
-                Text(
-                    stringResource(R.string.workflow_output_gallery_resume_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                if (isSelectionMode) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { selectedDirectories = emptySet() }) {
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.action_cancel))
+                        }
+                        IconButton(onClick = {
+                            outputs.firstOrNull { it.directory.absolutePath in selectedDirectories }?.let { pendingDeleteSet = it }
+                        }) {
+                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                } else {
+                    val resumeInfo = recoverableRuntimeInfo
+                    if (resumeInfo != null && resumeRequest != null) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                            tonalElevation = 1.dp
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    resumeInfo.sourceName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    stringResource(
+                                        R.string.workflow_output_gallery_resume_named_hint,
+                                        resumeInfo.sourceName,
+                                        resumeInfo.completedCount,
+                                        resumeInfo.totalCount
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                if (resumeTranslationOverride != null) {
+                                    Text(
+                                        stringResource(R.string.workflow_output_gallery_resume_current_engine_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            resumeRequest()
+                                            refreshTick++
+                                        },
+                                        enabled = !isWorkflowRunning,
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            stringResource(R.string.workflow_output_gallery_resume_button),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (discardRecoverableRequest != null) {
+                                        OutlinedButton(
+                                            onClick = { pendingDiscardRecoverable = resumeInfo },
+                                            enabled = !isWorkflowRunning,
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                stringResource(R.string.workflow_output_gallery_discard_resume_button),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (importedInputBytes > 0L) {
+                        OutlinedButton(
+                            onClick = { pendingClearImportedInputs = true },
+                            enabled = !isWorkflowRunning,
+                            modifier = Modifier.fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                stringResource(
+                                    R.string.workflow_imported_inputs_clear_button,
+                                    FormatUtils.Display.formatBytes(context, importedInputBytes)
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
             }
             if (outputs.isEmpty()) {
                 Text(
@@ -1823,6 +1989,85 @@ private fun WorkflowOutputGalleryCard(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteSet = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    if (pendingClearImportedInputs) {
+        AlertDialog(
+            onDismissRequest = { pendingClearImportedInputs = false },
+            title = { Text(stringResource(R.string.workflow_imported_inputs_clear_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.workflow_imported_inputs_clear_message,
+                        FormatUtils.Display.formatBytes(context, importedInputBytes)
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingClearImportedInputs = false
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            MediaTranslationWorkflowService.clearWorkflowImportedInputs(context)
+                        }
+                        importedInputBytes = withContext(Dispatchers.IO) {
+                            MediaTranslationWorkflowService.workflowImportedInputBytes(context)
+                        }
+                        Toast.makeText(
+                            context,
+                            context.getString(
+                                R.string.workflow_imported_inputs_cleared,
+                                result.deletedCount,
+                                FormatUtils.Display.formatBytes(context, result.freedBytes)
+                            ),
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }) {
+                    Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingClearImportedInputs = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    pendingDiscardRecoverable?.let { resumeInfo ->
+        AlertDialog(
+            onDismissRequest = { pendingDiscardRecoverable = null },
+            title = { Text(stringResource(R.string.workflow_output_gallery_discard_resume_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.workflow_output_gallery_discard_resume_message,
+                        resumeInfo.sourceName
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDiscardRecoverable = null
+                    discardRecoverableRequest?.invoke()
+                    recoverableRuntimeInfo = null
+                    refreshTick++
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.workflow_output_gallery_discard_resume_done),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }) {
+                    Text(stringResource(R.string.workflow_output_gallery_discard_resume_button), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDiscardRecoverable = null }) {
                     Text(stringResource(R.string.action_cancel))
                 }
             }
@@ -2161,6 +2406,74 @@ private fun mediaWorkflowExtensionForMime(mimeType: String?): String =
         else -> "media"
     }
 
+private fun isWorkflowTranslationBackendReady(
+    backend: String,
+    ollamaUrl: String,
+    ollamaModel: String?,
+    llamaServerUrl: String,
+    llamaSwapUrl: String,
+    llamaSwapModel: String?,
+    liteRtModelId: Long
+): Boolean =
+    when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
+        SettingsRepository.PDF_BACKEND_LITERT -> liteRtModelId > 0L
+        else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
+    }
+
+private fun workflowResumeTranslationOverride(
+    backend: String,
+    ollamaUrl: String,
+    llamaServerUrl: String,
+    llamaSwapUrl: String,
+    ollamaModel: String?,
+    llamaSwapModel: String?,
+    liteRtModelId: Long,
+    liteRtBackend: String,
+    liteRtMtpEnabled: Boolean,
+    thinkingEnabled: Boolean,
+    llamaServerModelLabel: String?,
+    llamaServerContextLabel: String?,
+    llamaServerContextTokens: Int,
+    contextSize: Int,
+    maxTokens: Int,
+    temperature: Float,
+    timeoutMinutes: Int,
+    targetLanguage: String,
+    translationContextEnabled: Boolean,
+    translationContextLines: Int
+): MediaTranslationResumeTranslationOverride =
+    MediaTranslationResumeTranslationOverride(
+        targetLanguage = targetLanguage,
+        backendSnapshot = RemoteSummarySettingsSnapshot(
+            backend = backend,
+            ollamaUrl = ollamaUrl,
+            llamaServerUrl = llamaServerUrl,
+            llamaSwapUrl = llamaSwapUrl,
+            ollamaModel = ollamaModel,
+            llamaSwapModel = llamaSwapModel,
+            liteRtModelId = liteRtModelId.takeIf { it > 0L },
+            liteRtBackend = liteRtBackend,
+            liteRtMtpEnabled = liteRtMtpEnabled,
+            thinkingEnabled = thinkingEnabled,
+            llamaServerModelLabel = llamaServerModelLabel,
+            llamaServerContextTokens = llamaServerContextTokens,
+            llamaServerContextLabel = llamaServerContextLabel,
+            chunkContext = contextSize,
+            chunkMaxTokens = maxTokens,
+            mergeContext = contextSize,
+            mergeMaxTokens = maxTokens,
+            temperature = temperature,
+            timeoutMinutes = timeoutMinutes,
+            targetLanguage = targetLanguage,
+            summaryPrompt = null,
+            mergePrompt = null
+        ),
+        translationContextEnabled = translationContextEnabled,
+        translationContextLines = translationContextLines.coerceIn(0, 10)
+    )
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SubtitleTranslationWorkflowContent(
@@ -2199,6 +2512,7 @@ private fun SubtitleTranslationWorkflowContent(
     onOllamaModelChange: (String?) -> Unit,
     llamaSwapModel: String?,
     onLlamaSwapModelChange: (String?) -> Unit,
+    liteRtModelId: Long,
     llamaServerModelLabel: String?,
     llamaServerContextLabel: String?,
     llamaServerContextTokens: Int,
@@ -2207,6 +2521,10 @@ private fun SubtitleTranslationWorkflowContent(
     temperature: Float,
     timeoutMinutes: Int,
     thinkingEnabled: Boolean,
+    translationContextEnabled: Boolean,
+    onTranslationContextEnabledChange: (Boolean) -> Unit,
+    translationContextLines: Int,
+    onTranslationContextLinesChange: (Int) -> Unit,
     burnIntoVideo: Boolean,
     onBurnIntoVideoChange: (Boolean) -> Unit,
     fontSize: Int,
@@ -2236,6 +2554,8 @@ private fun SubtitleTranslationWorkflowContent(
     var showTemplateMenu by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var showGalleryDialog by remember { mutableStateOf(false) }
+    val liteRtBackend by settingsRepo.workflowSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.workflowSummaryLiteRtMtpEnabled.collectAsState()
 
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -2308,7 +2628,31 @@ private fun SubtitleTranslationWorkflowContent(
                 WorkflowOutputGalleryCard(
                     folderName = "workflow_subtitle_translation",
                     refreshKey = state.finalOutputPath,
-                    isWorkflowRunning = state.isRunning
+                    isWorkflowRunning = state.isRunning,
+                    resumeTranslationOverride = if (translateSubtitles) {
+                        workflowResumeTranslationOverride(
+                            backend = backend,
+                            ollamaUrl = ollamaUrl,
+                            llamaServerUrl = llamaServerUrl,
+                            llamaSwapUrl = llamaSwapUrl,
+                            ollamaModel = ollamaModel,
+                            llamaSwapModel = llamaSwapModel,
+                            liteRtModelId = liteRtModelId,
+                            liteRtBackend = liteRtBackend,
+                            liteRtMtpEnabled = liteRtMtpEnabled,
+                            thinkingEnabled = thinkingEnabled,
+                            llamaServerModelLabel = llamaServerModelLabel,
+                            llamaServerContextLabel = llamaServerContextLabel,
+                            llamaServerContextTokens = llamaServerContextTokens,
+                            contextSize = contextSize,
+                            maxTokens = maxTokens,
+                            temperature = temperature,
+                            timeoutMinutes = timeoutMinutes,
+                            targetLanguage = targetLanguage,
+                            translationContextEnabled = translationContextEnabled,
+                            translationContextLines = translationContextLines
+                        )
+                    } else null
                 )
             }
         )
@@ -2362,6 +2706,8 @@ private fun SubtitleTranslationWorkflowContent(
                                             onWhisperThreadsChange(json.optInt("whisperThreads", whisperThreads))
                                             onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
                                             onTranslateSubtitlesChange(json.optBoolean("translateSubtitles", translateSubtitles))
+                                            onTranslationContextEnabledChange(json.optBoolean("translationContextEnabled", translationContextEnabled))
+                                            onTranslationContextLinesChange(json.optInt("translationContextLines", translationContextLines).coerceIn(0, 10))
                                             onBurnIntoVideoChange(json.optBoolean("burnIntoVideo", burnIntoVideo))
                                             onFontSizeChange(json.optInt("fontSize", fontSize))
                                             onAlignmentChange(json.optInt("alignment", alignment))
@@ -2421,6 +2767,8 @@ private fun SubtitleTranslationWorkflowContent(
                                 put("whisperThreads", whisperThreads)
                                 put("targetLanguage", targetLanguage)
                                 put("translateSubtitles", translateSubtitles)
+                                put("translationContextEnabled", translationContextEnabled)
+                                put("translationContextLines", translationContextLines)
                                 put("burnIntoVideo", burnIntoVideo)
                                 put("fontSize", fontSize)
                                 put("alignment", alignment)
@@ -2502,6 +2850,10 @@ private fun SubtitleTranslationWorkflowContent(
                 temperature = temperature,
                 timeoutMinutes = timeoutMinutes,
                 thinkingEnabled = thinkingEnabled,
+                translationContextEnabled = translationContextEnabled,
+                onTranslationContextEnabledChange = onTranslationContextEnabledChange,
+                translationContextLines = translationContextLines,
+                onTranslationContextLinesChange = onTranslationContextLinesChange,
                 onMetadataLoaded = onMetadataLoaded
             )
         }
@@ -2529,14 +2881,42 @@ private fun SubtitleTranslationWorkflowContent(
         WorkflowOutputGalleryCard(
             folderName = "workflow_subtitle_translation",
             refreshKey = state.finalOutputPath,
-            isWorkflowRunning = state.isRunning
+            isWorkflowRunning = state.isRunning,
+            resumeTranslationOverride = if (translateSubtitles) {
+                workflowResumeTranslationOverride(
+                    backend = backend,
+                    ollamaUrl = ollamaUrl,
+                    llamaServerUrl = llamaServerUrl,
+                    llamaSwapUrl = llamaSwapUrl,
+                    ollamaModel = ollamaModel,
+                    llamaSwapModel = llamaSwapModel,
+                    liteRtModelId = liteRtModelId,
+                    liteRtBackend = liteRtBackend,
+                    liteRtMtpEnabled = liteRtMtpEnabled,
+                    thinkingEnabled = thinkingEnabled,
+                    llamaServerModelLabel = llamaServerModelLabel,
+                    llamaServerContextLabel = llamaServerContextLabel,
+                    llamaServerContextTokens = llamaServerContextTokens,
+                    contextSize = contextSize,
+                    maxTokens = maxTokens,
+                    temperature = temperature,
+                    timeoutMinutes = timeoutMinutes,
+                    targetLanguage = targetLanguage,
+                    translationContextEnabled = translationContextEnabled,
+                    translationContextLines = translationContextLines
+                )
+            } else null
         )
 
-        val backendReady = !translateSubtitles || when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
-            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
-            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
-            else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
-        }
+        val backendReady = !translateSubtitles || isWorkflowTranslationBackendReady(
+            backend = backend,
+            ollamaUrl = ollamaUrl,
+            ollamaModel = ollamaModel,
+            llamaServerUrl = llamaServerUrl,
+            llamaSwapUrl = llamaSwapUrl,
+            llamaSwapModel = llamaSwapModel,
+            liteRtModelId = liteRtModelId
+        )
         val srtBatchConflict = subtitlePath != null && videoBatch.size > 1
         val canRun = !state.isRunning &&
             (videoPath != null || videoBatch.isNotEmpty()) &&
@@ -2825,6 +3205,7 @@ private fun MediaDubbingTranslationWorkflowContent(
     onOllamaModelChange: (String?) -> Unit,
     llamaSwapModel: String?,
     onLlamaSwapModelChange: (String?) -> Unit,
+    liteRtModelId: Long,
     llamaServerModelLabel: String?,
     llamaServerContextLabel: String?,
     llamaServerContextTokens: Int,
@@ -2833,6 +3214,10 @@ private fun MediaDubbingTranslationWorkflowContent(
     temperature: Float,
     timeoutMinutes: Int,
     thinkingEnabled: Boolean,
+    translationContextEnabled: Boolean,
+    onTranslationContextEnabledChange: (Boolean) -> Unit,
+    translationContextLines: Int,
+    onTranslationContextLinesChange: (Int) -> Unit,
     ttsModelPath: String?,
     ttsModelName: String?,
     onTtsModelChange: (String?, String?) -> Unit,
@@ -2868,6 +3253,8 @@ private fun MediaDubbingTranslationWorkflowContent(
     var showTemplateMenu by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
     var showGalleryDialog by remember { mutableStateOf(false) }
+    val liteRtBackend by settingsRepo.workflowSummaryLiteRtBackend.collectAsState()
+    val liteRtMtpEnabled by settingsRepo.workflowSummaryLiteRtMtpEnabled.collectAsState()
 
     LaunchedEffect(ttsModels) {
         if (ttsModelPath == null && ttsModels.isNotEmpty()) {
@@ -2944,7 +3331,29 @@ private fun MediaDubbingTranslationWorkflowContent(
                 WorkflowOutputGalleryCard(
                     folderName = "workflow_media_translation",
                     refreshKey = state.finalOutputPath,
-                    isWorkflowRunning = state.isRunning
+                    isWorkflowRunning = state.isRunning,
+                    resumeTranslationOverride = workflowResumeTranslationOverride(
+                        backend = backend,
+                        ollamaUrl = ollamaUrl,
+                        llamaServerUrl = llamaServerUrl,
+                        llamaSwapUrl = llamaSwapUrl,
+                        ollamaModel = ollamaModel,
+                        llamaSwapModel = llamaSwapModel,
+                        liteRtModelId = liteRtModelId,
+                        liteRtBackend = liteRtBackend,
+                        liteRtMtpEnabled = liteRtMtpEnabled,
+                        thinkingEnabled = thinkingEnabled,
+                        llamaServerModelLabel = llamaServerModelLabel,
+                        llamaServerContextLabel = llamaServerContextLabel,
+                        llamaServerContextTokens = llamaServerContextTokens,
+                        contextSize = contextSize,
+                        maxTokens = maxTokens,
+                        temperature = temperature,
+                        timeoutMinutes = timeoutMinutes,
+                        targetLanguage = targetLanguage,
+                        translationContextEnabled = translationContextEnabled,
+                        translationContextLines = translationContextLines
+                    )
                 )
             }
         )
@@ -2997,6 +3406,8 @@ private fun MediaDubbingTranslationWorkflowContent(
                                             onWhisperLanguageChange(json.optString("whisperLanguage", whisperLanguage))
                                             onWhisperThreadsChange(json.optInt("whisperThreads", whisperThreads))
                                             onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
+                                            onTranslationContextEnabledChange(json.optBoolean("translationContextEnabled", translationContextEnabled))
+                                            onTranslationContextLinesChange(json.optInt("translationContextLines", translationContextLines).coerceIn(0, 10))
                                             onTtsModelChange(
                                                 json.optString("ttsModelPath").takeIf { it.isNotBlank() },
                                                 json.optString("ttsModelName").takeIf { it.isNotBlank() }
@@ -3062,6 +3473,8 @@ private fun MediaDubbingTranslationWorkflowContent(
                                 put("whisperLanguage", whisperLanguage)
                                 put("whisperThreads", whisperThreads)
                                 put("targetLanguage", targetLanguage)
+                                put("translationContextEnabled", translationContextEnabled)
+                                put("translationContextLines", translationContextLines)
                                 put("ttsModelPath", ttsModelPath ?: "")
                                 put("ttsModelName", ttsModelName ?: "")
                                 put("ttsVoice", ttsVoice ?: "")
@@ -3132,6 +3545,10 @@ private fun MediaDubbingTranslationWorkflowContent(
             temperature = temperature,
             timeoutMinutes = timeoutMinutes,
             thinkingEnabled = thinkingEnabled,
+            translationContextEnabled = translationContextEnabled,
+            onTranslationContextEnabledChange = onTranslationContextEnabledChange,
+            translationContextLines = translationContextLines,
+            onTranslationContextLinesChange = onTranslationContextLinesChange,
             onMetadataLoaded = onMetadataLoaded
         )
 
@@ -3162,14 +3579,40 @@ private fun MediaDubbingTranslationWorkflowContent(
         WorkflowOutputGalleryCard(
             folderName = "workflow_media_translation",
             refreshKey = state.finalOutputPath,
-            isWorkflowRunning = state.isRunning
+            isWorkflowRunning = state.isRunning,
+            resumeTranslationOverride = workflowResumeTranslationOverride(
+                backend = backend,
+                ollamaUrl = ollamaUrl,
+                llamaServerUrl = llamaServerUrl,
+                llamaSwapUrl = llamaSwapUrl,
+                ollamaModel = ollamaModel,
+                llamaSwapModel = llamaSwapModel,
+                liteRtModelId = liteRtModelId,
+                liteRtBackend = liteRtBackend,
+                liteRtMtpEnabled = liteRtMtpEnabled,
+                thinkingEnabled = thinkingEnabled,
+                llamaServerModelLabel = llamaServerModelLabel,
+                llamaServerContextLabel = llamaServerContextLabel,
+                llamaServerContextTokens = llamaServerContextTokens,
+                contextSize = contextSize,
+                maxTokens = maxTokens,
+                temperature = temperature,
+                timeoutMinutes = timeoutMinutes,
+                targetLanguage = targetLanguage,
+                translationContextEnabled = translationContextEnabled,
+                translationContextLines = translationContextLines
+            )
         )
 
-        val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(backend)) {
-            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> llamaServerUrl.isNotBlank()
-            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> llamaSwapUrl.isNotBlank() && !llamaSwapModel.isNullOrBlank()
-            else -> ollamaUrl.isNotBlank() && !ollamaModel.isNullOrBlank()
-        }
+        val backendReady = isWorkflowTranslationBackendReady(
+            backend = backend,
+            ollamaUrl = ollamaUrl,
+            ollamaModel = ollamaModel,
+            llamaServerUrl = llamaServerUrl,
+            llamaSwapUrl = llamaSwapUrl,
+            llamaSwapModel = llamaSwapModel,
+            liteRtModelId = liteRtModelId
+        )
         val canRun = !state.isRunning &&
             (selectedPath != null || mediaBatch.isNotEmpty()) &&
             whisperModelPath != null &&
@@ -3341,6 +3784,10 @@ private fun MediaTranslationBackendCard(
     temperature: Float,
     timeoutMinutes: Int,
     thinkingEnabled: Boolean,
+    translationContextEnabled: Boolean,
+    onTranslationContextEnabledChange: (Boolean) -> Unit,
+    translationContextLines: Int,
+    onTranslationContextLinesChange: (Int) -> Unit,
     onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
 ) {
     val context = LocalContext.current
@@ -3356,6 +3803,71 @@ private fun MediaTranslationBackendCard(
                 label = { Text(stringResource(R.string.pdf_target_language_label)) },
                 modifier = Modifier.fillMaxWidth()
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.workflow_media_translate_context_toggle),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        stringResource(R.string.workflow_media_translate_context_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = translationContextEnabled,
+                    onCheckedChange = onTranslationContextEnabledChange
+                )
+            }
+            DraftIntTextField(
+                value = translationContextLines,
+                onValueChange = { onTranslationContextLinesChange(it.coerceIn(0, 10)) },
+                enabled = translationContextEnabled,
+                valueRange = 0..10,
+                blankValue = 0,
+                label = { Text(stringResource(R.string.workflow_media_translate_context_lines)) },
+                suffix = { Text(stringResource(R.string.workflow_media_translate_context_lines_suffix)) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            val promptPreview = remember(targetLanguage, translationContextEnabled, translationContextLines) {
+                mediaTranslationBuildLineTranslationPrompt(
+                    sourceLanguage = "auto",
+                    targetLanguage = targetLanguage.ifBlank { "English" },
+                    segments = listOf(
+                        TimedTranscriptSegment(1, 0L, 1_000L, "I did not expect that."),
+                        TimedTranscriptSegment(2, 1_000L, 2_000L, "We should leave before sunset."),
+                        TimedTranscriptSegment(3, 2_000L, 3_000L, "There is still time.")
+                    ),
+                    targetIndex = 1,
+                    includeContext = translationContextEnabled,
+                    contextLines = translationContextLines
+                )
+            }
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        stringResource(R.string.workflow_media_translate_prompt_preview),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        promptPreview,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
             RemoteSummaryBackendEditor(
                 title = stringResource(R.string.video_summary_remote_settings_title),
                 backend = backend,
@@ -3562,7 +4074,7 @@ private fun MediaTranslationRuntimeCards(state: MediaTranslationWorkflowState) {
                 }
                 if (state.totalChunks > 0) {
                     Text(
-                        stringResource(R.string.workflow_media_translate_chunk_progress, state.currentChunk.coerceAtLeast(1), state.totalChunks),
+                        stringResource(R.string.workflow_media_translate_line_progress, state.currentChunk.coerceAtLeast(1), state.totalChunks),
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -3577,7 +4089,7 @@ private fun MediaTranslationRuntimeCards(state: MediaTranslationWorkflowState) {
     if (state.cancelled && !state.isRunning && state.errorMessage == null) {
         Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f))) {
             Text(
-                stringResource(R.string.summary_cancelled_message),
+                stringResource(R.string.workflow_media_cancelled_message),
                 modifier = Modifier.padding(12.dp),
                 color = MaterialTheme.colorScheme.onSecondaryContainer
             )

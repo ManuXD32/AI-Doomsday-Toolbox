@@ -1,0 +1,7 @@
+FFmpeg: d4ff0020b40b (n6.1)
+whisper.cpp: 8a9ad7844d6e (v1.7.4)
+stable-diffusion.cpp: dff0e88265a5
+llama.cpp: 72874f559c59 (b9879)
+ncnn: 81e8cbffd063
+realcugan-ncnn-vulkan: 395302c5c70f (20220728)
+realsr-ncnn-vulkan: b7f890ee2704 (20220728)

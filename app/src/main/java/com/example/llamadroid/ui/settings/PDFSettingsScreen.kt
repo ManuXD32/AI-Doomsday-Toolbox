@@ -56,6 +56,26 @@ fun PDFSettingsScreen(navController: NavController) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val settingsRepo = remember { SettingsRepository(context) }
 
+    AppScreenScaffold(
+        title = stringResource(R.string.pdf_settings_title),
+        subtitle = stringResource(R.string.settings_subtitle),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
+        PDFSettingsContent(
+            settingsRepo = settingsRepo,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        )
+    }
+}
+
+@Composable
+fun PDFSettingsContent(
+    settingsRepo: SettingsRepository,
+    modifier: Modifier = Modifier
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val backend by settingsRepo.pdfSummaryBackend.collectAsState()
     val ollamaUrl by settingsRepo.pdfSummaryOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.pdfSummaryLlamaServerUrl.collectAsState()
@@ -86,15 +106,8 @@ fun PDFSettingsScreen(navController: NavController) {
         }
     }
 
-    AppScreenScaffold(
-        title = stringResource(R.string.pdf_settings_title),
-        subtitle = stringResource(R.string.settings_subtitle),
-        onBack = { navController.popBackStack() }
-    ) { _ ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+    LazyColumn(
+            modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
@@ -254,7 +267,6 @@ fun PDFSettingsScreen(navController: NavController) {
                 }
             }
         }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

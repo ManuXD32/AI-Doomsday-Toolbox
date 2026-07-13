@@ -25,6 +25,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import com.example.llamadroid.R
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -113,14 +114,16 @@ fun FarmScreen(
             .filter { it.quantity > 0 && FarmTradeItemCatalog.isCompostableCropItem(it.id) }
             .sortedBy { inventoryItemDisplayName(context, it) }
     }
-    LaunchedEffect(pet.id) {
+    LaunchedEffect(pet.id, pet.cycleFrozen) {
+        if (pet.cycleFrozen) return@LaunchedEffect
         while (true) {
             farmRepository.refreshFarmState(pet.id)
             delay(30_000L)
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(pet.cycleFrozen) {
+        if (pet.cycleFrozen) return@LaunchedEffect
         while (true) {
             delay(15_000L)
             currentTime = System.currentTimeMillis()
@@ -131,6 +134,37 @@ fun FarmScreen(
         if (currentFarmPage >= unlockedFarmPages) {
             currentFarmPage = (unlockedFarmPages - 1).coerceAtLeast(0)
         }
+    }
+
+    if (pet.cycleFrozen) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(stringResource(R.string.tama_farm_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.tama_cycle_frozen_busy),
+                    color = TamaDark,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        return
     }
 
     Scaffold(

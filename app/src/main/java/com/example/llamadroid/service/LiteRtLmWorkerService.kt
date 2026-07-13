@@ -46,6 +46,8 @@ internal object LiteRtLmWorkerProtocol {
     const val MSG_LOG = 6
     const val MSG_DOCTOR = 7
     const val MSG_THINKING = 8
+    const val MSG_CACHE_STATUS = 9
+    const val MSG_CACHE_UNLOAD = 10
 
     const val KEY_REQUEST_ID = "request_id"
     const val KEY_REQUEST_JSON = "request_json"
@@ -63,6 +65,12 @@ class LiteRtLmWorkerService : Service() {
                 true
             } else if (message.what == LiteRtLmWorkerProtocol.MSG_DOCTOR) {
                 handleDoctor(message)
+                true
+            } else if (message.what == LiteRtLmWorkerProtocol.MSG_CACHE_STATUS) {
+                handleCacheStatus(message)
+                true
+            } else if (message.what == LiteRtLmWorkerProtocol.MSG_CACHE_UNLOAD) {
+                handleCacheUnload(message)
                 true
             } else {
                 false
@@ -266,6 +274,62 @@ class LiteRtLmWorkerService : Service() {
                     what = LiteRtLmWorkerProtocol.MSG_DONE,
                     requestId = requestId,
                     statsJson = gson.toJson(result)
+                )
+            }
+        }
+    }
+
+    private fun handleCacheStatus(message: Message) {
+        handleCacheCommand(message) { service, request ->
+            service.isEngineLoaded(
+                model = request.model,
+                backendMode = request.backendMode,
+                contextSize = request.chat.contextSize,
+                mtpEnabled = (request.params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false
+            ).toString()
+        }
+    }
+
+    private fun handleCacheUnload(message: Message) {
+        handleCacheCommand(message) { service, request ->
+            service.unloadEngines(
+                model = request.model,
+                backendMode = request.backendMode,
+                contextSize = request.chat.contextSize,
+                mtpEnabled = (request.params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false
+            ).toString()
+        }
+    }
+
+    private fun handleCacheCommand(
+        message: Message,
+        block: (LiteRtLmChatService, LiteRtLmChatRequest) -> String
+    ) {
+        val replyTo = message.replyTo ?: return
+        val requestId = message.data.getString(LiteRtLmWorkerProtocol.KEY_REQUEST_ID).orEmpty()
+        val requestJson = message.data.getString(LiteRtLmWorkerProtocol.KEY_REQUEST_JSON)
+        if (requestId.isBlank() || requestJson.isNullOrBlank()) {
+            replyTo.sendWorkerMessage(
+                what = LiteRtLmWorkerProtocol.MSG_ERROR,
+                requestId = requestId,
+                text = getString(R.string.litert_error_worker_bad_request)
+            )
+            return
+        }
+        serviceScope.launch {
+            try {
+                val request = parseRequest(requestJson).copy(backendMode = LITERT_BACKEND_GPU)
+                val service = LiteRtLmChatService(applicationContext, allowGpuBackend = true)
+                replyTo.sendWorkerMessage(
+                    what = LiteRtLmWorkerProtocol.MSG_DONE,
+                    requestId = requestId,
+                    text = block(service, request)
+                )
+            } catch (e: Throwable) {
+                replyTo.sendWorkerMessage(
+                    what = LiteRtLmWorkerProtocol.MSG_ERROR,
+                    requestId = requestId,
+                    text = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.name
                 )
             }
         }
@@ -634,6 +698,18 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
         backendMode = backendMode
     )
 
+    suspend fun isGpuEngineLoaded(request: LiteRtLmChatRequest): Boolean =
+        streamCacheCommand(
+            request = request.copy(backendMode = LITERT_BACKEND_GPU),
+            messageType = LiteRtLmWorkerProtocol.MSG_CACHE_STATUS
+        ).toBooleanStrictOrNull() ?: false
+
+    suspend fun unloadGpuEngines(request: LiteRtLmChatRequest): Int =
+        streamCacheCommand(
+            request = request.copy(backendMode = LITERT_BACKEND_GPU),
+            messageType = LiteRtLmWorkerProtocol.MSG_CACHE_UNLOAD
+        ).toIntOrNull() ?: 0
+
     suspend fun runInAppGpuParityDoctor(model: LiteRtModelEntity): LiteRtBackendDoctorResult = withContext(Dispatchers.Default) {
         val appContext = context.applicationContext
         val startedAt = System.currentTimeMillis()
@@ -894,6 +970,89 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
             }
         }
         finishedStats ?: throw workerCrashException()
+    }
+
+    private suspend fun streamCacheCommand(
+        request: LiteRtLmChatRequest,
+        messageType: Int
+    ): String = withContext(Dispatchers.Default) {
+        val appContext = context.applicationContext
+        val requestId = "cache-${System.currentTimeMillis()}-${request.model.id}-${request.chat.contextSize}"
+        val serviceMessenger = CompletableDeferred<Messenger>()
+        val result = CompletableDeferred<String>()
+        val replyMessenger = Messenger(
+            Handler(Looper.getMainLooper()) { message ->
+                val eventRequestId = message.data.getString(LiteRtLmWorkerProtocol.KEY_REQUEST_ID).orEmpty()
+                if (eventRequestId != requestId) return@Handler true
+                when (message.what) {
+                    LiteRtLmWorkerProtocol.MSG_DONE -> {
+                        result.complete(message.data.getString(LiteRtLmWorkerProtocol.KEY_TEXT).orEmpty())
+                    }
+                    LiteRtLmWorkerProtocol.MSG_ERROR -> {
+                        result.completeExceptionally(
+                            IllegalStateException(message.data.getString(LiteRtLmWorkerProtocol.KEY_TEXT).orEmpty())
+                        )
+                    }
+                }
+                true
+            }
+        )
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                if (service == null) {
+                    serviceMessenger.completeExceptionally(
+                        IllegalStateException(appContext.getString(R.string.litert_error_worker_bind))
+                    )
+                } else {
+                    serviceMessenger.complete(Messenger(service))
+                }
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                result.completeExceptionally(
+                    IllegalStateException(appContext.getString(R.string.litert_error_gpu_worker_crashed))
+                )
+            }
+
+            override fun onBindingDied(name: ComponentName?) {
+                result.completeExceptionally(
+                    IllegalStateException(appContext.getString(R.string.litert_error_gpu_worker_crashed))
+                )
+            }
+
+            override fun onNullBinding(name: ComponentName?) {
+                result.completeExceptionally(
+                    IllegalStateException(appContext.getString(R.string.litert_error_worker_bind))
+                )
+            }
+        }
+        var bound = false
+        try {
+            bound = appContext.bindService(
+                Intent(appContext, LiteRtLmWorkerService::class.java),
+                connection,
+                Context.BIND_AUTO_CREATE
+            )
+            if (!bound) throw IllegalStateException(appContext.getString(R.string.litert_error_worker_bind))
+            val remote = serviceMessenger.await()
+            remote.send(
+                Message.obtain(null, messageType).apply {
+                    replyTo = replyMessenger
+                    data = Bundle().apply {
+                        putString(LiteRtLmWorkerProtocol.KEY_REQUEST_ID, requestId)
+                        putString(
+                            LiteRtLmWorkerProtocol.KEY_REQUEST_JSON,
+                            gson.toJson(LiteRtLmWorkerRequestDto.from(request))
+                        )
+                    }
+                }
+            )
+            result.await()
+        } finally {
+            if (bound) {
+                runCatching { appContext.unbindService(connection) }
+            }
+        }
     }
 
     private sealed interface WorkerEvent {

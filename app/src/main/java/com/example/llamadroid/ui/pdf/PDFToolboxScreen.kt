@@ -55,17 +55,6 @@ fun PDFToolboxScreen(navController: NavController) {
     val settingsRepo = remember { SettingsRepository(context) }
     val pdfTranslationJobState by PDFTranslationJobService.state.collectAsState()
 
-    LaunchedEffect(pdfTranslationJobState.successMessage, pdfTranslationJobState.errorMessage) {
-        pdfTranslationJobState.successMessage?.let { message ->
-            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-            PDFTranslationJobService.clearTerminalMessages()
-        }
-        pdfTranslationJobState.errorMessage?.let { message ->
-            Toast.makeText(context, context.getString(R.string.error_param, message), Toast.LENGTH_LONG).show()
-            PDFTranslationJobService.clearTerminalMessages()
-        }
-    }
-    
     // State - using rememberSaveable for persistence across tab changes
     var selectedTool by rememberSaveable { mutableStateOf<String?>(null) }
     var isProcessing by remember { mutableStateOf(false) } // Not saveable - reset on return
@@ -73,6 +62,33 @@ fun PDFToolboxScreen(navController: NavController) {
     var splitPageRange by rememberSaveable { mutableStateOf("") }
     var ocrResult by rememberSaveable { mutableStateOf("") }
     var ocrProgressMessage by rememberSaveable { mutableStateOf("") }
+    var ocrProgressDetails by rememberSaveable { mutableStateOf("") }
+
+    LaunchedEffect(
+        pdfTranslationJobState.successMessage,
+        pdfTranslationJobState.errorMessage,
+        pdfTranslationJobState.errorDetails,
+        pdfTranslationJobState.cancelled
+    ) {
+        pdfTranslationJobState.successMessage?.let { message ->
+            ocrProgressMessage = message
+            ocrProgressDetails = ""
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            PDFTranslationJobService.clearTerminalMessages()
+        }
+        pdfTranslationJobState.errorMessage?.let { message ->
+            ocrProgressMessage = message
+            ocrProgressDetails = pdfTranslationJobState.errorDetails.orEmpty()
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            PDFTranslationJobService.clearTerminalMessages()
+        }
+        if (pdfTranslationJobState.cancelled) {
+            ocrProgressMessage = context.getString(R.string.action_cancelled)
+            ocrProgressDetails = ""
+            Toast.makeText(context, context.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
+            PDFTranslationJobService.clearTerminalMessages()
+        }
+    }
     
     // Uri lists cannot be saved directly - store as strings
     var selectedPdfStrings by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
@@ -696,10 +712,11 @@ fun PDFToolboxScreen(navController: NavController) {
                             Spacer(modifier = Modifier.height(16.dp))
 
                             if (visibleOcrProgressMessage.isNotBlank()) {
-                                Text(
-                                    visibleOcrProgressMessage,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                PdfTranslationStatusCard(
+                                    message = visibleOcrProgressMessage,
+                                    details = if (pdfTranslationJobState.isRunning) "" else ocrProgressDetails,
+                                    isRunning = pdfTranslationJobState.isRunning && pdfTranslationJobState.kind != PdfTranslationJobKind.MANGA_BATCH,
+                                    onCancel = { PDFTranslationJobService.cancel() }
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -986,10 +1003,11 @@ fun PDFToolboxScreen(navController: NavController) {
                             Spacer(modifier = Modifier.height(16.dp))
 
                             if (visibleOcrProgressMessage.isNotBlank()) {
-                                Text(
-                                    visibleOcrProgressMessage,
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                PdfTranslationStatusCard(
+                                    message = visibleOcrProgressMessage,
+                                    details = if (pdfTranslationJobState.isRunning) "" else ocrProgressDetails,
+                                    isRunning = pdfTranslationJobState.isRunning && pdfTranslationJobState.kind != PdfTranslationJobKind.MANGA_BATCH,
+                                    onCancel = { PDFTranslationJobService.cancel() }
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                             }
@@ -1353,6 +1371,50 @@ fun PDFToolboxScreen(navController: NavController) {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PdfTranslationStatusCard(
+    message: String,
+    details: String,
+    isRunning: Boolean,
+    onCancel: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+        )
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (details.isNotBlank()) {
+                Text(
+                    text = details,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (isRunning) {
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.action_cancel), maxLines = 1)
                 }
             }
         }

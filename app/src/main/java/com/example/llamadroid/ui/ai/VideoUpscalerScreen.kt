@@ -153,6 +153,9 @@ fun VideoUpscalerScreen(navController: NavController) {
     val sharedOutputFolder by settingsRepo.outputFolderUri.collectAsState()
     // Use upscaler-specific output folder, or fall back to shared output folder
     val outputFolder = upscalerOutputFolder ?: sharedOutputFolder
+    val upscalerModelsRoot = remember(hasRequiredAssets) {
+        if (hasRequiredAssets) UpscalerAssetPackSupport.getModelsDir(context) else null
+    }
     
     // Video file picker
     val videoPicker = rememberLauncherForActivityResult(
@@ -184,10 +187,24 @@ fun VideoUpscalerScreen(navController: NavController) {
     }
     
     // Update scale when model changes
-    LaunchedEffect(selectedModel) {
-        selectedModel?.let {
-            if (selectedScale !in it.scales) {
-                selectedScale = it.scales.firstOrNull() ?: 2
+    val availableScales = remember(selectedModel, selectedDenoise, upscalerModelsRoot) {
+        val model = selectedModel
+        val modelsRoot = upscalerModelsRoot
+        if (model == null || modelsRoot == null) {
+            emptyList()
+        } else {
+            UpscalerModelFiles.availableScales(
+                modelsRoot = modelsRoot,
+                model = model,
+                denoise = if (model.supportsDenoise) selectedDenoise else -1
+            )
+        }
+    }
+
+    LaunchedEffect(selectedModel, selectedDenoise, availableScales) {
+        selectedModel?.let { model ->
+            if (selectedScale !in availableScales) {
+                selectedScale = availableScales.firstOrNull() ?: model.scales.firstOrNull() ?: 2
             }
         }
     }
@@ -320,17 +337,25 @@ fun VideoUpscalerScreen(navController: NavController) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(stringResource(R.string.upscaler_scale_label), style = MaterialTheme.typography.titleMedium)
                         Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            model.scales.forEach { scale ->
-                                FilterChip(
-                                    selected = selectedScale == scale,
-                                    onClick = { selectedScale = scale },
-                                    label = { Text("${scale}x") }
-                                )
+
+                        if (availableScales.isEmpty()) {
+                            Text(
+                                stringResource(R.string.upscaler_model_variant_unavailable),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                availableScales.forEach { scale ->
+                                    FilterChip(
+                                        selected = selectedScale == scale,
+                                        onClick = { selectedScale = scale },
+                                        label = { Text("${scale}x") }
+                                    )
+                                }
                             }
                         }
                         

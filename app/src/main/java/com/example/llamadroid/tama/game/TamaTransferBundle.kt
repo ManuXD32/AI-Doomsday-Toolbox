@@ -6,12 +6,16 @@ import com.example.llamadroid.tama.db.TamaArtworkEntity
 import com.example.llamadroid.tama.db.AdventureSessionEntity
 import com.example.llamadroid.tama.db.AdventureStageEntity
 import com.example.llamadroid.tama.db.AdventureGateBattleStateEntity
+import com.example.llamadroid.tama.db.AdventureGateNightArenaRunEntity
 import com.example.llamadroid.tama.db.AdventureGateProfileEntity
 import com.example.llamadroid.tama.db.AdventureGateWorldProgressEntity
 import com.example.llamadroid.tama.db.DungeonProgressEntity
 import com.example.llamadroid.tama.db.FarmLivestockEntity
 import com.example.llamadroid.tama.db.FarmTileEntity
 import com.example.llamadroid.tama.db.FarmUpgradeEntity
+import com.example.llamadroid.tama.db.TamaLocationEntity
+import com.example.llamadroid.tama.db.TamaMarketQuoteEntity
+import com.example.llamadroid.tama.db.TamaNpcEntity
 import com.example.llamadroid.tama.db.TamaChatMessageEntity
 import com.example.llamadroid.tama.db.TamaEventEntity
 import com.example.llamadroid.tama.db.TamaQuestChecklistItemEntity
@@ -26,7 +30,7 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 
-private const val TAMA_TRANSFER_VERSION = 19
+private const val TAMA_TRANSFER_VERSION = 20
 
 @Serializable
 data class TamaTransferBundle(
@@ -47,12 +51,16 @@ data class TamaTransferBundle(
     val deepDreamRuns: List<TamaTransferDeepDreamRun> = emptyList(),
     val studyLabels: List<TamaTransferStudyLabel> = emptyList(),
     val studySessions: List<TamaTransferStudySession> = emptyList(),
+    val marketQuotes: List<TamaTransferMarketQuote> = emptyList(),
+    val locations: List<TamaTransferLocation> = emptyList(),
+    val npcs: List<TamaTransferNpc> = emptyList(),
     val adventureSessions: List<TamaTransferAdventureSession> = emptyList(),
     val adventureStages: List<TamaTransferAdventureStage> = emptyList(),
     val dungeonProgress: TamaTransferDungeonProgress? = null,
     val adventureGateProfile: TamaTransferAdventureGateProfile? = null,
     val adventureGateWorldProgress: List<TamaTransferAdventureGateWorldProgress> = emptyList(),
-    val adventureGateBattleState: TamaTransferAdventureGateBattleState? = null
+    val adventureGateBattleState: TamaTransferAdventureGateBattleState? = null,
+    val adventureGateNightArenaRun: TamaTransferAdventureGateNightArenaRun? = null
 )
 
 @Serializable
@@ -616,6 +624,132 @@ data class TamaTransferStudySession(
 }
 
 @Serializable
+data class TamaTransferMarketQuote(
+    val petId: String,
+    val itemId: String,
+    val quoteWeekKey: String,
+    val currentPrice: Int,
+    val unitsSoldSinceRefresh: Int,
+    val updatedAt: Long
+) {
+    fun toEntity() = TamaMarketQuoteEntity(
+        petId = petId,
+        itemId = itemId,
+        quoteWeekKey = quoteWeekKey,
+        currentPrice = currentPrice,
+        unitsSoldSinceRefresh = unitsSoldSinceRefresh,
+        updatedAt = updatedAt
+    )
+
+    companion object {
+        fun fromEntity(entity: TamaMarketQuoteEntity) = TamaTransferMarketQuote(
+            petId = entity.petId,
+            itemId = entity.itemId,
+            quoteWeekKey = entity.quoteWeekKey,
+            currentPrice = entity.currentPrice,
+            unitsSoldSinceRefresh = entity.unitsSoldSinceRefresh,
+            updatedAt = entity.updatedAt
+        )
+    }
+}
+
+@Serializable
+data class TamaTransferLocation(
+    val id: String,
+    val name: String,
+    val type: String,
+    val description: String,
+    val cityId: String,
+    val x: Int,
+    val y: Int,
+    val isDiscovered: Boolean,
+    val npcIdsJson: String,
+    val shopInventoryJson: String? = null,
+    val jobsJson: String? = null
+) {
+    fun toEntity() = TamaLocationEntity(
+        id = id,
+        name = name,
+        type = type,
+        description = description,
+        cityId = cityId,
+        x = x,
+        y = y,
+        isDiscovered = isDiscovered,
+        npcIdsJson = npcIdsJson,
+        shopInventoryJson = shopInventoryJson,
+        jobsJson = jobsJson
+    )
+
+    companion object {
+        fun fromEntity(entity: TamaLocationEntity) = TamaTransferLocation(
+            id = entity.id,
+            name = entity.name,
+            type = entity.type,
+            description = entity.description,
+            cityId = entity.cityId,
+            x = entity.x,
+            y = entity.y,
+            isDiscovered = entity.isDiscovered,
+            npcIdsJson = entity.npcIdsJson,
+            shopInventoryJson = entity.shopInventoryJson,
+            jobsJson = entity.jobsJson
+        )
+    }
+}
+
+@Serializable
+data class TamaTransferNpc(
+    val id: String,
+    val name: String,
+    val species: String,
+    val personality: String,
+    val geneticsJson: String,
+    val homeLocationId: String,
+    val currentLocationId: String,
+    val job: String? = null,
+    val age: Int,
+    val marriedToPetId: String? = null,
+    val childrenIdsJson: String,
+    val likesJson: String,
+    val dislikesJson: String
+) {
+    fun toEntity() = TamaNpcEntity(
+        id = id,
+        name = name,
+        species = species,
+        personality = personality,
+        geneticsJson = geneticsJson,
+        homeLocationId = homeLocationId,
+        currentLocationId = currentLocationId,
+        job = job,
+        age = age,
+        marriedToPetId = marriedToPetId,
+        childrenIdsJson = childrenIdsJson,
+        likesJson = likesJson,
+        dislikesJson = dislikesJson
+    )
+
+    companion object {
+        fun fromEntity(entity: TamaNpcEntity) = TamaTransferNpc(
+            id = entity.id,
+            name = entity.name,
+            species = entity.species,
+            personality = entity.personality,
+            geneticsJson = entity.geneticsJson,
+            homeLocationId = entity.homeLocationId,
+            currentLocationId = entity.currentLocationId,
+            job = entity.job,
+            age = entity.age,
+            marriedToPetId = entity.marriedToPetId,
+            childrenIdsJson = entity.childrenIdsJson,
+            likesJson = entity.likesJson,
+            dislikesJson = entity.dislikesJson
+        )
+    }
+}
+
+@Serializable
 data class TamaTransferAdventureSession(
     val id: String,
     val petId: String,
@@ -870,6 +1004,36 @@ data class TamaTransferAdventureGateBattleState(
     }
 }
 
+@Serializable
+data class TamaTransferAdventureGateNightArenaRun(
+    val petId: String,
+    val nightKey: String,
+    val levelsJson: String,
+    val clearedLevelIdsJson: String,
+    val createdAt: Long,
+    val updatedAt: Long
+) {
+    fun toEntity() = AdventureGateNightArenaRunEntity(
+        petId = petId,
+        nightKey = nightKey,
+        levelsJson = levelsJson,
+        clearedLevelIdsJson = clearedLevelIdsJson,
+        createdAt = createdAt,
+        updatedAt = updatedAt
+    )
+
+    companion object {
+        fun fromEntity(entity: AdventureGateNightArenaRunEntity) = TamaTransferAdventureGateNightArenaRun(
+            petId = entity.petId,
+            nightKey = entity.nightKey,
+            levelsJson = entity.levelsJson,
+            clearedLevelIdsJson = entity.clearedLevelIdsJson,
+            createdAt = entity.createdAt,
+            updatedAt = entity.updatedAt
+        )
+    }
+}
+
 internal fun parseTamaTransferBundle(jsonString: String, json: Json): TamaTransferBundle {
     val element = json.parseToJsonElement(jsonString)
     if (element !is JsonObject) {
@@ -908,9 +1072,13 @@ private fun parseLegacyTamaTransferBundle(element: JsonObject, json: Json): Tama
         deepDreamRuns = emptyList(),
         studyLabels = emptyList(),
         studySessions = emptyList(),
+        marketQuotes = emptyList(),
+        locations = emptyList(),
+        npcs = emptyList(),
         adventureSessions = emptyList(),
         adventureStages = emptyList(),
-        dungeonProgress = null
+        dungeonProgress = null,
+        adventureGateNightArenaRun = null
     )
 }
 

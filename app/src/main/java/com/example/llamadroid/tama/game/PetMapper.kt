@@ -48,6 +48,8 @@ object PetMapper {
         rightDecorationId = pet.rightDecorationId,
         growthLocked = pet.growthLocked,
         growthLockStartedAt = pet.growthLockStartedAt,
+        cycleFrozen = pet.cycleFrozen,
+        cycleFreezeStartedAt = pet.cycleFreezeStartedAt,
         money = pet.money,
         inventoryJson = json.encodeToString(pet.inventory),
         currentActivity = pet.currentActivity.name,
@@ -110,6 +112,8 @@ object PetMapper {
         rightDecorationId = entity.rightDecorationId,
         growthLocked = entity.growthLocked,
         growthLockStartedAt = entity.growthLockStartedAt,
+        cycleFrozen = entity.cycleFrozen,
+        cycleFreezeStartedAt = entity.cycleFreezeStartedAt,
         money = entity.money,
         inventory = try { 
             json.decodeFromString<List<InventoryItem>>(entity.inventoryJson) 

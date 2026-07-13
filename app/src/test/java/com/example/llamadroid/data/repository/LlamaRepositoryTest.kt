@@ -65,6 +65,32 @@ class LlamaRepositoryTest {
         repository.deleteChatPromptProfile(profileDao.profiles.getValue(id))
         assertFalse(profileDao.profiles.containsKey(id))
     }
+
+    @Test
+    fun `chat AI Hub pin stores and clears remembered server`() = runBlocking {
+        val chatDao = FakeLlamaChatDao(
+            mutableMapOf(7L to LlamaChatEntity(id = 7, title = "Pinned chat"))
+        )
+        val repository = LlamaRepository(
+            FakeLlamaServerDao(),
+            chatDao,
+            FakeLlamaFolderDao(),
+            FakeLlamaMessageDao()
+        )
+
+        repository.updateChatAiHubPin(7L, pinned = true, serverId = 3L)
+
+        val pinned = chatDao.chats.getValue(7L)
+        assertEquals(true, pinned.pinnedToAiHub)
+        assertEquals(3L, pinned.pinnedServerId)
+
+        repository.updateChatAiHubPin(7L, pinned = false, serverId = null)
+
+        val unpinned = chatDao.chats.getValue(7L)
+        assertEquals(false, unpinned.pinnedToAiHub)
+        assertNull(unpinned.pinnedServerId)
+        assertNull(unpinned.pinnedAt)
+    }
 }
 
 private class FakeLlamaServerDao : LlamaServerDao {
@@ -123,6 +149,9 @@ private class FakeLlamaChatDao(
     val chats: MutableMap<Long, LlamaChatEntity> = mutableMapOf()
 ) : LlamaChatDao {
     override fun getAllChats(): Flow<List<LlamaChatEntity>> = flowOf(chats.values.toList())
+    override fun getPinnedAiHubChats(): Flow<List<LlamaChatEntity>> =
+        flowOf(chats.values.filter { it.pinnedToAiHub })
+
     override suspend fun getChatById(id: Long): LlamaChatEntity? = chats[id]
     override suspend fun insertChat(chat: LlamaChatEntity): Long {
         val id = chat.id.takeIf { it != 0L } ?: ((chats.keys.maxOrNull() ?: 0L) + 1L)
@@ -157,6 +186,13 @@ private class FakeLlamaChatDao(
                 chats[id] = chat.copy(folderId = null)
             }
         }
+    }
+    override suspend fun updateAiHubPin(id: Long, pinned: Boolean, serverId: Long?, pinnedAt: Long?) {
+        chats[id] = chats.getValue(id).copy(
+            pinnedToAiHub = pinned,
+            pinnedServerId = serverId,
+            pinnedAt = pinnedAt
+        )
     }
 }
 

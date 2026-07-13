@@ -71,16 +71,6 @@ fun AgentTopBar(
             }
         },
         actions = {
-            // Priority Actions
-            IconButton(onClick = onNavigateToWorkspace) {
-                Icon(Icons.Default.Folder, stringResource(R.string.agent_workspace_title), tint = Color(0xFFFFC107))
-            }
-
-            IconButton(onClick = onStopAll) {
-                Icon(Icons.Default.StopCircle, stringResource(R.string.agent_stop_all), tint = MaterialTheme.colorScheme.error)
-            }
-
-            // More Actions Menu
             Box {
                 IconButton(onClick = { showMenu = !showMenu }) {
                     Icon(Icons.Default.MoreVert, stringResource(R.string.action_more))
@@ -89,6 +79,17 @@ fun AgentTopBar(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false }
                 ) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_workspace_title)) },
+                        onClick = { showMenu = false; onNavigateToWorkspace() },
+                        leadingIcon = { Icon(Icons.Default.FolderOpen, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_stop_all)) },
+                        onClick = { showMenu = false; onStopAll() },
+                        leadingIcon = { Icon(Icons.Default.StopCircle, null, tint = MaterialTheme.colorScheme.error) }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.agent_settings_title)) },
                         onClick = { showMenu = false; onShowAgentSettings() },
@@ -139,6 +140,369 @@ fun AgentTopBar(
             scrolledContainerColor = MaterialTheme.colorScheme.surface
         )
     )
+}
+
+@Composable
+fun AgentWorkspaceConsoleHeader(
+    projectTitle: String?,
+    projectPath: String?,
+    backendLabel: String,
+    modelLabel: String,
+    connectionLabel: String,
+    isConnected: Boolean,
+    isRunning: Boolean,
+    statusText: String,
+    contextSnapshot: PromptContextSnapshot?,
+    lastSavedAt: Long?,
+    onShowConversations: () -> Unit,
+    onNavigateToWorkspace: () -> Unit,
+    onStopAll: () -> Unit,
+    onShowAgentSettings: () -> Unit,
+    onShowKnowledgeBases: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val horizontalScroll = rememberScrollState()
+    val detailScrollState = rememberScrollState()
+    val timeFormatter = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
+    val resolvedProject = projectTitle?.takeIf { it.isNotBlank() }
+        ?: stringResource(R.string.agent_console_no_project)
+    val resolvedPath = projectPath?.takeIf { it.isNotBlank() }
+        ?: stringResource(R.string.agent_workspace_no_project_path)
+    val runtimeLabel = if (isRunning) {
+        statusText.takeIf { it.isNotBlank() } ?: stringResource(R.string.agent_console_running)
+    } else {
+        stringResource(R.string.agent_console_ready)
+    }
+    val contextLabel = contextSnapshot?.let { snapshot ->
+        val promptTokens = snapshot.actualPromptTokens ?: snapshot.packedEstimatedTokens
+        val percentUsed = snapshot.actualPercentUsed ?: snapshot.percentUsed
+        stringResource(
+            R.string.agent_console_context_value,
+            percentUsed,
+            promptTokens,
+            snapshot.contextSize
+        )
+    } ?: stringResource(R.string.agent_console_context_unknown)
+    val savedLabel = lastSavedAt?.let { timestamp ->
+        stringResource(R.string.agent_console_last_saved_value, timeFormatter.format(Date(timestamp)))
+    } ?: stringResource(R.string.agent_console_last_saved_unknown)
+    val displayedPromptTokens = contextSnapshot?.actualPromptTokens ?: contextSnapshot?.packedEstimatedTokens
+    val displayedPercentUsed = contextSnapshot?.actualPercentUsed ?: contextSnapshot?.percentUsed
+    val contextProgress = displayedPercentUsed?.div(100f)?.coerceIn(0f, 1f)
+    val contextTone = when {
+        contextSnapshot != null && displayedPercentUsed != null && displayedPercentUsed >= contextSnapshot.thresholdPercent ->
+            MaterialTheme.colorScheme.error
+        contextSnapshot != null && displayedPercentUsed != null && displayedPercentUsed >= 75 ->
+            MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    ElevatedCard(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .clickable { expanded = !expanded },
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+        ),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = resolvedProject,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = resolvedPath,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = runtimeLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(0.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onShowConversations) {
+                        Icon(Icons.Default.FolderOpen, stringResource(R.string.agent_console_switch_project))
+                    }
+                    IconButton(onClick = onNavigateToWorkspace) {
+                        Icon(Icons.Default.Folder, stringResource(R.string.agent_workspace_title))
+                    }
+                    if (isRunning) {
+                        IconButton(onClick = onStopAll) {
+                            Icon(
+                                Icons.Default.StopCircle,
+                                stringResource(R.string.agent_stop_all),
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                    ContextUsageCircle(
+                        percentUsed = displayedPercentUsed,
+                        progress = contextProgress,
+                        color = contextTone,
+                        onClick = { expanded = !expanded }
+                    )
+                }
+            }
+
+            if (expanded) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(horizontalScroll),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AgentConsoleChip(
+                        label = stringResource(R.string.agent_console_connection),
+                        value = connectionLabel,
+                        containerColor = if (isConnected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.errorContainer
+                        },
+                        contentColor = if (isConnected) {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onErrorContainer
+                        }
+                    )
+                    AgentConsoleChip(
+                        label = stringResource(R.string.agent_console_backend),
+                        value = backendLabel
+                    )
+                    AgentConsoleChip(
+                        label = stringResource(R.string.agent_console_model),
+                        value = modelLabel
+                    )
+                    AgentConsoleChip(
+                        label = stringResource(R.string.agent_console_last_saved),
+                        value = savedLabel
+                    )
+                    AssistChip(
+                        onClick = onShowAgentSettings,
+                        label = { Text(stringResource(R.string.agent_settings_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Default.Settings, null, modifier = Modifier.size(18.dp)) }
+                    )
+                    AssistChip(
+                        onClick = onShowKnowledgeBases,
+                        label = { Text(stringResource(R.string.agent_console_knowledge), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        leadingIcon = { Icon(Icons.Default.Inventory, null, modifier = Modifier.size(18.dp)) }
+                    )
+                }
+                if (contextSnapshot != null && displayedPromptTokens != null && displayedPercentUsed != null) {
+                    AgentContextDetails(
+                        snapshot = contextSnapshot,
+                        displayedPromptTokens = displayedPromptTokens,
+                        displayedPercentUsed = displayedPercentUsed,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        detailScrollState = detailScrollState
+                    )
+                } else {
+                    Text(
+                        text = contextLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContextUsageCircle(
+    percentUsed: Int?,
+    progress: Float?,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(48.dp)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            progress = { progress ?: 0f },
+            modifier = Modifier.fillMaxSize(),
+            strokeWidth = 4.dp,
+            color = color,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+        Text(
+            text = percentUsed?.let { "$it%" } ?: "--",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun AgentConsoleChip(
+    label: String,
+    value: String,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceVariant,
+    contentColor: Color = MaterialTheme.colorScheme.onSurfaceVariant
+) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = containerColor,
+        contentColor = contentColor
+    ) {
+        Column(
+            modifier = Modifier
+                .widthIn(min = 120.dp, max = 220.dp)
+                .padding(horizontal = 10.dp, vertical = 7.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun AgentContextDetails(
+    snapshot: PromptContextSnapshot,
+    displayedPromptTokens: Int,
+    displayedPercentUsed: Int,
+    contentColor: Color,
+    detailScrollState: androidx.compose.foundation.ScrollState
+) {
+    val timeFormatter = remember {
+        SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+    }
+    val progress = (displayedPromptTokens.toFloat() / snapshot.contextSize.toFloat()).coerceIn(0f, 1f)
+    val detailText = when {
+        snapshot.isUsingHardCompactedBasis ->
+            stringResource(
+                R.string.agent_context_usage_hard_compacted_detail,
+                snapshot.rawEstimatedTokens,
+                snapshot.packedEstimatedTokens,
+                snapshot.thresholdPercent
+            )
+        snapshot.didCompactHistory || snapshot.omittedCount > 0 ->
+            stringResource(
+                R.string.agent_context_usage_compacted_detail,
+                snapshot.rawEstimatedTokens,
+                snapshot.packedEstimatedTokens,
+                snapshot.omittedCount
+            )
+        else ->
+            stringResource(
+                R.string.agent_context_usage_normalized_detail,
+                snapshot.rawEstimatedTokens,
+                snapshot.thresholdPercent
+            )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 150.dp)
+            .verticalScroll(detailScrollState),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = stringResource(
+                R.string.agent_context_usage_label,
+                displayedPercentUsed,
+                displayedPromptTokens,
+                snapshot.contextSize
+            ),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        LinearProgressIndicator(
+            progress = { progress },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp),
+            color = contentColor,
+            trackColor = contentColor.copy(alpha = 0.18f)
+        )
+        Text(
+            text = detailText,
+            style = MaterialTheme.typography.bodySmall,
+            color = contentColor.copy(alpha = 0.88f)
+        )
+        snapshot.actualPromptTokens?.let { actualPromptTokens ->
+            Text(
+                text = stringResource(
+                    R.string.agent_context_usage_actual_detail,
+                    actualPromptTokens,
+                    snapshot.actualCompletionTokens?.toString() ?: "?",
+                    snapshot.actualTotalTokens?.toString() ?: "?"
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = contentColor.copy(alpha = 0.88f)
+            )
+        }
+        if (snapshot.recentCompactions.isNotEmpty()) {
+            Text(
+                text = stringResource(R.string.agent_context_usage_history_title),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = contentColor
+            )
+            snapshot.recentCompactions.take(3).forEach { event ->
+                Text(
+                    text = stringResource(
+                        R.string.agent_context_usage_history_item_verbose,
+                        timeFormatter.format(Date(event.timestamp)),
+                        event.rawEstimatedTokens,
+                        event.packedEstimatedTokens,
+                        event.omittedCount,
+                        event.compactionPasses
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor.copy(alpha = 0.88f)
+                )
+            }
+        }
+    }
 }
 
 @Composable

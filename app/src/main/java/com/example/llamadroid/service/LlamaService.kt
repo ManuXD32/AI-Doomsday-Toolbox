@@ -22,6 +22,7 @@ import com.example.llamadroid.util.NativeProcessCleanup
 import com.example.llamadroid.util.WakeLockManager
 import android.net.wifi.WifiManager
 import com.example.llamadroid.data.binary.BinaryRepository
+import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.util.GGUFParser
 
 class LlamaService : Service() {
@@ -43,9 +44,11 @@ class LlamaService : Service() {
             DebugLog.log("LlamaService: onStartCommand action=${intent?.action}")
             when (intent?.action) {
                 ACTION_START -> {
+                    Companion.clearRecentStartupFailure()
                     val modelPath = intent.getStringExtra(EXTRA_MODEL_PATH)
                     val isEmbedding = intent.getBooleanExtra(EXTRA_IS_EMBEDDING, false)
                     val mmprojPath = intent.getStringExtra(EXTRA_MMPROJ_PATH)
+                    val allowSettingsMmproj = intent.getBooleanExtra(EXTRA_ALLOW_SETTINGS_MMPROJ, true)
                     val settingsProfile = intent.getStringExtra(EXTRA_SETTINGS_PROFILE) ?: SETTINGS_PROFILE_GENERAL
                     
                     // Get optional settings overrides (used by distributed mode to avoid changing global settings)
@@ -82,7 +85,6 @@ class LlamaService : Service() {
                         Companion.updateState(ServerState.Error("No model selected"))
                         stopSelf()
                     } else {
-                        restartMode = START_REDELIVER_INTENT
                         startServer(modelPath, isEmbedding, mmprojPath, 
                             threadsOverride, contextSizeOverride, temperatureOverride, hostOverride, portOverride,
                             draftModelPath = draftModelPath, draftMax = draftMax, draftMin = draftMin, draftPMin = draftPMin,
@@ -95,10 +97,14 @@ class LlamaService : Service() {
                             batchSizeOverride = batchSizeOverride,
                             physicalBatchSizeOverride = physicalBatchSizeOverride,
                             parallelOverride = parallelOverride, cacheRamOverride = cacheRamOverride, customFlagsOverride = customFlagsOverride, flashAttentionOverride = flashAttentionOverride,
-                            settingsProfile = settingsProfile)
+                            settingsProfile = settingsProfile,
+                            allowSettingsMmproj = allowSettingsMmproj)
                     }
                 }
-                ACTION_STOP -> stopServer()
+                ACTION_STOP -> {
+                    Companion.clearRecentStartupFailure()
+                    stopServer()
+                }
                 ACTION_SWITCH_MODEL -> {
                     val newModelPath = intent.getStringExtra(EXTRA_MODEL_PATH)
                     if (newModelPath.isNullOrEmpty()) {
@@ -149,6 +155,7 @@ class LlamaService : Service() {
                      val modelPath = intent.getStringExtra(EXTRA_MODEL_PATH)
                      val isEmbedding = intent.getBooleanExtra(EXTRA_IS_EMBEDDING, false)
                      val mmprojPath = intent.getStringExtra(EXTRA_MMPROJ_PATH)
+                     val allowSettingsMmproj = intent.getBooleanExtra(EXTRA_ALLOW_SETTINGS_MMPROJ, true)
                      val settingsProfile = intent.getStringExtra(EXTRA_SETTINGS_PROFILE) ?: SETTINGS_PROFILE_GENERAL
                      
                      // Get optional settings overrides
@@ -190,12 +197,17 @@ class LlamaService : Service() {
                              batchSizeOverride = batchSizeOverride,
                              physicalBatchSizeOverride = physicalBatchSizeOverride,
                              parallelOverride = parallelOverride, cacheRamOverride = cacheRamOverride, customFlagsOverride = customFlagsOverride, flashAttentionOverride = flashAttentionOverride,
-                             settingsProfile = settingsProfile)
+                             settingsProfile = settingsProfile,
+                             allowSettingsMmproj = allowSettingsMmproj)
                      }
                 }
             }
         } catch (e: Exception) {
-            DebugLog.log("LlamaService: CRASH in onStartCommand: ${e.message}")
+            val message = e.message ?: "Unknown error"
+            DebugLog.log("LlamaService: CRASH in onStartCommand: $message")
+            if (intent?.action == ACTION_START || intent?.action == ACTION_SWITCH_MODEL) {
+                handlePreLaunchStartFailure(message, previewMode = false)
+            }
             e.printStackTrace()
         }
         DebugLog.log(
@@ -230,7 +242,8 @@ class LlamaService : Service() {
         cacheRamOverride: Int? = null,
         customFlagsOverride: String? = null,
         flashAttentionOverride: Boolean? = null,
-        settingsProfile: String = SETTINGS_PROFILE_GENERAL
+        settingsProfile: String = SETTINGS_PROFILE_GENERAL,
+        allowSettingsMmproj: Boolean = true
     ) {
         if (!previewMode) {
             val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
@@ -276,9 +289,37 @@ class LlamaService : Service() {
         val flashAttention = flashAttentionOverride ?: if (isMasterProfile) DistributedService.masterFlashAttention.value else settingsRepo.flashAttentionEnabled.value
         val speculativeEnabled = !isMasterProfile && settingsRepo.speculativeEnabled.value
         val speculativeMode = if (speculativeEnabled) settingsRepo.speculativeMode.value else null
+        if (speculativeMode?.requiresDraftModel == true && draftModelPath.isNullOrBlank()) {
+            handlePreLaunchStartFailure(
+                getString(R.string.dist_speculative_missing_required_draft),
+                previewMode = previewMode
+            )
+            return
+        }
+        if (speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH && !draftModelPath.isNullOrBlank()) {
+            val dflashDraftError = validateDflashDraftArchitecture(draftModelPath)
+            if (dflashDraftError != null) {
+                handlePreLaunchStartFailure(dflashDraftError, previewMode = previewMode)
+                return
+            }
+        }
         val mtpDraftMax = if (isMasterProfile) 3 else settingsRepo.mtpDraftMaxTokens.value
         val mtpDraftMin = if (isMasterProfile) 0 else settingsRepo.mtpDraftMinTokens.value
         val mtpDraftPMin = if (isMasterProfile) 0.0f else settingsRepo.mtpDraftPMin.value
+        val ngramModNMatch = if (isMasterProfile) 24 else settingsRepo.ngramModNMatch.value
+        val ngramModNMin = if (isMasterProfile) 48 else settingsRepo.ngramModNMin.value
+        val ngramModNMax = if (isMasterProfile) 64 else settingsRepo.ngramModNMax.value
+        val ngramSimpleSizeN = if (isMasterProfile) 12 else settingsRepo.ngramSimpleSizeN.value
+        val ngramSimpleSizeM = if (isMasterProfile) 48 else settingsRepo.ngramSimpleSizeM.value
+        val ngramSimpleMinHits = if (isMasterProfile) 1 else settingsRepo.ngramSimpleMinHits.value
+        val ngramMapKSizeN = if (isMasterProfile) 12 else settingsRepo.ngramMapKSizeN.value
+        val ngramMapKSizeM = if (isMasterProfile) 48 else settingsRepo.ngramMapKSizeM.value
+        val ngramMapKMinHits = if (isMasterProfile) 1 else settingsRepo.ngramMapKMinHits.value
+        val ngramMapK4VSizeN = if (isMasterProfile) 12 else settingsRepo.ngramMapK4VSizeN.value
+        val ngramMapK4VSizeM = if (isMasterProfile) 48 else settingsRepo.ngramMapK4VSizeM.value
+        val ngramMapK4VMinHits = if (isMasterProfile) 1 else settingsRepo.ngramMapK4VMinHits.value
+        val nativeToolsEnabled = !isMasterProfile && settingsRepo.llamaNativeToolsEnabled.value
+        val nativeToolsWorkspaceDir = File(filesDir, "llama_native_tools_workspace")
         val commandTemplate = commandTemplateOverride
             ?.takeIf { it.isNotBlank() }
             ?: if (isMasterProfile) {
@@ -292,7 +333,7 @@ class LlamaService : Service() {
         
         // Use mmproj if vision is enabled AND we have a mmproj path (either from intent or settings)
         val effectiveMmprojPath = if (enableVision) {
-            mmprojPath ?: selectedMmprojPath
+            mmprojPath ?: selectedMmprojPath.takeIf { allowSettingsMmproj }
         } else null
         
         DebugLog.log("LlamaService: Settings - threads=$threads, batch=$batchSize, ubatch=${physicalBatchSize ?: "auto"}, ctx=$contextSize, temp=$temperature, host=$host, port=$port, parallel=${parallel ?: "auto"}, cacheRam=${cacheRam ?: "auto"}")
@@ -320,6 +361,19 @@ class LlamaService : Service() {
                 "mtpDraftMax" to mtpDraftMax,
                 "mtpDraftMin" to mtpDraftMin,
                 "mtpDraftPMin" to mtpDraftPMin,
+                "ngramModNMatch" to ngramModNMatch,
+                "ngramModNMin" to ngramModNMin,
+                "ngramModNMax" to ngramModNMax,
+                "ngramSimpleSizeN" to ngramSimpleSizeN,
+                "ngramSimpleSizeM" to ngramSimpleSizeM,
+                "ngramSimpleMinHits" to ngramSimpleMinHits,
+                "ngramMapKSizeN" to ngramMapKSizeN,
+                "ngramMapKSizeM" to ngramMapKSizeM,
+                "ngramMapKMinHits" to ngramMapKMinHits,
+                "ngramMapK4VSizeN" to ngramMapK4VSizeN,
+                "ngramMapK4VSizeM" to ngramMapK4VSizeM,
+                "ngramMapK4VMinHits" to ngramMapK4VMinHits,
+                "nativeToolsEnabled" to nativeToolsEnabled,
                 "kvCacheEnabled" to kvCacheEnabled,
                 "kvCacheTypeK" to kvCacheTypeK,
                 "kvCacheTypeV" to kvCacheTypeV,
@@ -526,6 +580,19 @@ class LlamaService : Service() {
                     mtpDraftMax = mtpDraftMax,
                     mtpDraftMin = mtpDraftMin,
                     mtpDraftPMin = mtpDraftPMin,
+                    ngramModNMatch = ngramModNMatch,
+                    ngramModNMin = ngramModNMin,
+                    ngramModNMax = ngramModNMax,
+                    ngramSimpleSizeN = ngramSimpleSizeN,
+                    ngramSimpleSizeM = ngramSimpleSizeM,
+                    ngramSimpleMinHits = ngramSimpleMinHits,
+                    ngramMapKSizeN = ngramMapKSizeN,
+                    ngramMapKSizeM = ngramMapKSizeM,
+                    ngramMapKMinHits = ngramMapKMinHits,
+                    ngramMapK4VSizeN = ngramMapK4VSizeN,
+                    ngramMapK4VSizeM = ngramMapK4VSizeM,
+                    ngramMapK4VMinHits = ngramMapK4VMinHits,
+                    nativeToolsEnabled = nativeToolsEnabled,
                     parallel = parallel,
                     cacheRam = cacheRam,
                     customFlags = customFlags,
@@ -561,6 +628,28 @@ class LlamaService : Service() {
                         launchConfig = config.copy(speculativeMode = null)
                     }
                 }
+                if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH &&
+                    !processController.binarySupportsDflashSpeculative(primaryBinaryFile)
+                ) {
+                    val cpuBinaryFile = binaryRepo.getCpuExecutable()
+                    if (cpuBinaryFile != null &&
+                        cpuBinaryFile.absolutePath != primaryBinaryFile.absolutePath &&
+                        processController.binarySupportsDflashSpeculative(cpuBinaryFile)
+                    ) {
+                        val warning = getString(
+                            R.string.llama_server_dflash_cpu_fallback,
+                            primaryBinaryFile.name,
+                            cpuBinaryFile.name
+                        )
+                        DebugLog.log("LlamaService: $warning")
+                        Companion.addServerLog(warning)
+                        primaryBinaryFile = cpuBinaryFile
+                    } else {
+                        throw IllegalStateException(
+                            getString(R.string.llama_server_dflash_unsupported, primaryBinaryFile.name)
+                        )
+                    }
+                }
 
                 fun buildCommandArgsFor(candidateBinary: String, candidateConfig: LlamaConfig = launchConfig): List<String> {
                     return if (commandTemplate.isNullOrBlank()) {
@@ -578,6 +667,16 @@ class LlamaService : Service() {
                 if (previewMode) {
                     DebugLog.log("LlamaService: Preview Command: $commandString")
                     return@launch
+                }
+
+                val speculativeRunDao = AppDatabase.getDatabase(applicationContext).llamaSpeculativeRunDao()
+                val speculativeRunId = launchConfig.speculativeMode?.let { mode ->
+                    LlamaSpeculativeRunStore.createRunAndPrune(
+                        dao = speculativeRunDao,
+                        modelPath = launchConfig.modelPath,
+                        speculativeMode = mode,
+                        draftModelPath = launchConfig.draftModelPath
+                    )
                 }
                 
                 DebugLog.log("LlamaService: Starting on port ${config.port}")
@@ -618,13 +717,38 @@ class LlamaService : Service() {
                 suspend fun startCandidate(candidateFile: File, candidateConfig: LlamaConfig, args: List<String>): ProcessRunResult {
                     var backendUnavailable = false
                     var stoppedForAcceleratorBackendIssue = false
+                    val metricsCollector = candidateConfig.speculativeMode?.let { LlamaSpeculativeMetricsCollector() }
                     val result = processController.start(
                         candidateFile.absolutePath,
                         candidateConfig,
                         filesDir,
+                        nativeToolsWorkspaceDir = nativeToolsWorkspaceDir,
                         customArgs = args,
                         onLog = { line ->
                             handleServerLog(line)
+                            val speculativeModeForMetrics = candidateConfig.speculativeMode
+                            val metrics = metricsCollector?.onLogLine(line)
+                            if (speculativeModeForMetrics != null && metrics != null) {
+                                val runId = speculativeRunId
+                                serviceScope.launch {
+                                    if (runId != null) {
+                                        LlamaSpeculativeRunStore.recordPromptMetricsAndPrune(
+                                            dao = speculativeRunDao,
+                                            runId = runId,
+                                            metrics = metrics
+                                        )
+                                    } else {
+                                        DebugLog.log("LlamaService: Skipping speculative metrics without active run row for ${speculativeModeForMetrics.flagValue}")
+                                    }
+                                }
+                            }
+                            if (candidateConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH &&
+                                line.contains("unknown model architecture: 'dflash-draft'")
+                            ) {
+                                DebugLog.log("LlamaService: DFlash draft GGUF architecture rejected by ${candidateFile.name}; stopping process")
+                                Companion.addServerLog(getString(R.string.llama_server_dflash_runtime_rejected, candidateFile.name))
+                                processController.stop()
+                            }
                             if (DeviceAcceleration.isAcceleratorBinary(candidateFile) &&
                                 !stoppedForAcceleratorBackendIssue
                             ) {
@@ -672,6 +796,13 @@ class LlamaService : Service() {
                         DebugLog.log("LlamaService: $warning")
                         Companion.addServerLog(warning)
                         launchConfig.copy(speculativeMode = null)
+                    } else if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH &&
+                        !processController.binarySupportsDflashSpeculative(cpuBinaryFile)
+                    ) {
+                        val warning = getString(R.string.llama_server_dflash_unsupported, cpuBinaryFile.name)
+                        DebugLog.log("LlamaService: $warning")
+                        Companion.addServerLog(warning)
+                        return null
                     } else {
                         launchConfig
                     }
@@ -685,8 +816,11 @@ class LlamaService : Service() {
                     (listOf(primaryBinaryFile) + binaryRepo.getAcceleratorBinaries("llama_server"))
                         .distinctBy { it.absolutePath }
                         .filter {
-                            launchConfig.speculativeMode != LlamaSpeculativeMode.DRAFT_MTP ||
-                                processController.binarySupportsMtpSpeculative(it)
+                            when (launchConfig.speculativeMode) {
+                                LlamaSpeculativeMode.DRAFT_MTP -> processController.binarySupportsMtpSpeculative(it)
+                                LlamaSpeculativeMode.DRAFT_DFLASH -> processController.binarySupportsDflashSpeculative(it)
+                                else -> true
+                            }
                         }
                 } else {
                     listOf(primaryBinaryFile)
@@ -768,6 +902,7 @@ class LlamaService : Service() {
                 if (!finalRunResult.stoppedIntentionally) {
                     // Process exited unexpectedly
                     DebugLog.log("LlamaService: Process terminated unexpectedly")
+                    Companion.recordRecentStartupFailure()
                 }
                 stopServer()
             } catch (e: Exception) {
@@ -775,6 +910,7 @@ class LlamaService : Service() {
                 if (!processController.stoppedIntentionally) {
                     DebugLog.log("LlamaService ERROR: ${e.message}")
                     Companion.updateState(ServerState.Error(e.message ?: "Unknown error"))
+                    Companion.recordRecentStartupFailure()
                 } else {
                     DebugLog.log("LlamaService: Stopped by user")
                     Companion.updateState(ServerState.Stopped)
@@ -826,44 +962,113 @@ class LlamaService : Service() {
     ): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         var loggedWait = false
+        var lastFailure: String? = null
         while (System.currentTimeMillis() < deadline) {
-            if (canBindServerPort(host, port)) {
+            val check = checkServerPortBind(host, port)
+            if (check.available) {
                 if (loggedWait) DebugLog.log("LlamaService: Port $port is free after $reason")
                 return true
             }
+            lastFailure = check.error
             if (!loggedWait) {
                 loggedWait = true
                 DebugLog.log("LlamaService: Waiting for port $port to be released $reason")
             }
             delay(150L)
         }
-        DebugLog.log("LlamaService: Port $port is still busy after waiting $reason")
+        DebugLog.log("LlamaService: Port $port is still busy after waiting $reason; bindFailure=${lastFailure ?: "unknown"}")
         return false
     }
 
     private suspend fun ensureServerPortAvailableOrThrow(host: String, port: Int, reason: String) {
-        if (canBindServerPort(host, port)) return
+        if (checkServerPortBind(host, port).available) return
         DebugLog.log("LlamaService: Port $port busy $reason; checking for stale app-owned llama-server processes")
         val cleaned = NativeProcessCleanup.cleanupSameUidLlamaServers(reason, port = port)
         if (cleaned > 0) {
             DebugLog.log("LlamaService: Requested cleanup for $cleaned stale llama-server process(es)")
         }
         if (!waitForServerPortAvailable(host, port, reason, timeoutMs = 8_000L)) {
-            val message = getString(R.string.llama_server_port_busy, port)
+            val bindFailure = checkServerPortBind(host, port).error ?: "unknown"
+            val visibleOwner = NativeProcessCleanup.describeSameUidPortOccupationSync(port)
+            val message = if (visibleOwner.isNotBlank()) {
+                getString(R.string.llama_server_port_busy_with_owner, port, host, visibleOwner)
+            } else {
+                getString(R.string.llama_server_port_busy_no_owner, port, host, bindFailure)
+            }
             DebugLog.log("LlamaService: $message")
             throw IllegalStateException(message)
         }
     }
 
     private fun canBindServerPort(host: String, port: Int): Boolean =
+        checkServerPortBind(host, port).available
+
+    private data class PortBindCheck(
+        val available: Boolean,
+        val error: String? = null
+    )
+
+    private fun checkServerPortBind(host: String, port: Int): PortBindCheck =
         runCatching {
             ServerSocket().use { socket ->
                 socket.reuseAddress = true
                 socket.bind(InetSocketAddress(host, port))
             }
-            true
-        }.getOrDefault(false)
+            PortBindCheck(available = true)
+        }.getOrElse { error ->
+            PortBindCheck(
+                available = false,
+                error = "${error.javaClass.simpleName}: ${error.message ?: "bind failed"}"
+            )
+        }
     
+    private fun handlePreLaunchStartFailure(message: String, previewMode: Boolean) {
+        DebugLog.log("LlamaService ERROR: $message")
+        Companion.addServerLog(message)
+        if (previewMode) return
+
+        DistributedService.setInferenceRunning(false)
+        DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
+        Companion.updateState(ServerState.Error(message))
+        Companion.recordRecentStartupFailure()
+        WakeLockManager.release("LlamaService")
+        WakeLockManager.releaseWifiLock("LlamaService")
+        notificationTaskId?.let { taskId ->
+            UnifiedNotificationManager.dismissTask(taskId)
+        }
+        notificationTaskId = null
+        currentServerPort = null
+        stopSelf()
+    }
+
+    private fun validateDflashDraftArchitecture(draftModelPath: String): String? {
+        val architecture = GGUFParser.parse(draftModelPath)?.architecture?.trim()?.lowercase()
+        return when {
+            architecture.isNullOrBlank() || architecture == "unknown" -> {
+                DebugLog.log("LlamaService: Could not read DFlash draft GGUF architecture for $draftModelPath; launch will let llama-server validate it")
+                null
+            }
+            architecture == "dflash-draft" -> {
+                getString(
+                    R.string.llama_server_dflash_draft_arch_unsupported,
+                    File(draftModelPath).name,
+                    architecture
+                )
+            }
+            architecture != "dflash" -> {
+                val warning = getString(
+                    R.string.llama_server_dflash_draft_arch_warning,
+                    File(draftModelPath).name,
+                    architecture
+                )
+                DebugLog.log("LlamaService: $warning")
+                Companion.addServerLog(warning)
+                null
+            }
+            else -> null
+        }
+    }
+
     private fun updateNotification(content: String) {
         notificationTaskId?.let {
             UnifiedNotificationManager.updateProgress(it, 1f, content)
@@ -878,6 +1083,7 @@ class LlamaService : Service() {
         const val EXTRA_MODEL_PATH = "MODEL_PATH"
         const val EXTRA_IS_EMBEDDING = "IS_EMBEDDING"
         const val EXTRA_MMPROJ_PATH = "MMPROJ_PATH"
+        const val EXTRA_ALLOW_SETTINGS_MMPROJ = "ALLOW_SETTINGS_MMPROJ"
         // Optional settings overrides for distributed mode (to avoid modifying global settings)
         const val EXTRA_THREADS = "THREADS"
         const val EXTRA_BATCH_SIZE = "BATCH_SIZE"
@@ -911,9 +1117,24 @@ class LlamaService : Service() {
         // Global state for simple observation
         private val _state = MutableStateFlow<ServerState>(ServerState.Stopped)
         val state = _state.asStateFlow()
+        @Volatile private var recentStartupFailureAtMs: Long = 0L
+        private const val RECENT_STARTUP_FAILURE_TTL_MS = 5L * 60L * 1000L
         
         fun updateState(newState: ServerState) {
             _state.value = newState
+        }
+
+        fun recordRecentStartupFailure(nowMs: Long = System.currentTimeMillis()) {
+            recentStartupFailureAtMs = nowMs
+        }
+
+        fun clearRecentStartupFailure() {
+            recentStartupFailureAtMs = 0L
+        }
+
+        fun hasRecentStartupFailure(nowMs: Long = System.currentTimeMillis()): Boolean {
+            val failedAt = recentStartupFailureAtMs
+            return failedAt > 0L && nowMs - failedAt <= RECENT_STARTUP_FAILURE_TTL_MS
         }
 
         private const val MAX_SERVER_LOGS = 1000

@@ -148,9 +148,10 @@ class KnowledgeBaseIndexingService : Service() {
                     KnowledgeBaseDiagnostics.log("Knowledge-base indexing job finished.")
                     UnifiedNotificationManager.completeTask(taskId, getString(R.string.kb_notification_complete))
                 }.onFailure { error ->
-                    KnowledgeBaseDiagnostics.log("Knowledge-base indexing job failed: ${error.message ?: error::class.java.simpleName}.")
-                    DebugLog.log("[KnowledgeBaseIndexingService] Failed: ${error.message}")
-                    UnifiedNotificationManager.failTask(taskId, error.message ?: getString(R.string.kb_action_failed))
+                    val detail = error.knowledgeBaseFailureDetail()
+                    KnowledgeBaseDiagnostics.log("Knowledge-base indexing job failed: $detail.")
+                    DebugLog.log("[KnowledgeBaseIndexingService] Failed: $detail")
+                    UnifiedNotificationManager.failTask(taskId, detail)
                 }
             } finally {
                 completedIndexingJobs.incrementAndGet()
@@ -355,4 +356,14 @@ class KnowledgeBaseIndexingService : Service() {
             }
         }
     }
+}
+
+private fun Throwable.knowledgeBaseFailureDetail(): String {
+    var current: Throwable = this
+    while (current is java.lang.reflect.InvocationTargetException) {
+        current = current.targetException ?: current.cause ?: break
+    }
+    return current.message?.takeIf { it.isNotBlank() }
+        ?: current.cause?.message?.takeIf { it.isNotBlank() }
+        ?: current::class.java.simpleName
 }

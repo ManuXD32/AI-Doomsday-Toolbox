@@ -26,20 +26,32 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 fun VideoUpscalerSettingsScreen(navController: NavController) {
     val context = LocalContext.current
     val settingsRepo = remember { SettingsRepository(context) }
-    
-    val loadThreads by settingsRepo.upscalerLoadThreads.collectAsState()
-    val procThreads by settingsRepo.upscalerProcThreads.collectAsState()
-    val saveThreads by settingsRepo.upscalerSaveThreads.collectAsState()
-    
+
     AppScreenScaffold(
         title = stringResource(R.string.video_upscaler_settings_title),
         subtitle = stringResource(R.string.settings_upscaler_desc),
         onBack = { navController.popBackStack() }
     ) { _ ->
-        LazyColumn(
+        VideoUpscalerSettingsContent(
+            settingsRepo = settingsRepo,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+        )
+    }
+}
+
+@Composable
+fun VideoUpscalerSettingsContent(
+    settingsRepo: SettingsRepository,
+    modifier: Modifier = Modifier
+) {
+    val loadThreads by settingsRepo.upscalerLoadThreads.collectAsState()
+    val procThreads by settingsRepo.upscalerProcThreads.collectAsState()
+    val saveThreads by settingsRepo.upscalerSaveThreads.collectAsState()
+
+    LazyColumn(
+            modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Load Threads
@@ -160,5 +172,4 @@ fun VideoUpscalerSettingsScreen(navController: NavController) {
                 }
             }
         }
-    }
 }

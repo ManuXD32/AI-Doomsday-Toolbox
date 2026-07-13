@@ -73,9 +73,7 @@
     <h2>3. Permissions</h2>
     <p>The app requests the following permissions:</p>
     <ul>
-        <li><strong>Storage Access:</strong> To load AI models from your storage and save generated content. We use
-            MANAGE_EXTERNAL_STORAGE to allow AI models (which can be several GB) to be stored in user-preferred
-            locations without duplication.</li>
+        <li><strong>Storage Access:</strong> To load AI models from your chosen model-library folder and save generated content. The app uses Android's document and folder pickers so you can choose specific shared folders, while native runtimes keep app-managed compatibility copies when direct filesystem paths are required.</li>
         <li><strong>Microphone:</strong> For audio recording in the transcription feature (processed locally)</li>
         <li><strong>Camera:</strong> For QR code scanning to connect devices on local network</li>
         <li><strong>Internet:</strong> Required only for downloading AI models from HuggingFace and for optional local

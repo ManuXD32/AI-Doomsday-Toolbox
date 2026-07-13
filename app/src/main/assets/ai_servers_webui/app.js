@@ -16,6 +16,13 @@ const STRINGS = {
     status: "Status",
     gallery: "Gallery",
     tasks: "Tasks",
+    hubServers: "Servers",
+    hubControlsTitle: "Server directory",
+    hubControlsBody: "Open one URL here, then jump into any active built-in AI server from a new tab.",
+    hubActive: "Active",
+    hubInactive: "Inactive",
+    hubOpen: "Open in new tab",
+    hubInactiveHint: "Start this server in the Android app to enable it here.",
     server: "Server",
     access: "Access",
     uploaded: "Uploaded",
@@ -151,6 +158,13 @@ const STRINGS = {
     status: "Estado",
     gallery: "Galeria",
     tasks: "Tareas",
+    hubServers: "Servidores",
+    hubControlsTitle: "Directorio de servidores",
+    hubControlsBody: "Abre una sola URL aqui y despues entra en cualquier servidor de IA integrado que este activo en una pestaña nueva.",
+    hubActive: "Activo",
+    hubInactive: "Inactivo",
+    hubOpen: "Abrir en pestaña nueva",
+    hubInactiveHint: "Inicia este servidor en la app Android para habilitarlo aqui.",
     server: "Servidor",
     access: "Acceso",
     uploaded: "Subido",
@@ -276,6 +290,7 @@ const browserLanguage = (navigator.language || "en").startsWith("es") ? "es" : "
 const serverType = document.body.dataset.serverType;
 const serverName = document.body.dataset.serverName;
 const serverEmoji = document.body.dataset.serverEmoji;
+const isHubServer = serverType === "ai_hub";
 const $ = (id) => document.getElementById(id);
 
 const state = {
@@ -310,6 +325,7 @@ const t = (key) => STRINGS[state.lang][key] || STRINGS.en[key] || key;
 
 document.addEventListener("DOMContentLoaded", () => {
   document.body.classList.toggle("chat-mode", serverType === "llama_chat");
+  document.body.classList.toggle("hub-mode", isHubServer);
   $("serverName").textContent = serverName;
   $("serverEmoji").textContent = serverEmoji;
   $("languageSelect").value = state.lang;
@@ -340,6 +356,10 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n]").forEach((node) => {
     node.textContent = t(node.dataset.i18n);
   });
+  if (isHubServer) {
+    const tasksTab = document.querySelector('.tab[data-tab="tasks"]');
+    if (tasksTab) tasksTab.textContent = t("hubServers");
+  }
   $("startButton").textContent = serverType === "llama_chat" ? t("sendMessage") : t("startJob");
   $("modeHint").textContent = state.options ? currentModeHint() : t("loading");
 }
@@ -426,6 +446,10 @@ function syncActiveChatState(allowServerOverride = true) {
 }
 
 function setupControls() {
+  if (isHubServer) {
+    renderControls();
+    return;
+  }
   const engines = state.options?.engines || [];
   const engineValues = engines.map((engine) => engine.id);
   const preferredEngine = normalizeSelectionValue(resolveSimpleValue("engine"), engineValues, true);
@@ -455,6 +479,18 @@ function populateModesForEngine() {
 }
 
 function renderControls() {
+  if (isHubServer) {
+    $("controlsHost").innerHTML = `
+      <section class="hub-intro">
+        <div class="section-title">
+          <h2>${escapeHtml(t("hubControlsTitle"))}</h2>
+          <p>${escapeHtml(t("hubControlsBody"))}</p>
+        </div>
+      </section>
+    `;
+    $("modeHint").textContent = t("hubControlsBody");
+    return;
+  }
   snapshotFormState();
   $("startButton").textContent = serverType === "llama_chat" ? t("sendMessage") : t("startJob");
   if (serverType === "llama_chat") {
@@ -659,6 +695,13 @@ function renderStatus() {
 }
 
 function renderJobs() {
+  if (isHubServer) {
+    const servers = state.options?.hubServers || [];
+    $("jobsList").innerHTML = servers.length
+      ? servers.map(renderHubServerCard).join("")
+      : `<p class="empty">${t("loading")}</p>`;
+    return;
+  }
   const failed = state.jobs.some((job) => job.status === "FAILED");
   const toolbar = failed
     ? `<div class="toolbar task-toolbar"><button class="secondary" type="button" onclick="clearFailedJobs()">${t("clearFailed")}</button></div>`
@@ -693,6 +736,51 @@ function renderArtifactPreview(path) {
         ? `<audio controls src="${escapeAttr(url)}"></audio>`
         : "";
   return `<div class="artifact-actions">${preview}<a href="${escapeAttr(url)}" target="_blank" rel="noreferrer">${t("download")}</a><code>${escapeHtml(path)}</code></div>`;
+}
+
+function renderHubServerCard(server) {
+  const accent = hubServerAccent(server.serverType);
+  const label = labelText(server.label) || server.displayName || server.serverType;
+  const description = labelText(server.description) || "";
+  const href = hubServerUrl(server.port);
+  const article = `
+    <article class="hub-server-card ${server.running ? "active" : "inactive"}" style="--server-accent:${escapeAttr(accent)};">
+      <div class="hub-server-header">
+        <div class="hub-server-badge">${escapeHtml(server.emoji || "AI")}</div>
+        <div class="hub-server-copy">
+          <strong>${escapeHtml(label)}</strong>
+          <p>${escapeHtml(description)}</p>
+        </div>
+        <span class="hub-server-state">${server.running ? t("hubActive") : t("hubInactive")}</span>
+      </div>
+      <div class="hub-server-footer">
+        <code>${escapeHtml(href)}</code>
+        <span class="hub-server-open">${escapeHtml(server.running ? t("hubOpen") : t("hubInactiveHint"))}</span>
+      </div>
+    </article>
+  `;
+  if (!server.running) return article;
+  return `<a class="hub-server-link" href="${escapeAttr(href)}" target="_blank" rel="noreferrer noopener">${article}</a>`;
+}
+
+function hubServerUrl(port) {
+  const safePort = Number(port);
+  const protocol = window.location.protocol;
+  const hostname = window.location.hostname;
+  return `${protocol}//${hostname}:${safePort}/`;
+}
+
+function hubServerAccent(serverType) {
+  switch (serverType) {
+    case "image": return "#2f80ed";
+    case "video": return "#e76f51";
+    case "workflows": return "#6c757d";
+    case "tts": return "#10a889";
+    case "video_upscale": return "#9b5de5";
+    case "docs_datasets": return "#f4a261";
+    case "llama_chat": return "#1f1f1f";
+    default: return "#4167f4";
+  }
 }
 
 function canRemoveJob(job) {
@@ -741,6 +829,10 @@ async function clearFailedJobs() {
 }
 
 function renderGallery() {
+  if (isHubServer) {
+    $("galleryList").innerHTML = `<p class="empty">${t("hubControlsBody")}</p>`;
+    return;
+  }
   $("galleryList").innerHTML = state.gallery.length ? state.gallery.map((artifact) => {
     const media = artifact.mimeType?.startsWith("image/")
       ? `<img src="${escapeAttr(artifact.url)}" alt="${escapeAttr(artifact.title || "output")}" />`
@@ -1432,6 +1524,7 @@ async function logout() {
 
 async function startJob(event) {
   event.preventDefault();
+  if (isHubServer) return;
   if (serverType === "llama_chat") return sendChatMessage(event);
   const action = currentAction();
   const params = collectParams(action);
@@ -1921,6 +2014,7 @@ async function saveProvider() {
 }
 
 function currentAction() {
+  if (isHubServer) return "";
   return $("mode").value || state.options?.modes?.[0]?.id || "";
 }
 
@@ -1930,6 +2024,7 @@ function currentMode() {
 }
 
 function currentModeHint() {
+  if (isHubServer) return t("hubControlsBody");
   const mode = currentMode();
   return mode?.hint ? labelText(mode.hint) : t("ready");
 }

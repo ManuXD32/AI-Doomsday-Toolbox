@@ -146,6 +146,19 @@ fun LLMSettingsScreen(navController: NavController) {
     val mtpDraftMinTokens by settingsRepo.mtpDraftMinTokens.collectAsState()
     val mtpDraftPMin by settingsRepo.mtpDraftPMin.collectAsState()
     val mtpUseDraftModel by settingsRepo.mtpUseDraftModel.collectAsState()
+    val ngramModNMatch by settingsRepo.ngramModNMatch.collectAsState()
+    val ngramModNMin by settingsRepo.ngramModNMin.collectAsState()
+    val ngramModNMax by settingsRepo.ngramModNMax.collectAsState()
+    val ngramSimpleSizeN by settingsRepo.ngramSimpleSizeN.collectAsState()
+    val ngramSimpleSizeM by settingsRepo.ngramSimpleSizeM.collectAsState()
+    val ngramSimpleMinHits by settingsRepo.ngramSimpleMinHits.collectAsState()
+    val ngramMapKSizeN by settingsRepo.ngramMapKSizeN.collectAsState()
+    val ngramMapKSizeM by settingsRepo.ngramMapKSizeM.collectAsState()
+    val ngramMapKMinHits by settingsRepo.ngramMapKMinHits.collectAsState()
+    val ngramMapK4VSizeN by settingsRepo.ngramMapK4VSizeN.collectAsState()
+    val ngramMapK4VSizeM by settingsRepo.ngramMapK4VSizeM.collectAsState()
+    val ngramMapK4VMinHits by settingsRepo.ngramMapK4VMinHits.collectAsState()
+    val llamaNativeToolsEnabled by settingsRepo.llamaNativeToolsEnabled.collectAsState()
     val flashAttentionEnabled by settingsRepo.flashAttentionEnabled.collectAsState()
     val serverPort by settingsRepo.serverPort.collectAsState()
     val serverBatchSize by settingsRepo.serverBatchSize.collectAsState()
@@ -164,6 +177,7 @@ fun LLMSettingsScreen(navController: NavController) {
     val kvCacheReuse by settingsRepo.serverKvCacheReuse.collectAsState()
     
     var showSaveCommandDialog by remember { mutableStateOf(false) }
+    var speculativeModeMenuExpanded by remember { mutableStateOf(false) }
     var saveCommandName by remember { mutableStateOf("") }
     var showLoadCommandDialog by remember { mutableStateOf(false) }
     var showCommandPreview by remember { mutableStateOf<SavedCommandEntity?>(null) }
@@ -171,6 +185,7 @@ fun LLMSettingsScreen(navController: NavController) {
     val savedCommands by db.savedCommandDao()
         .getCommandsByScope(SavedCommandScopes.GENERAL)
         .collectAsState(initial = emptyList())
+    val speculativeRuns by db.llamaSpeculativeRunDao().observeRuns().collectAsState(initial = emptyList())
     // val scope = rememberCoroutineScope() // Duplicate declaration, removed
 
     val llmModels by db.modelDao().getModelsByType(ModelType.LLM).collectAsState(initial = emptyList())
@@ -324,21 +339,43 @@ fun LLMSettingsScreen(navController: NavController) {
                             }
                         )
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text(stringResource(R.string.dist_advanced_custom_flags), fontWeight = FontWeight.Medium)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
+                            Text(stringResource(R.string.dist_advanced_custom_flags), fontWeight = FontWeight.Medium)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
                             value = customFlagsText,
                             onValueChange = { 
                                 customFlagsText = it 
                                 settingsRepo.setCustomFlags(it)
                             },
                             label = { Text(stringResource(R.string.dist_advanced_custom_flags)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            maxLines = 3
-                        )
+                                modifier = Modifier.fillMaxWidth(),
+                                maxLines = 3
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource(R.string.llm_native_tools_title),
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                    Text(
+                                        stringResource(R.string.llm_native_tools_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                Switch(
+                                    checked = llamaNativeToolsEnabled,
+                                    onCheckedChange = settingsRepo::setLlamaNativeToolsEnabled
+                                )
+                            }
+                        }
                     }
                 }
-            }
             
             // Generated llama.cpp parameters
             item {
@@ -750,31 +787,147 @@ fun LLMSettingsScreen(navController: NavController) {
                         if (speculativeEnabled) {
                             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
-                            Text(stringResource(R.string.dist_speculative_mode_label), fontWeight = FontWeight.Medium)
+                            val selectedSpeculativeModeLabel = when (speculativeMode) {
+                                LlamaSpeculativeMode.DRAFT_MTP -> stringResource(R.string.dist_speculative_mode_mtp)
+                                LlamaSpeculativeMode.DRAFT_DFLASH -> stringResource(R.string.dist_speculative_mode_dflash)
+                                LlamaSpeculativeMode.DRAFT_SIMPLE -> stringResource(R.string.dist_speculative_mode_simple)
+                                LlamaSpeculativeMode.NGRAM_MOD -> stringResource(R.string.dist_speculative_mode_ngram_mod)
+                                LlamaSpeculativeMode.NGRAM_SIMPLE -> stringResource(R.string.dist_speculative_mode_ngram_simple)
+                                LlamaSpeculativeMode.NGRAM_MAP_K -> stringResource(R.string.dist_speculative_mode_ngram_map_k)
+                                LlamaSpeculativeMode.NGRAM_MAP_K4V -> stringResource(R.string.dist_speculative_mode_ngram_map_k4v)
+                                LlamaSpeculativeMode.NGRAM_CACHE -> stringResource(R.string.dist_speculative_mode_ngram_cache)
+                            }
+
+                            Text(stringResource(R.string.dist_speculative_strategy_label), fontWeight = FontWeight.Medium)
                             Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ExposedDropdownMenuBox(
+                                expanded = speculativeModeMenuExpanded,
+                                onExpandedChange = { speculativeModeMenuExpanded = !speculativeModeMenuExpanded },
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                FilterChip(
-                                    selected = speculativeMode == LlamaSpeculativeMode.DRAFT_MTP,
-                                    onClick = { settingsRepo.setSpeculativeMode(LlamaSpeculativeMode.DRAFT_MTP) },
-                                    label = { Text(stringResource(R.string.dist_speculative_mode_mtp)) },
-                                    modifier = Modifier.weight(1f)
+                                OutlinedTextField(
+                                    value = selectedSpeculativeModeLabel,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text(stringResource(R.string.dist_speculative_mode_label)) },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = speculativeModeMenuExpanded) },
+                                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                    singleLine = true
                                 )
-                                FilterChip(
-                                    selected = speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE,
-                                    onClick = { settingsRepo.setSpeculativeMode(LlamaSpeculativeMode.DRAFT_SIMPLE) },
-                                    label = { Text(stringResource(R.string.dist_speculative_mode_simple)) },
-                                    modifier = Modifier.weight(1f)
-                                )
+                                ExposedDropdownMenu(
+                                    expanded = speculativeModeMenuExpanded,
+                                    onDismissRequest = { speculativeModeMenuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                stringResource(R.string.dist_speculative_model_modes_label),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false
+                                    )
+                                    listOf(
+                                        LlamaSpeculativeMode.DRAFT_MTP,
+                                        LlamaSpeculativeMode.DRAFT_DFLASH,
+                                        LlamaSpeculativeMode.DRAFT_SIMPLE
+                                    ).forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    when (mode) {
+                                                        LlamaSpeculativeMode.DRAFT_MTP -> stringResource(R.string.dist_speculative_mode_mtp)
+                                                        LlamaSpeculativeMode.DRAFT_DFLASH -> stringResource(R.string.dist_speculative_mode_dflash)
+                                                        else -> stringResource(R.string.dist_speculative_mode_simple)
+                                                    }
+                                                )
+                                            },
+                                            onClick = {
+                                                settingsRepo.setSpeculativeMode(mode)
+                                                speculativeModeMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                stringResource(R.string.dist_speculative_no_draft_modes_label),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false
+                                    )
+                                    listOf(
+                                        LlamaSpeculativeMode.NGRAM_MOD,
+                                        LlamaSpeculativeMode.NGRAM_SIMPLE,
+                                        LlamaSpeculativeMode.NGRAM_MAP_K
+                                    ).forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    when (mode) {
+                                                        LlamaSpeculativeMode.NGRAM_MOD -> stringResource(R.string.dist_speculative_mode_ngram_mod)
+                                                        LlamaSpeculativeMode.NGRAM_SIMPLE -> stringResource(R.string.dist_speculative_mode_ngram_simple)
+                                                        else -> stringResource(R.string.dist_speculative_mode_ngram_map_k)
+                                                    }
+                                                )
+                                            },
+                                            onClick = {
+                                                settingsRepo.setSpeculativeMode(mode)
+                                                speculativeModeMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                    HorizontalDivider()
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                stringResource(R.string.dist_speculative_advanced_modes_label),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        },
+                                        onClick = {},
+                                        enabled = false
+                                    )
+                                    listOf(
+                                        LlamaSpeculativeMode.NGRAM_MAP_K4V,
+                                        LlamaSpeculativeMode.NGRAM_CACHE
+                                    ).forEach { mode ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    when (mode) {
+                                                        LlamaSpeculativeMode.NGRAM_MAP_K4V -> stringResource(R.string.dist_speculative_mode_ngram_map_k4v)
+                                                        else -> stringResource(R.string.dist_speculative_mode_ngram_cache)
+                                                    }
+                                                )
+                                            },
+                                            onClick = {
+                                                settingsRepo.setSpeculativeMode(mode)
+                                                speculativeModeMenuExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
                             }
 
                             Spacer(modifier = Modifier.height(12.dp))
                             Text(
                                 text = when (speculativeMode) {
                                     LlamaSpeculativeMode.DRAFT_MTP -> stringResource(R.string.general_mtp_decoding_hint)
+                                    LlamaSpeculativeMode.DRAFT_DFLASH -> stringResource(R.string.dist_speculative_dflash_hint)
                                     LlamaSpeculativeMode.DRAFT_SIMPLE -> stringResource(R.string.dist_speculative_simple_hint)
+                                    LlamaSpeculativeMode.NGRAM_MOD -> stringResource(R.string.dist_speculative_ngram_mod_hint)
+                                    LlamaSpeculativeMode.NGRAM_SIMPLE -> stringResource(R.string.dist_speculative_ngram_simple_hint)
+                                    LlamaSpeculativeMode.NGRAM_MAP_K -> stringResource(R.string.dist_speculative_ngram_map_k_hint)
+                                    LlamaSpeculativeMode.NGRAM_MAP_K4V -> stringResource(R.string.dist_speculative_ngram_map_k4v_hint)
+                                    LlamaSpeculativeMode.NGRAM_CACHE -> stringResource(R.string.dist_speculative_ngram_cache_hint)
                                 },
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
@@ -782,132 +935,245 @@ fun LLMSettingsScreen(navController: NavController) {
 
                             Spacer(modifier = Modifier.height(16.dp))
 
-                            if (speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE) {
-                                Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                OutlinedButton(
-                                    onClick = { showDraftSelector = true },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-
-                                if (draftModelPath != null) {
+                            when (speculativeMode) {
+                                LlamaSpeculativeMode.DRAFT_SIMPLE,
+                                LlamaSpeculativeMode.DRAFT_DFLASH -> {
+                                    Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    TextButton(
-                                        onClick = { settingsRepo.setDraftModelPath(null) },
-                                        modifier = Modifier.align(Alignment.End)
+                                    OutlinedButton(
+                                        onClick = { showDraftSelector = true },
+                                        modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text(stringResource(R.string.dist_speculative_clear_draft))
-                                    }
-                                }
-
-                                Spacer(modifier = Modifier.height(16.dp))
-
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    DraftIntTextField(
-                                        value = draftMaxTokens,
-                                        onValueChange = settingsRepo::setDraftMaxTokens,
-                                        label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
-
-                                    DraftIntTextField(
-                                        value = draftMinTokens,
-                                        onValueChange = settingsRepo::setDraftMinTokens,
-                                        label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
-
-                                    DraftFloatTextField(
-                                        value = draftPMin,
-                                        onValueChange = settingsRepo::setDraftPMin,
-                                        valueRange = 0f..1f,
-                                        label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
-                                }
-                            } else {
-                                Column(
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                stringResource(R.string.general_mtp_use_draft_model_title),
-                                                fontWeight = FontWeight.Medium
-                                            )
-                                            Text(
-                                                stringResource(R.string.general_mtp_use_draft_model_desc),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Switch(
-                                            checked = mtpUseDraftModel,
-                                            onCheckedChange = settingsRepo::setMtpUseDraftModel
+                                        Text(
+                                            draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
 
-                                    if (mtpUseDraftModel) {
-                                        Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
-                                        OutlinedButton(
-                                            onClick = { showDraftSelector = true },
-                                            modifier = Modifier.fillMaxWidth()
+                                    if (draftModelPath != null) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        TextButton(
+                                            onClick = { settingsRepo.setDraftModelPath(null) },
+                                            modifier = Modifier.align(Alignment.End)
                                         ) {
-                                            Text(
-                                                draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-
-                                        if (draftModelPath != null) {
-                                            TextButton(
-                                                onClick = { settingsRepo.setDraftModelPath(null) },
-                                                modifier = Modifier.align(Alignment.End)
-                                            ) {
-                                                Text(stringResource(R.string.dist_speculative_clear_draft))
-                                            }
+                                            Text(stringResource(R.string.dist_speculative_clear_draft))
                                         }
                                     }
 
-                                    DraftIntTextField(
-                                        value = mtpDraftMaxTokens,
-                                        onValueChange = settingsRepo::setMtpDraftMaxTokens,
-                                        label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
 
-                                    DraftIntTextField(
-                                        value = mtpDraftMinTokens,
-                                        onValueChange = settingsRepo::setMtpDraftMinTokens,
-                                        label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
-                                    )
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        DraftIntTextField(
+                                            value = draftMaxTokens,
+                                            onValueChange = settingsRepo::setDraftMaxTokens,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
 
-                                    DraftFloatTextField(
-                                        value = mtpDraftPMin,
-                                        onValueChange = settingsRepo::setMtpDraftPMin,
-                                        valueRange = 0f..1f,
-                                        label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        singleLine = true
+                                        if (speculativeMode == LlamaSpeculativeMode.DRAFT_SIMPLE) {
+                                            DraftIntTextField(
+                                                value = draftMinTokens,
+                                                onValueChange = settingsRepo::setDraftMinTokens,
+                                                label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true
+                                            )
+
+                                            DraftFloatTextField(
+                                                value = draftPMin,
+                                                onValueChange = settingsRepo::setDraftPMin,
+                                                valueRange = 0f..1f,
+                                                label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true
+                                            )
+                                        }
+                                    }
+                                }
+                                LlamaSpeculativeMode.DRAFT_MTP -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    stringResource(R.string.general_mtp_use_draft_model_title),
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Text(
+                                                    stringResource(R.string.general_mtp_use_draft_model_desc),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Switch(
+                                                checked = mtpUseDraftModel,
+                                                onCheckedChange = settingsRepo::setMtpUseDraftModel
+                                            )
+                                        }
+
+                                        if (mtpUseDraftModel) {
+                                            Text(stringResource(R.string.dist_speculative_draft_model), fontWeight = FontWeight.Medium)
+                                            OutlinedButton(
+                                                onClick = { showDraftSelector = true },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) {
+                                                Text(
+                                                    draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+
+                                            if (draftModelPath != null) {
+                                                TextButton(
+                                                    onClick = { settingsRepo.setDraftModelPath(null) },
+                                                    modifier = Modifier.align(Alignment.End)
+                                                ) {
+                                                    Text(stringResource(R.string.dist_speculative_clear_draft))
+                                                }
+                                            }
+                                        }
+
+                                        DraftIntTextField(
+                                            value = mtpDraftMaxTokens,
+                                            onValueChange = settingsRepo::setMtpDraftMaxTokens,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_max)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+
+                                        DraftIntTextField(
+                                            value = mtpDraftMinTokens,
+                                            onValueChange = settingsRepo::setMtpDraftMinTokens,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_min)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+
+                                        DraftFloatTextField(
+                                            value = mtpDraftPMin,
+                                            onValueChange = settingsRepo::setMtpDraftPMin,
+                                            valueRange = 0f..1f,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_p_min)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
+                                }
+                                LlamaSpeculativeMode.NGRAM_MOD -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(stringResource(R.string.dist_speculative_ngram_params), fontWeight = FontWeight.Medium)
+                                        DraftIntTextField(
+                                            value = ngramModNMatch,
+                                            onValueChange = settingsRepo::setNgramModNMatch,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_mod_match)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramModNMin,
+                                            onValueChange = settingsRepo::setNgramModNMin,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_mod_min)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramModNMax,
+                                            onValueChange = settingsRepo::setNgramModNMax,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_mod_max)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
+                                }
+                                LlamaSpeculativeMode.NGRAM_SIMPLE -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(stringResource(R.string.dist_speculative_ngram_params), fontWeight = FontWeight.Medium)
+                                        DraftIntTextField(
+                                            value = ngramSimpleSizeN,
+                                            onValueChange = settingsRepo::setNgramSimpleSizeN,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_simple_size_n)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramSimpleSizeM,
+                                            onValueChange = settingsRepo::setNgramSimpleSizeM,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_simple_size_m)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramSimpleMinHits,
+                                            onValueChange = settingsRepo::setNgramSimpleMinHits,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_simple_min_hits)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
+                                }
+                                LlamaSpeculativeMode.NGRAM_MAP_K -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(stringResource(R.string.dist_speculative_ngram_params), fontWeight = FontWeight.Medium)
+                                        DraftIntTextField(
+                                            value = ngramMapKSizeN,
+                                            onValueChange = settingsRepo::setNgramMapKSizeN,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_map_k_size_n)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramMapKSizeM,
+                                            onValueChange = settingsRepo::setNgramMapKSizeM,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_map_k_size_m)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramMapKMinHits,
+                                            onValueChange = settingsRepo::setNgramMapKMinHits,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_map_k_min_hits)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
+                                }
+                                LlamaSpeculativeMode.NGRAM_MAP_K4V -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                        Text(stringResource(R.string.dist_speculative_ngram_params), fontWeight = FontWeight.Medium)
+                                        DraftIntTextField(
+                                            value = ngramMapK4VSizeN,
+                                            onValueChange = settingsRepo::setNgramMapK4VSizeN,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_map_k4v_size_n)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramMapK4VSizeM,
+                                            onValueChange = settingsRepo::setNgramMapK4VSizeM,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_map_k4v_size_m)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                        DraftIntTextField(
+                                            value = ngramMapK4VMinHits,
+                                            onValueChange = settingsRepo::setNgramMapK4VMinHits,
+                                            label = { Text(stringResource(R.string.dist_speculative_ngram_map_k4v_min_hits)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+                                    }
+                                }
+                                LlamaSpeculativeMode.NGRAM_CACHE -> {
+                                    Text(
+                                        stringResource(R.string.dist_speculative_ngram_cache_params_hint),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -1024,6 +1290,27 @@ fun LLMSettingsScreen(navController: NavController) {
                     }
                 }
             } // End of Vision Settings
+
+            item {
+                SpeculativeRunHistoryCard(
+                    runs = speculativeRuns,
+                    onRename = { run, name ->
+                        scope.launch {
+                            db.llamaSpeculativeRunDao().renameRun(run.id, name.takeIf { it.isNotBlank() })
+                        }
+                    },
+                    onToggleSaved = { run ->
+                        scope.launch {
+                            db.llamaSpeculativeRunDao().setSavedForever(run.id, !run.savedForever)
+                        }
+                    },
+                    onDelete = { run ->
+                        scope.launch {
+                            db.llamaSpeculativeRunDao().deleteRun(run.id)
+                        }
+                    }
+                )
+            }
         } // End of LazyColumn
     } // End of Scaffold content
     
@@ -1048,7 +1335,12 @@ fun LLMSettingsScreen(navController: NavController) {
             confirmButton = {
                 Button(
                     onClick = {
-                        if (saveCommandName.isNotBlank() && selectedModelPath != null) {
+                        if (speculativeEnabled &&
+                            speculativeMode.requiresDraftModel &&
+                            draftModelPath.isNullOrBlank()
+                        ) {
+                            android.widget.Toast.makeText(context, context.getString(R.string.dist_speculative_missing_required_draft), android.widget.Toast.LENGTH_SHORT).show()
+                        } else if (saveCommandName.isNotBlank() && selectedModelPath != null) {
                             val cmd = SavedCommandEntity(
                                 name = saveCommandName,
                                 commandTemplate = customCommandTemplateText,
@@ -1065,6 +1357,19 @@ fun LLMSettingsScreen(navController: NavController) {
                                 draftMax = draftMaxTokens,
                                 draftMin = draftMinTokens,
                                 draftPMin = draftPMin,
+                                ngramModNMatch = ngramModNMatch,
+                                ngramModNMin = ngramModNMin,
+                                ngramModNMax = ngramModNMax,
+                                ngramSimpleSizeN = ngramSimpleSizeN,
+                                ngramSimpleSizeM = ngramSimpleSizeM,
+                                ngramSimpleMinHits = ngramSimpleMinHits,
+                                ngramMapKSizeN = ngramMapKSizeN,
+                                ngramMapKSizeM = ngramMapKSizeM,
+                                ngramMapKMinHits = ngramMapKMinHits,
+                                ngramMapK4VSizeN = ngramMapK4VSizeN,
+                                ngramMapK4VSizeM = ngramMapK4VSizeM,
+                                ngramMapK4VMinHits = ngramMapK4VMinHits,
+                                nativeToolsEnabled = llamaNativeToolsEnabled,
                                 parallel = serverParallel,
                                 cacheRam = serverCacheRam,
                                 customFlags = customFlagsText,
@@ -1153,6 +1458,19 @@ fun LLMSettingsScreen(navController: NavController) {
                                             settingsRepo.setDraftMaxTokens(cmd.draftMax)
                                             settingsRepo.setDraftMinTokens(cmd.draftMin)
                                             settingsRepo.setDraftPMin(cmd.draftPMin)
+                                            settingsRepo.setNgramModNMatch(cmd.ngramModNMatch)
+                                            settingsRepo.setNgramModNMin(cmd.ngramModNMin)
+                                            settingsRepo.setNgramModNMax(cmd.ngramModNMax)
+                                            settingsRepo.setNgramSimpleSizeN(cmd.ngramSimpleSizeN)
+                                            settingsRepo.setNgramSimpleSizeM(cmd.ngramSimpleSizeM)
+                                            settingsRepo.setNgramSimpleMinHits(cmd.ngramSimpleMinHits)
+                                            settingsRepo.setNgramMapKSizeN(cmd.ngramMapKSizeN)
+                                            settingsRepo.setNgramMapKSizeM(cmd.ngramMapKSizeM)
+                                            settingsRepo.setNgramMapKMinHits(cmd.ngramMapKMinHits)
+                                            settingsRepo.setNgramMapK4VSizeN(cmd.ngramMapK4VSizeN)
+                                            settingsRepo.setNgramMapK4VSizeM(cmd.ngramMapK4VSizeM)
+                                            settingsRepo.setNgramMapK4VMinHits(cmd.ngramMapK4VMinHits)
+                                            settingsRepo.setLlamaNativeToolsEnabled(cmd.nativeToolsEnabled)
                                             
                                             // Advanced & Vision
                                             settingsRepo.setCustomCommandTemplate(cmd.commandTemplate)

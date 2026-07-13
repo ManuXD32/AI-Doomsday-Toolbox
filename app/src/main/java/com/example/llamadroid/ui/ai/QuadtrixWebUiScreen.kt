@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -42,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -77,6 +79,7 @@ fun QuadtrixWebUiScreen(
     var errorMessage by remember(decodedUrl) { mutableStateOf("") }
     var menuExpanded by remember { mutableStateOf(false) }
     var fileUploadCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
+    var webViewGeneration by remember(decodedUrl) { mutableIntStateOf(0) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uris = if (result.resultCode == Activity.RESULT_OK) {
@@ -92,7 +95,7 @@ fun QuadtrixWebUiScreen(
         fileUploadCallback = null
     }
 
-    val webView = remember(decodedUrl) {
+    val webView = remember(decodedUrl, webViewGeneration) {
         WebViewHolder.getOrCreate(
             context = context,
             url = decodedUrl,
@@ -286,6 +289,17 @@ fun QuadtrixWebUiScreen(
                         isLoading = true
                         hasError = false
                         webView.reload()
+                    }
+                )
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.quadtrix_webui_clear_browser_state)) },
+                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                    onClick = {
+                        menuExpanded = false
+                        isLoading = true
+                        hasError = false
+                        WebViewHolder.clearBrowserState(decodedUrl)
+                        webViewGeneration += 1
                     }
                 )
                 DropdownMenuItem(

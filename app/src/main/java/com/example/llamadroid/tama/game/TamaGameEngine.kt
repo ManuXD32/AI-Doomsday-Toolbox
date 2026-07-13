@@ -280,6 +280,10 @@ class TamaGameEngine(
         if (lastUpdateTime > 0L && now - lastUpdateTime < 4_500L) {
             return
         }
+        if (pet.cycleFrozen) {
+            lastUpdateTime = now
+            return
+        }
 
         // Update farm state (growth, production, decay)
         farmEngine.updateFarm(pet.id, now)
@@ -391,6 +395,64 @@ class TamaGameEngine(
         savePet(updatedPet)
         logEvolutionEvents(updatedPet, growthAdvance.evolvedStages, growthAdvance.initialStage)
         lastUpdateTime = now
+    }
+
+    suspend fun freezeCycle(): ActionResult {
+        val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        if (pet.cycleFrozen) {
+            return ActionResult(false, context.getString(R.string.tama_cycle_freeze_already_frozen))
+        }
+        val now = System.currentTimeMillis()
+        val frozenPet = pet.copy(
+            cycleFrozen = true,
+            cycleFreezeStartedAt = now,
+            lastDecayTime = now
+        )
+        _pet.value = frozenPet
+        savePet(frozenPet)
+        TamaNotificationScheduler.cancelPetAlarms(context.applicationContext, frozenPet.id)
+        UnifiedNotificationManager.cancelTamaSleepNotification(frozenPet.id)
+        logEvent(
+            frozenPet.id,
+            EventType.OTHER,
+            context.getString(R.string.tama_event_cycle_frozen, frozenPet.name)
+        )
+        lastUpdateTime = now
+        return ActionResult(true, context.getString(R.string.tama_cycle_freeze_started, frozenPet.name), "frozen")
+    }
+
+    suspend fun unfreezeCycle(): ActionResult {
+        val pet = _pet.value ?: return ActionResult(false, context.getString(R.string.tama_error_no_pet))
+        if (!pet.cycleFrozen) {
+            return ActionResult(false, context.getString(R.string.tama_cycle_freeze_not_frozen))
+        }
+        val now = System.currentTimeMillis()
+        val durationMs = (now - (pet.cycleFreezeStartedAt ?: now)).coerceAtLeast(0L)
+        val shiftedPet = pet
+            .withCycleTimestampsShifted(durationMs)
+            .copy(
+                cycleFrozen = false,
+                cycleFreezeStartedAt = null,
+                lastDecayTime = now
+            )
+        TamaDatabase.getInstance(context).withTransaction {
+            dao.saveStudySessions(dao.getStudySessionsForPet(pet.id).map { it.withCycleTimestampsShifted(durationMs) })
+            dao.saveQuests(dao.getQuestsForPet(pet.id).map { it.withCycleTimestampsShifted(durationMs) })
+            farmRepository.shiftCycleTimestamps(pet.id, durationMs)
+            dao.savePet(PetMapper.toEntity(shiftedPet))
+        }
+        _pet.value = shiftedPet
+        TamaNotificationScheduler.scheduleForPet(context.applicationContext, shiftedPet.id)
+        if (shiftedPet.isSleeping) {
+            UnifiedNotificationManager.showTamaSleepNotification(shiftedPet)
+        }
+        logEvent(
+            shiftedPet.id,
+            EventType.OTHER,
+            context.getString(R.string.tama_event_cycle_unfrozen, shiftedPet.name)
+        )
+        lastUpdateTime = now
+        return ActionResult(true, context.getString(R.string.tama_cycle_freeze_stopped, shiftedPet.name), "idle")
     }
 
     private suspend fun advanceGrowthStage(pet: TamaPet, now: Long): GrowthAdvanceResult {
@@ -1276,7 +1338,7 @@ class TamaGameEngine(
      */
     fun canDoAction(): Boolean {
         val pet = _pet.value ?: return false
-        return !pet.isSleeping && pet.stage != GrowthStage.EGG
+        return !pet.cycleFrozen && !pet.isSleeping && pet.stage != GrowthStage.EGG
     }
 
     // ==================== Activity System ====================
@@ -1285,6 +1347,9 @@ class TamaGameEngine(
      * Start an activity (working, studying, relaxing).
      */
     suspend fun startActivity(activity: ActivityType): ActionResult {
+        _pet.value?.let { pet ->
+            if (pet.cycleFrozen) return ActionResult(false, context.getString(R.string.tama_cycle_frozen_busy))
+        }
         if (activity == ActivityType.STUDYING) {
             return startNormalStudySession(emptySet(), emptyList())
         }
@@ -2912,12 +2977,16 @@ class TamaGameEngine(
         val questChecklist = dao.getQuestChecklist(pet.id)
         val studyLabels = dao.getStudyLabels(pet.id)
         val studySessions = dao.getStudySessionsForPet(pet.id)
+        val marketQuotes = dao.getMarketQuotesForPet(pet.id)
+        val locations = dao.getAllLocations()
+        val npcs = dao.getAllNpcs()
         val adventureSessions = dao.getAdventureHistory(pet.id)
         val adventureStages = adventureSessions.flatMap { dao.getAdventureStages(it.id) }
         val dungeonProgress = dao.getDungeonProgress(pet.id)
         val adventureGateProfile = dao.getAdventureGateProfile(pet.id)
         val adventureGateWorldProgress = dao.getAdventureGateWorldProgress(pet.id)
         val adventureGateBattleState = dao.getAdventureGateBattleState(pet.id)
+        val adventureGateNightArenaRun = dao.getAdventureGateNightArenaRun(pet.id)
         val artworks = dao.getArtworks(pet.id)
         val exportedSummaries = buildExportSummaries(pet.id, summaries, artworks)
         val audioPaths = chatMessages.associate { message ->
@@ -2950,6 +3019,9 @@ class TamaGameEngine(
             deepDreamRuns = deepDreamRuns.map(TamaTransferDeepDreamRun::fromEntity),
             studyLabels = studyLabels.map(TamaTransferStudyLabel::fromEntity),
             studySessions = studySessions.map(TamaTransferStudySession::fromEntity),
+            marketQuotes = marketQuotes.map(TamaTransferMarketQuote::fromEntity),
+            locations = locations.map(TamaTransferLocation::fromEntity),
+            npcs = npcs.map(TamaTransferNpc::fromEntity),
             adventureSessions = adventureSessions.map { session ->
                 val worldImagePath = decodeSchematicWorldImagePath(session.schematicJson)
                 val relativeWorldImagePath = worldImagePath
@@ -2974,7 +3046,8 @@ class TamaGameEngine(
             dungeonProgress = dungeonProgress?.let(TamaTransferDungeonProgress::fromEntity),
             adventureGateProfile = adventureGateProfile?.let(TamaTransferAdventureGateProfile::fromEntity),
             adventureGateWorldProgress = adventureGateWorldProgress.map(TamaTransferAdventureGateWorldProgress::fromEntity),
-            adventureGateBattleState = adventureGateBattleState?.let(TamaTransferAdventureGateBattleState::fromEntity)
+            adventureGateBattleState = adventureGateBattleState?.let(TamaTransferAdventureGateBattleState::fromEntity),
+            adventureGateNightArenaRun = adventureGateNightArenaRun?.let(TamaTransferAdventureGateNightArenaRun::fromEntity)
         )
         return TamaBackupPackage(bundle = bundle, artworks = artworks)
     }
@@ -3002,6 +3075,9 @@ class TamaGameEngine(
                                 val petIdsToReplace = replacementPetIds(dao.getAllPetIds(), importedPet.id)
                                 petIdsToReplace.forEach { petId ->
                                     clearPetScopedTransferData(petId)
+                                }
+                                if ((bundle?.version ?: 0) >= 20) {
+                                    clearGlobalTransferData()
                                 }
                             }
                             else -> {
@@ -3133,6 +3209,15 @@ class TamaGameEngine(
             if (bundle.studySessions.isNotEmpty()) {
                 dao.saveStudySessions(bundle.studySessions.map { it.toEntity() })
             }
+            if (bundle.marketQuotes.isNotEmpty()) {
+                dao.saveMarketQuotes(bundle.marketQuotes.map { it.toEntity() })
+            }
+            if (bundle.locations.isNotEmpty()) {
+                dao.saveLocations(bundle.locations.map { it.toEntity() })
+            }
+            if (bundle.npcs.isNotEmpty()) {
+                dao.saveNpcs(bundle.npcs.map { it.toEntity() })
+            }
             if (bundle.farmTiles.isNotEmpty()) {
                 database.farmDao().saveTiles(bundle.farmTiles.map { it.toEntity() })
             }
@@ -3174,6 +3259,7 @@ class TamaGameEngine(
                 dao.saveAdventureGateWorldProgress(bundle.adventureGateWorldProgress.map { it.toEntity() })
             }
             bundle.adventureGateBattleState?.let { dao.saveAdventureGateBattleState(it.toEntity()) }
+            bundle.adventureGateNightArenaRun?.let { dao.saveAdventureGateNightArenaRun(it.toEntity()) }
             if (restoredArtworkEntities.isNotEmpty()) {
                 dao.saveArtworks(restoredArtworkEntities)
             }
@@ -3910,6 +3996,11 @@ class TamaGameEngine(
         settingsRepo.setAdventureOnnxResolution(settings.adventureOnnxResolution)
     }
 
+    private suspend fun clearGlobalTransferData() {
+        dao.deleteAllNpcs()
+        dao.deleteAllLocations()
+    }
+
     private suspend fun clearPetScopedTransferData(petId: String) {
         val database = TamaDatabase.getInstance(context)
         val adventureSessions = dao.getAdventureHistory(petId)
@@ -3922,6 +4013,7 @@ class TamaGameEngine(
         dao.deleteDungeonProgress(petId)
         dao.deleteAdventureGateBattleState(petId)
         dao.deleteAdventureGateWorldProgress(petId)
+        dao.deleteAdventureGateNightArenaRun(petId)
         dao.deleteAdventureGateProfile(petId)
         dao.deleteDeepDreamRunsForPet(petId)
         dao.deleteStudySessionsForPet(petId)
