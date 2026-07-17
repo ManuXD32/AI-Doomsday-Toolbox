@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -120,6 +121,13 @@ class MediaTranslationWorkflowServiceTest {
     }
 
     @Test
+    fun originalSubtitleFileNameIncludesSourceAndTimestamp() {
+        val fileName = mediaTranslationOriginalSubtitleFileName("My Video!.mp4", 1_234_567_890L)
+
+        assertEquals("original_My_Video_1234567890.srt", fileName)
+    }
+
+    @Test
     fun latestTranscriptTimestampParsesWhisperOutputAndSrtTimestamps() {
         val raw = """
             [00:00:00.000 --> 00:00:02.000] hello
@@ -142,6 +150,33 @@ class MediaTranslationWorkflowServiceTest {
         assertEquals(3_723_450L, parsed.startMs)
         assertEquals(3_725_670L, parsed.endMs)
         assertEquals("hola que tal buenos dias", parsed.text)
+    }
+
+    @Test
+    fun whisperLinkerOutOfMemoryOutputRequestsLaunchRetry() {
+        val output = """
+            CANNOT LINK EXECUTABLE "/data/app/pkg/lib/arm64/libwhisper-cli_baseline.so":
+            can't enable GNU RELRO protection for "/data/app/pkg/lib/arm64/libwhisper-cli_baseline.so": Out of memory
+        """.trimIndent()
+
+        assertTrue(mediaTranslationWhisperLaunchNeedsMemoryRetry(output))
+    }
+
+    @Test
+    fun compactWhisperProcessOutputKeepsTailAndLimitsLength() {
+        val output = (1..20).joinToString("\n") { "line-$it ${"x".repeat(80)}" }
+
+        val compact = mediaTranslationCompactProcessOutput(output, maxChars = 120)
+
+        assertTrue(compact.startsWith("line-13"))
+        assertTrue(compact.length <= 120)
+        assertTrue(compact.endsWith("..."))
+    }
+
+    @Test
+    fun whisperLinkerRetryDelayIsBounded() {
+        assertEquals(1_500L, mediaTranslationWhisperLinkerRetryDelayMs(1))
+        assertEquals(8_000L, mediaTranslationWhisperLinkerRetryDelayMs(99))
     }
 
     @Test
@@ -263,4 +298,139 @@ class MediaTranslationWorkflowServiceTest {
     fun promptEchoDetectionRejectsContextMarkers() {
         assertTrue(mediaTranslationLooksLikePromptEcho("[CONTEXT]\nTranslate me\n[/CONTEXT]"))
     }
+
+    @Test
+    fun lineTranslationRetryPolicyRetriesBlankAndPromptEchoAnswers() {
+        assertTrue(mediaTranslationShouldRetryLineTranslation(""))
+        assertTrue(mediaTranslationShouldRetryLineTranslation("[TARGET] Translate me\n[CONTEXT]\nMore prompt"))
+        assertTrue(mediaTranslationShouldRetryLineTranslation(null))
+        assertTrue(mediaTranslationShouldRetryLineTranslation("Hola", IllegalStateException("network")))
+        assertTrue(!mediaTranslationShouldRetryLineTranslation("Translation: Hola mundo"))
+    }
+
+    @Test
+    fun translationDiagnosticSnippetKeepsErrorsReadable() {
+        assertEquals("<empty>", mediaTranslationDiagnosticSnippet(" \n\t "))
+        assertEquals("a b c", mediaTranslationDiagnosticSnippet("a\n b\t c"))
+        assertEquals("12345...", mediaTranslationDiagnosticSnippet("123456789", maxChars = 5))
+    }
+
+    @Test
+    fun resumeOverrideCarriesSkipFailedLinesIntoMediaSpecs() {
+        val override = testResumeOverride(skipFailedTranslationLines = true)
+
+        val updated = mediaTranslationApplyResumeOverride(testMediaJobSpec(), override)
+
+        assertEquals("Spanish", updated.targetLanguage)
+        assertTrue(updated.skipFailedTranslationLines)
+        assertEquals(10, updated.translationContextLines)
+    }
+
+    @Test
+    fun resumeOverrideCarriesSkipFailedLinesIntoSubtitleSpecs() {
+        val override = testResumeOverride(skipFailedTranslationLines = true)
+
+        val updated = mediaTranslationApplyResumeOverride(testSubtitleJobSpec(), override)
+
+        assertEquals("Spanish", updated.targetLanguage)
+        assertTrue(updated.skipFailedTranslationLines)
+        assertEquals(10, updated.translationContextLines)
+    }
+
+    @Test
+    fun isolatedLineTranslationPromptAvoidsContextMarkers() {
+        val prompt = mediaTranslationBuildIsolatedLineTranslationPrompt(
+            sourceLanguage = "auto",
+            targetLanguage = "English",
+            sourceText = "そろそろ帰らないと。"
+        )
+
+        assertTrue(prompt.contains("Return exactly one non-empty line."))
+        assertTrue(prompt.contains("Source:\nそろそろ帰らないと。"))
+        assertTrue(!prompt.contains("[TARGET]"))
+        assertTrue(!prompt.contains("[CONTEXT]"))
+    }
+
+    private fun testResumeOverride(skipFailedTranslationLines: Boolean): MediaTranslationResumeTranslationOverride =
+        MediaTranslationResumeTranslationOverride(
+            targetLanguage = "Spanish",
+            backendSnapshot = testRemoteSummarySnapshot(targetLanguage = "Spanish"),
+            translationContextEnabled = false,
+            translationContextLines = 42,
+            skipFailedTranslationLines = skipFailedTranslationLines
+        )
+
+    private fun testMediaJobSpec(): MediaTranslationJobSpec =
+        MediaTranslationJobSpec(
+            sourcePath = "/tmp/source.mp4",
+            sourceName = "source.mp4",
+            sourceMimeType = "video/mp4",
+            whisperModelPath = "/tmp/whisper.bin",
+            whisperLanguage = "auto",
+            whisperThreads = 2,
+            targetLanguage = "English",
+            ttsModelPath = "/tmp/tts.onnx",
+            ttsModelName = "tts",
+            ttsLanguage = "en",
+            ttsVoiceName = null,
+            ttsSteps = 4,
+            outputMode = MediaTranslationOutputMode.AUTO,
+            replaceOriginalAudio = false,
+            backendSnapshot = testRemoteSummarySnapshot(),
+            translationContextEnabled = true,
+            translationContextLines = 2,
+            skipFailedTranslationLines = false
+        )
+
+    private fun testSubtitleJobSpec(): SubtitleTranslationJobSpec =
+        SubtitleTranslationJobSpec(
+            videoPath = "/tmp/source.mp4",
+            videoName = "source.mp4",
+            sourceSubtitlePath = "/tmp/source.srt",
+            sourceSubtitleName = "source.srt",
+            whisperModelPath = null,
+            whisperLanguage = "auto",
+            whisperThreads = 2,
+            targetLanguage = "English",
+            translateSubtitles = true,
+            burnIntoVideo = false,
+            burnStyle = SubtitleBurnStyleSpec(
+                fontSize = 24,
+                alignment = 2,
+                marginV = 24,
+                marginL = 12,
+                primaryColorRed = 1f,
+                primaryColorGreen = 1f,
+                primaryColorBlue = 1f,
+                fontName = "default"
+            ),
+            backendSnapshot = testRemoteSummarySnapshot(),
+            translationContextEnabled = true,
+            translationContextLines = 2,
+            skipFailedTranslationLines = false
+        )
+
+    private fun testRemoteSummarySnapshot(targetLanguage: String = "English"): RemoteSummarySettingsSnapshot =
+        RemoteSummarySettingsSnapshot(
+            backend = "ollama",
+            ollamaUrl = "http://localhost:11434",
+            llamaServerUrl = "",
+            llamaSwapUrl = "",
+            ollamaModel = "test-model",
+            llamaSwapModel = null,
+            liteRtModelId = null,
+            thinkingEnabled = false,
+            llamaServerModelLabel = null,
+            llamaServerContextTokens = 4096,
+            llamaServerContextLabel = null,
+            chunkContext = 4096,
+            chunkMaxTokens = 1024,
+            mergeContext = 4096,
+            mergeMaxTokens = 1024,
+            temperature = 0.2f,
+            timeoutMinutes = 2,
+            targetLanguage = targetLanguage,
+            summaryPrompt = null,
+            mergePrompt = null
+        )
 }

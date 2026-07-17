@@ -1967,6 +1967,23 @@ object Migrations {
         }
     }
 
+    val MIGRATION_87_88 = object : Migration(87, 88) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 87 -> 88: saved command draft thread settings")
+
+            if (tableExists(db, "saved_commands")) {
+                if (!columnExists(db, "saved_commands", "draftThreads")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `draftThreads` INTEGER NOT NULL DEFAULT 4")
+                }
+                if (!columnExists(db, "saved_commands", "draftThreadsBatch")) {
+                    db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `draftThreadsBatch` INTEGER NOT NULL DEFAULT 4")
+                }
+            }
+
+            DebugLog.log("[DB] Migration 87 -> 88 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -2027,7 +2044,8 @@ object Migrations {
         MIGRATION_83_84,
         MIGRATION_84_85,
         MIGRATION_85_86,
-        MIGRATION_86_87
+        MIGRATION_86_87,
+        MIGRATION_87_88
     )
     /**
      * Check if a column exists in a table.

@@ -1214,6 +1214,10 @@
     <string name="llama_top_k_value">Top K (%1$d)</string>
     <string name="llama_min_p_value">Min P (%1$.2f)</string>
     <string name="llama_repeat_penalty_value">Rep Pen (%1$.2f)</string>
+    <string name="llama_max_output_tokens_toggle">Limit output tokens</string>
+    <string name="llama_max_output_tokens_desc">Send a per-chat max_tokens limit only when enabled.</string>
+    <string name="llama_max_output_tokens_label">Max output tokens</string>
+    <string name="llama_max_output_tokens_supporting">Disabled chats leave the backend default unchanged.</string>
     
     <!-- Status Messages -->
     <string name="status_loading">Loading…</string>
@@ -2840,8 +2844,8 @@
     <string name="workflow_txt2img_upscale">txt2img + Upscale</string>
     <string name="workflow_txt2img_upscale_desc">Generate image, then upscale it</string>
     <string name="workflow_manga_translation">Manga/Comic Translation</string>
-    <string name="workflow_manga_translation_desc">Batch translate CBZ comics to PDF and CBZ</string>
-    <string name="workflow_manga_translation_help">Select one or more CBZ files. The workflow extracts pages, creates a PDF reference, runs OCR with Japanese support, translates with page-level JSON context, writes a translated PDF, paints translated text onto the original images, and packs a translated CBZ.</string>
+    <string name="workflow_manga_translation_desc">Batch translate CBZ, ZIP, and manga PDF files to PDF and CBZ</string>
+    <string name="workflow_manga_translation_help">Select one or more CBZ, ZIP, or PDF files. The workflow extracts pages, runs OCR with Japanese support, translates with page-level JSON context, writes a translated PDF, paints translated text onto the original images, and packs a translated CBZ.</string>
     <string name="workflow_media_translate_title">Video Dubbing / Audio Translation</string>
     <string name="workflow_media_translate_desc">Translate audio or video, generate speech, and export dubbed media</string>
     <string name="workflow_media_translate_help">Choose an audio or video file. The workflow creates timestamped subtitles, translates each segment, generates speech, and exports translated audio or a dubbed video.</string>
@@ -2879,6 +2883,17 @@
     <string name="workflow_media_translate_context_desc">Adds nearby subtitle lines to each translation request so the model can understand pronouns, tone, and continuity.</string>
     <string name="workflow_media_translate_context_lines">Context lines before and after</string>
     <string name="workflow_media_translate_context_lines_suffix">lines</string>
+    <string name="workflow_media_translate_skip_failed_lines">Skip failed lines after retries</string>
+    <string name="workflow_media_translate_skip_failed_lines_desc">If a line still fails after automatic retries, keep the original subtitle text and continue. Leave this off when every line must be translated.</string>
+    <string name="workflow_media_translate_retrying_line">Retrying line %1$d (%2$d/%3$d)</string>
+    <string name="workflow_media_translate_litert_fallback_line">Retrying line %1$d with safer LiteRT CPU fallback</string>
+    <string name="workflow_media_translate_recovering_line">Retrying line %1$d with a fresh isolated translation request</string>
+    <string name="workflow_media_translate_error_unusable_answer">The model returned an empty or unusable answer.</string>
+    <string name="workflow_media_translate_error_empty_snippet">&lt;empty&gt;</string>
+    <string name="workflow_media_translate_error_line_failure_detail">Reason: %1$s. Last raw output: %2$s. Cleaned output: %3$s. Source line: %4$s. Backend: %5$s.</string>
+    <string name="workflow_media_translate_error_line_failed_after_retries">Line %1$d still failed after %2$d attempts: %3$s You can resume after changing the translation engine, or enable skipped lines to keep the original text for failed lines.</string>
+    <string name="workflow_media_translate_whisper_linker_oom_failed">Whisper could not start on this device because Android could not map the native Whisper executable after %1$d attempts. This happens before the model loads, so it is usually a device firmware or native-loader issue rather than the Whisper model size. Last output: %2$s</string>
+    <string name="workflow_media_translate_skipped_lines_summary">%1$d lines kept their original text after translation retries failed.</string>
     <string name="workflow_media_translate_prompt_preview">Translation prompt preview</string>
     <string name="workflow_media_translate_notification_title">Media translation: %1$s</string>
     <string name="workflow_media_foreground_title">Media workflow running</string>
@@ -2984,8 +2999,9 @@
     <string name="subtitle_burn_margin_vertical">Vertical margin</string>
     <string name="subtitle_burn_margin_horizontal">Horizontal margin</string>
     <string name="subtitle_burn_color">Subtitle color</string>
-    <string name="workflow_manga_select_cbz">Select CBZ files</string>
-    <string name="workflow_manga_selected_count">%d CBZ files selected</string>
+    <string name="workflow_manga_select_cbz">Select CBZ/PDF files</string>
+    <string name="workflow_manga_browse_all_files">Browse all files</string>
+    <string name="workflow_manga_selected_count">%d manga/comic files selected</string>
     <string name="workflow_manga_output_title">Translated outputs</string>
     <string name="workflow_manga_output_pdf">Translated PDF</string>
     <string name="workflow_manga_output_pdf_desc">Save the translated pages as a PDF.</string>
@@ -2994,10 +3010,10 @@
     <string name="workflow_manga_presets_title">Reusable presets</string>
     <string name="workflow_manga_results_title">Batch results</string>
     <string name="workflow_manga_run_batch">Run Manga Translation Batch</string>
-    <string name="workflow_manga_select_first">Select at least one CBZ file first</string>
+    <string name="workflow_manga_select_first">Select at least one CBZ, ZIP, or PDF file first</string>
     <string name="workflow_manga_select_output_first">Select at least one translated output format.</string>
-    <string name="workflow_manga_stage_extracting">Extracting CBZ pages…</string>
-    <string name="workflow_manga_stage_pdf">Creating intermediate PDF…</string>
+    <string name="workflow_manga_stage_extracting">Preparing manga/comic pages…</string>
+    <string name="workflow_manga_stage_pdf">Creating translated PDF…</string>
     <string name="workflow_manga_stage_ocr">OCR page %1$d/%2$d…</string>
     <string name="workflow_manga_stage_translating">Translating page %1$d/%2$d…</string>
     <string name="workflow_manga_stage_correcting">Correcting translation chunk %1$d/%2$d…</string>
@@ -3013,6 +3029,8 @@
     <string name="workflow_manga_notification_file">File %1$d/%2$d: %3$s</string>
     <string name="workflow_manga_notification_complete">%d comic files translated</string>
     <string name="workflow_manga_notification_partial">%1$d translated, %2$d failed</string>
+    <string name="workflow_manga_foreground_title">Manga translation running</string>
+    <string name="workflow_manga_checkpoint_ready">A resumable manga translation checkpoint is available.</string>
     <string name="pdf_error_could_not_open_cbz">Could not open CBZ as a ZIP archive</string>
     <string name="pdf_error_no_image_pages_in_cbz">No image pages found inside the CBZ archive</string>
     <string name="pdf_error_no_valid_images_to_convert">No valid image pages could be decoded or embedded from the CBZ archive</string>
@@ -3457,6 +3475,8 @@
     <string name="dist_speculative_draft_min">Min draft tokens</string>
     <string name="dist_speculative_draft_p_min">Min acceptance probability</string>
     <string name="dist_speculative_draft_p_min_desc">Lower = more aggressive drafting</string>
+    <string name="dist_speculative_draft_threads">Draft threads</string>
+    <string name="dist_speculative_draft_threads_batch">Draft batch threads</string>
     <string name="dist_speculative_mode_label">Speculative mode</string>
     <string name="dist_speculative_strategy_label">Speculative strategy</string>
     <string name="dist_speculative_model_modes_label">Draft model</string>

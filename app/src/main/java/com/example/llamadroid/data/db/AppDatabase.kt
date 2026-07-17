@@ -131,7 +131,7 @@ class Converters {
         AiServerWebMessageAttachmentEntity::class,
         AiServerWebToolEventEntity::class
     ], 
-    version = 87,
+    version = 88,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

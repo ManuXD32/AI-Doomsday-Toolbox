@@ -4509,7 +4509,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             tools = availableTools,
                             modelLabel = model,
                             thinkingEnabled = thinkingEnabled,
-                            numCtx = ollamaService.numCtx.value,
+                            maxTokens = ollamaService.numCtx.value,
                             onChunk = { chunk, thinkingChunk ->
                                 if (isAgentRunActive(runEpoch)) {
                                     chunk?.let {
@@ -10032,7 +10032,7 @@ sys.exit(proc.returncode)
                     settingsRepo.agentLlamaServerModelLabel.value
                 },
                 thinkingEnabled = false,
-                numCtx = summarizerCtx
+                maxTokens = summarizerCtx
             ) { _, _ -> }
         } else {
             ollamaService.chatWithToolsStreaming(

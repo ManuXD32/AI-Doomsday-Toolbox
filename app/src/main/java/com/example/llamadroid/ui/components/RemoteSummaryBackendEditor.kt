@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -56,6 +57,12 @@ private fun normalizeLiteRtBackend(value: String?): String {
         else -> LITERT_BACKEND_AUTO
     }
 }
+
+internal fun visibleLiteRtModelId(currentId: Long?, availableIds: List<Long>): Long? =
+    availableIds.firstOrNull { it == currentId } ?: availableIds.firstOrNull()
+
+internal fun shouldCommitVisibleLiteRtModelId(currentId: Long?, visibleId: Long?): Boolean =
+    visibleId != null && visibleId != currentId
 
 private fun com.example.llamadroid.data.model.LiteRtModelEntity.advertisedLiteRtMaxContextTokens(): Int? =
     maxContextTokens?.takeIf { it > 0 }
@@ -332,8 +339,18 @@ fun RemoteSummaryBackendEditor(
             Spacer(modifier = Modifier.height(12.dp))
 
             if (isLiteRt) {
-                val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == liteRtModelId }
-                    ?: liteRtModels.firstOrNull()
+                val selectedLiteRtModelId = visibleLiteRtModelId(
+                    currentId = liteRtModelId,
+                    availableIds = liteRtModels.map { it.id }
+                )
+                val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == selectedLiteRtModelId }
+                LaunchedEffect(isLiteRt, liteRtModelId, liteRtModels) {
+                    selectedLiteRtModelId?.let { visibleId ->
+                        if (isLiteRt && shouldCommitVisibleLiteRtModelId(liteRtModelId, visibleId)) {
+                            onLiteRtModelSelected(visibleId)
+                        }
+                    }
+                }
                 Text(
                     stringResource(R.string.litert_model_label),
                     style = MaterialTheme.typography.labelLarge
@@ -378,16 +395,22 @@ fun RemoteSummaryBackendEditor(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    val selectedBackend = normalizeLiteRtBackend(liteRtBackend)
                     listOf(
                         LITERT_BACKEND_AUTO to R.string.general_acceleration_mode_auto,
                         LITERT_BACKEND_CPU to R.string.general_acceleration_mode_cpu,
                         LITERT_BACKEND_GPU to R.string.litert_backend_gpu
                     ).forEach { (mode, label) ->
+                        val selected = selectedBackend == mode
                         OutlinedButton(
                             onClick = { onLiteRtBackendChange(mode) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                            )
                         ) {
-                            Text(stringResource(label))
+                            Text(stringResource(label), fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
                         }
                     }
                 }

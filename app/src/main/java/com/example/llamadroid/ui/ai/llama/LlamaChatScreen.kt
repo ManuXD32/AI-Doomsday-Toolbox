@@ -125,6 +125,8 @@ import com.example.llamadroid.service.LITERT_PARAM_MTP_ENABLED
 import com.example.llamadroid.service.LlamaCallUiState
 import com.example.llamadroid.service.LlamaCallService
 import com.example.llamadroid.service.LlamaClientService
+import com.example.llamadroid.service.NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS
+import com.example.llamadroid.service.NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED
 import com.example.llamadroid.service.NativeChatImageGenerationEngine
 import com.example.llamadroid.service.NativeChatImageToolParams
 import com.example.llamadroid.service.NativeChatSdImageToolParams
@@ -477,8 +479,17 @@ fun LlamaChatScreen(
     var liteRtMtpEnabled by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, LITERT_PARAM_MTP_ENABLED, false))
     }
-    var liteRtMaxOutputTokens by remember(currentChat?.apiParams) {
-        mutableIntStateOf(parseParam(currentChat?.apiParams, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024).coerceAtLeast(1))
+    var maxOutputTokensEnabled by remember(currentChat?.apiParams) {
+        mutableStateOf(parseParam(currentChat?.apiParams, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false))
+    }
+    var maxOutputTokens by remember(currentChat?.apiParams) {
+        mutableIntStateOf(
+            parseParam(
+                currentChat?.apiParams,
+                NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS,
+                parseParam(currentChat?.apiParams, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024)
+            ).coerceAtLeast(1)
+        )
     }
     var liteRtMaxTokens by remember(currentChat?.id, currentChat?.contextSize, liteRtContextRange, liteRtDefaultContext) {
         mutableIntStateOf(
@@ -842,11 +853,15 @@ fun LlamaChatScreen(
         val map = linkedMapOf<String, Any>(
             "temperature" to if (activeServerIsLiteRt) temperature.coerceIn(0f, 1f) else temperature,
             "top_p" to if (activeServerIsLiteRt) topP.coerceIn(0f, 0.95f) else topP,
-            "top_k" to if (activeServerIsLiteRt) topK.toInt().coerceIn(5, 64) else topK.toInt()
+            "top_k" to if (activeServerIsLiteRt) topK.toInt().coerceIn(5, 64) else topK.toInt(),
+            NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED to maxOutputTokensEnabled,
+            NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS to maxOutputTokens.coerceAtLeast(1)
         )
         if (activeServerIsLiteRt) {
             map[LITERT_PARAM_MTP_ENABLED] = liteRtMtpEnabled
-            map[LITERT_PARAM_MAX_OUTPUT_TOKENS] = liteRtMaxOutputTokens.coerceAtLeast(1)
+            if (maxOutputTokensEnabled) {
+                map[LITERT_PARAM_MAX_OUTPUT_TOKENS] = maxOutputTokens.coerceAtLeast(1)
+            }
             map["enable_thinking"] = enableThinking
             currentChat?.let { chat ->
                 viewModel.updateChat(
@@ -1086,7 +1101,12 @@ fun LlamaChatScreen(
         repPen = parseParam(params, "repeat_penalty", 1.1f)
         enableThinking = parseParam(params, "enable_thinking", true)
         liteRtMtpEnabled = parseParam(params, LITERT_PARAM_MTP_ENABLED, false)
-        liteRtMaxOutputTokens = parseParam(params, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024).coerceAtLeast(1)
+        maxOutputTokensEnabled = parseParam(params, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false)
+        maxOutputTokens = parseParam(
+            params,
+            NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS,
+            parseParam(params, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024)
+        ).coerceAtLeast(1)
         enableThinking = parseParam(params, "enable_thinking", true)
         liteRtMaxTokens = (currentChat?.contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
             .coerceIn(liteRtContextRange)
@@ -1756,11 +1776,11 @@ fun LlamaChatScreen(
                                 onValueChange = { liteRtMaxTokens = it },
                                 range = liteRtContextRange
                             )
-                            LlamaToolNumberRow(
-                                label = stringResource(R.string.litert_gallery_max_output_tokens),
-                                value = liteRtMaxOutputTokens,
-                                onValueChange = { liteRtMaxOutputTokens = it.coerceAtLeast(1) },
-                                range = 1..liteRtContextCap.coerceAtLeast(1)
+                            LlamaMaxOutputTokensControl(
+                                enabled = maxOutputTokensEnabled,
+                                value = maxOutputTokens,
+                                onEnabledChange = { maxOutputTokensEnabled = it },
+                                onValueChange = { maxOutputTokens = it.coerceAtLeast(1) }
                             )
                             Text(
                                 text = stringResource(
@@ -1918,6 +1938,13 @@ fun LlamaChatScreen(
                                 Text(stringResource(R.string.llama_repeat_penalty_value, repPen), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
                                 Slider(value = repPen, onValueChange = { repPen = it }, valueRange = 1f..2f, modifier = Modifier.weight(1f))
                             }
+
+                            LlamaMaxOutputTokensControl(
+                                enabled = maxOutputTokensEnabled,
+                                value = maxOutputTokens,
+                                onEnabledChange = { maxOutputTokensEnabled = it },
+                                onValueChange = { maxOutputTokens = it.coerceAtLeast(1) }
+                            )
 
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -3918,6 +3945,36 @@ private fun parseParam(jsonStr: String?, key: String, default: String): String {
         (map[key] as? String)?.takeIf { it.isNotBlank() } ?: default
     } catch (e: Exception) {
         default
+    }
+}
+
+@Composable
+private fun LlamaMaxOutputTokensControl(
+    enabled: Boolean,
+    value: Int,
+    onEnabledChange: (Boolean) -> Unit,
+    onValueChange: (Int) -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        LlamaToolToggleRow(
+            label = stringResource(R.string.llama_max_output_tokens_toggle),
+            description = stringResource(R.string.llama_max_output_tokens_desc),
+            checked = enabled,
+            onCheckedChange = onEnabledChange
+        )
+        AnimatedVisibility(visible = enabled) {
+            DraftIntTextField(
+                value = value.coerceAtLeast(1),
+                onValueChange = { onValueChange(it.coerceAtLeast(1)) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.llama_max_output_tokens_label)) },
+                supportingText = { Text(stringResource(R.string.llama_max_output_tokens_supporting)) },
+                valueRange = 1..Int.MAX_VALUE
+            )
+        }
     }
 }
 

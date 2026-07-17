@@ -65,6 +65,8 @@ class LlamaService : Service() {
                     val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 3) else null
                     val draftMin = if (intent.hasExtra(EXTRA_DRAFT_MIN)) intent.getIntExtra(EXTRA_DRAFT_MIN, 0) else null
                     val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.0f) else null
+                    val draftThreads = if (intent.hasExtra(EXTRA_DRAFT_THREADS)) intent.getIntExtra(EXTRA_DRAFT_THREADS, 4) else null
+                    val draftThreadsBatch = if (intent.hasExtra(EXTRA_DRAFT_THREADS_BATCH)) intent.getIntExtra(EXTRA_DRAFT_THREADS_BATCH, 4) else null
                     
                     val parallelOverride = if (intent.hasExtra(EXTRA_PARALLEL)) intent.getIntExtra(EXTRA_PARALLEL, 1) else null
                     val cacheRamOverride = if (intent.hasExtra(EXTRA_CACHE_RAM)) intent.getIntExtra(EXTRA_CACHE_RAM, 0) else null
@@ -88,6 +90,7 @@ class LlamaService : Service() {
                         startServer(modelPath, isEmbedding, mmprojPath, 
                             threadsOverride, contextSizeOverride, temperatureOverride, hostOverride, portOverride,
                             draftModelPath = draftModelPath, draftMax = draftMax, draftMin = draftMin, draftPMin = draftPMin,
+                            draftThreads = draftThreads, draftThreadsBatch = draftThreadsBatch,
                             kvCacheEnabledOverride = kvCacheEnabledOverride,
                             kvCacheTypeKOverride = kvCacheTypeKOverride,
                             kvCacheTypeVOverride = kvCacheTypeVOverride,
@@ -134,6 +137,8 @@ class LlamaService : Service() {
                                 draftMax = params["draftMax"] as? Int,
                                 draftMin = params["draftMin"] as? Int,
                                 draftPMin = params["draftPMin"] as? Float,
+                                draftThreads = params["draftThreads"] as? Int,
+                                draftThreadsBatch = params["draftThreadsBatch"] as? Int,
                                 kvCacheEnabledOverride = params["kvCacheEnabled"] as? Boolean,
                                 kvCacheTypeKOverride = params["kvCacheTypeK"] as? String,
                                 kvCacheTypeVOverride = params["kvCacheTypeV"] as? String,
@@ -172,6 +177,8 @@ class LlamaService : Service() {
                      val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 3) else null
                      val draftMin = if (intent.hasExtra(EXTRA_DRAFT_MIN)) intent.getIntExtra(EXTRA_DRAFT_MIN, 0) else null
                      val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.0f) else null
+                     val draftThreads = if (intent.hasExtra(EXTRA_DRAFT_THREADS)) intent.getIntExtra(EXTRA_DRAFT_THREADS, 4) else null
+                     val draftThreadsBatch = if (intent.hasExtra(EXTRA_DRAFT_THREADS_BATCH)) intent.getIntExtra(EXTRA_DRAFT_THREADS_BATCH, 4) else null
                      
                      val parallelOverride = if (intent.hasExtra(EXTRA_PARALLEL)) intent.getIntExtra(EXTRA_PARALLEL, 1) else null
                      val cacheRamOverride = if (intent.hasExtra(EXTRA_CACHE_RAM)) intent.getIntExtra(EXTRA_CACHE_RAM, 0) else null
@@ -188,6 +195,7 @@ class LlamaService : Service() {
                              threadsOverride, contextSizeOverride, temperatureOverride, hostOverride, portOverride, 
                              previewMode = true,
                              draftModelPath = draftModelPath, draftMax = draftMax, draftMin = draftMin, draftPMin = draftPMin,
+                             draftThreads = draftThreads, draftThreadsBatch = draftThreadsBatch,
                              kvCacheEnabledOverride = kvCacheEnabledOverride,
                              kvCacheTypeKOverride = kvCacheTypeKOverride,
                              kvCacheTypeVOverride = kvCacheTypeVOverride,
@@ -230,6 +238,8 @@ class LlamaService : Service() {
         draftMax: Int? = null,
         draftMin: Int? = null,
         draftPMin: Float? = null,
+        draftThreads: Int? = null,
+        draftThreadsBatch: Int? = null,
         kvCacheEnabledOverride: Boolean? = null,
         kvCacheTypeKOverride: String? = null,
         kvCacheTypeVOverride: String? = null,
@@ -287,8 +297,16 @@ class LlamaService : Service() {
         val cacheRam = cacheRamOverride ?: if (isMasterProfile) DistributedService.masterCacheRam.value else settingsRepo.serverCacheRam.value
         val customFlags = customFlagsOverride ?: if (isMasterProfile) DistributedService.masterCustomFlags.value else settingsRepo.customFlags.value
         val flashAttention = flashAttentionOverride ?: if (isMasterProfile) DistributedService.masterFlashAttention.value else settingsRepo.flashAttentionEnabled.value
-        val speculativeEnabled = !isMasterProfile && settingsRepo.speculativeEnabled.value
-        val speculativeMode = if (speculativeEnabled) settingsRepo.speculativeMode.value else null
+        val speculativeEnabled = if (isMasterProfile) {
+            DistributedService.masterSpeculativeEnabled.value && !draftModelPath.isNullOrBlank()
+        } else {
+            settingsRepo.speculativeEnabled.value
+        }
+        val speculativeMode = if (speculativeEnabled) {
+            if (isMasterProfile) LlamaSpeculativeMode.DRAFT_SIMPLE else settingsRepo.speculativeMode.value
+        } else {
+            null
+        }
         if (speculativeMode?.requiresDraftModel == true && draftModelPath.isNullOrBlank()) {
             handlePreLaunchStartFailure(
                 getString(R.string.dist_speculative_missing_required_draft),
@@ -306,6 +324,8 @@ class LlamaService : Service() {
         val mtpDraftMax = if (isMasterProfile) 3 else settingsRepo.mtpDraftMaxTokens.value
         val mtpDraftMin = if (isMasterProfile) 0 else settingsRepo.mtpDraftMinTokens.value
         val mtpDraftPMin = if (isMasterProfile) 0.0f else settingsRepo.mtpDraftPMin.value
+        val effectiveDraftThreads = draftThreads ?: if (isMasterProfile) DistributedService.masterDraftThreads.value else settingsRepo.draftThreads.value
+        val effectiveDraftThreadsBatch = draftThreadsBatch ?: if (isMasterProfile) DistributedService.masterDraftThreadsBatch.value else settingsRepo.draftThreadsBatch.value
         val ngramModNMatch = if (isMasterProfile) 24 else settingsRepo.ngramModNMatch.value
         val ngramModNMin = if (isMasterProfile) 48 else settingsRepo.ngramModNMin.value
         val ngramModNMax = if (isMasterProfile) 64 else settingsRepo.ngramModNMax.value
@@ -358,6 +378,8 @@ class LlamaService : Service() {
                 "draftMax" to draftMax,
                 "draftMin" to draftMin,
                 "draftPMin" to draftPMin,
+                "draftThreads" to effectiveDraftThreads,
+                "draftThreadsBatch" to effectiveDraftThreadsBatch,
                 "mtpDraftMax" to mtpDraftMax,
                 "mtpDraftMin" to mtpDraftMin,
                 "mtpDraftPMin" to mtpDraftPMin,
@@ -577,6 +599,8 @@ class LlamaService : Service() {
                     draftMax = draftMax ?: 3,
                     draftMin = draftMin ?: 0,
                     draftPMin = draftPMin ?: 0.0f,
+                    draftThreads = effectiveDraftThreads,
+                    draftThreadsBatch = effectiveDraftThreadsBatch,
                     mtpDraftMax = mtpDraftMax,
                     mtpDraftMin = mtpDraftMin,
                     mtpDraftPMin = mtpDraftPMin,
@@ -1098,6 +1122,8 @@ class LlamaService : Service() {
         const val EXTRA_DRAFT_MAX = "DRAFT_MAX"
         const val EXTRA_DRAFT_MIN = "DRAFT_MIN"
         const val EXTRA_DRAFT_P_MIN = "DRAFT_P_MIN"
+        const val EXTRA_DRAFT_THREADS = "DRAFT_THREADS"
+        const val EXTRA_DRAFT_THREADS_BATCH = "DRAFT_THREADS_BATCH"
         const val EXTRA_CUSTOM_COMMAND = "CUSTOM_COMMAND"
         const val EXTRA_COMMAND_TEMPLATE = "COMMAND_TEMPLATE"
         

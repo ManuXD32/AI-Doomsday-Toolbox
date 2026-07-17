@@ -2033,6 +2033,31 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate87To88_addsDraftThreadSavedCommandFields() {
+        helper.createDatabase(TEST_DB, 87).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            88,
+            true,
+            Migrations.MIGRATION_87_88
+        )
+
+        migratedDb.query("PRAGMA table_info(saved_commands)").use { cursor ->
+            val defaultsByColumn = mutableMapOf<String, String?>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+            while (cursor.moveToNext()) {
+                defaultsByColumn[cursor.getString(nameIndex)] = cursor.getString(defaultIndex)
+            }
+            assertEquals("4", defaultsByColumn["draftThreads"])
+            assertEquals("4", defaultsByColumn["draftThreadsBatch"])
+        }
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
     }

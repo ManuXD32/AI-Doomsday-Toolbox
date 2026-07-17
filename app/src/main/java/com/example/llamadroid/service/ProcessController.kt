@@ -289,7 +289,7 @@ class ProcessController {
                     "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString(),
                     "--spec-draft-n-min", config.draftMin.coerceAtLeast(0).toString(),
                     "--spec-draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin.coerceIn(0f, 1f))
-                )
+                ) + buildDraftThreadArgs(config)
             }
             LlamaSpeculativeMode.DRAFT_MTP -> buildList {
                 add("--spec-type")
@@ -297,6 +297,7 @@ class ProcessController {
                 config.draftModelPath?.let { draftModel ->
                     add("--spec-draft-model")
                     add(draftModel)
+                    addAll(buildDraftThreadArgs(config))
                 }
                 add("--spec-draft-n-max")
                 add(config.mtpDraftMax.coerceAtLeast(1).toString())
@@ -311,7 +312,7 @@ class ProcessController {
                     "--spec-type", config.speculativeMode.flagValue,
                     "-md", draftModel,
                     "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString()
-                )
+                ) + buildDraftThreadArgs(config)
             }
             LlamaSpeculativeMode.NGRAM_MOD -> listOf(
                 "--spec-type", config.speculativeMode.flagValue,
@@ -342,6 +343,11 @@ class ProcessController {
             )
         }
     }
+
+    private fun buildDraftThreadArgs(config: LlamaConfig): List<String> = listOf(
+        "--spec-draft-threads", config.draftThreads.coerceIn(1, 16).toString(),
+        "--spec-draft-threads-batch", config.draftThreadsBatch.coerceIn(1, 16).toString()
+    )
 
     private fun buildNativeToolsArgs(enabled: Boolean): List<String> =
         if (enabled) listOf("--tools", "all") else emptyList()

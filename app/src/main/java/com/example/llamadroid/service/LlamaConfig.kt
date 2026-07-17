@@ -31,6 +31,8 @@ data class LlamaConfig(
     val draftMax: Int = 3,                // Max tokens to draft per step
     val draftMin: Int = 0,                // Min tokens to draft
     val draftPMin: Float = 0.0f,          // Min probability threshold for acceptance
+    val draftThreads: Int = 4,            // CPU threads for draft model generation
+    val draftThreadsBatch: Int = 4,       // CPU threads for draft model prompt/batch processing
     val mtpDraftMax: Int = 3,
     val mtpDraftMin: Int = 0,
     val mtpDraftPMin: Float = 0.0f,

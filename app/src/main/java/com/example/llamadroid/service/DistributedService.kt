@@ -302,6 +302,22 @@ class DistributedService : Service() {
         private val _masterDraftPMinText = MutableStateFlow<String>("0.00")
         val masterDraftPMinText: StateFlow<String> = _masterDraftPMinText.asStateFlow()
         fun setMasterDraftPMinText(text: String) { _masterDraftPMinText.value = text }
+
+        private val _masterDraftThreads = MutableStateFlow<Int>(4)
+        val masterDraftThreads: StateFlow<Int> = _masterDraftThreads.asStateFlow()
+        fun setMasterDraftThreads(threads: Int) { _masterDraftThreads.value = threads.coerceIn(1, 16) }
+
+        private val _masterDraftThreadsText = MutableStateFlow<String>("4")
+        val masterDraftThreadsText: StateFlow<String> = _masterDraftThreadsText.asStateFlow()
+        fun setMasterDraftThreadsText(text: String) { _masterDraftThreadsText.value = text }
+
+        private val _masterDraftThreadsBatch = MutableStateFlow<Int>(4)
+        val masterDraftThreadsBatch: StateFlow<Int> = _masterDraftThreadsBatch.asStateFlow()
+        fun setMasterDraftThreadsBatch(threads: Int) { _masterDraftThreadsBatch.value = threads.coerceIn(1, 16) }
+
+        private val _masterDraftThreadsBatchText = MutableStateFlow<String>("4")
+        val masterDraftThreadsBatchText: StateFlow<String> = _masterDraftThreadsBatchText.asStateFlow()
+        fun setMasterDraftThreadsBatchText(text: String) { _masterDraftThreadsBatchText.value = text }
         
         // --- Advanced settings (Master) ---
 

@@ -68,6 +68,30 @@ class LlamaServerChatServiceTest {
     }
 
     @Test
+    fun `buildLlamaServerChatRequestPayload omits max tokens when unset`() {
+        val payload = buildLlamaServerChatRequestPayload(
+            messages = listOf(OllamaService.ChatMessage(role = "user", content = "hello")),
+            tools = emptyList(),
+            thinkingEnabled = true,
+            maxTokens = null
+        )
+
+        assertFalse(payload.containsKey("max_tokens"))
+    }
+
+    @Test
+    fun `buildLlamaServerChatRequestPayload includes max tokens when provided`() {
+        val payload = buildLlamaServerChatRequestPayload(
+            messages = listOf(OllamaService.ChatMessage(role = "user", content = "hello")),
+            tools = emptyList(),
+            thinkingEnabled = true,
+            maxTokens = 777
+        )
+
+        assertEquals(777, payload["max_tokens"])
+    }
+
+    @Test
     fun `buildLlamaServerChatRequestPayload drops assistant prefill when thinking is enabled`() {
         val payload = buildLlamaServerChatRequestPayload(
             messages = listOf(

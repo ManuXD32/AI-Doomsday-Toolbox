@@ -223,6 +223,11 @@
             android:exported="false" />
 
         <service
+            android:name=".service.MangaTranslationForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <service
             android:name=".service.KnowledgeBaseIndexingService"
             android:foregroundServiceType="dataSync"
             android:exported="false" />

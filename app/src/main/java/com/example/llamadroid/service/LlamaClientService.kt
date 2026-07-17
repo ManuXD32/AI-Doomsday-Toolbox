@@ -737,6 +737,8 @@ class LlamaClientService : Service() {
                 putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
                 putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
                 putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)
+                putExtra(LlamaService.EXTRA_DRAFT_THREADS, settingsRepo.draftThreads.value)
+                putExtra(LlamaService.EXTRA_DRAFT_THREADS_BATCH, settingsRepo.draftThreadsBatch.value)
             }
             putExtra(LlamaService.EXTRA_FLASH_ATTENTION, settingsRepo.flashAttentionEnabled.value)
             putExtra(LlamaService.EXTRA_CUSTOM_FLAGS, settingsRepo.customFlags.value)
@@ -1020,6 +1022,14 @@ class LlamaClientService : Service() {
         }
     }
 
+    private fun nativeChatMaxOutputTokens(params: Map<String, Any>): Int? {
+        val enabled = (params[NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED] as? Boolean) ?: false
+        if (!enabled) return null
+        return (params[NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS] as? Number)
+            ?.toInt()
+            ?.takeIf { it > 0 }
+    }
+
     private suspend fun streamLlamaServerResponse(
         chatId: Long,
         taskId: Int,
@@ -1078,6 +1088,7 @@ class LlamaClientService : Service() {
             repeat_penalty = (params["repeat_penalty"] as? Number)?.toFloat(),
             frequency_penalty = (params["frequency_penalty"] as? Number)?.toFloat(),
             presence_penalty = (params["presence_penalty"] as? Number)?.toFloat(),
+            max_tokens = nativeChatMaxOutputTokens(params),
             chat_template_kwargs = if (isContinuation || (params["enable_thinking"] as? Boolean) == false) {
                 mapOf("enable_thinking" to false)
             } else {
@@ -1472,7 +1483,7 @@ class LlamaClientService : Service() {
             .withMergedTransientSystemMessages(transientSystemMessages)
             .toMutableList()
         val samplingParams = LlamaServerSamplingParams.fromParams(params)
-        val numCtx = chat.contextSize.takeIf { it > 0 } ?: 16384
+        val maxOutputTokens = nativeChatMaxOutputTokens(params)
 
         var rawSequence = progress.content
         var lastUpdate = System.currentTimeMillis()
@@ -1546,7 +1557,7 @@ class LlamaClientService : Service() {
                     tools = availableTools,
                     modelLabel = modelName,
                     thinkingEnabled = thinkingEnabled,
-                    numCtx = numCtx,
+                    maxTokens = maxOutputTokens,
                     samplingParams = samplingParams,
                     onChunk = chunkHandler
                 ).getOrElse { throw it }
@@ -2014,15 +2025,18 @@ class LlamaClientService : Service() {
         )
     }
 
-    private fun liteRtGalleryParams(params: Map<String, Any>): Map<String, Any> = linkedMapOf(
-        "top_k" to ((params["top_k"] as? Number)?.toInt() ?: 40).coerceIn(5, 64),
-        "top_p" to ((params["top_p"] as? Number)?.toDouble() ?: 0.95).coerceIn(0.0, 0.95),
-        "temperature" to ((params["temperature"] as? Number)?.toDouble() ?: 1.0).coerceIn(0.0, 1.0),
-        "enable_thinking" to ((params["enable_thinking"] as? Boolean) ?: false),
-        LITERT_PARAM_MAX_OUTPUT_TOKENS to ((params[LITERT_PARAM_MAX_OUTPUT_TOKENS] as? Number)?.toInt() ?: 1024)
-            .coerceAtLeast(1),
-        LITERT_PARAM_MTP_ENABLED to ((params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false)
-    )
+    private fun liteRtGalleryParams(params: Map<String, Any>): Map<String, Any> =
+        linkedMapOf<String, Any>(
+            "top_k" to ((params["top_k"] as? Number)?.toInt() ?: 40).coerceIn(5, 64),
+            "top_p" to ((params["top_p"] as? Number)?.toDouble() ?: 0.95).coerceIn(0.0, 0.95),
+            "temperature" to ((params["temperature"] as? Number)?.toDouble() ?: 1.0).coerceIn(0.0, 1.0),
+            "enable_thinking" to ((params["enable_thinking"] as? Boolean) ?: false),
+            LITERT_PARAM_MTP_ENABLED to ((params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false)
+        ).apply {
+            nativeChatMaxOutputTokens(params)?.let { outputTokens ->
+                this[LITERT_PARAM_MAX_OUTPUT_TOKENS] = outputTokens.coerceAtLeast(1)
+            }
+        }
 
     private data class LiteRtRecoveredResponseText(
         val visible: String = "",
@@ -2966,7 +2980,7 @@ class LlamaClientService : Service() {
                 tools = emptyList(),
                 modelLabel = modelName,
                 thinkingEnabled = false,
-                numCtx = NATIVE_SEARCH_SUMMARY_MAX_TOKENS,
+                maxTokens = NATIVE_SEARCH_SUMMARY_MAX_TOKENS,
                 samplingParams = LlamaServerSamplingParams(
                     temperature = 0.2f,
                     topP = 0.9f

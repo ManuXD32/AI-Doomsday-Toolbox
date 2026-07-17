@@ -8,8 +8,13 @@ import java.io.File
 
 data class LogEntry(val timestamp: Long, val message: String)
 
+internal fun debugLogTrimPersistedLines(lines: List<String>, maxLines: Int): List<String> =
+    lines.takeLast(maxLines.coerceAtLeast(0))
+
 object DebugLog {
-    private const val MAX_LOGS = 500
+    private const val MAX_LOGS = 1000
+    private const val MAX_PERSISTED_LOG_LINES = 1000
+    private const val PERSISTED_LOG_PRUNE_BATCH = 100
     private const val LOG_DIR = "debug_log"
     private const val LOG_FILE = "app_logs.tsv"
 
@@ -17,6 +22,7 @@ object DebugLog {
     val logs = _logs.asStateFlow()
     private val lock = Any()
     @Volatile private var appContext: Context? = null
+    private var persistedLineCount: Int = 0
     
     // Patterns to filter out (noisy server logs + sensitive build info)
     private val filterPatterns = listOf(
@@ -82,6 +88,7 @@ object DebugLog {
     fun clear() {
         synchronized(lock) {
             _logs.value = emptyList()
+            persistedLineCount = 0
             logFile()?.delete()
         }
     }
@@ -91,6 +98,10 @@ object DebugLog {
         runCatching {
             file.parentFile?.mkdirs()
             file.appendText("${entry.timestamp}\t${encode(entry.message)}\n")
+            persistedLineCount += 1
+            if (persistedLineCount > MAX_PERSISTED_LOG_LINES + PERSISTED_LOG_PRUNE_BATCH) {
+                persistedLineCount = prunePersistedFile(file)
+            }
         }
     }
 
@@ -98,7 +109,13 @@ object DebugLog {
         val file = logFile() ?: return emptyList()
         if (!file.isFile) return emptyList()
         return runCatching {
-            file.readLines()
+            val lines = file.readLines()
+            val keptLines = debugLogTrimPersistedLines(lines, MAX_PERSISTED_LOG_LINES)
+            if (keptLines.size != lines.size) {
+                file.writeText(keptLines.joinToString(separator = "\n", postfix = "\n"))
+            }
+            persistedLineCount = keptLines.size
+            keptLines
                 .mapNotNull { line ->
                     val timestamp = line.substringBefore('\t').toLongOrNull() ?: return@mapNotNull null
                     val encoded = line.substringAfter('\t', missingDelimiterValue = "")
@@ -108,6 +125,12 @@ object DebugLog {
                 }
                 .takeLast(MAX_LOGS)
         }.getOrDefault(emptyList())
+    }
+
+    private fun prunePersistedFile(file: File): Int {
+        val keptLines = debugLogTrimPersistedLines(file.readLines(), MAX_PERSISTED_LOG_LINES)
+        file.writeText(keptLines.joinToString(separator = "\n", postfix = if (keptLines.isEmpty()) "" else "\n"))
+        return keptLines.size
     }
 
     private fun logFile(): File? {

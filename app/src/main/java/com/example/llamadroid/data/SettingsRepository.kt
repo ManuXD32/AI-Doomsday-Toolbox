@@ -1587,6 +1587,22 @@ class SettingsRepository(private val context: Context) {
         _draftPMin.value = normalized
     }
 
+    private val _draftThreads = MutableStateFlow(prefs.getInt("draft_threads", 4).coerceIn(1, 16))
+    val draftThreads = _draftThreads.asStateFlow()
+    fun setDraftThreads(threads: Int) {
+        val normalized = threads.coerceIn(1, 16)
+        prefs.edit().putInt("draft_threads", normalized).apply()
+        _draftThreads.value = normalized
+    }
+
+    private val _draftThreadsBatch = MutableStateFlow(prefs.getInt("draft_threads_batch", 4).coerceIn(1, 16))
+    val draftThreadsBatch = _draftThreadsBatch.asStateFlow()
+    fun setDraftThreadsBatch(threads: Int) {
+        val normalized = threads.coerceIn(1, 16)
+        prefs.edit().putInt("draft_threads_batch", normalized).apply()
+        _draftThreadsBatch.value = normalized
+    }
+
     // Enable embedded MTP decoding for llama.cpp models with MTP heads
     private val _mtpDecodingEnabled = MutableStateFlow(prefs.getBoolean("mtp_decoding_enabled", false))
     val mtpDecodingEnabled = _mtpDecodingEnabled.asStateFlow()

@@ -11,7 +11,7 @@ import com.example.llamadroid.util.DebugLog
  */
 object WakeLockManager {
     private var wakeLock: PowerManager.WakeLock? = null
-    private var refCount = 0
+    private val wakeOwners = OwnerLockState()
     private val lock = Any()
     
     /**
@@ -31,12 +31,12 @@ object WakeLockManager {
                 )
             }
             
-            refCount++
-            if (refCount == 1) {
+            val transition = wakeOwners.acquire(tag)
+            if (transition.totalCount == 1) {
                 wakeLock?.acquire()  // Infinite - long AI tasks need indefinite locks
-                DebugLog.log("[WakeLock] Acquired by $tag (refCount=$refCount)")
+                DebugLog.log("[WakeLock] Acquired by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
             } else {
-                DebugLog.log("[WakeLock] Ref increased by $tag (refCount=$refCount)")
+                DebugLog.log("[WakeLock] Ref increased by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
             }
         }
     }
@@ -49,14 +49,17 @@ object WakeLockManager {
      */
     fun release(tag: String = "Unknown") {
         synchronized(lock) {
-            if (refCount > 0) {
-                refCount--
-                DebugLog.log("[WakeLock] Released by $tag (refCount=$refCount)")
-                
-                if (refCount == 0 && wakeLock?.isHeld == true) {
-                    wakeLock?.release()
-                    DebugLog.log("[WakeLock] Actually released, no more refs")
-                }
+            val transition = wakeOwners.release(tag)
+            if (!transition.ownerHadReference) {
+                DebugLog.log("[WakeLock] Ignored unowned release by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
+                return
+            }
+
+            DebugLog.log("[WakeLock] Released by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
+
+            if (transition.totalCount == 0 && wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                DebugLog.log("[WakeLock] Actually released, no more refs")
             }
         }
     }
@@ -71,7 +74,7 @@ object WakeLockManager {
                 wakeLock?.release()
                 DebugLog.log("[WakeLock] Force released")
             }
-            refCount = 0
+            wakeOwners.clear()
         }
     }
     
@@ -85,7 +88,7 @@ object WakeLockManager {
     // ============================================================================================
     
     private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
-    private var wifiRefCount = 0
+    private val wifiOwners = OwnerLockState()
     private val wifiLockSync = Any()
     
     /**
@@ -106,12 +109,12 @@ object WakeLockManager {
                 wifiLock?.setReferenceCounted(false)
             }
             
-            wifiRefCount++
-            if (wifiRefCount == 1) {
+            val transition = wifiOwners.acquire(tag)
+            if (transition.totalCount == 1) {
                 wifiLock?.acquire()
-                DebugLog.log("[WifiLock] Acquired by $tag")
+                DebugLog.log("[WifiLock] Acquired by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
             } else {
-                DebugLog.log("[WifiLock] Ref increased by $tag (refCount=$wifiRefCount)")
+                DebugLog.log("[WifiLock] Ref increased by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
             }
         }
     }
@@ -121,17 +124,63 @@ object WakeLockManager {
      */
     fun releaseWifiLock(tag: String = "Unknown") {
         synchronized(wifiLockSync) {
-            if (wifiRefCount > 0) {
-                wifiRefCount--
-                DebugLog.log("[WifiLock] Released by $tag (refCount=$wifiRefCount)")
-                
-                if (wifiRefCount == 0 && wifiLock?.isHeld == true) {
-                    wifiLock?.release()
-                    DebugLog.log("[WifiLock] Actually released, no more refs")
-                }
+            val transition = wifiOwners.release(tag)
+            if (!transition.ownerHadReference) {
+                DebugLog.log("[WifiLock] Ignored unowned release by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
+                return
+            }
+
+            DebugLog.log("[WifiLock] Released by $tag (refCount=${transition.totalCount}, owners=${transition.ownerSummary})")
+
+            if (transition.totalCount == 0 && wifiLock?.isHeld == true) {
+                wifiLock?.release()
+                DebugLog.log("[WifiLock] Actually released, no more refs")
             }
         }
     }
 
     fun isWifiHeld(): Boolean = wifiLock?.isHeld == true
 }
+
+internal class OwnerLockState {
+    private val owners = linkedMapOf<String, Int>()
+
+    fun acquire(owner: String): OwnerLockTransition {
+        val normalized = owner.ifBlank { "Unknown" }
+        owners[normalized] = (owners[normalized] ?: 0) + 1
+        return snapshot(ownerHadReference = true)
+    }
+
+    fun release(owner: String): OwnerLockTransition {
+        val normalized = owner.ifBlank { "Unknown" }
+        val count = owners[normalized] ?: 0
+        if (count <= 0) {
+            return snapshot(ownerHadReference = false)
+        }
+        if (count == 1) {
+            owners.remove(normalized)
+        } else {
+            owners[normalized] = count - 1
+        }
+        return snapshot(ownerHadReference = true)
+    }
+
+    fun clear() {
+        owners.clear()
+    }
+
+    fun totalCount(): Int = owners.values.sum()
+
+    private fun snapshot(ownerHadReference: Boolean): OwnerLockTransition =
+        OwnerLockTransition(
+            totalCount = totalCount(),
+            ownerSummary = owners.entries.joinToString(",") { "${it.key}:${it.value}" }.ifBlank { "none" },
+            ownerHadReference = ownerHadReference
+        )
+}
+
+internal data class OwnerLockTransition(
+    val totalCount: Int,
+    val ownerSummary: String,
+    val ownerHadReference: Boolean
+)

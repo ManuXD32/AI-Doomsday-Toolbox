@@ -180,62 +180,70 @@ object PDFTranslationJobService {
             progressMessage = appContext.getString(R.string.pdf_translation_background_started)
         )
         RemoteSummaryProtection.acquire(appContext)
+        MangaTranslationForegroundService.start(
+            appContext,
+            appContext.getString(R.string.workflow_manga_foreground_title)
+        )
         val controller = PDFTranslationExecutionController()
         currentController = controller
 
         currentJob = serviceScope.launch {
-            val result = try {
-                PDFService(appContext).translateMangaCbzBatch(
-                    cbzUris = cbzUris,
-                    exportPdf = exportPdf,
-                    exportCbz = exportCbz,
-                    executionController = controller
-                ) { progress ->
+            try {
+                val result = try {
+                    PDFService(appContext).translateMangaCbzBatch(
+                        cbzUris = cbzUris,
+                        exportPdf = exportPdf,
+                        exportCbz = exportCbz,
+                        executionController = controller
+                    ) { progress ->
                         publishProgress(appContext, progress)
                     }
-            } catch (cancelled: CancellationException) {
-                Result.failure(cancelled)
-            } catch (error: Exception) {
-                Result.failure(error)
-            }
-
-            result.fold(
-                onSuccess = { results ->
-                    val failed = results.count { !it.isSuccess }
-                    val message = if (failed == 0) {
-                        appContext.getString(R.string.workflow_manga_notification_complete, results.size)
-                    } else {
-                        appContext.getString(R.string.workflow_manga_notification_partial, results.size - failed, failed)
-                    }
-                    _state.value = PdfTranslationJobState(
-                        isRunning = false,
-                        kind = PdfTranslationJobKind.MANGA_BATCH,
-                        successMessage = message,
-                        mangaResults = results
-                    )
-                },
-                onFailure = { error ->
-                    _state.value = if (error is PDFTranslationCancelledException || error is CancellationException || controller.isCancelled()) {
-                        PdfTranslationJobState(
-                            isRunning = false,
-                            kind = PdfTranslationJobKind.MANGA_BATCH,
-                            cancelled = true,
-                            mangaResults = (error as? PDFTranslationCancelledException)?.mangaResults.orEmpty()
-                        )
-                    } else {
-                        val display = displayError(error, appContext)
-                        PdfTranslationJobState(
-                            isRunning = false,
-                            kind = PdfTranslationJobKind.MANGA_BATCH,
-                            errorMessage = display.first,
-                            errorDetails = display.second
-                        )
-                    }
+                } catch (cancelled: CancellationException) {
+                    Result.failure(cancelled)
+                } catch (error: Exception) {
+                    Result.failure(error)
                 }
-            )
-            RemoteSummaryProtection.release()
-            currentJob = null
-            currentController = null
+
+                result.fold(
+                    onSuccess = { results ->
+                        val failed = results.count { !it.isSuccess }
+                        val message = if (failed == 0) {
+                            appContext.getString(R.string.workflow_manga_notification_complete, results.size)
+                        } else {
+                            appContext.getString(R.string.workflow_manga_notification_partial, results.size - failed, failed)
+                        }
+                        _state.value = PdfTranslationJobState(
+                            isRunning = false,
+                            kind = PdfTranslationJobKind.MANGA_BATCH,
+                            successMessage = message,
+                            mangaResults = results
+                        )
+                    },
+                    onFailure = { error ->
+                        _state.value = if (error is PDFTranslationCancelledException || error is CancellationException || controller.isCancelled()) {
+                            PdfTranslationJobState(
+                                isRunning = false,
+                                kind = PdfTranslationJobKind.MANGA_BATCH,
+                                cancelled = true,
+                                mangaResults = (error as? PDFTranslationCancelledException)?.mangaResults.orEmpty()
+                            )
+                        } else {
+                            val display = displayError(error, appContext)
+                            PdfTranslationJobState(
+                                isRunning = false,
+                                kind = PdfTranslationJobKind.MANGA_BATCH,
+                                errorMessage = display.first,
+                                errorDetails = display.second
+                            )
+                        }
+                    }
+                )
+            } finally {
+                MangaTranslationForegroundService.stop(appContext)
+                RemoteSummaryProtection.release()
+                currentJob = null
+                currentController = null
+            }
         }
 
         return true

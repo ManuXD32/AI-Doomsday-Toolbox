@@ -38,6 +38,8 @@ data class SavedCommand(
     val draftMax: Int = 3,
     val draftMin: Int = 0,
     val draftPMin: Float = 0.0f,
+    val draftThreads: Int = 4,
+    val draftThreadsBatch: Int = 4,
     val ngramModNMatch: Int = 24,
     val ngramModNMin: Int = 48,
     val ngramModNMax: Int = 64,

@@ -1242,6 +1242,10 @@
     <string name="llama_top_k_value">Top K (%1$d)</string>
     <string name="llama_min_p_value">Min P (%1$.2f)</string>
     <string name="llama_repeat_penalty_value">Pen rep (%1$.2f)</string>
+    <string name="llama_max_output_tokens_toggle">Limitar tokens de salida</string>
+    <string name="llama_max_output_tokens_desc">Envía un límite max_tokens por chat solo cuando está activado.</string>
+    <string name="llama_max_output_tokens_label">Tokens máximos de salida</string>
+    <string name="llama_max_output_tokens_supporting">Los chats desactivados mantienen el valor predeterminado del backend.</string>
     
     <!-- Status Messages -->
     <string name="status_loading">Cargando…</string>
@@ -2947,8 +2951,8 @@
     <string name="workflow_txt2img_upscale">txt2img + Escalado</string>
     <string name="workflow_txt2img_upscale_desc">Genera una imagen y luego escálala</string>
     <string name="workflow_manga_translation">Traducción de Manga/Cómic</string>
-    <string name="workflow_manga_translation_desc">Traduce cómics CBZ por lotes a PDF y CBZ</string>
-    <string name="workflow_manga_translation_help">Selecciona uno o varios CBZ. El flujo extrae páginas, crea un PDF de referencia, ejecuta OCR con soporte japonés, traduce con contexto JSON por página, escribe un PDF traducido, pinta las traducciones sobre las imágenes originales y empaqueta un CBZ traducido.</string>
+    <string name="workflow_manga_translation_desc">Traduce archivos CBZ, ZIP y PDF manga por lotes a PDF y CBZ</string>
+    <string name="workflow_manga_translation_help">Selecciona uno o varios archivos CBZ, ZIP o PDF. El flujo extrae páginas, ejecuta OCR con soporte japonés, traduce con contexto JSON por página, escribe un PDF traducido, pinta las traducciones sobre las imágenes originales y empaqueta un CBZ traducido.</string>
     <string name="workflow_media_translate_title">Doblaje de Vídeo / Traducción de Audio</string>
     <string name="workflow_media_translate_desc">Traduce audio o vídeo, genera voz y exporta el medio doblado</string>
     <string name="workflow_media_translate_help">Elige un archivo de audio o vídeo. El flujo crea subtítulos con marcas de tiempo, traduce cada segmento, genera voz y exporta audio traducido o un vídeo doblado.</string>
@@ -2986,6 +2990,17 @@
     <string name="workflow_media_translate_context_desc">Añade líneas de subtítulos cercanas a cada petición para que el modelo entienda pronombres, tono y continuidad.</string>
     <string name="workflow_media_translate_context_lines">Líneas de contexto antes y después</string>
     <string name="workflow_media_translate_context_lines_suffix">líneas</string>
+    <string name="workflow_media_translate_skip_failed_lines">Omitir líneas fallidas tras reintentos</string>
+    <string name="workflow_media_translate_skip_failed_lines_desc">Si una línea sigue fallando tras los reintentos automáticos, conserva el texto original del subtítulo y continúa. Déjalo desactivado cuando todas las líneas deban traducirse.</string>
+    <string name="workflow_media_translate_retrying_line">Reintentando línea %1$d (%2$d/%3$d)</string>
+    <string name="workflow_media_translate_litert_fallback_line">Reintentando línea %1$d con reserva segura de LiteRT en CPU</string>
+    <string name="workflow_media_translate_recovering_line">Reintentando línea %1$d con una petición de traducción aislada y nueva</string>
+    <string name="workflow_media_translate_error_unusable_answer">El modelo devolvió una respuesta vacía o inutilizable.</string>
+    <string name="workflow_media_translate_error_empty_snippet">&lt;vacío&gt;</string>
+    <string name="workflow_media_translate_error_line_failure_detail">Motivo: %1$s. Última salida sin procesar: %2$s. Salida limpia: %3$s. Línea original: %4$s. Motor: %5$s.</string>
+    <string name="workflow_media_translate_error_line_failed_after_retries">La línea %1$d sigue fallando tras %2$d intentos: %3$s Puedes reanudar después de cambiar el motor de traducción, o activar las líneas omitidas para conservar el texto original en las líneas fallidas.</string>
+    <string name="workflow_media_translate_whisper_linker_oom_failed">Whisper no pudo iniciarse en este dispositivo porque Android no pudo mapear el ejecutable nativo de Whisper tras %1$d intentos. Esto ocurre antes de cargar el modelo, así que normalmente es un problema del firmware del dispositivo o del cargador nativo, no del tamaño del modelo Whisper. Última salida: %2$s</string>
+    <string name="workflow_media_translate_skipped_lines_summary">%1$d líneas conservaron su texto original después de fallar los reintentos de traducción.</string>
     <string name="workflow_media_translate_prompt_preview">Vista previa del prompt de traducción</string>
     <string name="workflow_media_translate_notification_title">Traducción de medios: %1$s</string>
     <string name="workflow_media_foreground_title">Flujo de medios en ejecución</string>
@@ -3091,8 +3106,9 @@
     <string name="subtitle_burn_margin_vertical">Margen vertical</string>
     <string name="subtitle_burn_margin_horizontal">Margen horizontal</string>
     <string name="subtitle_burn_color">Color de subtítulos</string>
-    <string name="workflow_manga_select_cbz">Seleccionar archivos CBZ</string>
-    <string name="workflow_manga_selected_count">%d archivos CBZ seleccionados</string>
+    <string name="workflow_manga_select_cbz">Seleccionar archivos CBZ/PDF</string>
+    <string name="workflow_manga_browse_all_files">Explorar todos los archivos</string>
+    <string name="workflow_manga_selected_count">%d archivos manga/cómic seleccionados</string>
     <string name="workflow_manga_output_title">Salidas traducidas</string>
     <string name="workflow_manga_output_pdf">PDF traducido</string>
     <string name="workflow_manga_output_pdf_desc">Guarda las páginas traducidas como PDF.</string>
@@ -3101,10 +3117,10 @@
     <string name="workflow_manga_presets_title">Ajustes reutilizables</string>
     <string name="workflow_manga_results_title">Resultados del lote</string>
     <string name="workflow_manga_run_batch">Ejecutar lote de traducción manga</string>
-    <string name="workflow_manga_select_first">Selecciona al menos un archivo CBZ primero</string>
+    <string name="workflow_manga_select_first">Selecciona al menos un archivo CBZ, ZIP o PDF primero</string>
     <string name="workflow_manga_select_output_first">Selecciona al menos un formato de salida traducida.</string>
-    <string name="workflow_manga_stage_extracting">Extrayendo páginas del CBZ…</string>
-    <string name="workflow_manga_stage_pdf">Creando PDF intermedio…</string>
+    <string name="workflow_manga_stage_extracting">Preparando páginas de manga/cómic…</string>
+    <string name="workflow_manga_stage_pdf">Creando PDF traducido…</string>
     <string name="workflow_manga_stage_ocr">OCR página %1$d/%2$d…</string>
     <string name="workflow_manga_stage_translating">Traduciendo página %1$d/%2$d…</string>
     <string name="workflow_manga_stage_correcting">Corrigiendo fragmento de traducción %1$d/%2$d…</string>
@@ -3120,6 +3136,8 @@
     <string name="workflow_manga_notification_file">Archivo %1$d/%2$d: %3$s</string>
     <string name="workflow_manga_notification_complete">%d cómics traducidos</string>
     <string name="workflow_manga_notification_partial">%1$d traducidos, %2$d fallidos</string>
+    <string name="workflow_manga_foreground_title">Traducción manga en curso</string>
+    <string name="workflow_manga_checkpoint_ready">Hay un punto de reanudación de traducción manga disponible.</string>
     <string name="pdf_error_could_not_open_cbz">No se pudo abrir el CBZ como archivo ZIP</string>
     <string name="pdf_error_no_image_pages_in_cbz">No se encontraron páginas de imagen dentro del archivo CBZ</string>
     <string name="pdf_error_no_valid_images_to_convert">No se pudo decodificar ni incrustar ninguna página de imagen válida del archivo CBZ</string>
@@ -3600,6 +3618,8 @@
     <string name="dist_speculative_draft_min">Mín. tokens borrador</string>
     <string name="dist_speculative_draft_p_min">Probabilidad mínima de aceptación</string>
     <string name="dist_speculative_draft_p_min_desc">Menor = borrador más agresivo</string>
+    <string name="dist_speculative_draft_threads">Hilos del borrador</string>
+    <string name="dist_speculative_draft_threads_batch">Hilos de lote del borrador</string>
     <string name="dist_speculative_mode_label">Modo especulativo</string>
     <string name="dist_speculative_strategy_label">Estrategia especulativa</string>
     <string name="dist_speculative_model_modes_label">Modelo borrador</string>

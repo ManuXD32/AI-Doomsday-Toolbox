@@ -93,6 +93,8 @@ class DashboardViewModel(
                     putExtra(LlamaService.EXTRA_DRAFT_MAX, settingsRepo.draftMaxTokens.value)
                     putExtra(LlamaService.EXTRA_DRAFT_MIN, settingsRepo.draftMinTokens.value)
                     putExtra(LlamaService.EXTRA_DRAFT_P_MIN, settingsRepo.draftPMin.value)
+                    putExtra(LlamaService.EXTRA_DRAFT_THREADS, settingsRepo.draftThreads.value)
+                    putExtra(LlamaService.EXTRA_DRAFT_THREADS_BATCH, settingsRepo.draftThreadsBatch.value)
                 }
 
                 // Pass global flash attention setting

@@ -1036,7 +1036,8 @@ class AiToolServerService : Service() {
                             ttsSteps = body.optInt("ttsSteps", SUPERTONIC_DEFAULT_TOTAL_STEPS),
                             outputMode = parseEnum(body.optString("outputMode"), MediaTranslationOutputMode.AUTO),
                             replaceOriginalAudio = body.optBoolean("replaceOriginalAudio", true),
-                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage))
+                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage)),
+                            skipFailedTranslationLines = body.optBoolean("skipFailedTranslationLines", false)
                         )
                     )
                     val job = AiServerJob(jobId, type.id, "Media translation", "RUNNING", 0.05f, "Workflow started", ownerUserId)
@@ -1072,7 +1073,8 @@ class AiToolServerService : Service() {
                                 primaryColorBlue = body.optDouble("primaryColorBlue", 1.0).toFloat(),
                                 fontName = body.optString("fontName", "Default")
                             ),
-                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage))
+                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage)),
+                            skipFailedTranslationLines = body.optBoolean("skipFailedTranslationLines", false)
                         )
                     )
                     val job = AiServerJob(jobId, type.id, "Subtitle translation", "RUNNING", 0.05f, "Workflow started", ownerUserId)
@@ -1494,7 +1496,7 @@ class AiToolServerService : Service() {
 
         private fun startMangaTranslationWorkflow(jobId: String, body: JSONObject, ownerUserId: Long?): AiServerJob {
             val inputUris = body.pathList("inputPaths").map(::uriForPath)
-            require(inputUris.isNotEmpty()) { "Upload at least one CBZ file." }
+            require(inputUris.isNotEmpty()) { "Upload at least one CBZ, ZIP, or PDF file." }
             val exportPdf = body.optBoolean("exportPdf", true)
             val exportCbz = body.optBoolean("exportCbz", true)
             require(exportPdf || exportCbz) { "Choose at least one manga output format." }
@@ -2953,7 +2955,7 @@ class AiToolServerService : Service() {
                         tools = availableTools,
                         modelLabel = modelName,
                         thinkingEnabled = useThinking,
-                        numCtx = contextTokens,
+                        maxTokens = contextTokens,
                         samplingParams = LlamaServerSamplingParams.fromParams(params.filterValues { it != null }.mapValues { it.value as Any }),
                         onChunk = onChunk
                     ).getOrElse { throw it }
@@ -3454,7 +3456,7 @@ class AiToolServerService : Service() {
                     tools = emptyList(),
                     modelLabel = modelName,
                     thinkingEnabled = false,
-                    numCtx = 4096,
+                    maxTokens = 4096,
                     samplingParams = LlamaServerSamplingParams(temperature = 0.2f, topP = 0.9f)
                 ).getOrElse { throw it }
             }
@@ -4136,7 +4138,7 @@ class AiToolServerService : Service() {
 
         private fun mangaWorkflowFields(): JSONArray = JSONArray(
             listOf(
-                fileField("inputPaths", "CBZ files", "Archivos CBZ", required = true, accept = ".cbz,application/vnd.comicbook+zip,application/zip", multiple = true),
+                fileField("inputPaths", "CBZ, ZIP, or PDF files", "Archivos CBZ, ZIP o PDF", required = true, accept = ".cbz,.zip,.pdf,application/vnd.comicbook+zip,application/x-cbz,application/zip,application/pdf", multiple = true),
                 fieldJson("exportPdf", "checkbox", "Export translated PDF", "Exportar PDF traducido", defaultValue = true),
                 fieldJson("exportCbz", "checkbox", "Export translated CBZ", "Exportar CBZ traducido", defaultValue = true)
             ) + summaryProviderFields(
@@ -4157,7 +4159,8 @@ class AiToolServerService : Service() {
                 fieldJson("ttsVoiceName", "select", "Voice", "Voz", modelKey = "ttsVoices"),
                 fieldJson("ttsSteps", "number", "TTS steps", "Pasos TTS", defaultValue = SUPERTONIC_DEFAULT_TOTAL_STEPS, min = 1.0, step = 1.0),
                 fieldJson("outputMode", "select", "Output mode", "Modo salida", defaultValue = MediaTranslationOutputMode.AUTO.name, options = enumOptions<MediaTranslationOutputMode>()),
-                fieldJson("replaceOriginalAudio", "checkbox", "Replace original audio", "Reemplazar audio original", defaultValue = true)
+                fieldJson("replaceOriginalAudio", "checkbox", "Replace original audio", "Reemplazar audio original", defaultValue = true),
+                fieldJson("skipFailedTranslationLines", "checkbox", "Skip failed lines after retries", "Omitir lineas fallidas tras reintentos", defaultValue = false)
             ) + summaryProviderFields(
                 includeTargetLanguage = false,
                 summaryPromptDefault = SettingsRepository.DEFAULT_TRANSCRIPT_SUMMARY_PROMPT,
@@ -4174,6 +4177,7 @@ class AiToolServerService : Service() {
                 fieldJson("whisperThreads", "number", "Whisper threads", "Hilos Whisper", defaultValue = 4, min = 1.0, step = 1.0),
                 fieldJson("targetLanguage", "text", "Target language", "Idioma destino", defaultValue = "Spanish"),
                 fieldJson("translateSubtitles", "checkbox", "Translate subtitles", "Traducir subtitulos", defaultValue = true),
+                fieldJson("skipFailedTranslationLines", "checkbox", "Skip failed lines after retries", "Omitir lineas fallidas tras reintentos", defaultValue = false),
                 fieldJson("burnIntoVideo", "checkbox", "Burn into video", "Incrustar en video", defaultValue = true),
                 fieldJson("fontSize", "number", "Font size", "Tamano fuente", defaultValue = 24, min = 8.0, step = 1.0),
                 fieldJson("alignment", "number", "Alignment", "Alineacion", defaultValue = 2, min = 1.0, max = 9.0, step = 1.0),

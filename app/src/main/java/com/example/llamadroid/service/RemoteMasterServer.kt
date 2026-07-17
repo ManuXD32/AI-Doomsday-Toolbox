@@ -311,6 +311,8 @@ class RemoteMasterServer(
             put("draftMax", lastParams["draftMax"] as? Int ?: 3)
             put("draftMin", lastParams["draftMin"] as? Int ?: 0)
             put("draftPMin", lastParams["draftPMin"] as? Float ?: 0.0f)
+            put("draftThreads", lastParams["draftThreads"] as? Int ?: 4)
+            put("draftThreadsBatch", lastParams["draftThreadsBatch"] as? Int ?: 4)
             
             // Advanced Settings
             put("parallel", lastParams["parallel"] as? Int ?: -1)
@@ -483,6 +485,8 @@ class RemoteMasterServer(
                 if (json.has("draftMax")) currentParams["draftMax"] = json.getInt("draftMax")
                 if (json.has("draftMin")) currentParams["draftMin"] = json.getInt("draftMin")
                 if (json.has("draftPMin")) currentParams["draftPMin"] = json.getDouble("draftPMin").toFloat()
+                if (json.has("draftThreads")) currentParams["draftThreads"] = json.getInt("draftThreads")
+                if (json.has("draftThreadsBatch")) currentParams["draftThreadsBatch"] = json.getInt("draftThreadsBatch")
                 
                 DistributedService.addRemoteLog("📡 Remote speculative update by $clientIp: enabled, draft=$draftModelFilename")
             } else {
@@ -490,6 +494,8 @@ class RemoteMasterServer(
                 currentParams.remove("draftMax")
                 currentParams.remove("draftMin")
                 currentParams.remove("draftPMin")
+                currentParams.remove("draftThreads")
+                currentParams.remove("draftThreadsBatch")
                 DistributedService.addRemoteLog("📡 Remote speculative update by $clientIp: disabled")
             }
             

@@ -142,6 +142,8 @@ fun LLMSettingsScreen(navController: NavController) {
     val draftMaxTokens by settingsRepo.draftMaxTokens.collectAsState()
     val draftMinTokens by settingsRepo.draftMinTokens.collectAsState()
     val draftPMin by settingsRepo.draftPMin.collectAsState()
+    val draftThreads by settingsRepo.draftThreads.collectAsState()
+    val draftThreadsBatch by settingsRepo.draftThreadsBatch.collectAsState()
     val mtpDraftMaxTokens by settingsRepo.mtpDraftMaxTokens.collectAsState()
     val mtpDraftMinTokens by settingsRepo.mtpDraftMinTokens.collectAsState()
     val mtpDraftPMin by settingsRepo.mtpDraftPMin.collectAsState()
@@ -990,6 +992,22 @@ fun LLMSettingsScreen(navController: NavController) {
                                                 singleLine = true
                                             )
                                         }
+
+                                        DraftIntTextField(
+                                            value = draftThreads,
+                                            onValueChange = settingsRepo::setDraftThreads,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_threads)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+
+                                        DraftIntTextField(
+                                            value = draftThreadsBatch,
+                                            onValueChange = settingsRepo::setDraftThreadsBatch,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_threads_batch)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
                                     }
                                 }
                                 LlamaSpeculativeMode.DRAFT_MTP -> {
@@ -1037,6 +1055,22 @@ fun LLMSettingsScreen(navController: NavController) {
                                                     Text(stringResource(R.string.dist_speculative_clear_draft))
                                                 }
                                             }
+
+                                            DraftIntTextField(
+                                                value = draftThreads,
+                                                onValueChange = settingsRepo::setDraftThreads,
+                                                label = { Text(stringResource(R.string.dist_speculative_draft_threads)) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true
+                                            )
+
+                                            DraftIntTextField(
+                                                value = draftThreadsBatch,
+                                                onValueChange = settingsRepo::setDraftThreadsBatch,
+                                                label = { Text(stringResource(R.string.dist_speculative_draft_threads_batch)) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true
+                                            )
                                         }
 
                                         DraftIntTextField(
@@ -1357,6 +1391,8 @@ fun LLMSettingsScreen(navController: NavController) {
                                 draftMax = draftMaxTokens,
                                 draftMin = draftMinTokens,
                                 draftPMin = draftPMin,
+                                draftThreads = draftThreads,
+                                draftThreadsBatch = draftThreadsBatch,
                                 ngramModNMatch = ngramModNMatch,
                                 ngramModNMin = ngramModNMin,
                                 ngramModNMax = ngramModNMax,
@@ -1458,6 +1494,8 @@ fun LLMSettingsScreen(navController: NavController) {
                                             settingsRepo.setDraftMaxTokens(cmd.draftMax)
                                             settingsRepo.setDraftMinTokens(cmd.draftMin)
                                             settingsRepo.setDraftPMin(cmd.draftPMin)
+                                            settingsRepo.setDraftThreads(cmd.draftThreads)
+                                            settingsRepo.setDraftThreadsBatch(cmd.draftThreadsBatch)
                                             settingsRepo.setNgramModNMatch(cmd.ngramModNMatch)
                                             settingsRepo.setNgramModNMin(cmd.ngramModNMin)
                                             settingsRepo.setNgramModNMax(cmd.ngramModNMax)
