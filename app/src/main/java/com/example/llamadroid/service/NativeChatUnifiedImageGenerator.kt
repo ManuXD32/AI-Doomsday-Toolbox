@@ -2,6 +2,7 @@ package com.example.llamadroid.service
 
 import android.content.Context
 import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
@@ -94,6 +95,12 @@ class NativeChatSdImageGenerator(
             val resolvedNegativePrompt = negativePrompt.takeIf { it.isNotBlank() }
                 ?: imageParams.negativePrompt
             val seed = imageParams.seed.trim().toLongOrNull() ?: -1L
+            val settingsRepo = SettingsRepository(context)
+            val maxVramCpuGiB = if (settingsRepo.sdMaxCpuRamEnabled.value) {
+                settingsRepo.sdMaxCpuRamGiB.value
+            } else {
+                ""
+            }
             val startedAt = System.currentTimeMillis()
             val resultFile = SdToolGenerationRunner(context).generateTxt2Img(
                 config = SDConfig(
@@ -125,7 +132,10 @@ class NativeChatSdImageGenerator(
                     mmap = imageParams.mmap && spec.supportsMmap,
                     vaeConvDirect = imageParams.vaeConvDirect && spec.supportsVaeConvDirect,
                     qwenImageZeroCondT = imageParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
-                    chromaDisableDitMask = imageParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask
+                    chromaDisableDitMask = imageParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask,
+                    sdParamsBackendMode = model.sdParamsBackendMode,
+                    sdRuntimeBackendMode = model.sdRuntimeBackendMode,
+                    maxVramCpuGiB = maxVramCpuGiB
                 ),
                 onProgress = { snapshot ->
                     DebugLog.log("[NativeChatImage][SD] step ${snapshot.currentStep}/${snapshot.totalSteps}")

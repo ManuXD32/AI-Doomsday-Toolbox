@@ -18,6 +18,7 @@ import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
+import com.example.llamadroid.util.WakeLockManager
 import com.example.llamadroid.util.getParcelableExtraCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -45,11 +46,11 @@ class StableDiffusionService : Service() {
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val modeJobs = mutableMapOf<SDMode, Job>()
-    private val modeProcesses = mutableMapOf<SDMode, Process>()
+    private val modeJobs = mutableMapOf<SdWorkLane, Job>()
+    private val modeProcesses = mutableMapOf<SdWorkLane, Process>()
     private val modeLifecycleLock = Any()
     private val modeDiagnostics = mutableMapOf<SDMode, ActivityDiagnostics>()
-    private val modeSessionIds = mutableMapOf<SDMode, String>()
+    private val modeSessionIds = mutableMapOf<SdWorkLane, String>()
     private var workflowJob: Job? = null
     private var notificationTaskId: Int? = null
     private lateinit var powerManager: PowerManager
@@ -68,31 +69,35 @@ class StableDiffusionService : Service() {
 
     override fun onBind(intent: Intent?): IBinder = binder
 
-    private fun storeModeJob(mode: SDMode, job: Job) {
+    private fun laneFor(mode: SDMode, useDistributedStateHolder: Boolean): SdWorkLane =
+        SdWorkLane(mode, useDistributedStateHolder)
+
+    private fun storeModeJob(mode: SDMode, useDistributedStateHolder: Boolean, job: Job) {
         synchronized(modeLifecycleLock) {
-            modeJobs[mode] = job
+            modeJobs[laneFor(mode, useDistributedStateHolder)] = job
         }
     }
 
-    private fun removeModeJob(mode: SDMode): Job? = synchronized(modeLifecycleLock) {
-        modeJobs.remove(mode)
+    private fun removeModeJob(mode: SDMode, useDistributedStateHolder: Boolean): Job? = synchronized(modeLifecycleLock) {
+        modeJobs.remove(laneFor(mode, useDistributedStateHolder))
     }
 
-    private fun storeModeProcess(mode: SDMode, process: Process) {
+    private fun storeModeProcess(mode: SDMode, useDistributedStateHolder: Boolean, process: Process) {
         synchronized(modeLifecycleLock) {
-            modeProcesses[mode] = process
+            modeProcesses[laneFor(mode, useDistributedStateHolder)] = process
         }
     }
 
-    private fun removeModeProcess(mode: SDMode): Process? = synchronized(modeLifecycleLock) {
-        modeProcesses.remove(mode)
+    private fun removeModeProcess(mode: SDMode, useDistributedStateHolder: Boolean): Process? = synchronized(modeLifecycleLock) {
+        modeProcesses.remove(laneFor(mode, useDistributedStateHolder))
     }
 
-    private fun removeModeRuntime(mode: SDMode): Pair<Job?, Process?> = synchronized(modeLifecycleLock) {
-        modeJobs.remove(mode) to modeProcesses.remove(mode)
+    private fun removeModeRuntime(mode: SDMode, useDistributedStateHolder: Boolean): Pair<Job?, Process?> = synchronized(modeLifecycleLock) {
+        val lane = laneFor(mode, useDistributedStateHolder)
+        modeJobs.remove(lane) to modeProcesses.remove(lane)
     }
 
-    private fun snapshotModeKeys(): List<SDMode> = synchronized(modeLifecycleLock) {
+    private fun snapshotModeKeys(): List<SdWorkLane> = synchronized(modeLifecycleLock) {
         modeJobs.keys.toList()
     }
 
@@ -110,6 +115,10 @@ class StableDiffusionService : Service() {
 
     private fun hasActiveModeJobs(): Boolean = synchronized(modeLifecycleLock) {
         modeJobs.values.any { it.isActive }
+    }
+
+    private fun hasActiveModeJob(mode: SDMode, useDistributedStateHolder: Boolean): Boolean = synchronized(modeLifecycleLock) {
+        modeJobs[laneFor(mode, useDistributedStateHolder)]?.isActive == true
     }
 
     override fun onCreate() {
@@ -131,26 +140,30 @@ class StableDiffusionService : Service() {
             ACTION_START_GENERATION -> {
                 val config = intent.getParcelableExtraCompat<SDConfig>(EXTRA_CONFIG)
                 val useWorkflowStateHolder = intent.getBooleanExtra(EXTRA_USE_WORKFLOW_STATE_HOLDER, false)
+                val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
-                } else if (hasActiveWork()) {
+                } else if (hasActiveModeJob(config.mode, useDistributedStateHolder)) {
                     val message = getString(R.string.imagegen_error_already_running)
-                    getModeStateHolder(config.mode, useWorkflowStateHolder).updateState(SDGenerationState.Error(message))
+                    getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
+                        .updateState(SDGenerationState.Error(message))
                     _generationState.value = SDGenerationState.Error(message)
                 } else {
-                    startGenerationSafely(config, useWorkflowStateHolder)
+                    startGenerationSafely(config, useWorkflowStateHolder, useDistributedStateHolder)
                 }
             }
             ACTION_START_UPSCALE -> {
                 val config = intent.getParcelableExtraCompat<SDUpscaleConfig>(EXTRA_UPSCALE_CONFIG)
+                val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     surfaceStartFailure(getString(R.string.imagegen_error_missing_config))
-                } else if (hasActiveWork()) {
+                } else if (hasActiveModeJob(SDMode.UPSCALE, useDistributedStateHolder)) {
                     val message = getString(R.string.imagegen_error_already_running)
-                    SDModeStateHolder.getForMode(SDMode.UPSCALE).updateState(SDGenerationState.Error(message))
+                    getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
+                        .updateState(SDGenerationState.Error(message))
                     _generationState.value = SDGenerationState.Error(message)
                 } else {
-                    startUpscaleSafely(config)
+                    startUpscaleSafely(config, useDistributedStateHolder)
                 }
             }
             ACTION_START_WORKFLOW -> {
@@ -165,9 +178,10 @@ class StableDiffusionService : Service() {
                 }
             }
             ACTION_CANCEL_MODE -> {
+                val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 intent.getStringExtra(EXTRA_MODE)
                     ?.let { runCatching { SDMode.valueOf(it) }.getOrNull() }
-                    ?.let(::cancelMode)
+                    ?.let { cancelMode(it, useDistributedStateHolder) }
             }
             ACTION_CANCEL_WORKFLOW -> cancelWorkflow()
             ACTION_CANCEL_ALL -> cancel()
@@ -175,7 +189,11 @@ class StableDiffusionService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startGenerationSafely(config: SDConfig, useWorkflowStateHolder: Boolean) {
+    private fun startGenerationSafely(
+        config: SDConfig,
+        useWorkflowStateHolder: Boolean,
+        useDistributedStateHolder: Boolean
+    ) {
         val launchDetails = buildSdLaunchBreadcrumbDetails(config)
         recordLaunchBreadcrumb(config.mode, "service_start_requested", launchDetails)
 
@@ -193,7 +211,7 @@ class StableDiffusionService : Service() {
                 "service_preflight_failed",
                 "$launchDetails issue=${launchIssue.name}"
             )
-            surfaceStartFailure(message, config.mode, useWorkflowStateHolder)
+            surfaceStartFailure(message, config.mode, useWorkflowStateHolder, useDistributedStateHolder)
             return
         }
 
@@ -201,7 +219,7 @@ class StableDiffusionService : Service() {
             recordLaunchBreadcrumb(config.mode, "service_foreground_starting", launchDetails)
             ensureForegroundTask()
             recordLaunchBreadcrumb(config.mode, "service_generation_handoff", launchDetails)
-            startGeneration(config, useWorkflowStateHolder)
+            startGeneration(config, useWorkflowStateHolder, useDistributedStateHolder)
         }.onFailure { throwable ->
             val message = throwable.message ?: getString(R.string.error_generic)
             DebugLog.log("[StableDiffusionService] Failed to start ${config.mode}: $message")
@@ -210,7 +228,7 @@ class StableDiffusionService : Service() {
                 "service_start_failed",
                 "$launchDetails error=${throwable.javaClass.simpleName}: $message"
             )
-            surfaceStartFailure(message, config.mode, useWorkflowStateHolder)
+            surfaceStartFailure(message, config.mode, useWorkflowStateHolder, useDistributedStateHolder)
             failForegroundTask(message)
             cleanupAfterWork()
         }
@@ -245,7 +263,7 @@ class StableDiffusionService : Service() {
         }
     }
 
-    private fun startUpscaleSafely(config: SDUpscaleConfig) {
+    private fun startUpscaleSafely(config: SDUpscaleConfig, useDistributedStateHolder: Boolean) {
         val launchDetails = buildSdLaunchBreadcrumbDetails(config)
         recordLaunchBreadcrumb(SDMode.UPSCALE, "service_start_requested", launchDetails)
 
@@ -263,7 +281,7 @@ class StableDiffusionService : Service() {
                 "service_preflight_failed",
                 "$launchDetails issue=${launchIssue.name}"
             )
-            surfaceStartFailure(message, SDMode.UPSCALE, false)
+            surfaceStartFailure(message, SDMode.UPSCALE, false, useDistributedStateHolder)
             return
         }
 
@@ -271,7 +289,7 @@ class StableDiffusionService : Service() {
             recordLaunchBreadcrumb(SDMode.UPSCALE, "service_foreground_starting", launchDetails)
             ensureForegroundTask()
             recordLaunchBreadcrumb(SDMode.UPSCALE, "service_generation_handoff", launchDetails)
-            startUpscale(config)
+            startUpscale(config, useDistributedStateHolder)
         }.onFailure { throwable ->
             val message = throwable.message ?: getString(R.string.error_generic)
             DebugLog.log("[StableDiffusionService] Failed to start upscale: $message")
@@ -280,17 +298,21 @@ class StableDiffusionService : Service() {
                 "service_start_failed",
                 "$launchDetails error=${throwable.javaClass.simpleName}: $message"
             )
-            surfaceStartFailure(message, SDMode.UPSCALE, false)
+            surfaceStartFailure(message, SDMode.UPSCALE, false, useDistributedStateHolder)
             failForegroundTask(message)
             cleanupAfterWork()
         }
     }
 
-    private fun startGeneration(config: SDConfig, useWorkflowStateHolder: Boolean) {
-        val modeStateHolder = getModeStateHolder(config.mode, useWorkflowStateHolder)
+    private fun startGeneration(
+        config: SDConfig,
+        useWorkflowStateHolder: Boolean,
+        useDistributedStateHolder: Boolean
+    ) {
+        val modeStateHolder = getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
         modeStateHolder.updatePrompt(config.prompt)
         ensureWakeLockHeld()
-        modeSessionIds[config.mode] = GenerationDiagnosticsStore.startSession(
+        modeSessionIds[laneFor(config.mode, useDistributedStateHolder)] = GenerationDiagnosticsStore.startSession(
             source = DIAGNOSTIC_SOURCE,
             mode = config.mode.name,
             details = buildSessionDetails(config, useWorkflowStateHolder),
@@ -304,22 +326,23 @@ class StableDiffusionService : Service() {
         markActivity(config.mode, "starting")
         ensureStallMonitorRunning()
 
-        storeModeJob(config.mode, serviceScope.launch {
+        storeModeJob(config.mode, useDistributedStateHolder, serviceScope.launch {
             try {
                 val result = executeGeneration(
                     config = config,
                     modeStateHolder = modeStateHolder,
-                    exportSubfolder = subfolderForMode(config.mode)
+                    exportSubfolder = subfolderForMode(config.mode),
+                    useDistributedStateHolder = useDistributedStateHolder
                 )
                 markActivity(config.mode, "complete")
                 _generationState.value = SDGenerationState.Complete(result)
                 _progress.value = 1f
                 modeStateHolder.updateState(SDGenerationState.Complete(result))
-                finishModeSession(config.mode, "complete", File(config.modelPath).name)
+                finishModeSession(config.mode, useDistributedStateHolder, "complete", File(config.modelPath).name)
                 completeForegroundTask(getString(R.string.imagegen_notification_complete))
             } catch (cancelled: CancellationException) {
                 markActivity(config.mode, "cancelled")
-                finishModeSession(config.mode, "cancelled")
+                finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
                 DebugLog.log("[StableDiffusionService] ${config.mode} cancelled")
             } catch (e: Exception) {
                 val message = e.message ?: getString(R.string.error_generic)
@@ -327,21 +350,21 @@ class StableDiffusionService : Service() {
                 DebugLog.log("[StableDiffusionService] ${config.mode} failed: $message")
                 _generationState.value = SDGenerationState.Error(message)
                 modeStateHolder.updateState(SDGenerationState.Error(message))
-                finishModeSession(config.mode, "failed", message)
+                finishModeSession(config.mode, useDistributedStateHolder, "failed", message)
                 failForegroundTask(message)
             } finally {
-                removeModeProcess(config.mode)
-                removeModeJob(config.mode)
+                removeModeProcess(config.mode, useDistributedStateHolder)
+                removeModeJob(config.mode, useDistributedStateHolder)
                 clearDiagnostics(config.mode)
                 cleanupAfterWork()
             }
         })
     }
 
-    private fun startUpscale(config: SDUpscaleConfig) {
-        val modeStateHolder = SDModeStateHolder.getForMode(SDMode.UPSCALE)
+    private fun startUpscale(config: SDUpscaleConfig, useDistributedStateHolder: Boolean) {
+        val modeStateHolder = getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
         ensureWakeLockHeld()
-        modeSessionIds[SDMode.UPSCALE] = GenerationDiagnosticsStore.startSession(
+        modeSessionIds[laneFor(SDMode.UPSCALE, useDistributedStateHolder)] = GenerationDiagnosticsStore.startSession(
             source = DIAGNOSTIC_SOURCE,
             mode = SDMode.UPSCALE.name,
             details = buildUpscaleSessionDetails(config),
@@ -355,21 +378,22 @@ class StableDiffusionService : Service() {
         markActivity(SDMode.UPSCALE, "starting")
         ensureStallMonitorRunning()
 
-        storeModeJob(SDMode.UPSCALE, serviceScope.launch {
+        storeModeJob(SDMode.UPSCALE, useDistributedStateHolder, serviceScope.launch {
             try {
                 val result = executeUpscaleGeneration(
                     config = config,
-                    modeStateHolder = modeStateHolder
+                    modeStateHolder = modeStateHolder,
+                    useDistributedStateHolder = useDistributedStateHolder
                 )
                 markActivity(SDMode.UPSCALE, "complete")
                 _generationState.value = SDGenerationState.Complete(result)
                 _progress.value = 1f
                 modeStateHolder.updateState(SDGenerationState.Complete(result))
-                finishModeSession(SDMode.UPSCALE, "complete", File(config.modelPath).name)
+                finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "complete", File(config.modelPath).name)
                 completeForegroundTask(getString(R.string.imagegen_notification_complete))
             } catch (cancelled: CancellationException) {
                 markActivity(SDMode.UPSCALE, "cancelled")
-                finishModeSession(SDMode.UPSCALE, "cancelled")
+                finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "cancelled")
                 DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} cancelled")
             } catch (e: Exception) {
                 val message = e.message ?: getString(R.string.error_generic)
@@ -377,11 +401,11 @@ class StableDiffusionService : Service() {
                 DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} failed: $message")
                 _generationState.value = SDGenerationState.Error(message)
                 modeStateHolder.updateState(SDGenerationState.Error(message))
-                finishModeSession(SDMode.UPSCALE, "failed", message)
+                finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "failed", message)
                 failForegroundTask(message)
             } finally {
-                removeModeProcess(SDMode.UPSCALE)
-                removeModeJob(SDMode.UPSCALE)
+                removeModeProcess(SDMode.UPSCALE, useDistributedStateHolder)
+                removeModeJob(SDMode.UPSCALE, useDistributedStateHolder)
                 clearDiagnostics(SDMode.UPSCALE)
                 cleanupAfterWork()
             }
@@ -395,7 +419,7 @@ class StableDiffusionService : Service() {
         upscaleHolder.reset()
         txt2imgHolder.updatePrompt(workflowConfig.txt2imgConfig.prompt)
         ensureWakeLockHeld()
-        modeSessionIds[SDMode.TXT2IMG] = GenerationDiagnosticsStore.startSession(
+        modeSessionIds[laneFor(SDMode.TXT2IMG, false)] = GenerationDiagnosticsStore.startSession(
             source = DIAGNOSTIC_SOURCE,
             mode = SDMode.TXT2IMG.name,
             details = buildSessionDetails(workflowConfig.txt2imgConfig, true),
@@ -414,12 +438,13 @@ class StableDiffusionService : Service() {
                 val txt2imgOutput = executeGeneration(
                     config = workflowConfig.txt2imgConfig,
                     modeStateHolder = txt2imgHolder,
-                    exportSubfolder = null
+                    exportSubfolder = null,
+                    useDistributedStateHolder = false
                 )
                 txt2imgHolder.updateState(SDGenerationState.Complete(txt2imgOutput))
-                finishModeSession(SDMode.TXT2IMG, "complete", File(workflowConfig.txt2imgConfig.modelPath).name)
+                finishModeSession(SDMode.TXT2IMG, false, "complete", File(workflowConfig.txt2imgConfig.modelPath).name)
 
-                modeSessionIds[SDMode.UPSCALE] = GenerationDiagnosticsStore.startSession(
+                modeSessionIds[laneFor(SDMode.UPSCALE, false)] = GenerationDiagnosticsStore.startSession(
                     source = DIAGNOSTIC_SOURCE,
                     mode = SDMode.UPSCALE.name,
                     details = buildSessionDetails(workflowConfig.upscaleConfig, true),
@@ -434,25 +459,26 @@ class StableDiffusionService : Service() {
                 val finalOutput = executeGeneration(
                     config = workflowConfig.upscaleConfig,
                     modeStateHolder = upscaleHolder,
-                    exportSubfolder = WORKFLOW_OUTPUT_SUBFOLDER
+                    exportSubfolder = WORKFLOW_OUTPUT_SUBFOLDER,
+                    useDistributedStateHolder = false
                 )
 
                 markActivity(SDMode.UPSCALE, "complete")
                 upscaleHolder.updateState(SDGenerationState.Complete(finalOutput))
-                finishModeSession(SDMode.UPSCALE, "complete", File(workflowConfig.upscaleConfig.modelPath).name)
+                finishModeSession(SDMode.UPSCALE, false, "complete", File(workflowConfig.upscaleConfig.modelPath).name)
                 completeForegroundTask(getString(R.string.workflow_complete))
             } catch (cancelled: CancellationException) {
                 markActivity(SDMode.TXT2IMG, "workflow-cancelled")
                 markActivity(SDMode.UPSCALE, "workflow-cancelled")
-                finishModeSession(SDMode.TXT2IMG, "cancelled")
-                finishModeSession(SDMode.UPSCALE, "cancelled")
+                finishModeSession(SDMode.TXT2IMG, false, "cancelled")
+                finishModeSession(SDMode.UPSCALE, false, "cancelled")
                 DebugLog.log("[StableDiffusionService] Workflow cancelled")
             } catch (e: Exception) {
                 val message = e.message ?: getString(R.string.error_generic)
                 markActivity(SDMode.TXT2IMG, "workflow-failed")
                 markActivity(SDMode.UPSCALE, "workflow-failed")
-                finishModeSession(SDMode.TXT2IMG, "failed", message)
-                finishModeSession(SDMode.UPSCALE, "failed", message)
+                finishModeSession(SDMode.TXT2IMG, false, "failed", message)
+                finishModeSession(SDMode.UPSCALE, false, "failed", message)
                 DebugLog.log("[StableDiffusionService] Workflow failed: $message")
                 val activeHolder = when {
                     upscaleHolder.state.value is SDGenerationState.Generating -> upscaleHolder
@@ -472,7 +498,8 @@ class StableDiffusionService : Service() {
     private suspend fun executeGeneration(
         config: SDConfig,
         modeStateHolder: SDModeStateHolder,
-        exportSubfolder: String?
+        exportSubfolder: String?,
+        useDistributedStateHolder: Boolean
     ): String = withContext(Dispatchers.IO) {
         val startingSnapshot = buildStartingSnapshot(config)
         _generationState.value = SDGenerationState.Generating(startingSnapshot)
@@ -482,7 +509,7 @@ class StableDiffusionService : Service() {
         updateNotification(buildImageNotificationText(config.mode, startingSnapshot), startingSnapshot.progress)
         markActivity(config.mode, "starting")
 
-        val result = runGeneration(config, modeStateHolder)
+        val result = runGeneration(config, modeStateHolder, useDistributedStateHolder)
         val outputFile = File(result)
         markActivity(config.mode, "post-processing")
         postProcessOutputIfNeeded(config, outputFile)
@@ -495,7 +522,8 @@ class StableDiffusionService : Service() {
 
     private suspend fun executeUpscaleGeneration(
         config: SDUpscaleConfig,
-        modeStateHolder: SDModeStateHolder
+        modeStateHolder: SDModeStateHolder,
+        useDistributedStateHolder: Boolean
     ): String = withContext(Dispatchers.IO) {
         val startingSnapshot = buildStartingSnapshot(config.upscaleRepeats.coerceAtLeast(1))
         _generationState.value = SDGenerationState.Generating(startingSnapshot)
@@ -505,7 +533,7 @@ class StableDiffusionService : Service() {
         updateNotification(buildImageNotificationText(SDMode.UPSCALE, startingSnapshot), startingSnapshot.progress)
         markActivity(SDMode.UPSCALE, "starting")
 
-        val result = runUpscaleGeneration(config, modeStateHolder)
+        val result = runUpscaleGeneration(config, modeStateHolder, useDistributedStateHolder)
         val outputFile = File(result)
         markActivity(SDMode.UPSCALE, "exporting")
         exportImageIfConfigured(outputFile, subfolderForMode(SDMode.UPSCALE))
@@ -514,7 +542,11 @@ class StableDiffusionService : Service() {
         result
     }
 
-    private suspend fun runGeneration(config: SDConfig, modeStateHolder: SDModeStateHolder): String = withContext(Dispatchers.IO) {
+    private suspend fun runGeneration(
+        config: SDConfig,
+        modeStateHolder: SDModeStateHolder,
+        useDistributedStateHolder: Boolean
+    ): String = withContext(Dispatchers.IO) {
         SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
         val sdBinary = binaryRepo.getSdBinary()
@@ -523,16 +555,12 @@ class StableDiffusionService : Service() {
             throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
         }
         runCatching {
-            runGenerationWithBinary(config, modeStateHolder, binaryRepo, sdBinary)
+            runGenerationWithBinary(config, modeStateHolder, binaryRepo, sdBinary, useDistributedStateHolder)
         }.getOrElse { error ->
             val cpuBinary = binaryRepo.getCpuSdBinary()
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
-                cpuBinary != null &&
-                cpuBinary.exists() &&
-                cpuBinary.absolutePath != sdBinary.absolutePath
-            ) {
+            if (shouldRetrySdGenerationOnCpu(sdBinary, cpuBinary, config.distributedRuntime, error)) {
                 DebugLog.log("[StableDiffusionService] Accelerator SD binary failed, retrying CPU fallback: ${error.message}")
-                runGenerationWithBinary(config, modeStateHolder, binaryRepo, cpuBinary)
+                runGenerationWithBinary(config, modeStateHolder, binaryRepo, requireNotNull(cpuBinary), useDistributedStateHolder)
             } else {
                 throw error
             }
@@ -544,16 +572,20 @@ class StableDiffusionService : Service() {
         config: SDConfig,
         modeStateHolder: SDModeStateHolder,
         binaryRepo: BinaryRepository,
-        sdBinary: File
+        sdBinary: File,
+        useDistributedStateHolder: Boolean
     ): String = coroutineScope {
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
 
         val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
+        val effectiveConfig = config.copy(
+            maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB)
+        )
         try {
             args.addAll(
                 buildSdCommandArgs(
-                    config = config,
+                    config = effectiveConfig,
                     binaryCapabilities = binaryCapabilities
                 )
             )
@@ -588,10 +620,10 @@ class StableDiffusionService : Service() {
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-        pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
+        pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
 
         val process = pb.start()
-        storeModeProcess(config.mode, process)
+        storeModeProcess(config.mode, useDistributedStateHolder, process)
         val progressTracker = SdProgressTracker(
             totalStepsHint = when (config.mode) {
                 SDMode.UPSCALE -> config.upscaleRepeats.coerceAtLeast(1)
@@ -661,7 +693,8 @@ class StableDiffusionService : Service() {
 
     private suspend fun runUpscaleGeneration(
         config: SDUpscaleConfig,
-        modeStateHolder: SDModeStateHolder
+        modeStateHolder: SDModeStateHolder,
+        useDistributedStateHolder: Boolean
     ): String = withContext(Dispatchers.IO) {
         SdGenerationProcessLock.withLock {
         val binaryRepo = BinaryRepository(applicationContext)
@@ -671,16 +704,12 @@ class StableDiffusionService : Service() {
             throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
         }
         runCatching {
-            runUpscaleGenerationWithBinary(config, modeStateHolder, binaryRepo, sdBinary)
+            runUpscaleGenerationWithBinary(config, modeStateHolder, binaryRepo, sdBinary, useDistributedStateHolder)
         }.getOrElse { error ->
             val cpuBinary = binaryRepo.getCpuSdBinary()
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
-                cpuBinary != null &&
-                cpuBinary.exists() &&
-                cpuBinary.absolutePath != sdBinary.absolutePath
-            ) {
+            if (shouldRetrySdGenerationOnCpu(sdBinary, cpuBinary, config.distributedRuntime, error)) {
                 DebugLog.log("[StableDiffusionService] Accelerator SD upscale binary failed, retrying CPU fallback: ${error.message}")
-                runUpscaleGenerationWithBinary(config, modeStateHolder, binaryRepo, cpuBinary)
+                runUpscaleGenerationWithBinary(config, modeStateHolder, binaryRepo, requireNotNull(cpuBinary), useDistributedStateHolder)
             } else {
                 throw error
             }
@@ -692,14 +721,18 @@ class StableDiffusionService : Service() {
         config: SDUpscaleConfig,
         modeStateHolder: SDModeStateHolder,
         binaryRepo: BinaryRepository,
-        sdBinary: File
+        sdBinary: File,
+        useDistributedStateHolder: Boolean
     ): String = coroutineScope {
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
 
         val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
+        val effectiveConfig = config.copy(
+            maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB)
+        )
         try {
-            args.addAll(buildSdUpscaleCommandArgs(config, binaryCapabilities))
+            args.addAll(buildSdUpscaleCommandArgs(effectiveConfig, binaryCapabilities))
         } catch (e: SdUnsupportedFlagsException) {
             throw IllegalStateException(
                 getString(
@@ -723,10 +756,10 @@ class StableDiffusionService : Service() {
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-        pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
+        pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
 
         val process = pb.start()
-        storeModeProcess(SDMode.UPSCALE, process)
+        storeModeProcess(SDMode.UPSCALE, useDistributedStateHolder, process)
         val progressTracker = SdProgressTracker(
             totalStepsHint = config.upscaleRepeats.coerceAtLeast(1),
             startedAtMs = SystemClock.elapsedRealtime()
@@ -791,15 +824,15 @@ class StableDiffusionService : Service() {
         config.outputPath
     }
 
-    fun cancelMode(mode: SDMode) {
+    fun cancelMode(mode: SDMode, useDistributedStateHolder: Boolean = false) {
         markActivity(mode, "cancel-requested")
         recordModeBreadcrumb(mode, "cancel_requested")
-        val (job, process) = removeModeRuntime(mode)
+        val (job, process) = removeModeRuntime(mode, useDistributedStateHolder)
         job?.cancel(CancellationException(getString(R.string.action_cancelled)))
         process?.destroy()
         clearDiagnostics(mode)
 
-        SDModeStateHolder.getForMode(mode).updateState(SDGenerationState.Idle)
+        getModeStateHolder(mode, false, useDistributedStateHolder).updateState(SDGenerationState.Idle)
         _generationState.value = SDGenerationState.Idle
         _progress.value = 0f
 
@@ -826,7 +859,7 @@ class StableDiffusionService : Service() {
     }
 
     fun cancel() {
-        snapshotModeKeys().forEach(::cancelMode)
+        snapshotModeKeys().forEach { lane -> cancelMode(lane.mode, lane.useDistributedStateHolder) }
         cancelWorkflow()
     }
 
@@ -929,10 +962,14 @@ class StableDiffusionService : Service() {
     private fun surfaceStartFailure(
         message: String,
         mode: SDMode? = null,
-        useWorkflowStateHolder: Boolean = false
+        useWorkflowStateHolder: Boolean = false,
+        useDistributedStateHolder: Boolean = false
     ) {
         DebugLog.log("[StableDiffusionService] Start failure: $message")
-        mode?.let { getModeStateHolder(it, useWorkflowStateHolder).updateState(SDGenerationState.Error(message)) }
+        mode?.let {
+            getModeStateHolder(it, useWorkflowStateHolder, useDistributedStateHolder)
+                .updateState(SDGenerationState.Error(message))
+        }
         _generationState.value = SDGenerationState.Error(message)
         _progress.value = 0f
         recordServiceBreadcrumb("start_failure", message)
@@ -944,13 +981,17 @@ class StableDiffusionService : Service() {
             DebugLog.log("[StableDiffusionService] WakeLock acquired")
             recordServiceBreadcrumb("wake_lock_acquired")
         }
+        WakeLockManager.acquireWifiLock(applicationContext, "StableDiffusionService")
     }
 
     private fun releaseWakeLockIfIdle() {
-        if (!hasActiveWork() && wakeLock?.isHeld == true) {
-            wakeLock?.release()
-            DebugLog.log("[StableDiffusionService] WakeLock released")
-            recordServiceBreadcrumb("wake_lock_released")
+        if (!hasActiveWork()) {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                DebugLog.log("[StableDiffusionService] WakeLock released")
+                recordServiceBreadcrumb("wake_lock_released")
+            }
+            WakeLockManager.releaseWifiLock("StableDiffusionService")
         }
     }
 
@@ -1061,8 +1102,14 @@ class StableDiffusionService : Service() {
         }
     }
 
-    private fun getModeStateHolder(mode: SDMode, useWorkflowStateHolder: Boolean): SDModeStateHolder =
-        if (useWorkflowStateHolder) {
+    private fun getModeStateHolder(
+        mode: SDMode,
+        useWorkflowStateHolder: Boolean,
+        useDistributedStateHolder: Boolean = false
+    ): SDModeStateHolder =
+        if (useDistributedStateHolder) {
+            SDModeStateHolder.getDistributedForMode(mode)
+        } else if (useWorkflowStateHolder) {
             when (mode) {
                 SDMode.TXT2IMG -> SDModeStateHolder.workflowTxt2img
                 SDMode.UPSCALE -> SDModeStateHolder.workflowUpscale
@@ -1216,6 +1263,7 @@ class StableDiffusionService : Service() {
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
+        WakeLockManager.releaseWifiLock("StableDiffusionService")
         super.onDestroy()
     }
 
@@ -1229,8 +1277,13 @@ class StableDiffusionService : Service() {
         super.onTrimMemory(level)
     }
 
-    private fun finishModeSession(mode: SDMode, outcome: String, details: String? = null) {
-        val sessionId = modeSessionIds.remove(mode) ?: return
+    private fun finishModeSession(
+        mode: SDMode,
+        useDistributedStateHolder: Boolean,
+        outcome: String,
+        details: String? = null
+    ) {
+        val sessionId = modeSessionIds.remove(laneFor(mode, useDistributedStateHolder)) ?: return
         GenerationDiagnosticsStore.finishSession(
             sessionId = sessionId,
             source = DIAGNOSTIC_SOURCE,
@@ -1253,7 +1306,7 @@ class StableDiffusionService : Service() {
     ) {
         GenerationDiagnosticsStore.recordBreadcrumb(
             source = DIAGNOSTIC_SOURCE,
-            sessionId = modeSessionIds[mode],
+            sessionId = modeSessionIds[laneFor(mode, false)] ?: modeSessionIds[laneFor(mode, true)],
             mode = mode.name,
             event = event,
             phase = phase,
@@ -1312,6 +1365,11 @@ class StableDiffusionService : Service() {
             add("initImage=${config.initImage != null}")
             add("family=${family.storedValue}")
             variant?.let { add("variant=$it") }
+            add("paramsBackend=${config.sdParamsBackendMode}")
+            add("runtimeBackend=${config.sdRuntimeBackendMode}")
+            if (config.maxVramCpuGiB.isNotBlank()) {
+                add("maxVramCpuGiB=${config.maxVramCpuGiB}")
+            }
             add("workflow=$workflow")
         }.joinToString(" ")
     }
@@ -1321,6 +1379,11 @@ class StableDiffusionService : Service() {
         add("input=${File(config.inputImagePath).name}")
         add("repeats=${config.upscaleRepeats}")
         add("threads=${config.threads}")
+        add("paramsBackend=${config.sdParamsBackendMode}")
+        add("runtimeBackend=${config.sdRuntimeBackendMode}")
+        if (config.maxVramCpuGiB.isNotBlank()) {
+            add("maxVramCpuGiB=${config.maxVramCpuGiB}")
+        }
     }.joinToString(" ")
 
     private fun componentRoleLabel(role: SdComponentRole): String = when (role) {
@@ -1348,9 +1411,9 @@ class StableDiffusionService : Service() {
 
         val libDir = File(applicationContext.filesDir, "lib").apply { mkdirs() }
         setupLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-        val envPath = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
+        val envPath = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
 
-        val helpOutput = listOf("--help", "-h").firstNotNullOfOrNull { flag ->
+        val helpCapabilities = listOf("--help", "-h").mapNotNull { flag ->
             runCatching {
                 val process = ProcessBuilder(sdBinary.absolutePath, flag)
                     .redirectErrorStream(true)
@@ -1361,11 +1424,12 @@ class StableDiffusionService : Service() {
                     .start()
                 val output = process.inputStream.bufferedReader().use { it.readText() }
                 process.waitFor()
-                output.takeIf { it.isNotBlank() }
+                output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
             }.getOrNull()
-        } ?: return@withContext null
+        }
+        val capabilities = helpCapabilities.maxByOrNull { it.supportedFlags.size } ?: return@withContext null
 
-        parseSdBinaryCapabilities(helpOutput).also { capabilities ->
+        capabilities.also {
             cachedSdCapabilityBinaryPath = sdBinary.absolutePath
             cachedSdCapabilities = capabilities
         }
@@ -1379,6 +1443,7 @@ class StableDiffusionService : Service() {
 
         val binaryName = File(binaryPath).name
         val tier = when {
+            binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
             binaryName.contains("_armv9") -> "_armv9"
             binaryName.contains("_dotprod") -> "_dotprod"
             binaryName.contains("_baseline") -> "_baseline"
@@ -1445,6 +1510,7 @@ class StableDiffusionService : Service() {
         private const val EXTRA_WORKFLOW_CONFIG = "extra_sd_workflow_config"
         private const val EXTRA_MODE = "extra_sd_mode"
         private const val EXTRA_USE_WORKFLOW_STATE_HOLDER = "extra_sd_use_workflow_holder"
+        private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_sd_use_distributed_holder"
         private const val WORKFLOW_OUTPUT_SUBFOLDER = "workflow"
         private const val STALL_MONITOR_INTERVAL_MS = 15_000L
         private const val STALL_THRESHOLD_MS_1 = 60_000L
@@ -1455,17 +1521,28 @@ class StableDiffusionService : Service() {
         private var cachedSdCapabilityBinaryPath: String? = null
         private var cachedSdCapabilities: SdBinaryCapabilities? = null
 
-        fun createStartIntent(context: Context, config: SDConfig, useWorkflowStateHolder: Boolean = false): Intent =
+        fun createStartIntent(
+            context: Context,
+            config: SDConfig,
+            useWorkflowStateHolder: Boolean = false,
+            useDistributedStateHolder: Boolean = false
+        ): Intent =
             Intent(context, StableDiffusionService::class.java).apply {
                 action = ACTION_START_GENERATION
                 putExtra(EXTRA_CONFIG, config)
                 putExtra(EXTRA_USE_WORKFLOW_STATE_HOLDER, useWorkflowStateHolder)
+                putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
             }
 
-        fun createStartUpscaleIntent(context: Context, config: SDUpscaleConfig): Intent =
+        fun createStartUpscaleIntent(
+            context: Context,
+            config: SDUpscaleConfig,
+            useDistributedStateHolder: Boolean = false
+        ): Intent =
             Intent(context, StableDiffusionService::class.java).apply {
                 action = ACTION_START_UPSCALE
                 putExtra(EXTRA_UPSCALE_CONFIG, config)
+                putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
             }
 
         fun createStartWorkflowIntent(context: Context, workflowConfig: SDWorkflowConfig): Intent =
@@ -1474,10 +1551,15 @@ class StableDiffusionService : Service() {
                 putExtra(EXTRA_WORKFLOW_CONFIG, workflowConfig)
             }
 
-        fun createCancelModeIntent(context: Context, mode: SDMode): Intent =
+        fun createCancelModeIntent(
+            context: Context,
+            mode: SDMode,
+            useDistributedStateHolder: Boolean = false
+        ): Intent =
             Intent(context, StableDiffusionService::class.java).apply {
                 action = ACTION_CANCEL_MODE
                 putExtra(EXTRA_MODE, mode.name)
+                putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
             }
 
         fun createCancelWorkflowIntent(context: Context): Intent =
@@ -1490,6 +1572,11 @@ class StableDiffusionService : Service() {
                 action = ACTION_CANCEL_ALL
             }
     }
+
+    private data class SdWorkLane(
+        val mode: SDMode,
+        val useDistributedStateHolder: Boolean
+    )
 
     private data class ActivityDiagnostics(
         var phase: String,
@@ -1620,10 +1707,20 @@ class SDModeStateHolder(val mode: SDMode) {
         val workflowTxt2img = SDModeStateHolder(SDMode.TXT2IMG)
         val workflowUpscale = SDModeStateHolder(SDMode.UPSCALE)
 
+        val distributedTxt2img = SDModeStateHolder(SDMode.TXT2IMG)
+        val distributedImg2img = SDModeStateHolder(SDMode.IMG2IMG)
+        val distributedUpscale = SDModeStateHolder(SDMode.UPSCALE)
+
         fun getForMode(mode: SDMode): SDModeStateHolder = when (mode) {
             SDMode.TXT2IMG -> txt2img
             SDMode.IMG2IMG -> img2img
             SDMode.UPSCALE -> upscale
+        }
+
+        fun getDistributedForMode(mode: SDMode): SDModeStateHolder = when (mode) {
+            SDMode.TXT2IMG -> distributedTxt2img
+            SDMode.IMG2IMG -> distributedImg2img
+            SDMode.UPSCALE -> distributedUpscale
         }
 
         fun getForModeIndex(index: Int): SDModeStateHolder = when (index) {

@@ -18,6 +18,8 @@ data class ModelEntity(
     val sdFamily: String? = null,
     val sdVariant: String? = null,
     val sdCompatProfiles: String? = null,
+    val sdParamsBackendMode: String = "auto",
+    val sdRuntimeBackendMode: String = "auto",
     // ONNX-specific fields
     val onnxCapabilities: String? = null, // Comma-separated: "txt2img,img2img"
     val onnxAssetKind: String? = null,

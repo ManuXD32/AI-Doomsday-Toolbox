@@ -34,6 +34,7 @@ import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.service.WhisperModel
+import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -151,18 +152,20 @@ fun WhisperModelsScreen(navController: NavController) {
     fun startModelDownload(model: WhisperModel) {
         val destPath = File(modelsDir, model.filename).absolutePath
         val repoId = "ggerganov/whisper.cpp"
+        val progressKey = "whisper_${model.filename}"
         // Register pending download for DB tracking
         PendingDownloadHolder.addPending(
+            downloadId = progressKey,
             filename = model.filename,
             repoId = repoId,
-            progressKey = "whisper_${model.filename}",
+            progressKey = progressKey,
             type = ModelType.WHISPER,
             destPath = destPath
         )
         // Track progress
-        DownloadProgressHolder.updateProgress("whisper_${model.filename}", model.filename, 0f)
+        DownloadProgressHolder.updateProgress(progressKey, model.filename, 0f)
         // Start service
-        DownloadService.startDownload(context, model.downloadUrl, destPath, model.filename)
+        DownloadService.startDownload(context, model.downloadUrl, destPath, model.filename, progressKey)
     }
 
     fun exportModel(model: ModelEntity) {
@@ -282,6 +285,12 @@ fun WhisperModelsScreen(navController: NavController) {
                     }
                 )
             }
+
+            DownloadTaskSection(
+                modelTypes = listOf(ModelType.WHISPER),
+                includeTask = { it.id.startsWith("whisper_") }
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             
             // Model categories
             WhisperModelCategory(

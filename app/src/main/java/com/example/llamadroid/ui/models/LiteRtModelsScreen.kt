@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.currentLiteRtDeviceTargetInfo
@@ -95,6 +96,7 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
 import java.io.File
@@ -649,6 +651,7 @@ private fun LiteRtDownloadingTab(
     statuses: Map<String, String>,
     onCancel: (String) -> Unit
 ) {
+    val context = LocalContext.current
     val active = progress
         .filter { (key, value) ->
             key.startsWith(LITERT_PROGRESS_PREFIX) &&
@@ -665,6 +668,14 @@ private fun LiteRtDownloadingTab(
                 stringResource(R.string.models_tab_downloading),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        item {
+            DownloadTaskSection(
+                modelTypes = listOf(ModelType.LLM),
+                includeTask = { it.id.startsWith(LITERT_PROGRESS_PREFIX) },
+                staleRoots = listOf(File(context.noBackupFilesDir, "litert_models"))
             )
         }
 

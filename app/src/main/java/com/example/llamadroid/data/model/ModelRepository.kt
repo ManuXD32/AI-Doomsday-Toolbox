@@ -561,6 +561,8 @@ class ModelRepository(
         sdFamily: String? = original.sdFamily,
         sdVariant: String? = original.sdVariant,
         sdCompatProfiles: String? = original.sdCompatProfiles,
+        sdParamsBackendMode: String = original.sdParamsBackendMode,
+        sdRuntimeBackendMode: String = original.sdRuntimeBackendMode,
         onnxCapabilities: String? = original.onnxCapabilities,
         onnxAssetKind: String? = original.onnxAssetKind,
         onnxPipelineFamily: String? = original.onnxPipelineFamily,
@@ -621,6 +623,8 @@ class ModelRepository(
                 sdCompatProfiles = sdCompatProfiles ?: buildSdCompatProfiles(
                     *defaultCompatProfilesFor(newType).toTypedArray()
                 ),
+                sdParamsBackendMode = sdParamsBackendMode,
+                sdRuntimeBackendMode = sdRuntimeBackendMode,
                 onnxCapabilities = onnxCapabilities,
                 onnxAssetKind = onnxAssetKind,
                 onnxPipelineFamily = onnxPipelineFamily,
@@ -1135,6 +1139,14 @@ object PendingDownloadHolder {
     }
     
     fun getPending(downloadId: String): PendingDownload? = pendingDownloads[downloadId]
+
+    fun addPendingFrom(task: com.example.llamadroid.data.db.DownloadTaskEntity) {
+        val pending = task.toPendingDownload()
+        pendingDownloads[task.id] = pending
+        if (task.id != task.filename) {
+            pendingDownloads[task.filename] = pending
+        }
+    }
     
     fun removePending(downloadId: String) {
         val removed = pendingDownloads.remove(downloadId)

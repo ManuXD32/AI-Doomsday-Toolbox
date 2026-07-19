@@ -4374,6 +4374,9 @@ private fun Txt2ImgUpscaleWorkflowContent(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    val settingsRepo = remember { SettingsRepository(context) }
+    val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
+    val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
 
     // Models
     val sdCheckpoints by db.modelDao().getModelsByType(ModelType.SD_CHECKPOINT).collectAsState(initial = emptyList())
@@ -4392,6 +4395,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
         model.isSdImageMainModel()
     }
     val selectedGenerationModel = allGenerationModels.firstOrNull { it.path == modelPath }
+    val selectedUpscalerModel = upscalerModels.firstOrNull { it.path == upscalerPath }
     val selectedGenerationFamily = selectedGenerationModel?.resolvedSdFamily()
     val selectedGenerationFamilyEnum = selectedGenerationFamily?.first
     val selectedGenerationVariant = selectedGenerationFamily?.second
@@ -4518,7 +4522,10 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 t5xxlPath = t5xxlPath,
                 llmPath = llmPath,
                 llmVisionPath = llmVisionPath,
-                photoMakerPath = photoMakerPath
+                photoMakerPath = photoMakerPath,
+                sdParamsBackendMode = selectedGenerationModel?.sdParamsBackendMode ?: "auto",
+                sdRuntimeBackendMode = selectedGenerationModel?.sdRuntimeBackendMode ?: "auto",
+                maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
             )
 
             val upscaleConfig = SDConfig(
@@ -4529,7 +4536,10 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 initImage = txt2imgFile.absolutePath,
                 upscaleModel = upscalerPath,
                 upscaleRepeats = upscaleRepeats,
-                threads = upscaleThreads
+                threads = upscaleThreads,
+                sdParamsBackendMode = selectedUpscalerModel?.sdParamsBackendMode ?: "auto",
+                sdRuntimeBackendMode = selectedUpscalerModel?.sdRuntimeBackendMode ?: "auto",
+                maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
             )
 
             val workflowConfig = SDWorkflowConfig(

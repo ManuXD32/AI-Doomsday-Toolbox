@@ -55,13 +55,9 @@ internal class SdToolGenerationRunner(
             runGenerationWithBinary(config, binaryRepo, sdBinary, onProgress, onStatus)
         }.getOrElse { error ->
             val cpuBinary = binaryRepo.getCpuSdBinary()
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
-                cpuBinary != null &&
-                cpuBinary.exists() &&
-                cpuBinary.absolutePath != sdBinary.absolutePath
-            ) {
+            if (shouldRetrySdGenerationOnCpu(sdBinary, cpuBinary, config.distributedRuntime, error)) {
                 DebugLog.log("[SdToolGenerationRunner] Accelerator SD binary failed, retrying CPU fallback: ${error.message}")
-                runGenerationWithBinary(config, binaryRepo, cpuBinary, onProgress, onStatus)
+                runGenerationWithBinary(config, binaryRepo, requireNotNull(cpuBinary), onProgress, onStatus)
             } else {
                 throw error
             }
@@ -79,8 +75,11 @@ internal class SdToolGenerationRunner(
 
         val binaryCapabilities = probeSdBinaryCapabilities(context, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
+        val effectiveConfig = config.copy(
+            maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB)
+        )
         try {
-            args.addAll(buildSdCommandArgs(config, binaryCapabilities))
+            args.addAll(buildSdCommandArgs(effectiveConfig, binaryCapabilities))
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_missing_required_components, e.roles.joinToString(", ") { it.name }))
         } catch (e: SdUnsupportedFlagsException) {
@@ -94,7 +93,7 @@ internal class SdToolGenerationRunner(
 
         val libDir = File(context.filesDir, "lib").apply { mkdirs() }
         setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-        pb.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
+        pb.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
 
         val progressTracker = SdProgressTracker(
             totalStepsHint = config.steps.coerceAtLeast(1),
@@ -126,6 +125,46 @@ internal class SdToolGenerationRunner(
     }
 }
 
+internal fun sdProcessLibraryPath(
+    binaryRepo: BinaryRepository,
+    sdBinary: File,
+    libDir: File
+): String = buildList {
+    add(libDir.absolutePath)
+    add(binaryRepo.getLibraryDir())
+    if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+        DeviceAcceleration.acceleratorLibrarySearchDirs()
+            .map { it.absolutePath }
+            .forEach(::add)
+    }
+}.flatMap { it.split(':') }
+    .filter { it.isNotBlank() }
+    .distinct()
+    .joinToString(":")
+
+internal fun shouldRetrySdGenerationOnCpu(
+    sdBinary: File,
+    cpuBinary: File?,
+    distributedRuntime: SdDistributedRuntimeConfig,
+    error: Throwable
+): Boolean {
+    if (!DeviceAcceleration.isAcceleratorBinary(sdBinary) ||
+        cpuBinary == null ||
+        !cpuBinary.exists() ||
+        cpuBinary.absolutePath == sdBinary.absolutePath
+    ) {
+        return false
+    }
+
+    if (!distributedRuntime.enabled) {
+        return true
+    }
+
+    val message = error.message.orEmpty()
+    return listOf("--rpc-servers", "--backend", "--split-mode", "--params-backend", "--auto-fit", "--max-vram")
+        .any { flag -> message.contains(flag) }
+}
+
 private object SdBinaryCapabilityCache {
     var binaryPath: String? = null
     var capabilities: SdBinaryCapabilities? = null
@@ -142,9 +181,9 @@ internal suspend fun probeSdBinaryCapabilities(
 
     val libDir = File(context.filesDir, "lib").apply { mkdirs() }
     setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-    val envPath = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
+    val envPath = sdProcessLibraryPath(binaryRepo, sdBinary, libDir)
 
-    val helpOutput = listOf("--help", "-h").firstNotNullOfOrNull { flag ->
+    val helpCapabilities = listOf("--help", "-h").mapNotNull { flag ->
         runCatching {
             val process = ProcessBuilder(sdBinary.absolutePath, flag)
                 .redirectErrorStream(true)
@@ -155,11 +194,12 @@ internal suspend fun probeSdBinaryCapabilities(
                 .start()
             val output = process.inputStream.bufferedReader().use { it.readText() }
             process.waitFor()
-            output.takeIf { it.isNotBlank() }
+            output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
         }.getOrNull()
-    } ?: return@withContext null
+    }
+    val capabilities = helpCapabilities.maxByOrNull { it.supportedFlags.size } ?: return@withContext null
 
-    parseSdBinaryCapabilities(helpOutput).also { capabilities ->
+    capabilities.also {
         SdBinaryCapabilityCache.binaryPath = sdBinary.absolutePath
         SdBinaryCapabilityCache.capabilities = capabilities
     }
@@ -170,6 +210,7 @@ internal fun setupSdLibrarySymlinks(sourceDir: File?, targetDir: File, binaryPat
 
     val binaryName = File(binaryPath).name
     val tier = when {
+        binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
         binaryName.contains("_armv9") -> "_armv9"
         binaryName.contains("_dotprod") -> "_dotprod"
         binaryName.contains("_baseline") -> "_baseline"

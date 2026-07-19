@@ -16,6 +16,7 @@ data class LlamaConfig(
     val kvCacheTypeK: String = "f16",  // f16, q8_0, q4_0
     val kvCacheTypeV: String = "f16",
     val kvCacheReuse: Int = 0,  // 0 = disabled, >0 = number of tokens to reuse
+    val kvOffloadMode: String = LlamaKvOffloadMode.AUTO.value,
     // Distributed inference - RPC workers
     val rpcWorkers: List<String> = emptyList(), // List of worker addresses "ip:port"
     // Number of layers to offload to RPC (calculated based on worker RAM vs master RAM)
@@ -33,6 +34,7 @@ data class LlamaConfig(
     val draftPMin: Float = 0.0f,          // Min probability threshold for acceptance
     val draftThreads: Int = 4,            // CPU threads for draft model generation
     val draftThreadsBatch: Int = 4,       // CPU threads for draft model prompt/batch processing
+    val draftDeviceMode: String = LlamaDraftDeviceMode.AUTO.value,
     val mtpDraftMax: Int = 3,
     val mtpDraftMin: Int = 0,
     val mtpDraftPMin: Float = 0.0f,
@@ -55,6 +57,28 @@ data class LlamaConfig(
     val customFlags: String? = null,
     val flashAttention: Boolean = false
 )
+
+enum class LlamaKvOffloadMode(val value: String) {
+    AUTO("auto"),
+    ACCELERATOR("accelerator"),
+    CPU("cpu");
+
+    companion object {
+        fun fromValue(value: String?): LlamaKvOffloadMode =
+            entries.firstOrNull { it.value == value?.trim()?.lowercase() } ?: AUTO
+    }
+}
+
+enum class LlamaDraftDeviceMode(val value: String) {
+    AUTO("auto"),
+    ACCELERATOR("accelerator"),
+    CPU("cpu");
+
+    companion object {
+        fun fromValue(value: String?): LlamaDraftDeviceMode =
+            entries.firstOrNull { it.value == value?.trim()?.lowercase() } ?: AUTO
+    }
+}
 
 sealed class ServerState {
     object Stopped : ServerState()

@@ -63,6 +63,8 @@ fun ImageGenSettingsContent(
     val sdVaeTileSize by settingsRepo.sdVaeTileSize.collectAsState()
     val sdVaeRelativeTileSize by settingsRepo.sdVaeRelativeTileSize.collectAsState()
     val sdTensorTypeRules by settingsRepo.sdTensorTypeRules.collectAsState()
+    val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
+    val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
 
     LazyColumn(
             modifier = modifier,
@@ -170,6 +172,41 @@ fun ImageGenSettingsContent(
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(stringResource(R.string.imagegen_memory_opt), fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(stringResource(R.string.imagegen_max_cpu_ram_toggle))
+                                Text(
+                                    stringResource(R.string.imagegen_max_cpu_ram_desc),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Switch(
+                                checked = sdMaxCpuRamEnabled,
+                                onCheckedChange = { settingsRepo.setSdMaxCpuRamEnabled(it) }
+                            )
+                        }
+
+                        if (sdMaxCpuRamEnabled) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = sdMaxCpuRamGiB,
+                                onValueChange = { settingsRepo.setSdMaxCpuRamGiB(it) },
+                                label = { Text(stringResource(R.string.imagegen_max_cpu_ram_label)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("4") },
+                                supportingText = { Text(stringResource(R.string.imagegen_max_cpu_ram_support)) },
+                                singleLine = true
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
                         
                         // VAE Tiling
                         Row(

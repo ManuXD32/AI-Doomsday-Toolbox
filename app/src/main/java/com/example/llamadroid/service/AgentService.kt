@@ -1167,7 +1167,10 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 mmap = sdParams.mmap && spec.supportsMmap,
                 vaeConvDirect = sdParams.vaeConvDirect && spec.supportsVaeConvDirect,
                 qwenImageZeroCondT = sdParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
-                chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask
+                chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask,
+                sdParamsBackendMode = model.sdParamsBackendMode,
+                sdRuntimeBackendMode = model.sdRuntimeBackendMode,
+                maxVramCpuGiB = if (settingsRepo.sdMaxCpuRamEnabled.value) settingsRepo.sdMaxCpuRamGiB.value else ""
             ),
             onProgress = { snapshot ->
                 setStatusText(context.getString(R.string.agent_generating_image_status, "${snapshot.currentStep}/${snapshot.totalSteps}"))

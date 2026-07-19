@@ -31,13 +31,13 @@ class BinaryRepositoryTest {
     }
 
     @Test
-    fun acceleratorLibNames_mapsOnlySupportedSnapdragonLlamaPayloads() {
+    fun acceleratorLibNames_autoDoesNotMapExperimentalGpuPayloads() {
         assertEquals(
-            listOf("libllama_server_snapdragon_opencl.so"),
+            emptyList<String>(),
             BinaryRepository.acceleratorLibNames("llama_server")
         )
         assertEquals(
-            listOf("libllama-bench_snapdragon_opencl.so"),
+            emptyList<String>(),
             BinaryRepository.acceleratorLibNames("llama-bench")
         )
         assertEquals(
@@ -57,16 +57,40 @@ class BinaryRepositoryTest {
             BinaryRepository.acceleratorLibNames("llama_server", SettingsRepository.ACCELERATION_GPU)
         )
         assertEquals(
-            listOf("libllama_server_snapdragon_opencl.so"),
+            emptyList<String>(),
             BinaryRepository.acceleratorLibNames("llama_server", SettingsRepository.ACCELERATION_NPU)
         )
         assertEquals(
             listOf("libllama-bench_snapdragon_opencl.so"),
-            BinaryRepository.acceleratorLibNames("llama-bench", SettingsRepository.ACCELERATION_NPU)
+            BinaryRepository.acceleratorLibNames("llama-bench", SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL)
         )
         assertEquals(
             emptyList<String>(),
-            BinaryRepository.acceleratorLibNames("sd", SettingsRepository.ACCELERATION_CPU)
+            BinaryRepository.acceleratorLibNames("sd", SettingsRepository.NATIVE_BINARY_CPU_AUTO)
+        )
+        assertEquals(
+            listOf("libsd_snapdragon_vulkan.so"),
+            BinaryRepository.acceleratorLibNames("sd", SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN)
+        )
+    }
+
+    @Test
+    fun exactCpuTierForNativeSelection_mapsConcreteCpuChoices() {
+        assertEquals(
+            "baseline",
+            BinaryRepository.exactCpuTierForNativeSelection(SettingsRepository.NATIVE_BINARY_CPU_BASELINE)
+        )
+        assertEquals(
+            "dotprod",
+            BinaryRepository.exactCpuTierForNativeSelection(SettingsRepository.NATIVE_BINARY_CPU_DOTPROD)
+        )
+        assertEquals(
+            "armv9",
+            BinaryRepository.exactCpuTierForNativeSelection(SettingsRepository.NATIVE_BINARY_CPU_ARMV9)
+        )
+        assertEquals(
+            null,
+            BinaryRepository.exactCpuTierForNativeSelection(SettingsRepository.NATIVE_BINARY_AUTO)
         )
     }
 }

@@ -1984,6 +1984,359 @@ object Migrations {
         }
     }
 
+    val MIGRATION_88_89 = object : Migration(88, 89) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 88 -> 89: SD distributed inference tables")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sd_distributed_workers` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `host` TEXT NOT NULL,
+                    `port` INTEGER NOT NULL,
+                    `deviceName` TEXT NOT NULL,
+                    `ramMB` INTEGER NOT NULL,
+                    `threads` INTEGER NOT NULL,
+                    `backendDevice` TEXT NOT NULL,
+                    `isEnabled` INTEGER NOT NULL,
+                    `lastSeenAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_sd_distributed_workers_host_port` ON `sd_distributed_workers` (`host`, `port`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sd_distributed_placements` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `placementMode` TEXT NOT NULL,
+                    `backendSpec` TEXT NOT NULL,
+                    `paramsBackendSpec` TEXT NOT NULL,
+                    `autoFit` INTEGER NOT NULL,
+                    `maxVramSpec` TEXT NOT NULL,
+                    `splitMode` TEXT NOT NULL,
+                    `customFlags` TEXT NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sd_distributed_runs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `mode` TEXT NOT NULL,
+                    `modelName` TEXT NOT NULL,
+                    `rpcServers` TEXT NOT NULL,
+                    `backendSpec` TEXT NOT NULL,
+                    `paramsBackendSpec` TEXT NOT NULL,
+                    `splitMode` TEXT NOT NULL,
+                    `autoFit` INTEGER NOT NULL,
+                    `maxVramSpec` TEXT NOT NULL,
+                    `commandPreview` TEXT NOT NULL,
+                    `status` TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_sd_distributed_runs_createdAt` ON `sd_distributed_runs` (`createdAt`)")
+
+            DebugLog.log("[DB] Migration 88 -> 89 complete")
+        }
+    }
+
+    val MIGRATION_89_90 = object : Migration(89, 90) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 89 -> 90: SD distributed master settings")
+
+            if (tableExists(db, "sd_distributed_workers") && !columnExists(db, "sd_distributed_workers", "sortOrder")) {
+                db.execSQL("ALTER TABLE `sd_distributed_workers` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE `sd_distributed_workers` SET `sortOrder` = `id`")
+            }
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sd_distributed_master_settings` (
+                    `id` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    `enabled` INTEGER NOT NULL,
+                    `placementMode` TEXT NOT NULL,
+                    `backendSpec` TEXT NOT NULL,
+                    `paramsBackendSpec` TEXT NOT NULL,
+                    `autoFit` INTEGER NOT NULL,
+                    `maxVramEnabled` INTEGER NOT NULL,
+                    `maxVramSpec` TEXT NOT NULL,
+                    `splitMode` TEXT NOT NULL,
+                    `customFlags` TEXT NOT NULL,
+                    `prompt` TEXT NOT NULL,
+                    `negativePrompt` TEXT NOT NULL,
+                    `dimensions` TEXT NOT NULL,
+                    `steps` TEXT NOT NULL,
+                    `cfg` TEXT NOT NULL,
+                    `seed` TEXT NOT NULL,
+                    `sampler` TEXT NOT NULL,
+                    `scheduler` TEXT NOT NULL,
+                    `batchCount` TEXT NOT NULL,
+                    `clipSkip` TEXT NOT NULL,
+                    `strength` TEXT NOT NULL,
+                    `frames` TEXT NOT NULL,
+                    `fps` TEXT NOT NULL,
+                    `runtimeThreads` TEXT NOT NULL,
+                    `mmap` INTEGER NOT NULL,
+                    `diffusionFa` INTEGER NOT NULL,
+                    `vaeTiling` INTEGER NOT NULL,
+                    `vaeTileSize` TEXT NOT NULL,
+                    `vaeTileOverlap` TEXT NOT NULL,
+                    `flowShift` TEXT NOT NULL,
+                    `quantization` TEXT NOT NULL,
+                    `tensorRules` TEXT NOT NULL,
+                    `loraStrength` TEXT NOT NULL,
+                    `controlStrength` TEXT NOT NULL,
+                    `cacheMode` TEXT NOT NULL,
+                    `cacheOption` TEXT NOT NULL,
+                    `scmMask` TEXT NOT NULL,
+                    `scmPolicy` TEXT NOT NULL,
+                    `devicesExpanded` INTEGER NOT NULL,
+                    `plannerExpanded` INTEGER NOT NULL,
+                    `generationExpanded` INTEGER NOT NULL,
+                    `runtimeExpanded` INTEGER NOT NULL,
+                    `adaptersExpanded` INTEGER NOT NULL,
+                    `expertExpanded` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+
+            db.execSQL(
+                """
+                INSERT OR IGNORE INTO `sd_distributed_master_settings` (
+                    `id`, `updatedAt`, `enabled`, `placementMode`, `backendSpec`, `paramsBackendSpec`,
+                    `autoFit`, `maxVramEnabled`, `maxVramSpec`, `splitMode`, `customFlags`,
+                    `prompt`, `negativePrompt`, `dimensions`, `steps`, `cfg`, `seed`, `sampler`,
+                    `scheduler`, `batchCount`, `clipSkip`, `strength`, `frames`, `fps`,
+                    `runtimeThreads`, `mmap`, `diffusionFa`, `vaeTiling`, `vaeTileSize`,
+                    `vaeTileOverlap`, `flowShift`, `quantization`, `tensorRules`,
+                    `loraStrength`, `controlStrength`, `cacheMode`, `cacheOption`,
+                    `scmMask`, `scmPolicy`, `devicesExpanded`, `plannerExpanded`,
+                    `generationExpanded`, `runtimeExpanded`, `adaptersExpanded`, `expertExpanded`
+                ) VALUES (
+                    1, 0, 0, 'AUTO_RAM', '', '', 0, 0, '', 'layer', '',
+                    '', '', '512 x 512', '20', '7.0', '-1', 'euler_a',
+                    '', '1', '0', '0.75', '8', '5',
+                    '-1', 0, 0, 0, '',
+                    '0', '', '', '',
+                    '1.0', '0.9', '', '',
+                    '', '', 1, 1,
+                    0, 0, 0, 1
+                )
+                """.trimIndent()
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `sd_distributed_templates` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `settingsJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_sd_distributed_templates_name` ON `sd_distributed_templates` (`name`)")
+
+            DebugLog.log("[DB] Migration 89 -> 90 complete")
+        }
+    }
+
+    val MIGRATION_90_91 = object : Migration(90, 91) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 90 -> 91: local SD backend preferences")
+
+            if (!columnExists(db, "models", "sdParamsBackendMode")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdParamsBackendMode` TEXT NOT NULL DEFAULT 'auto'")
+            }
+            if (!columnExists(db, "models", "sdRuntimeBackendMode")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdRuntimeBackendMode` TEXT NOT NULL DEFAULT 'auto'")
+            }
+
+            DebugLog.log("[DB] Migration 90 -> 91 complete")
+        }
+    }
+
+    val MIGRATION_91_92 = object : Migration(91, 92) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 91 -> 92: SD distributed console workflow settings")
+
+            fun addMasterColumn(name: String, definition: String) {
+                if (tableExists(db, "sd_distributed_master_settings") &&
+                    !columnExists(db, "sd_distributed_master_settings", name)
+                ) {
+                    db.execSQL("ALTER TABLE `sd_distributed_master_settings` ADD COLUMN `$name` $definition")
+                }
+            }
+
+            addMasterColumn("masterContributes", "INTEGER NOT NULL DEFAULT 0")
+            addMasterColumn("masterDisplayName", "TEXT NOT NULL DEFAULT 'This device'")
+            addMasterColumn("masterRamMB", "INTEGER NOT NULL DEFAULT 4096")
+            addMasterColumn("masterThreads", "INTEGER NOT NULL DEFAULT 4")
+            addMasterColumn("masterBackendDevice", "TEXT NOT NULL DEFAULT 'cpu'")
+            addMasterColumn("masterAllowedModules", "TEXT NOT NULL DEFAULT 'diffusion,te,vae,controlnet,upscaler'")
+            addMasterColumn("masterDiffusionSharePercent", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageWorkflowMode", "TEXT NOT NULL DEFAULT 'TXT2IMG'")
+            addMasterColumn("imageModelPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageUpscalerModelPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageInputPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoWorkflowMode", "TEXT NOT NULL DEFAULT 'TXT2VID'")
+            addMasterColumn("videoModelPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoInputPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageExpanded", "INTEGER NOT NULL DEFAULT 1")
+            addMasterColumn("videoExpanded", "INTEGER NOT NULL DEFAULT 0")
+
+            if (tableExists(db, "sd_distributed_templates") &&
+                !columnExists(db, "sd_distributed_templates", "workflowType")
+            ) {
+                db.execSQL("ALTER TABLE `sd_distributed_templates` ADD COLUMN `workflowType` TEXT NOT NULL DEFAULT 'IMAGE'")
+                db.execSQL(
+                    """
+                    UPDATE `sd_distributed_templates`
+                    SET `workflowType` = 'VIDEO'
+                    WHERE `settingsJson` LIKE '%"videoWorkflowMode"%'
+                       OR `settingsJson` LIKE '%"videoModelPath"%'
+                       OR `settingsJson` LIKE '%"TXT2VID"%'
+                       OR `settingsJson` LIKE '%"IMG2VID"%'
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 91 -> 92 complete")
+        }
+    }
+
+    val MIGRATION_92_93 = object : Migration(92, 93) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 92 -> 93: SD distributed model components")
+
+            fun addMasterColumn(name: String, definition: String) {
+                if (tableExists(db, "sd_distributed_master_settings") &&
+                    !columnExists(db, "sd_distributed_master_settings", name)
+                ) {
+                    db.execSQL("ALTER TABLE `sd_distributed_master_settings` ADD COLUMN `$name` $definition")
+                }
+            }
+
+            addMasterColumn("imageVaePath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageTaePath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageClipLPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageClipGPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageT5xxlPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageLlmPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageLlmVisionPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imagePhotoMakerPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageControlNetEnabled", "INTEGER NOT NULL DEFAULT 0")
+            addMasterColumn("imageControlNetPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageLoraEnabled", "INTEGER NOT NULL DEFAULT 0")
+            addMasterColumn("imageLoraPath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageLoraApplyMode", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoUseVae", "INTEGER NOT NULL DEFAULT 0")
+            addMasterColumn("videoVaePath", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoUseT5xxl", "INTEGER NOT NULL DEFAULT 0")
+            addMasterColumn("videoT5xxlPath", "TEXT NOT NULL DEFAULT ''")
+
+            DebugLog.log("[DB] Migration 92 -> 93 complete")
+        }
+    }
+
+    val MIGRATION_93_94 = object : Migration(93, 94) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 93 -> 94: SD distributed Auto RAM scope")
+
+            if (tableExists(db, "sd_distributed_master_settings") &&
+                !columnExists(db, "sd_distributed_master_settings", "autoRamScope")
+            ) {
+                db.execSQL(
+                    "ALTER TABLE `sd_distributed_master_settings` ADD COLUMN `autoRamScope` TEXT NOT NULL DEFAULT 'DIFFUSION_ONLY'"
+                )
+            }
+
+            DebugLog.log("[DB] Migration 93 -> 94 complete")
+        }
+    }
+
+    val MIGRATION_94_95 = object : Migration(94, 95) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 94 -> 95: durable download tasks")
+
+            if (!tableExists(db, "download_tasks")) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `download_tasks` (" +
+                        "`id` TEXT NOT NULL, " +
+                        "`url` TEXT NOT NULL, " +
+                        "`destPath` TEXT NOT NULL, " +
+                        "`filename` TEXT NOT NULL, " +
+                        "`repoId` TEXT NOT NULL, " +
+                        "`progressKey` TEXT NOT NULL, " +
+                        "`modelType` TEXT NOT NULL, " +
+                        "`isVision` INTEGER NOT NULL DEFAULT 0, " +
+                        "`sdCapabilities` TEXT DEFAULT NULL, " +
+                        "`sdFamily` TEXT DEFAULT NULL, " +
+                        "`sdVariant` TEXT DEFAULT NULL, " +
+                        "`sdCompatProfiles` TEXT DEFAULT NULL, " +
+                        "`onnxCapabilities` TEXT DEFAULT NULL, " +
+                        "`onnxAssetKind` TEXT DEFAULT NULL, " +
+                        "`onnxPipelineFamily` TEXT DEFAULT NULL, " +
+                        "`onnxReferenceUri` TEXT DEFAULT NULL, " +
+                        "`onnxReferencePath` TEXT DEFAULT NULL, " +
+                        "`onnxInstallKind` TEXT DEFAULT NULL, " +
+                        "`onnxInstallDirPath` TEXT DEFAULT NULL, " +
+                        "`huggingFaceToken` TEXT DEFAULT NULL, " +
+                        "`liteRtDisplayName` TEXT DEFAULT NULL, " +
+                        "`liteRtSourceUri` TEXT DEFAULT NULL, " +
+                        "`liteRtBackendPreference` TEXT DEFAULT NULL, " +
+                        "`liteRtSupportsCpu` INTEGER DEFAULT NULL, " +
+                        "`liteRtSupportsGpu` INTEGER DEFAULT NULL, " +
+                        "`liteRtSupportsVision` INTEGER DEFAULT NULL, " +
+                        "`liteRtSupportsAudio` INTEGER DEFAULT NULL, " +
+                        "`liteRtSupportsEmbedding` INTEGER DEFAULT NULL, " +
+                        "`liteRtMaxContextTokens` INTEGER DEFAULT NULL, " +
+                        "`status` TEXT NOT NULL DEFAULT 'ACTIVE', " +
+                        "`bytesDownloaded` INTEGER NOT NULL DEFAULT 0, " +
+                        "`totalBytes` INTEGER DEFAULT NULL, " +
+                        "`lastError` TEXT DEFAULT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`id`)" +
+                        ")"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_download_tasks_modelType` ON `download_tasks` (`modelType`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_download_tasks_status` ON `download_tasks` (`status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_download_tasks_updatedAt` ON `download_tasks` (`updatedAt`)")
+            }
+
+            DebugLog.log("[DB] Migration 94 -> 95 complete")
+        }
+    }
+
+    val MIGRATION_95_96 = object : Migration(95, 96) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 95 -> 96: SD distributed card custom flags")
+
+            fun addMasterColumn(name: String, definition: String) {
+                if (tableExists(db, "sd_distributed_master_settings") &&
+                    !columnExists(db, "sd_distributed_master_settings", name)
+                ) {
+                    db.execSQL("ALTER TABLE `sd_distributed_master_settings` ADD COLUMN `$name` $definition")
+                }
+            }
+
+            addMasterColumn("imageCustomFlags", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoCustomFlags", "TEXT NOT NULL DEFAULT ''")
+
+            DebugLog.log("[DB] Migration 95 -> 96 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -2045,7 +2398,15 @@ object Migrations {
         MIGRATION_84_85,
         MIGRATION_85_86,
         MIGRATION_86_87,
-        MIGRATION_87_88
+        MIGRATION_87_88,
+        MIGRATION_88_89,
+        MIGRATION_89_90,
+        MIGRATION_90_91,
+        MIGRATION_91_92,
+        MIGRATION_92_93,
+        MIGRATION_93_94,
+        MIGRATION_94_95,
+        MIGRATION_95_96
     )
     /**
      * Check if a column exists in a table.

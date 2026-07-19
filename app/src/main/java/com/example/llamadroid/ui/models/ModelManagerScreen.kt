@@ -41,6 +41,7 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -1059,39 +1060,63 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
     val progressMap by viewModel.downloadProgress.collectAsState()
     val activeDownloads = progressMap.filter {
-        it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f
+        !it.key.startsWith("onnx:") &&
+            !it.key.startsWith("litert:") &&
+            (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
     }
-    
-    if (activeDownloads.isEmpty()) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.ArrowDropDown,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    stringResource(R.string.models_no_downloads),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    stringResource(R.string.models_downloading_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-            }
+
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            DownloadTaskSection(
+                modelTypes = listOf(
+                    ModelType.LLM,
+                    ModelType.EMBEDDING,
+                    ModelType.VISION,
+                    ModelType.VISION_PROJECTOR,
+                    ModelType.MMPROJ,
+                    ModelType.QUADTRIX
+                ),
+                includeTask = { task ->
+                    !task.id.startsWith("onnx:") &&
+                        !task.id.startsWith("litert:") &&
+                        !task.id.startsWith("whisper_")
+                }
+            )
         }
-    } else {
-        LazyColumn(
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+
+        if (activeDownloads.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.ArrowDropDown,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            stringResource(R.string.models_no_downloads),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            stringResource(R.string.models_downloading_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+        } else {
             items(activeDownloads.toList()) { (repoId, progress) ->
                 val isIndeterminate = progress == DownloadProgressHolder.INDETERMINATE
                 Card(

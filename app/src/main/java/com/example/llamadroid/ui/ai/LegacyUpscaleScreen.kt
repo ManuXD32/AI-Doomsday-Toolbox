@@ -96,10 +96,13 @@ fun LegacyUpscaleScreen(navController: NavController) {
     val settingsRepo = remember { SettingsRepository(context) }
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
+    val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
+    val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER).collectAsState(initial = emptyList())
 
     var mainTab by remember { mutableIntStateOf(0) }
     var selectedUpscalerModelPath by remember { mutableStateOf<String?>(null) }
+    val selectedUpscalerModel = upscalerModels.firstOrNull { it.path == selectedUpscalerModelPath }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var selectedImagePath by remember { mutableStateOf<String?>(null) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
@@ -247,7 +250,10 @@ fun LegacyUpscaleScreen(navController: NavController) {
             inputImagePath = inputImagePath ?: "",
             outputPath = outputFile.absolutePath,
             upscaleRepeats = upscaleRepeats,
-            threads = threadCount
+            threads = threadCount,
+            sdParamsBackendMode = selectedUpscalerModel?.sdParamsBackendMode ?: "auto",
+            sdRuntimeBackendMode = selectedUpscalerModel?.sdRuntimeBackendMode ?: "auto",
+            maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
         )
 
         batteryGateState.runAfterCheck {

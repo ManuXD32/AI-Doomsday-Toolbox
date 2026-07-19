@@ -40,12 +40,15 @@ data class AcceleratorModuleState(
 
 object DeviceAcceleration {
     const val MODULE_LLM_SNAPDRAGON_OPENCL = "feature_llm_snapdragon_opencl"
+    const val MODULE_MEDIA_SNAPDRAGON_VULKAN = "feature_media_snapdragon_vulkan"
 
     val llamaSnapdragonModules = listOf(
         MODULE_LLM_SNAPDRAGON_OPENCL
     )
 
-    val stableDiffusionSnapdragonModules = emptyList<String>()
+    val stableDiffusionSnapdragonModules = listOf(
+        MODULE_MEDIA_SNAPDRAGON_VULKAN
+    )
 
     private val _activeBinaries = MutableStateFlow<Map<AccelerationWorkload, String>>(emptyMap())
     val activeBinaries = _activeBinaries.asStateFlow()
@@ -146,7 +149,10 @@ object DeviceAcceleration {
 
     fun isAcceleratorBinary(file: File): Boolean {
         val name = file.name.lowercase(Locale.US)
-        return "snapdragon_opencl" in name || "opencl" in name
+        return "snapdragon_opencl" in name ||
+            "snapdragon_vulkan" in name ||
+            "opencl" in name ||
+            "vulkan" in name
     }
 
     fun acceleratorLibrarySearchDirs(): List<File> =

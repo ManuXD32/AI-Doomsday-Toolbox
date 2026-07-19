@@ -46,6 +46,8 @@ import com.example.llamadroid.sd.SdCacheArchitecture
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdImageInputMode
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdParamsBackendMode
+import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
@@ -86,6 +88,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val sdVaeTileSize by settingsRepo.sdVaeTileSize.collectAsState()
     val sdVaeRelativeTileSize by settingsRepo.sdVaeRelativeTileSize.collectAsState()
     val sdTensorTypeRules by settingsRepo.sdTensorTypeRules.collectAsState()
+    val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
+    val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
+    val scope = rememberCoroutineScope()
 
     // Available SD models - Classic checkpoints (SD1.5/SDXL)
     val sdCheckpoints by db.modelDao().getModelsByType(ModelType.SD_CHECKPOINT)
@@ -205,6 +210,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val selectedFamily = selectedFamilyInfo?.first
     val selectedVariant = selectedFamilyInfo?.second
     val selectedFamilySpec = selectedFamily?.let { resolveSdFamilySpec(it, selectedVariant) }
+    val localMaxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
     val effectiveCapabilities = run {
         val explicit = selectedMainModel?.sdCapabilities?.parseSdCapabilities().orEmpty()
         when {
@@ -342,6 +348,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var cacheOption by remember { mutableStateOf("") }
     var scmMask by remember { mutableStateOf("") }
     var scmPolicy by remember { mutableStateOf<SdCacheScmPolicy?>(null) }
+    var manualCommandFlags by remember { mutableStateOf("") }
 
     fun clearDiffusionModeState() {
         selectedVaePath = null
@@ -614,7 +621,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     outputPath = outputFile.absolutePath,
                     inputImagePath = inputImagePath ?: "",
                     upscaleRepeats = upscaleRepeats,
-                    threads = threadCount
+                    threads = threadCount,
+                    sdParamsBackendMode = selectedActiveModel?.sdParamsBackendMode ?: "auto",
+                    sdRuntimeBackendMode = selectedActiveModel?.sdRuntimeBackendMode ?: "auto",
+                    maxVramCpuGiB = localMaxVramCpuGiB,
+                    customFlags = manualCommandFlags
                 )
 
                 batteryGateState.runAfterCheck {
@@ -694,6 +705,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     vaeConvDirect = vaeConvDirectEnabled,
                     qwenImageZeroCondT = qwenImageZeroCondTEnabled,
                     chromaDisableDitMask = chromaDisableDitMaskEnabled,
+                    sdParamsBackendMode = selectedMainModel?.sdParamsBackendMode ?: "auto",
+                    sdRuntimeBackendMode = selectedMainModel?.sdRuntimeBackendMode ?: "auto",
+                    maxVramCpuGiB = localMaxVramCpuGiB,
                     vaeTiling = sdVaeTiling,
                     vaeTileOverlap = sdVaeTileOverlap,
                     vaeTileSize = sdVaeTileSize,
@@ -703,7 +717,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     cacheMode = cacheMode,
                     cacheOption = cacheOption,
                     scmMask = scmMask,
-                    scmPolicy = scmPolicy
+                    scmPolicy = scmPolicy,
+                    customFlags = manualCommandFlags
                 )
 
                 batteryGateState.runAfterCheck {
@@ -1517,6 +1532,33 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                        LocalSdCliMemoryControls(
+                            selectedModel = selectedActiveModel,
+                            maxRamEnabled = sdMaxCpuRamEnabled,
+                            maxRamGiB = sdMaxCpuRamGiB,
+                            onParamsBackendChange = { mode ->
+                                selectedActiveModel?.let { model ->
+                                    scope.launch {
+                                        db.modelDao().insertModel(
+                                            model.copy(sdParamsBackendMode = mode.storedValue)
+                                        )
+                                    }
+                                }
+                            },
+                            onRuntimeBackendChange = { mode ->
+                                selectedActiveModel?.let { model ->
+                                    scope.launch {
+                                        db.modelDao().insertModel(
+                                            model.copy(sdRuntimeBackendMode = mode.storedValue)
+                                        )
+                                    }
+                                }
+                            },
+                            onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
+                            onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
+                        )
                     }
                 }
             }
@@ -1713,6 +1755,36 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             enabled = selectedMode != 2,
             disabledMessage = stringResource(R.string.gen_cache_disabled_for_upscale)
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    stringResource(R.string.sd_manual_flags_label),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Text(
+                    stringResource(R.string.sd_manual_flags_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = manualCommandFlags,
+                    onValueChange = { manualCommandFlags = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.sd_manual_flags_label)) },
+                    placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
+                    minLines = 2,
+                    shape = RoundedCornerShape(12.dp)
+                )
+            }
+        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -2411,6 +2483,171 @@ private fun LabeledSwitchRow(
             onCheckedChange = onCheckedChange
         )
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LocalSdCliMemoryControls(
+    selectedModel: ModelEntity?,
+    maxRamEnabled: Boolean,
+    maxRamGiB: String,
+    onParamsBackendChange: (SdParamsBackendMode) -> Unit,
+    onRuntimeBackendChange: (SdRuntimeBackendMode) -> Unit,
+    onMaxRamEnabledChange: (Boolean) -> Unit,
+    onMaxRamGiBChange: (String) -> Unit
+) {
+    val paramsMode = SdParamsBackendMode.fromStoredValue(selectedModel?.sdParamsBackendMode)
+    val runtimeMode = SdRuntimeBackendMode.fromStoredValue(selectedModel?.sdRuntimeBackendMode)
+    Text(
+        stringResource(R.string.sd_models_local_backend_title),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary
+    )
+    Text(
+        stringResource(R.string.imagegen_local_sd_memory_help),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        SdParamsBackendDropdown(
+            modifier = Modifier.weight(1f),
+            value = paramsMode,
+            enabled = selectedModel != null,
+            onValueChange = onParamsBackendChange
+        )
+        SdRuntimeBackendDropdown(
+            modifier = Modifier.weight(1f),
+            value = runtimeMode,
+            enabled = selectedModel != null,
+            onValueChange = onRuntimeBackendChange
+        )
+    }
+    Spacer(modifier = Modifier.height(12.dp))
+    LabeledSwitchRow(
+        label = stringResource(R.string.imagegen_max_cpu_ram_toggle),
+        checked = maxRamEnabled,
+        onCheckedChange = onMaxRamEnabledChange
+    )
+    Text(
+        stringResource(R.string.imagegen_max_cpu_ram_desc),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (maxRamEnabled) {
+        Spacer(modifier = Modifier.height(8.dp))
+        OutlinedTextField(
+            value = maxRamGiB,
+            onValueChange = onMaxRamGiBChange,
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(stringResource(R.string.imagegen_max_cpu_ram_label)) },
+            supportingText = { Text(stringResource(R.string.imagegen_max_cpu_ram_support)) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            shape = RoundedCornerShape(12.dp)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SdParamsBackendDropdown(
+    modifier: Modifier = Modifier,
+    value: SdParamsBackendMode,
+    enabled: Boolean,
+    onValueChange: (SdParamsBackendMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = sdParamsBackendModeLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            label = { Text(stringResource(R.string.sd_models_params_backend_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = RoundedCornerShape(12.dp)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            SdParamsBackendMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(sdParamsBackendModeLabel(mode)) },
+                    onClick = {
+                        onValueChange(mode)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SdRuntimeBackendDropdown(
+    modifier: Modifier = Modifier,
+    value: SdRuntimeBackendMode,
+    enabled: Boolean,
+    onValueChange: (SdRuntimeBackendMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = sdRuntimeBackendModeLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            label = { Text(stringResource(R.string.sd_models_runtime_backend_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = RoundedCornerShape(12.dp)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            SdRuntimeBackendMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(sdRuntimeBackendModeLabel(mode)) },
+                    onClick = {
+                        onValueChange(mode)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun sdParamsBackendModeLabel(mode: SdParamsBackendMode): String = when (mode) {
+    SdParamsBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
+    SdParamsBackendMode.DISK -> stringResource(R.string.sd_models_params_backend_disk)
+}
+
+@Composable
+private fun sdRuntimeBackendModeLabel(mode: SdRuntimeBackendMode): String = when (mode) {
+    SdRuntimeBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
+    SdRuntimeBackendMode.CPU -> stringResource(R.string.sd_models_runtime_backend_cpu)
 }
 
 @Composable

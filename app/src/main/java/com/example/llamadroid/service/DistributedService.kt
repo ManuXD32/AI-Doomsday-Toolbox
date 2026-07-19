@@ -623,6 +623,31 @@ class DistributedService : Service() {
             }
             context.startService(intent)
         }
+
+        fun clearWorkerCache(context: Context): Boolean {
+            if (_isRunning.value) {
+                addRpcLog(context.getString(com.example.llamadroid.R.string.dist_worker_cache_clear_running))
+                return false
+            }
+            return runCatching {
+                val root = workerCacheRoot(context)
+                if (root.exists()) root.deleteRecursively()
+                root.mkdirs()
+                addRpcLog(context.getString(com.example.llamadroid.R.string.dist_worker_cache_cleared))
+                true
+            }.getOrElse { error ->
+                addRpcLog(
+                    context.getString(
+                        com.example.llamadroid.R.string.dist_worker_cache_clear_failed,
+                        error.message ?: error.javaClass.simpleName
+                    )
+                )
+                false
+            }
+        }
+
+        private fun workerCacheRoot(context: Context): File =
+            File(context.filesDir, "llm_rpc_worker_cache").apply { mkdirs() }
         
         fun stopWorker(context: Context) {
             val intent = Intent(context, DistributedService::class.java).apply {
@@ -861,8 +886,8 @@ class DistributedService : Service() {
                 processBuilder.redirectErrorStream(true)
                 processBuilder.environment()["LD_LIBRARY_PATH"] = binaryFile.parentFile?.absolutePath ?: ""
                 
-                // Set XDG_CACHE_HOME to app's cache folder for layer caching with -c flag
-                val cacheDir = applicationContext.cacheDir.absolutePath
+                // Set XDG_CACHE_HOME to a dedicated folder for RPC tensor caching with -c flag.
+                val cacheDir = workerCacheRoot(applicationContext).absolutePath
                 val filesDir = applicationContext.filesDir.absolutePath
                 processBuilder.environment()["XDG_CACHE_HOME"] = cacheDir
                 
@@ -972,9 +997,10 @@ class DistributedService : Service() {
         rpcProcess = null
         _isRunning.value = false
         
-        // Release WakeLock
+        // Release locks held while the RPC worker process is alive.
         WakeLockManager.release("DistributedService")
-        DebugLog.log("[$TAG] Worker stopped, WakeLock released")
+        WakeLockManager.releaseWifiLock("DistributedService")
+        DebugLog.log("[$TAG] Worker stopped, WakeLock & WifiLock released")
         
         // Stop notification updates
         notificationJob?.cancel()

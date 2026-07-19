@@ -13,6 +13,7 @@ import java.io.FileInputStream
 import java.io.InputStreamReader
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
+import com.example.llamadroid.util.CpuFeatures
 import kotlin.math.min
 
 data class ProcessRunResult(
@@ -20,7 +21,10 @@ data class ProcessRunResult(
     val becameReady: Boolean,
     val stoppedIntentionally: Boolean,
     val acceleratorBackendUnavailable: Boolean = false,
-    val acceleratorBackendDegraded: Boolean = false
+    val acceleratorBackendDegraded: Boolean = false,
+    val recentOutput: List<String> = emptyList(),
+    val startupFailureMessage: String? = null,
+    val nativeLinkerStartupFailure: Boolean = false
 )
 
 class ProcessController {
@@ -41,9 +45,26 @@ class ProcessController {
             ServerState.Error(errorMessage)
         }
     }
+
+    internal fun classifyNativeLinkerStartupFailure(lines: List<String>): String? {
+        val joined = lines.joinToString("\n")
+        val lower = joined.lowercase()
+        val linkerFailure = lower.contains("cannot link executable") ||
+            lower.contains("can't enable gnu relro protection") ||
+            lower.contains("gnu relro")
+        if (!linkerFailure) return null
+        return lines.lastOrNull { line ->
+            val candidate = line.lowercase()
+            candidate.contains("cannot link executable") ||
+                candidate.contains("can't enable gnu relro protection") ||
+                candidate.contains("out of memory") ||
+                candidate.contains("gnu relro")
+        } ?: joined.takeLast(240)
+    }
     
 
     fun getCommand(binaryPath: String, config: LlamaConfig): List<String> {
+        val customFlagsText = config.customFlags.orEmpty()
         val args = mutableListOf(
             binaryPath,
             "-m", config.modelPath,
@@ -83,6 +104,7 @@ class ProcessController {
                 args.add(config.kvCacheReuse.toString())
             }
         }
+        appendKvOffloadArgs(args, config, customFlagsText)
         
         // Add RPC workers for distributed inference
         if (config.rpcWorkers.isNotEmpty()) {
@@ -107,7 +129,6 @@ class ProcessController {
             }
         }
 
-        val customFlagsText = config.customFlags.orEmpty()
         if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath)) &&
             config.rpcWorkers.isEmpty() &&
             "-ngl" !in customFlagsText &&
@@ -227,6 +248,7 @@ class ProcessController {
         val speculativeArgs = buildSpeculativeArgs(config)
         val mtpArgs = if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) speculativeArgs else emptyList()
         val nativeToolsArgs = buildNativeToolsArgs(config.nativeToolsEnabled)
+        val kvOffloadArgs = buildKvOffloadArgs(config, customFlagsArgs)
         val kvCacheArgs = if (config.kvCacheEnabled) {
             buildList {
                 add("--cache-type-k")
@@ -268,7 +290,9 @@ class ProcessController {
             "{speculative_args}" to buildCommandString(speculativeArgs),
             "{mtp_args}" to buildCommandString(mtpArgs),
             "{native_tools_args}" to buildCommandString(nativeToolsArgs),
-            "{kv_cache_args}" to buildCommandString(kvCacheArgs)
+            "{kv_cache_args}" to buildCommandString(kvCacheArgs + kvOffloadArgs),
+            "{kv_offload_args}" to buildCommandString(kvOffloadArgs),
+            "{draft_device_args}" to buildCommandString(buildDraftDeviceArgs(config, customFlagsArgs))
         )
 
         var rendered = template
@@ -305,6 +329,7 @@ class ProcessController {
                 add(config.mtpDraftMin.coerceAtLeast(0).toString())
                 add("--spec-draft-p-min")
                 add(String.format(java.util.Locale.US, "%.2f", config.mtpDraftPMin.coerceIn(0f, 1f)))
+                addAll(buildDraftDeviceArgs(config, config.customFlags.orEmpty()))
             }
             LlamaSpeculativeMode.DRAFT_DFLASH -> {
                 val draftModel = config.draftModelPath ?: return emptyList()
@@ -348,6 +373,38 @@ class ProcessController {
         "--spec-draft-threads", config.draftThreads.coerceIn(1, 16).toString(),
         "--spec-draft-threads-batch", config.draftThreadsBatch.coerceIn(1, 16).toString()
     )
+
+    private fun appendKvOffloadArgs(args: MutableList<String>, config: LlamaConfig, customFlagsText: String) {
+        args.addAll(buildKvOffloadArgs(config, customFlagsText))
+    }
+
+    private fun buildKvOffloadArgs(config: LlamaConfig, customFlagsText: String): List<String> =
+        buildKvOffloadArgs(config, splitCommandLine(customFlagsText))
+
+    private fun buildKvOffloadArgs(config: LlamaConfig, customFlagsArgs: List<String>): List<String> {
+        if (hasAnyCommandFlag(customFlagsArgs, setOf("--kv-offload", "-kvo", "--no-kv-offload", "-nkvo"))) {
+            return emptyList()
+        }
+        return when (LlamaKvOffloadMode.fromValue(config.kvOffloadMode)) {
+            LlamaKvOffloadMode.AUTO -> emptyList()
+            LlamaKvOffloadMode.ACCELERATOR -> listOf("--kv-offload")
+            LlamaKvOffloadMode.CPU -> listOf("--no-kv-offload")
+        }
+    }
+
+    private fun buildDraftDeviceArgs(config: LlamaConfig, customFlagsText: String): List<String> =
+        buildDraftDeviceArgs(config, splitCommandLine(customFlagsText))
+
+    private fun buildDraftDeviceArgs(config: LlamaConfig, customFlagsArgs: List<String>): List<String> {
+        if (hasAnyCommandFlag(customFlagsArgs, setOf("--device-draft", "--gpu-layers-draft"))) {
+            return emptyList()
+        }
+        return when (LlamaDraftDeviceMode.fromValue(config.draftDeviceMode)) {
+            LlamaDraftDeviceMode.AUTO -> emptyList()
+            LlamaDraftDeviceMode.CPU -> listOf("--device-draft", "none", "--gpu-layers-draft", "0")
+            LlamaDraftDeviceMode.ACCELERATOR -> listOf("--device-draft", "GPUOpenCL", "--gpu-layers-draft", "all")
+        }
+    }
 
     private fun buildNativeToolsArgs(enabled: Boolean): List<String> =
         if (enabled) listOf("--tools", "all") else emptyList()
@@ -417,6 +474,7 @@ class ProcessController {
 
     private companion object {
         private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
+        private const val RECENT_OUTPUT_LIMIT = 24
         private val MTP_SPEC_TYPE_MARKER = "draft-mtp".toByteArray(Charsets.US_ASCII)
         private val DFLASH_SPEC_MARKERS = listOf(
             "draft-dflash",
@@ -482,7 +540,14 @@ class ProcessController {
             pb.environment()["TMPDIR"] = workingDir.absolutePath
             pb.environment()["PREFIX"] = filesDir.absolutePath
             if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath))) {
-                pb.environment()["GGML_BACKEND_PATH"] = nativeLibDir?.absolutePath.orEmpty()
+                val ggmlBackendPath = resolveGgmlBackendPathForAccelerator(nativeLibDir, libDir)
+                if (ggmlBackendPath != null) {
+                    pb.environment()["GGML_BACKEND_PATH"] = ggmlBackendPath
+                    DebugLog.log("ProcessController: GGML_BACKEND_PATH=$ggmlBackendPath")
+                } else {
+                    pb.environment().remove("GGML_BACKEND_PATH")
+                    DebugLog.log("ProcessController: GGML_BACKEND_PATH unset; no standalone GGML accelerator backend library was found.")
+                }
                 pb.environment()["AIDOOM_OPENCL_DEBUG"] = "1"
                 pb.environment()["ADSP_LIBRARY_PATH"] = buildList {
                     nativeLibDir?.absolutePath?.takeIf { it.isNotBlank() }?.let(::add)
@@ -492,7 +557,7 @@ class ProcessController {
                         .forEach(::add)
                 }.distinct().joinToString(";")
             } else {
-                pb.environment()["GGML_BACKEND_PATH"] = ""
+                pb.environment().remove("GGML_BACKEND_PATH")
                 pb.environment().remove("ADSP_LIBRARY_PATH")
             }
             DebugLog.log("ProcessController: Working dir=${workingDir.absolutePath}")
@@ -504,10 +569,17 @@ class ProcessController {
             val reader = BufferedReader(InputStreamReader(process!!.inputStream))
             var line: String?
             var modelLoaded = false
+            val recentOutput = ArrayDeque<String>()
             while (reader.readLine().also { line = it } != null) {
                 _logs.value = line ?: ""
                 Log.d("LlamaServer", line ?: "")
                 DebugLog.log("Server: ${line ?: ""}")
+                line?.let {
+                    recentOutput.addLast(it)
+                    while (recentOutput.size > RECENT_OUTPUT_LIMIT) {
+                        recentOutput.removeFirst()
+                    }
+                }
                 
                 // Invoke callback
                 line?.let { 
@@ -552,12 +624,22 @@ class ProcessController {
             DebugLog.log("ProcessController: Process exited with code $exitCode")
             process = null
             val appContext = LlamaApplication.instance
-            val exitMessage = appContext.getString(R.string.llama_server_process_exited_unexpectedly, exitCode)
+            val startupFailureDetail = if (!modelLoaded && !stoppedIntentionally) {
+                classifyNativeLinkerStartupFailure(recentOutput.toList())
+            } else {
+                null
+            }
+            val exitMessage = startupFailureDetail?.let {
+                appContext.getString(R.string.llama_server_native_linker_failure, it.take(220))
+            } ?: appContext.getString(R.string.llama_server_process_exited_unexpectedly, exitCode)
             onState?.invoke(resolveExitState(exitCode, exitMessage))
             return@withContext ProcessRunResult(
                 exitCode = exitCode,
                 becameReady = modelLoaded,
-                stoppedIntentionally = stoppedIntentionally
+                stoppedIntentionally = stoppedIntentionally,
+                recentOutput = recentOutput.toList(),
+                startupFailureMessage = if (stoppedIntentionally) null else exitMessage,
+                nativeLinkerStartupFailure = startupFailureDetail != null
             )
         } catch (e: Exception) {
             if (stoppedIntentionally) {
@@ -574,6 +656,23 @@ class ProcessController {
             Log.e("ProcessController", "Failed to start", e)
             throw e
         }
+    }
+
+    internal fun resolveGgmlBackendPathForAccelerator(nativeLibDir: File?, libDir: File): String? {
+        val candidateNames = listOf(
+            "libggml-opencl.so",
+            "libggml-opencl.so.0",
+            "libggml-opencl.so.0.so",
+            "libggml-vulkan.so",
+            "libggml-vulkan.so.0",
+            "libggml-vulkan.so.0.so"
+        )
+        val dirs = listOfNotNull(libDir, nativeLibDir).distinctBy { it.absolutePath }
+        return candidateNames
+            .asSequence()
+            .flatMap { name -> dirs.asSequence().map { dir -> File(dir, name) } }
+            .firstOrNull { it.isFile }
+            ?.absolutePath
     }
     
     /**
@@ -592,6 +691,7 @@ class ProcessController {
             binaryName.contains("_armv9") -> "_armv9"
             binaryName.contains("_dotprod") -> "_dotprod"
             binaryName.contains("_baseline") -> "_baseline"
+            DeviceAcceleration.isAcceleratorBinary(File(binaryPath)) -> "_${CpuFeatures.getTier()}"
             else -> ""
         }
         
@@ -612,6 +712,9 @@ class ProcessController {
             
             "libggml-cpu.so" to listOf("libggml-cpu.so", "libggml-cpu.so.0.so"),
             "libggml-cpu.so.0" to listOf("libggml-cpu.so.0", "libggml-cpu.so", "libggml-cpu.so.0.so"),
+
+            "libggml-opencl.so" to listOf("libggml-opencl.so", "libggml-opencl.so.0.so"),
+            "libggml-opencl.so.0" to listOf("libggml-opencl.so.0", "libggml-opencl.so", "libggml-opencl.so.0.so"),
             
             "libggml-base.so" to listOf("libggml-base.so", "libggml-base.so.0.so"),
             "libggml-base.so.0" to listOf("libggml-base.so.0", "libggml-base.so", "libggml-base.so.0.so")

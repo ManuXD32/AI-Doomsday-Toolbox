@@ -69,6 +69,66 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `accelerator ggml backend path resolves to a file only`() {
+        val controller = ProcessController()
+        val tempDir = createTempDir(prefix = "ggml-backend-test")
+        val libDir = File(tempDir, "linked").apply { mkdirs() }
+        val nativeDir = File(tempDir, "native").apply { mkdirs() }
+        val backend = File(nativeDir, "libggml-opencl.so").apply { writeText("test") }
+
+        val resolved = controller.resolveGgmlBackendPathForAccelerator(nativeDir, libDir)
+
+        assertEquals(backend.absolutePath, resolved)
+    }
+
+    @Test
+    fun `accelerator ggml backend path ignores directories`() {
+        val controller = ProcessController()
+        val tempDir = createTempDir(prefix = "ggml-backend-test")
+        val libDir = File(tempDir, "linked").apply { mkdirs() }
+        val nativeDir = File(tempDir, "native").apply { mkdirs() }
+        File(nativeDir, "libggml-opencl.so").mkdirs()
+
+        val resolved = controller.resolveGgmlBackendPathForAccelerator(nativeDir, libDir)
+
+        assertEquals(null, resolved)
+    }
+
+    @Test
+    fun `generated command can keep KV cache on CPU`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                kvCacheEnabled = true,
+                kvOffloadMode = LlamaKvOffloadMode.CPU.value
+            )
+        )
+
+        assertTrue(args.contains("--no-kv-offload"))
+        assertFalse(args.contains("--kv-offload"))
+    }
+
+    @Test
+    fun `generated command can explicitly enable KV offload`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                kvCacheEnabled = true,
+                kvOffloadMode = LlamaKvOffloadMode.ACCELERATOR.value
+            )
+        )
+
+        assertTrue(args.contains("--kv-offload"))
+        assertFalse(args.contains("--no-kv-offload"))
+    }
+
+    @Test
     fun `speculative command template placeholder uses current speculative decoding flags`() {
         val controller = ProcessController()
 
@@ -115,6 +175,59 @@ class ProcessControllerTest {
         assertFalse(args.contains("--spec-draft-threads"))
         assertFalse(args.contains("--spec-draft-threads-batch"))
         assertFalse(args.contains("--draft-p-min"))
+    }
+
+    @Test
+    fun `MTP command can force CPU draft placement`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/mtp.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.CPU.value
+            )
+        )
+
+        assertArgValue(args, "--device-draft", "none")
+        assertArgValue(args, "--gpu-layers-draft", "0")
+    }
+
+    @Test
+    fun `MTP command can force OpenCL draft placement`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/mtp.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.ACCELERATOR.value
+            )
+        )
+
+        assertArgValue(args, "--device-draft", "GPUOpenCL")
+        assertArgValue(args, "--gpu-layers-draft", "all")
+    }
+
+    @Test
+    fun `custom draft placement flags suppress generated draft placement`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/mtp.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.CPU.value,
+                customFlags = "--device-draft GPUOpenCL --gpu-layers-draft all"
+            )
+        )
+
+        assertEquals(1, args.count { it == "--device-draft" })
+        assertArgValue(args, "--device-draft", "GPUOpenCL")
+        assertArgValue(args, "--gpu-layers-draft", "all")
     }
 
     @Test

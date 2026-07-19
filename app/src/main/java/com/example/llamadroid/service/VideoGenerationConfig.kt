@@ -41,7 +41,12 @@ data class VideoGenerationConfig(
     val vaeTileSize: String = "24x24",
     val diffusionFa: Boolean = true,
     val mmap: Boolean = true,
-    val threads: Int = -1
+    val threads: Int = -1,
+    val sdParamsBackendMode: String = "auto",
+    val sdRuntimeBackendMode: String = "auto",
+    val maxVramCpuGiB: String = "",
+    val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
+    val customFlags: String = ""
 ) : Parcelable
 
 enum class VideoGenerationMode(val folderName: String) {
@@ -51,7 +56,13 @@ enum class VideoGenerationMode(val folderName: String) {
 
 sealed class VideoGenerationState {
     object Idle : VideoGenerationState()
-    data class Generating(val progress: Float, val status: String) : VideoGenerationState()
+    data class Generating(
+        val progress: Float,
+        val status: String,
+        val currentStep: Int = 0,
+        val totalSteps: Int = 0,
+        val etaSeconds: Double? = null
+    ) : VideoGenerationState()
     data class Converting(val progress: Float, val status: String) : VideoGenerationState()
     data class Copying(val progress: Float, val status: String) : VideoGenerationState()
     data class Complete(
@@ -91,6 +102,10 @@ data class GeneratedVideoMetadata(
     val vaeTileSize: String?,
     val diffusionFa: Boolean,
     val mmap: Boolean,
+    val sdParamsBackendMode: String = "auto",
+    val sdRuntimeBackendMode: String = "auto",
+    val maxVramCpuGiB: String = "",
+    val distributedRuntime: SdDistributedRuntimeConfig,
     val createdAt: Long,
     val aviPath: String,
     val mp4Path: String,
@@ -135,6 +150,18 @@ data class GeneratedVideoMetadata(
         put("vaeTileSize", vaeTileSize)
         put("diffusionFa", diffusionFa)
         put("mmap", mmap)
+        put("sdParamsBackendMode", sdParamsBackendMode)
+        put("sdRuntimeBackendMode", sdRuntimeBackendMode)
+        put("maxVramCpuGiB", maxVramCpuGiB)
+        put("distributedEnabled", distributedRuntime.enabled)
+        put("distributedRpcServers", distributedRuntime.rpcServers)
+        put("distributedPlacementMode", distributedRuntime.placementMode.name)
+        put("distributedBackendSpec", distributedRuntime.backendSpec)
+        put("distributedParamsBackendSpec", distributedRuntime.paramsBackendSpec)
+        put("distributedAutoFit", distributedRuntime.autoFit)
+        put("distributedMaxVramSpec", distributedRuntime.maxVramSpec)
+        put("distributedSplitMode", distributedRuntime.splitMode.name)
+        put("distributedCustomFlags", distributedRuntime.customFlags)
         put("createdAt", createdAt)
         put("aviPath", aviPath)
         put("mp4Path", mp4Path)
@@ -191,6 +218,24 @@ data class GeneratedVideoMetadata(
                 vaeTileSize = json.optString("vaeTileSize").ifBlank { null },
                 diffusionFa = json.optBoolean("diffusionFa", true),
                 mmap = json.optBoolean("mmap", true),
+                sdParamsBackendMode = json.optString("sdParamsBackendMode", "auto"),
+                sdRuntimeBackendMode = json.optString("sdRuntimeBackendMode", "auto"),
+                maxVramCpuGiB = json.optString("maxVramCpuGiB"),
+                distributedRuntime = SdDistributedRuntimeConfig(
+                    enabled = json.optBoolean("distributedEnabled", false),
+                    rpcServers = json.optString("distributedRpcServers"),
+                    placementMode = runCatching {
+                        SdDistributedPlacementMode.valueOf(json.optString("distributedPlacementMode"))
+                    }.getOrDefault(SdDistributedPlacementMode.AUTO_RAM),
+                    backendSpec = json.optString("distributedBackendSpec"),
+                    paramsBackendSpec = json.optString("distributedParamsBackendSpec"),
+                    autoFit = json.optBoolean("distributedAutoFit", true),
+                    maxVramSpec = json.optString("distributedMaxVramSpec"),
+                    splitMode = runCatching {
+                        SdDistributedSplitMode.valueOf(json.optString("distributedSplitMode"))
+                    }.getOrDefault(SdDistributedSplitMode.LAYER),
+                    customFlags = json.optString("distributedCustomFlags")
+                ),
                 createdAt = json.optLong("createdAt", 0L),
                 aviPath = json.optString("aviPath"),
                 mp4Path = json.optString("mp4Path"),
@@ -228,6 +273,15 @@ class VideoGenerationStateHolder(val mode: VideoGenerationMode) {
     private val _status = MutableStateFlow("")
     val status: StateFlow<String> = _status
 
+    private val _currentStep = MutableStateFlow(0)
+    val currentStep: StateFlow<Int> = _currentStep
+
+    private val _totalSteps = MutableStateFlow(0)
+    val totalSteps: StateFlow<Int> = _totalSteps
+
+    private val _etaSeconds = MutableStateFlow<Double?>(null)
+    val etaSeconds: StateFlow<Double?> = _etaSeconds
+
     private val _currentPrompt = MutableStateFlow("")
     val currentPrompt: StateFlow<String> = _currentPrompt
 
@@ -240,27 +294,39 @@ class VideoGenerationStateHolder(val mode: VideoGenerationMode) {
             is VideoGenerationState.Generating -> {
                 _progress.value = newState.progress
                 _status.value = newState.status
+                _currentStep.value = newState.currentStep
+                _totalSteps.value = newState.totalSteps
+                _etaSeconds.value = newState.etaSeconds
             }
             is VideoGenerationState.Converting -> {
                 _progress.value = newState.progress
                 _status.value = newState.status
+                _etaSeconds.value = null
             }
             is VideoGenerationState.Copying -> {
                 _progress.value = newState.progress
                 _status.value = newState.status
+                _etaSeconds.value = null
             }
             is VideoGenerationState.Complete -> {
                 _progress.value = 1f
                 _status.value = ""
+                _currentStep.value = _totalSteps.value
+                _etaSeconds.value = null
                 addVideo(newState.metadata)
             }
             is VideoGenerationState.Error -> {
                 _progress.value = 0f
                 _status.value = newState.message
+                _currentStep.value = 0
+                _etaSeconds.value = null
             }
             is VideoGenerationState.Idle -> {
                 _progress.value = 0f
                 _status.value = ""
+                _currentStep.value = 0
+                _totalSteps.value = 0
+                _etaSeconds.value = null
             }
         }
     }
@@ -287,16 +353,34 @@ class VideoGenerationStateHolder(val mode: VideoGenerationMode) {
         _state.value = VideoGenerationState.Idle
         _progress.value = 0f
         _status.value = ""
+        _currentStep.value = 0
+        _etaSeconds.value = null
     }
 
     companion object {
         val txt2vid = VideoGenerationStateHolder(VideoGenerationMode.TXT2VID)
         val img2vid = VideoGenerationStateHolder(VideoGenerationMode.IMG2VID)
 
+        val distributedTxt2vid = VideoGenerationStateHolder(VideoGenerationMode.TXT2VID)
+        val distributedImg2vid = VideoGenerationStateHolder(VideoGenerationMode.IMG2VID)
+
         fun getForMode(mode: VideoGenerationMode): VideoGenerationStateHolder = when (mode) {
             VideoGenerationMode.TXT2VID -> txt2vid
             VideoGenerationMode.IMG2VID -> img2vid
         }
+
+        fun getForMode(
+            mode: VideoGenerationMode,
+            useDistributedStateHolder: Boolean
+        ): VideoGenerationStateHolder =
+            if (useDistributedStateHolder) {
+                when (mode) {
+                    VideoGenerationMode.TXT2VID -> distributedTxt2vid
+                    VideoGenerationMode.IMG2VID -> distributedImg2vid
+                }
+            } else {
+                getForMode(mode)
+            }
 
         fun getForModeIndex(index: Int): VideoGenerationStateHolder = when (index) {
             1 -> img2vid

@@ -2058,6 +2058,278 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate88To89_addsSdDistributedTables() {
+        helper.createDatabase(TEST_DB, 88).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            89,
+            true,
+            Migrations.MIGRATION_88_89
+        )
+
+        val expectedTables = setOf(
+            "sd_distributed_workers",
+            "sd_distributed_placements",
+            "sd_distributed_runs"
+        )
+        expectedTables.forEach { table ->
+            migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='$table'").use { cursor ->
+                assertTrue("Missing table $table", cursor.moveToFirst())
+            }
+        }
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_workers)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("ramMB"))
+            assertTrue(columns.contains("threads"))
+            assertTrue(columns.contains("backendDevice"))
+        }
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_placements)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("backendSpec"))
+            assertTrue(columns.contains("paramsBackendSpec"))
+            assertTrue(columns.contains("splitMode"))
+        }
+    }
+
+    @Test
+    fun migrate89To90_addsSdDistributedMasterSettingsTemplatesAndWorkerOrder() {
+        helper.createDatabase(TEST_DB, 89).apply {
+            execSQL(
+                """
+                INSERT INTO sd_distributed_workers (
+                    host,
+                    port,
+                    deviceName,
+                    ramMB,
+                    threads,
+                    backendDevice,
+                    isEnabled,
+                    lastSeenAt
+                ) VALUES (
+                    '10.0.0.9',
+                    50062,
+                    'Pixel worker',
+                    4096,
+                    4,
+                    '',
+                    1,
+                    0
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            90,
+            true,
+            Migrations.MIGRATION_89_90
+        )
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_workers)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("sortOrder"))
+        }
+
+        migratedDb.query("SELECT sortOrder FROM sd_distributed_workers WHERE host = '10.0.0.9'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+
+        migratedDb.query("SELECT placementMode, autoFit, devicesExpanded FROM sd_distributed_master_settings WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("AUTO_RAM", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+            assertEquals(1, cursor.getInt(2))
+        }
+
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sd_distributed_templates'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+    }
+
+    @Test
+    fun migrate90To91_addsLocalSdBackendPreferencesToModels() {
+        helper.createDatabase(TEST_DB, 90).apply {
+            execSQL(
+                """
+                INSERT INTO models (
+                    filename,
+                    path,
+                    sizeBytes,
+                    type,
+                    repoId,
+                    isDownloaded,
+                    isVision,
+                    mmprojPath,
+                    sdCapabilities,
+                    sdFamily,
+                    sdVariant,
+                    sdCompatProfiles,
+                    onnxCapabilities,
+                    onnxAssetKind,
+                    onnxPipelineFamily,
+                    onnxReferenceUri,
+                    onnxReferencePath,
+                    layerCount
+                ) VALUES (
+                    'low-ram.safetensors',
+                    '/models/low-ram.safetensors',
+                    1234,
+                    'SD_CHECKPOINT',
+                    'local-import',
+                    1,
+                    0,
+                    NULL,
+                    'txt2img,img2img',
+                    'checkpoint',
+                    'sdxl',
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    0
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            91,
+            true,
+            Migrations.MIGRATION_90_91
+        )
+
+        migratedDb.query(
+            "SELECT sdParamsBackendMode, sdRuntimeBackendMode FROM models WHERE filename = 'low-ram.safetensors'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("auto", cursor.getString(0))
+            assertEquals("auto", cursor.getString(1))
+        }
+    }
+
+    @Test
+    fun migrate91To92_addsSdDistributedConsoleWorkflowSettings() {
+        helper.createDatabase(TEST_DB, 91).apply {
+            execSQL(
+                """
+                INSERT INTO sd_distributed_templates (
+                    name,
+                    settingsJson,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    'Video preset',
+                    '{"videoWorkflowMode":"TXT2VID","videoModelPath":"/models/video.gguf"}',
+                    1,
+                    1
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            92,
+            true,
+            Migrations.MIGRATION_91_92
+        )
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_master_settings)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("masterContributes"))
+            assertTrue(columns.contains("masterAllowedModules"))
+            assertTrue(columns.contains("imageWorkflowMode"))
+            assertTrue(columns.contains("videoWorkflowMode"))
+        }
+
+        migratedDb.query("SELECT workflowType FROM sd_distributed_templates WHERE name = 'Video preset'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("VIDEO", cursor.getString(0))
+        }
+    }
+
+    @Test
+    fun migrate92To93_addsSdDistributedComponentModelSettings() {
+        helper.createDatabase(TEST_DB, 92).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            93,
+            true,
+            Migrations.MIGRATION_92_93
+        )
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_master_settings)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("imageVaePath"))
+            assertTrue(columns.contains("imageClipLPath"))
+            assertTrue(columns.contains("imageT5xxlPath"))
+            assertTrue(columns.contains("imageControlNetEnabled"))
+            assertTrue(columns.contains("imageLoraApplyMode"))
+            assertTrue(columns.contains("videoUseVae"))
+            assertTrue(columns.contains("videoT5xxlPath"))
+        }
+    }
+
+    @Test
+    fun migrate93To94_addsSdDistributedAutoRamScope() {
+        helper.createDatabase(TEST_DB, 93).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            94,
+            true,
+            Migrations.MIGRATION_93_94
+        )
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_master_settings)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("autoRamScope"))
+        }
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
     }
