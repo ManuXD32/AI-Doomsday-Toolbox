@@ -129,9 +129,15 @@ class Converters {
         AiServerWebChatEntity::class,
         AiServerWebMessageEntity::class,
         AiServerWebMessageAttachmentEntity::class,
-        AiServerWebToolEventEntity::class
+        AiServerWebToolEventEntity::class,
+        SdDistributedWorkerEntity::class,
+        SdDistributedMasterSettingsEntity::class,
+        SdDistributedTemplateEntity::class,
+        SdDistributedPlacementEntity::class,
+        SdDistributedRunEntity::class,
+        DownloadTaskEntity::class
     ], 
-    version = 87,
+    version = 96,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -170,6 +176,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun liveTranslatorSessionDao(): LiveTranslatorSessionDao
     abstract fun liveTranslatorTurnDao(): LiveTranslatorTurnDao
     abstract fun aiServerDao(): AiServerDao
+    abstract fun sdDistributedDao(): SdDistributedDao
+    abstract fun downloadTaskDao(): DownloadTaskDao
 
     companion object {
         @Volatile

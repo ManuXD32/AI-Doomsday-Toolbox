@@ -51,6 +51,7 @@ import android.content.ContextWrapper
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.CloseFullscreen
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
@@ -293,6 +294,31 @@ fun WorkerModeScreen(navController: NavController) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                text = stringResource(R.string.dist_worker_ram_budget_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
@@ -335,6 +361,17 @@ fun WorkerModeScreen(navController: NavController) {
                                 checked = enableCache,
                                 onCheckedChange = { enableCache = it }
                             )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedButton(
+                            onClick = { DistributedService.clearWorkerCache(context) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Delete, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.dist_clear_worker_cache))
                         }
                     }
                 }

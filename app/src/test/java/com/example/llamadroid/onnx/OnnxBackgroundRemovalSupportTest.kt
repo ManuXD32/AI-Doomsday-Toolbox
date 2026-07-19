@@ -21,12 +21,12 @@ class OnnxBackgroundRemovalSupportTest {
         val entries = OnnxCatalog.entriesFor(OnnxCatalogProvider.BACKGROUND_REMOVAL)
         val byId = entries.associateBy { it.bundleId }
 
-        assertEquals(14, entries.size)
-        assertEquals(219_000_000L, byId.getValue("ben2_fp16").archiveSizeBytes)
+        assertEquals(9, entries.size)
         assertEquals(1_020_000_000L, byId.getValue("rmbg_2_0_full").archiveSizeBytes)
-        assertEquals(234_000_000L, byId.getValue("rmbg_2_0_q4f16").archiveSizeBytes)
         assertEquals(44_400_000L, byId.getValue("rmbg_1_4_quantized").archiveSizeBytes)
-        assertEquals(199_000_000L, byId.getValue("inspyrenet_swinb_fp16").archiveSizeBytes)
+        assertEquals(395_000_000L, byId.getValue("inspyrenet_swinb_full").archiveSizeBytes)
+        assertFalse(byId.containsKey("ben2_fp16"))
+        assertFalse(byId.containsKey("rmbg_2_0_q4f16"))
     }
 
     @Test
@@ -45,14 +45,14 @@ class OnnxBackgroundRemovalSupportTest {
     @Test
     fun `background removal catalog rows use stable model metadata`() {
         val entry = OnnxCatalog.entriesFor(OnnxCatalogProvider.BACKGROUND_REMOVAL)
-            .first { it.bundleId == "rmbg_1_4_fp16" }
+            .first { it.bundleId == "rmbg_1_4_full" }
 
         assertEquals(ModelType.ONNX_BACKGROUND_REMOVAL, entry.modelType)
         assertEquals(ONNX_PIPELINE_FAMILY_BACKGROUND_REMOVAL, entry.pipelineFamily)
         assertEquals(ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE, entry.assetKind)
         assertEquals(buildOnnxCapabilities(ONNX_CAPABILITY_BACKGROUND_REMOVAL), entry.capabilities)
-        assertEquals("background_removal__rmbg_1_4_fp16", entry.stableId)
-        assertEquals("onnx_catalog/background_removal/rmbg_1_4_fp16", entry.repoId)
+        assertEquals("background_removal__rmbg_1_4_full", entry.stableId)
+        assertEquals("onnx_catalog/background_removal/rmbg_1_4_full", entry.repoId)
     }
 
     @Test

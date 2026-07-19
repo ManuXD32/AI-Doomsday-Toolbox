@@ -30,6 +30,7 @@ object DynamicFeatureManager {
     // Feature Upscaler (Shared)
     const val MODULE_UPSCALER = "feature_upscaler"
     const val MODULE_LLM_SNAPDRAGON_OPENCL = "feature_llm_snapdragon_opencl"
+    const val MODULE_MEDIA_SNAPDRAGON_VULKAN = "feature_media_snapdragon_vulkan"
 
     private val _optionalModuleStates = MutableStateFlow<Map<String, AcceleratorModuleState>>(emptyMap())
     val optionalModuleStates = _optionalModuleStates.asStateFlow()

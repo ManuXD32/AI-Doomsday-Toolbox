@@ -30,6 +30,57 @@ import kotlinx.coroutines.launch
 
 private typealias SavedCommandEntity = SavedCommand
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LlmModeDropdown(
+    label: String,
+    selected: String,
+    options: List<Pair<String, String>>,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelected: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: options.firstOrNull()?.second.orEmpty()
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = onExpandedChange,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+            singleLine = true
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) }
+        ) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    onClick = {
+                        onSelected(value)
+                        onExpandedChange(false)
+                    }
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun DraftIntTextField(
     value: Int,
@@ -142,6 +193,8 @@ fun LLMSettingsScreen(navController: NavController) {
     val draftMaxTokens by settingsRepo.draftMaxTokens.collectAsState()
     val draftMinTokens by settingsRepo.draftMinTokens.collectAsState()
     val draftPMin by settingsRepo.draftPMin.collectAsState()
+    val draftThreads by settingsRepo.draftThreads.collectAsState()
+    val draftThreadsBatch by settingsRepo.draftThreadsBatch.collectAsState()
     val mtpDraftMaxTokens by settingsRepo.mtpDraftMaxTokens.collectAsState()
     val mtpDraftMinTokens by settingsRepo.mtpDraftMinTokens.collectAsState()
     val mtpDraftPMin by settingsRepo.mtpDraftPMin.collectAsState()
@@ -175,6 +228,8 @@ fun LLMSettingsScreen(navController: NavController) {
     val kvCacheTypeK by settingsRepo.serverKvCacheTypeK.collectAsState()
     val kvCacheTypeV by settingsRepo.serverKvCacheTypeV.collectAsState()
     val kvCacheReuse by settingsRepo.serverKvCacheReuse.collectAsState()
+    val llamaKvOffloadMode by settingsRepo.llamaKvOffloadMode.collectAsState()
+    val llamaDraftDeviceMode by settingsRepo.llamaDraftDeviceMode.collectAsState()
     
     var showSaveCommandDialog by remember { mutableStateOf(false) }
     var speculativeModeMenuExpanded by remember { mutableStateOf(false) }
@@ -555,6 +610,7 @@ fun LLMSettingsScreen(navController: NavController) {
                 val cacheTypes = listOf("f16", "q8_0", "q4_0")
                 var showTypeKMenu by remember { mutableStateOf(false) }
                 var showTypeVMenu by remember { mutableStateOf(false) }
+                var showKvOffloadMenu by remember { mutableStateOf(false) }
                 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -582,16 +638,36 @@ fun LLMSettingsScreen(navController: NavController) {
                                 onCheckedChange = { settingsRepo.setServerKvCacheEnabled(it) }
                             )
                         }
-                        
+
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+                        LlmModeDropdown(
+                            label = stringResource(R.string.llm_kv_offload_mode),
+                            selected = llamaKvOffloadMode,
+                            options = listOf(
+                                SettingsRepository.LLAMA_KV_OFFLOAD_AUTO to stringResource(R.string.llm_backend_mode_auto),
+                                SettingsRepository.LLAMA_KV_OFFLOAD_ACCELERATOR to stringResource(R.string.llm_kv_offload_accelerator),
+                                SettingsRepository.LLAMA_KV_OFFLOAD_CPU to stringResource(R.string.llm_kv_offload_cpu)
+                            ),
+                            expanded = showKvOffloadMenu,
+                            onExpandedChange = { showKvOffloadMenu = it },
+                            onSelected = settingsRepo::setLlamaKvOffloadMode
+                        )
+                        Text(
+                            stringResource(R.string.llm_kv_offload_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                        )
+
                         if (kvCacheEnabled) {
                             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
-                            
+
                             Text(
                                 stringResource(R.string.llm_kv_cache_warning),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            
+
                             Spacer(modifier = Modifier.height(12.dp))
                             
                             // Cache Type K
@@ -744,6 +820,11 @@ fun LLMSettingsScreen(navController: NavController) {
                                     stringResource(R.string.dist_flash_attention_desc),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    stringResource(R.string.llm_flash_attention_opencl_hint),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                                 )
                             }
                             Switch(
@@ -990,9 +1071,26 @@ fun LLMSettingsScreen(navController: NavController) {
                                                 singleLine = true
                                             )
                                         }
+
+                                        DraftIntTextField(
+                                            value = draftThreads,
+                                            onValueChange = settingsRepo::setDraftThreads,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_threads)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
+
+                                        DraftIntTextField(
+                                            value = draftThreadsBatch,
+                                            onValueChange = settingsRepo::setDraftThreadsBatch,
+                                            label = { Text(stringResource(R.string.dist_speculative_draft_threads_batch)) },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            singleLine = true
+                                        )
                                     }
                                 }
                                 LlamaSpeculativeMode.DRAFT_MTP -> {
+                                    var showDraftDeviceMenu by remember { mutableStateOf(false) }
                                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),
@@ -1037,7 +1135,41 @@ fun LLMSettingsScreen(navController: NavController) {
                                                     Text(stringResource(R.string.dist_speculative_clear_draft))
                                                 }
                                             }
+
+                                            DraftIntTextField(
+                                                value = draftThreads,
+                                                onValueChange = settingsRepo::setDraftThreads,
+                                                label = { Text(stringResource(R.string.dist_speculative_draft_threads)) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true
+                                            )
+
+                                            DraftIntTextField(
+                                                value = draftThreadsBatch,
+                                                onValueChange = settingsRepo::setDraftThreadsBatch,
+                                                label = { Text(stringResource(R.string.dist_speculative_draft_threads_batch)) },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                singleLine = true
+                                            )
                                         }
+
+                                        LlmModeDropdown(
+                                            label = stringResource(R.string.llm_draft_device_mode),
+                                            selected = llamaDraftDeviceMode,
+                                            options = listOf(
+                                                SettingsRepository.LLAMA_DRAFT_DEVICE_AUTO to stringResource(R.string.llm_backend_mode_auto),
+                                                SettingsRepository.LLAMA_DRAFT_DEVICE_ACCELERATOR to stringResource(R.string.llm_draft_device_accelerator),
+                                                SettingsRepository.LLAMA_DRAFT_DEVICE_CPU to stringResource(R.string.llm_draft_device_cpu)
+                                            ),
+                                            expanded = showDraftDeviceMenu,
+                                            onExpandedChange = { showDraftDeviceMenu = it },
+                                            onSelected = settingsRepo::setLlamaDraftDeviceMode
+                                        )
+                                        Text(
+                                            stringResource(R.string.llm_draft_device_hint),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                                        )
 
                                         DraftIntTextField(
                                             value = mtpDraftMaxTokens,
@@ -1357,6 +1489,8 @@ fun LLMSettingsScreen(navController: NavController) {
                                 draftMax = draftMaxTokens,
                                 draftMin = draftMinTokens,
                                 draftPMin = draftPMin,
+                                draftThreads = draftThreads,
+                                draftThreadsBatch = draftThreadsBatch,
                                 ngramModNMatch = ngramModNMatch,
                                 ngramModNMin = ngramModNMin,
                                 ngramModNMax = ngramModNMax,
@@ -1458,6 +1592,8 @@ fun LLMSettingsScreen(navController: NavController) {
                                             settingsRepo.setDraftMaxTokens(cmd.draftMax)
                                             settingsRepo.setDraftMinTokens(cmd.draftMin)
                                             settingsRepo.setDraftPMin(cmd.draftPMin)
+                                            settingsRepo.setDraftThreads(cmd.draftThreads)
+                                            settingsRepo.setDraftThreadsBatch(cmd.draftThreadsBatch)
                                             settingsRepo.setNgramModNMatch(cmd.ngramModNMatch)
                                             settingsRepo.setNgramModNMin(cmd.ngramModNMin)
                                             settingsRepo.setNgramModNMax(cmd.ngramModNMax)

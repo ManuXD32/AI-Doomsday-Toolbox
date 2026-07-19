@@ -27,6 +27,10 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.DatabaseBackupManager
 import com.example.llamadroid.quadtrix.QuadtrixWorkspaceManager
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.util.AccelerationWorkload
+import com.example.llamadroid.util.CpuFeatures
+import com.example.llamadroid.util.DeviceAcceleration
+import com.example.llamadroid.util.DynamicFeatureManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -288,12 +292,81 @@ fun GeneralSettingsScreen(navController: NavController) {
             }
             
             item {
-                val llmAccelerationMode by settingsRepo.llmAccelerationMode.collectAsState()
-                val llmOptions = listOf(
-                    SettingsRepository.ACCELERATION_AUTO to stringResource(R.string.general_acceleration_mode_auto),
-                    SettingsRepository.ACCELERATION_CPU to stringResource(R.string.general_acceleration_mode_cpu),
-                    SettingsRepository.ACCELERATION_GPU to stringResource(R.string.general_acceleration_mode_gpu_opencl)
+                val llmBinarySelection by settingsRepo.llmNativeBinarySelection.collectAsState()
+                val sdBinarySelection by settingsRepo.stableDiffusionNativeBinarySelection.collectAsState()
+                val optionalModuleStates by DynamicFeatureManager.optionalModuleStates.collectAsState()
+                val runtimeFailures by DeviceAcceleration.runtimeFailures.collectAsState()
+                val isSnapdragonCompatible = remember { DeviceAcceleration.isSnapdragonCompatible() }
+                val deviceCpuTier = remember {
+                    runCatching { CpuFeatures.getTier() }.getOrDefault("baseline")
+                }
+                val deviceCpuSelection = remember(deviceCpuTier) {
+                    nativeBinarySelectionForCpuTier(deviceCpuTier)
+                }
+                val optionalModuleRefresh = optionalModuleStates.size
+                val llmAcceleratorInstalled = optionalModuleRefresh.let {
+                    DynamicFeatureManager.isModuleInstalled(
+                        context,
+                        DeviceAcceleration.MODULE_LLM_SNAPDRAGON_OPENCL
+                    )
+                }
+                val sdAcceleratorInstalled = optionalModuleRefresh.let {
+                    DynamicFeatureManager.isModuleInstalled(
+                        context,
+                        DeviceAcceleration.MODULE_MEDIA_SNAPDRAGON_VULKAN
+                    )
+                }
+                val needsGpuInstall = isSnapdragonCompatible && (!llmAcceleratorInstalled || !sdAcceleratorInstalled)
+                val llmAcceleratorMessage = nativeBinaryAcceleratorMessage(
+                    isSnapdragonCompatible = isSnapdragonCompatible,
+                    isInstalled = llmAcceleratorInstalled,
+                    runtimeFailure = runtimeFailures[AccelerationWorkload.LLM]
                 )
+                val sdAcceleratorMessage = nativeBinaryAcceleratorMessage(
+                    isSnapdragonCompatible = isSnapdragonCompatible,
+                    isInstalled = sdAcceleratorInstalled,
+                    runtimeFailure = runtimeFailures[AccelerationWorkload.STABLE_DIFFUSION]
+                )
+                val normalizedLlmSelection = SettingsRepository.normalizeLlmNativeBinarySelection(llmBinarySelection)
+                val normalizedSdSelection = SettingsRepository.normalizeStableDiffusionNativeBinarySelection(sdBinarySelection)
+                var pendingExperimentalSelection by remember { mutableStateOf<String?>(null) }
+                var pendingExperimentalSelectionIsLlm by remember { mutableStateOf(false) }
+                val allowedLlmSelection = remember(
+                    normalizedLlmSelection,
+                    deviceCpuSelection,
+                    isSnapdragonCompatible,
+                    llmAcceleratorInstalled
+                ) {
+                    coerceNativeBinarySelectionForDevice(
+                        selection = normalizedLlmSelection,
+                        deviceCpuSelection = deviceCpuSelection,
+                        acceleratorSelection = SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL,
+                        acceleratorEnabled = isSnapdragonCompatible && llmAcceleratorInstalled
+                    )
+                }
+                val allowedSdSelection = remember(
+                    normalizedSdSelection,
+                    deviceCpuSelection,
+                    isSnapdragonCompatible,
+                    sdAcceleratorInstalled
+                ) {
+                    coerceNativeBinarySelectionForDevice(
+                        selection = normalizedSdSelection,
+                        deviceCpuSelection = deviceCpuSelection,
+                        acceleratorSelection = SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN,
+                        acceleratorEnabled = isSnapdragonCompatible && sdAcceleratorInstalled
+                    )
+                }
+                LaunchedEffect(normalizedLlmSelection, allowedLlmSelection) {
+                    if (normalizedLlmSelection != allowedLlmSelection) {
+                        settingsRepo.setLlmNativeBinarySelection(allowedLlmSelection)
+                    }
+                }
+                LaunchedEffect(normalizedSdSelection, allowedSdSelection) {
+                    if (normalizedSdSelection != allowedSdSelection) {
+                        settingsRepo.setStableDiffusionNativeBinarySelection(allowedSdSelection)
+                    }
+                }
 
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -320,18 +393,95 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                         }
 
-                        AccelerationModeSelector(
+                        NativeBinarySelector(
                             label = stringResource(R.string.general_acceleration_llm),
-                            selected = llmAccelerationMode,
-                            options = llmOptions,
-                            onSelected = settingsRepo::setLlmAccelerationMode
+                            selected = allowedLlmSelection,
+                            options = llmNativeBinaryOptions(
+                                deviceCpuSelection = deviceCpuSelection,
+                                binaryBaseName = "llama_server",
+                                acceleratorEnabled = isSnapdragonCompatible && llmAcceleratorInstalled
+                            ),
+                            onSelected = { selection ->
+                                if (isExperimentalNativeBinarySelection(selection)) {
+                                    pendingExperimentalSelection = selection
+                                    pendingExperimentalSelectionIsLlm = true
+                                } else {
+                                    settingsRepo.setLlmNativeBinarySelection(selection)
+                                }
+                            }
                         )
+                        llmAcceleratorMessage?.let { message ->
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
+                        }
+
+                        NativeBinarySelector(
+                            label = stringResource(R.string.general_acceleration_stable_diffusion),
+                            selected = allowedSdSelection,
+                            options = sdNativeBinaryOptions(
+                                deviceCpuSelection = deviceCpuSelection,
+                                binaryBaseName = "sd",
+                                acceleratorEnabled = isSnapdragonCompatible && sdAcceleratorInstalled
+                            ),
+                            onSelected = { selection ->
+                                if (isExperimentalNativeBinarySelection(selection)) {
+                                    pendingExperimentalSelection = selection
+                                    pendingExperimentalSelectionIsLlm = false
+                                } else {
+                                    settingsRepo.setStableDiffusionNativeBinarySelection(selection)
+                                }
+                            }
+                        )
+                        sdAcceleratorMessage?.let { message ->
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                            )
+                        }
+                        if (needsGpuInstall) {
+                            OutlinedButton(
+                                onClick = { DynamicFeatureManager.installOptionalAccelerators(context) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.general_native_binary_install_gpu))
+                            }
+                        }
                         Text(
                             stringResource(R.string.general_acceleration_hint),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
                         )
                     }
+                }
+                pendingExperimentalSelection?.let { pending ->
+                    AlertDialog(
+                        onDismissRequest = { pendingExperimentalSelection = null },
+                        title = { Text(stringResource(R.string.general_native_binary_experimental_warning_title)) },
+                        text = { Text(stringResource(R.string.general_native_binary_experimental_warning_body)) },
+                        confirmButton = {
+                            TextButton(
+                                onClick = {
+                                    if (pendingExperimentalSelectionIsLlm) {
+                                        settingsRepo.setLlmNativeBinarySelection(pending)
+                                    } else {
+                                        settingsRepo.setStableDiffusionNativeBinarySelection(pending)
+                                    }
+                                    pendingExperimentalSelection = null
+                                }
+                            ) {
+                                Text(stringResource(R.string.general_native_binary_experimental_confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { pendingExperimentalSelection = null }) {
+                                Text(stringResource(R.string.action_cancel))
+                            }
+                        }
+                    )
                 }
             }
 
@@ -456,7 +606,6 @@ fun GeneralSettingsScreen(navController: NavController) {
 
             // Backups
             item {
-                val scope = rememberCoroutineScope()
                 val database = remember { AppDatabase.getDatabase(context) }
                 var isBackingUp by remember { mutableStateOf(false) }
                 var isRestoring by remember { mutableStateOf(false) }
@@ -781,15 +930,118 @@ fun GeneralSettingsScreen(navController: NavController) {
     }
 }
 
+private data class NativeBinaryOption(
+    val value: String,
+    val label: String,
+    val enabled: Boolean = true
+)
+
+internal fun isExperimentalNativeBinarySelection(selection: String): Boolean =
+    selection == SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL ||
+        selection == SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN
+
+private fun nativeBinarySelectionForCpuTier(tier: String): String =
+    when (tier) {
+        "armv9" -> SettingsRepository.NATIVE_BINARY_CPU_ARMV9
+        "dotprod" -> SettingsRepository.NATIVE_BINARY_CPU_DOTPROD
+        else -> SettingsRepository.NATIVE_BINARY_CPU_BASELINE
+    }
+
+private fun isConcreteCpuNativeBinarySelection(selection: String): Boolean =
+    selection == SettingsRepository.NATIVE_BINARY_CPU_AUTO ||
+        selection == SettingsRepository.NATIVE_BINARY_CPU_BASELINE ||
+        selection == SettingsRepository.NATIVE_BINARY_CPU_DOTPROD ||
+        selection == SettingsRepository.NATIVE_BINARY_CPU_ARMV9
+
+private fun coerceNativeBinarySelectionForDevice(
+    selection: String,
+    deviceCpuSelection: String,
+    acceleratorSelection: String,
+    acceleratorEnabled: Boolean
+): String = when {
+    selection == SettingsRepository.NATIVE_BINARY_AUTO -> SettingsRepository.NATIVE_BINARY_AUTO
+    isConcreteCpuNativeBinarySelection(selection) -> deviceCpuSelection
+    selection == acceleratorSelection && acceleratorEnabled -> acceleratorSelection
+    else -> SettingsRepository.NATIVE_BINARY_AUTO
+}
+
 @Composable
-private fun AccelerationModeSelector(
+private fun cpuNativeBinaryOption(
+    deviceCpuSelection: String,
+    binaryBaseName: String
+): NativeBinaryOption =
+    when (deviceCpuSelection) {
+        SettingsRepository.NATIVE_BINARY_CPU_ARMV9 -> NativeBinaryOption(
+            deviceCpuSelection,
+            stringResource(R.string.general_native_binary_cpu_armv9, binaryBaseName)
+        )
+        SettingsRepository.NATIVE_BINARY_CPU_DOTPROD -> NativeBinaryOption(
+            deviceCpuSelection,
+            stringResource(R.string.general_native_binary_cpu_dotprod, binaryBaseName)
+        )
+        else -> NativeBinaryOption(
+            SettingsRepository.NATIVE_BINARY_CPU_BASELINE,
+            stringResource(R.string.general_native_binary_cpu_baseline, binaryBaseName)
+        )
+    }
+
+@Composable
+private fun llmNativeBinaryOptions(
+    deviceCpuSelection: String,
+    binaryBaseName: String,
+    acceleratorEnabled: Boolean
+): List<NativeBinaryOption> = listOf(
+    NativeBinaryOption(
+        SettingsRepository.NATIVE_BINARY_AUTO,
+        stringResource(R.string.general_acceleration_mode_auto)
+    ),
+    cpuNativeBinaryOption(deviceCpuSelection, binaryBaseName),
+    NativeBinaryOption(
+        SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL,
+        stringResource(R.string.general_native_binary_llm_opencl_experimental),
+        enabled = acceleratorEnabled
+    )
+)
+
+@Composable
+private fun sdNativeBinaryOptions(
+    deviceCpuSelection: String,
+    binaryBaseName: String,
+    acceleratorEnabled: Boolean
+): List<NativeBinaryOption> = listOf(
+    NativeBinaryOption(
+        SettingsRepository.NATIVE_BINARY_AUTO,
+        stringResource(R.string.general_acceleration_mode_auto)
+    ),
+    cpuNativeBinaryOption(deviceCpuSelection, binaryBaseName),
+    NativeBinaryOption(
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN,
+        stringResource(R.string.general_native_binary_sd_vulkan_experimental),
+        enabled = acceleratorEnabled
+    )
+)
+
+@Composable
+private fun nativeBinaryAcceleratorMessage(
+    isSnapdragonCompatible: Boolean,
+    isInstalled: Boolean,
+    runtimeFailure: String?
+): String? = when {
+    !isSnapdragonCompatible -> stringResource(R.string.general_native_binary_device_unsupported)
+    !isInstalled -> stringResource(R.string.general_native_binary_module_missing)
+    runtimeFailure != null -> stringResource(R.string.general_native_binary_previous_failure, runtimeFailure)
+    else -> null
+}
+
+@Composable
+private fun NativeBinarySelector(
     label: String,
     selected: String,
-    options: List<Pair<String, String>>,
+    options: List<NativeBinaryOption>,
     onSelected: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val selectedLabel = options.firstOrNull { it.first == selected }?.second ?: options.first().second
+    val selectedLabel = options.firstOrNull { it.value == selected }?.label ?: options.first().label
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
@@ -817,11 +1069,20 @@ private fun AccelerationModeSelector(
                 expanded = expanded,
                 onDismissRequest = { expanded = false }
             ) {
-                options.forEach { (value, text) ->
+                options.forEach { option ->
                     DropdownMenuItem(
-                        text = { Text(text) },
+                        text = {
+                            Text(
+                                if (option.enabled) {
+                                    option.label
+                                } else {
+                                    "${option.label} - ${stringResource(R.string.general_native_binary_unavailable)}"
+                                }
+                            )
+                        },
+                        enabled = option.enabled,
                         onClick = {
-                            onSelected(value)
+                            onSelected(option.value)
                             expanded = false
                         }
                     )

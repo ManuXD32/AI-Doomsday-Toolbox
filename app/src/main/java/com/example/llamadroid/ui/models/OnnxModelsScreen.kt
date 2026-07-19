@@ -76,6 +76,7 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TTS
@@ -123,7 +124,7 @@ fun OnnxModelsScreen(navController: NavController) {
     val downloadStatus by DownloadProgressHolder.status.collectAsState()
     val onnxDownloads = remember(downloadProgress) { downloadProgress.filterKeys { it.startsWith("onnx:") } }
     val activeOnnxDownloads = remember(onnxDownloads) {
-        onnxDownloads.filterValues { it in 0f..0.999f }
+        onnxDownloads.filterValues { it == DownloadProgressHolder.INDETERMINATE || it in 0f..0.999f }
     }
     val selectedProvider by settingsRepo.onnxCatalogProvider.collectAsState()
     val catalogEntries = remember(selectedProvider) { OnnxCatalog.entriesFor(selectedProvider) }
@@ -505,21 +506,37 @@ private fun DownloadingOnnxModelsTab(
     onCancel: (String) -> Unit
 ) {
     val items = downloadProgress.entries.sortedBy { it.key }
-    if (items.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                stringResource(R.string.onnx_models_downloading_empty),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        return
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        item {
+            DownloadTaskSection(
+                modelTypes = listOf(
+                    ModelType.ONNX_IMAGE_GEN,
+                    ModelType.ONNX_TTS,
+                    ModelType.ONNX_BACKGROUND_REMOVAL,
+                    ModelType.ONNX_IMAGE_UPSCALER
+                ),
+                includeTask = { it.id.startsWith("onnx:") }
+            )
+        }
+        if (items.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        stringResource(R.string.onnx_models_downloading_empty),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
         items(items, key = { it.key }) { (key, progress) ->
             val modelId = DownloadProgressHolder.getFilename(key) ?: key.removePrefix("onnx:")
             val catalogEntry = OnnxCatalog.findByLegacyOrStableId(modelId)

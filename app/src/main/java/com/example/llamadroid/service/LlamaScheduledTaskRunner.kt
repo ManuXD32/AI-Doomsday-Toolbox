@@ -94,7 +94,7 @@ class LlamaScheduledTaskRunner(
                     tools = availableTools,
                     modelLabel = modelName,
                     thinkingEnabled = useThinking,
-                    numCtx = contextSize,
+                    maxTokens = contextSize,
                     samplingParams = sampling,
                     onChunk = { delta, thinkingDelta ->
                         delta?.let { content.append(it) }
@@ -405,7 +405,7 @@ class LlamaScheduledTaskRunner(
                 tools = emptyList(),
                 modelLabel = modelName,
                 thinkingEnabled = false,
-                numCtx = NATIVE_SEARCH_SUMMARY_MAX_TOKENS,
+                maxTokens = NATIVE_SEARCH_SUMMARY_MAX_TOKENS,
                 samplingParams = LlamaServerSamplingParams(
                     temperature = 0.2f,
                     topP = 0.9f

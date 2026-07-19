@@ -7,6 +7,7 @@ import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.onnx.OnnxTtsRequest
 import com.example.llamadroid.onnx.SupertonicTtsPipeline
@@ -18,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -29,6 +31,16 @@ import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.max
 import kotlin.math.roundToInt
+
+const val MEDIA_TRANSLATION_WORKFLOW_KIND_MEDIA = "media"
+const val MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE = "subtitle"
+
+private const val MEDIA_TRANSLATION_WHISPER_LINKER_OOM_MAX_ATTEMPTS = 4
+
+private class WhisperLinkerOutOfMemoryException(
+    message: String,
+    cause: Throwable? = null
+) : IllegalStateException(message, cause)
 
 data class TimedTranscriptSegment(
     val id: Int,
@@ -72,7 +84,8 @@ data class MediaTranslationJobSpec(
     val replaceOriginalAudio: Boolean,
     val backendSnapshot: RemoteSummarySettingsSnapshot,
     val translationContextEnabled: Boolean = true,
-    val translationContextLines: Int = 2
+    val translationContextLines: Int = 2,
+    val skipFailedTranslationLines: Boolean = false
 )
 
 data class SubtitleBurnStyleSpec(
@@ -100,17 +113,44 @@ data class SubtitleTranslationJobSpec(
     val burnStyle: SubtitleBurnStyleSpec,
     val backendSnapshot: RemoteSummarySettingsSnapshot,
     val translationContextEnabled: Boolean = true,
-    val translationContextLines: Int = 2
+    val translationContextLines: Int = 2,
+    val skipFailedTranslationLines: Boolean = false
 )
 
 data class MediaTranslationResumeTranslationOverride(
     val targetLanguage: String,
     val backendSnapshot: RemoteSummarySettingsSnapshot,
     val translationContextEnabled: Boolean,
-    val translationContextLines: Int
+    val translationContextLines: Int,
+    val skipFailedTranslationLines: Boolean
 )
 
+internal fun mediaTranslationApplyResumeOverride(
+    spec: MediaTranslationJobSpec,
+    override: MediaTranslationResumeTranslationOverride
+): MediaTranslationJobSpec =
+    spec.copy(
+        targetLanguage = override.targetLanguage,
+        backendSnapshot = override.backendSnapshot,
+        translationContextEnabled = override.translationContextEnabled,
+        translationContextLines = override.translationContextLines.coerceIn(0, 10),
+        skipFailedTranslationLines = override.skipFailedTranslationLines
+    )
+
+internal fun mediaTranslationApplyResumeOverride(
+    spec: SubtitleTranslationJobSpec,
+    override: MediaTranslationResumeTranslationOverride
+): SubtitleTranslationJobSpec =
+    spec.copy(
+        targetLanguage = override.targetLanguage,
+        backendSnapshot = override.backendSnapshot,
+        translationContextEnabled = override.translationContextEnabled,
+        translationContextLines = override.translationContextLines.coerceIn(0, 10),
+        skipFailedTranslationLines = override.skipFailedTranslationLines
+    )
+
 data class MediaTranslationWorkflowState(
+    val workflowKind: String? = null,
     val isRunning: Boolean = false,
     val progress: Float = 0f,
     val status: String = "",
@@ -124,6 +164,7 @@ data class MediaTranslationWorkflowState(
     val translatedAudioPath: String? = null,
     val finalOutputPath: String? = null,
     val errorMessage: String? = null,
+    val skippedTranslationLineCount: Int = 0,
     val cancelled: Boolean = false,
     val paused: Boolean = false
 )
@@ -300,6 +341,26 @@ internal fun mediaTranslationBuildLineTranslationPrompt(
     }.trim()
 }
 
+internal fun mediaTranslationBuildIsolatedLineTranslationPrompt(
+    sourceLanguage: String,
+    targetLanguage: String,
+    sourceText: String
+): String =
+    buildString {
+        appendLine("Translate this single subtitle line.")
+        appendLine("Source language hint: $sourceLanguage")
+        appendLine("Target language: $targetLanguage")
+        appendLine()
+        appendLine("Rules:")
+        appendLine("- Return exactly one non-empty line.")
+        appendLine("- Return only the translation, with no label, quote, JSON, markdown, or explanation.")
+        appendLine("- If the source is a name, sound effect, fragment, or cannot be translated, copy the source text exactly.")
+        appendLine("- Do not return the source text when a natural translation is possible.")
+        appendLine()
+        appendLine("Source:")
+        append(sourceText)
+    }.trim()
+
 internal fun mediaTranslationCleanLineTranslation(raw: String): String {
     var text = raw.trim()
     if (text.startsWith("```")) {
@@ -327,6 +388,22 @@ internal fun mediaTranslationCleanLineTranslation(raw: String): String {
     return text.trim().trim('"', '\'').trim()
 }
 
+internal fun mediaTranslationCleanLineTranslationCandidate(raw: String): String? =
+    mediaTranslationCleanLineTranslation(raw)
+        .takeIf { it.isNotBlank() && !mediaTranslationLooksLikePromptEcho(it) }
+
+internal fun mediaTranslationShouldRetryLineTranslation(raw: String?, error: Throwable? = null): Boolean =
+    error != null || raw == null || mediaTranslationCleanLineTranslationCandidate(raw) == null
+
+internal fun mediaTranslationDiagnosticSnippet(value: String?, maxChars: Int = 180): String {
+    val clean = value
+        ?.replace(Regex("\\s+"), " ")
+        ?.trim()
+        .orEmpty()
+    if (clean.isBlank()) return "<empty>"
+    return if (clean.length <= maxChars) clean else clean.take(maxChars).trimEnd() + "..."
+}
+
 internal fun mediaTranslationLooksLikePromptEcho(text: String): Boolean {
     val lower = text.lowercase(Locale.US)
     return "[context]" in lower ||
@@ -348,9 +425,14 @@ object MediaTranslationWorkflowService {
     private const val RECOVERABLE_JOB_FILE = "recoverable_job.json"
     private const val RECOVERABLE_MEDIA_JOB_FILE = "recoverable_media_job.json"
     private const val RECOVERABLE_SUBTITLE_JOB_FILE = "recoverable_subtitle_job.json"
-    private const val KIND_MEDIA = "media"
-    private const val KIND_SUBTITLE = "subtitle"
+    private const val KIND_MEDIA = MEDIA_TRANSLATION_WORKFLOW_KIND_MEDIA
+    private const val KIND_SUBTITLE = MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE
     private const val CHECKPOINTS_DIR = "checkpoints"
+    private const val MAX_LINE_TRANSLATION_ATTEMPTS = 5
+    private const val MAX_LINE_TRANSLATION_FALLBACK_ATTEMPTS = 2
+    private const val MAX_LINE_TRANSLATION_RECOVERY_ATTEMPTS = 2
+    private const val LINE_TRANSLATION_RETRY_DELAY_MS = 700L
+    private const val LINE_TRANSLATION_MAX_OUTPUT_TOKENS = 160
     private const val WORKFLOW_INPUTS_DIR = "workflow_media_inputs"
     private const val STAGE_AUDIO_EXTRACTED = "audio_extracted"
     private const val STAGE_TRANSCRIBED = "transcribed"
@@ -383,6 +465,7 @@ object MediaTranslationWorkflowService {
         val finalOutputPath: String? = null,
         val translatedSegmentCount: Int = 0,
         val totalSegmentCount: Int = 0,
+        val skippedSegmentIds: Set<Int> = emptySet(),
         val mediaDurationMs: Long = 0L
     ) {
         fun withStage(stage: String): MediaTranslationJobCheckpoint =
@@ -551,6 +634,7 @@ object MediaTranslationWorkflowService {
         if (validationError != null) {
             MediaTranslationWorkflowStateHolder.update {
                 it.copy(
+                    workflowKind = expectedKind,
                     isRunning = false,
                     status = "",
                     errorMessage = context.getString(R.string.workflow_media_resume_missing_inputs, validationError),
@@ -588,26 +672,14 @@ object MediaTranslationWorkflowService {
     ): MediaTranslationRecoverableRuntime =
         when (kind) {
             KIND_MEDIA -> copy(
-                mediaSpecs = mediaSpecs.map {
-                    it.copy(
-                        targetLanguage = override.targetLanguage,
-                        backendSnapshot = override.backendSnapshot,
-                        translationContextEnabled = override.translationContextEnabled,
-                        translationContextLines = override.translationContextLines.coerceIn(0, 10)
-                    )
-                }
+                mediaSpecs = mediaSpecs.map { mediaTranslationApplyResumeOverride(it, override) }
             )
             KIND_SUBTITLE -> copy(
                 subtitleSpecs = subtitleSpecs.map {
                     if (!it.translateSubtitles) {
                         it
                     } else {
-                        it.copy(
-                            targetLanguage = override.targetLanguage,
-                            backendSnapshot = override.backendSnapshot,
-                            translationContextEnabled = override.translationContextEnabled,
-                            translationContextLines = override.translationContextLines.coerceIn(0, 10)
-                        )
+                        mediaTranslationApplyResumeOverride(it, override)
                     }
                 }
             )
@@ -869,6 +941,7 @@ object MediaTranslationWorkflowService {
             putNullable("finalOutputPath", finalOutputPath)
             put("translatedSegmentCount", translatedSegmentCount)
             put("totalSegmentCount", totalSegmentCount)
+            put("skippedSegmentIds", JSONArray().apply { skippedSegmentIds.sorted().forEach { put(it) } })
             put("mediaDurationMs", mediaDurationMs)
         }
 
@@ -890,6 +963,7 @@ object MediaTranslationWorkflowService {
             finalOutputPath = optNullableString("finalOutputPath"),
             translatedSegmentCount = optInt("translatedSegmentCount", 0),
             totalSegmentCount = optInt("totalSegmentCount", 0),
+            skippedSegmentIds = optJSONArray("skippedSegmentIds").toIntList().toSet(),
             mediaDurationMs = optLong("mediaDurationMs", 0L)
         )
     }
@@ -939,6 +1013,7 @@ object MediaTranslationWorkflowService {
             put("backendSnapshot", backendSnapshot.toJson())
             put("translationContextEnabled", translationContextEnabled)
             put("translationContextLines", translationContextLines)
+            put("skipFailedTranslationLines", skipFailedTranslationLines)
         }
 
     private fun JSONObject.toMediaSpec(): MediaTranslationJobSpec =
@@ -959,7 +1034,8 @@ object MediaTranslationWorkflowService {
             replaceOriginalAudio = optBoolean("replaceOriginalAudio", true),
             backendSnapshot = optJSONObject("backendSnapshot").toRemoteSummarySnapshot(),
             translationContextEnabled = optBoolean("translationContextEnabled", true),
-            translationContextLines = optInt("translationContextLines", 2).coerceIn(0, 10)
+            translationContextLines = optInt("translationContextLines", 2).coerceIn(0, 10),
+            skipFailedTranslationLines = optBoolean("skipFailedTranslationLines", false)
         )
 
     private fun SubtitleTranslationJobSpec.toJson(): JSONObject =
@@ -978,6 +1054,7 @@ object MediaTranslationWorkflowService {
             put("backendSnapshot", backendSnapshot.toJson())
             put("translationContextEnabled", translationContextEnabled)
             put("translationContextLines", translationContextLines)
+            put("skipFailedTranslationLines", skipFailedTranslationLines)
         }
 
     private fun JSONObject.toSubtitleSpec(): SubtitleTranslationJobSpec =
@@ -995,7 +1072,8 @@ object MediaTranslationWorkflowService {
             burnStyle = optJSONObject("burnStyle").toSubtitleBurnStyle(),
             backendSnapshot = optJSONObject("backendSnapshot").toRemoteSummarySnapshot(),
             translationContextEnabled = optBoolean("translationContextEnabled", true),
-            translationContextLines = optInt("translationContextLines", 2).coerceIn(0, 10)
+            translationContextLines = optInt("translationContextLines", 2).coerceIn(0, 10),
+            skipFailedTranslationLines = optBoolean("skipFailedTranslationLines", false)
         )
 
     private fun SubtitleBurnStyleSpec.toJson(): JSONObject =
@@ -1138,6 +1216,7 @@ object MediaTranslationWorkflowService {
         acquireWakeLock(context)
         MediaTranslationWorkflowStateHolder.update {
             MediaTranslationWorkflowState(
+                workflowKind = KIND_MEDIA,
                 isRunning = true,
                 progress = 0.02f,
                 status = if (replaceExisting) {
@@ -1198,6 +1277,7 @@ object MediaTranslationWorkflowService {
                                 translatedAudioPath = output.translatedAudio.absolutePath,
                                 finalOutputPath = output.finalOutput.absolutePath,
                                 errorMessage = null,
+                                skippedTranslationLineCount = output.skippedTranslationLineCount,
                                 cancelled = false,
                                 paused = false
                             )
@@ -1264,6 +1344,7 @@ object MediaTranslationWorkflowService {
         acquireWakeLock(context)
         MediaTranslationWorkflowStateHolder.update {
             MediaTranslationWorkflowState(
+                workflowKind = KIND_SUBTITLE,
                 isRunning = true,
                 progress = 0.02f,
                 status = if (replaceExisting) {
@@ -1324,6 +1405,7 @@ object MediaTranslationWorkflowService {
                                 translatedAudioPath = null,
                                 finalOutputPath = output.finalOutput.absolutePath,
                                 errorMessage = null,
+                                skippedTranslationLineCount = output.skippedTranslationLineCount,
                                 cancelled = false,
                                 paused = false
                             )
@@ -1443,7 +1525,8 @@ object MediaTranslationWorkflowService {
                 ?: throw IllegalStateException(context.getString(R.string.workflow_media_translate_error_no_srt))
             val segments = SrtParser.parse(originalSrtRaw)
             require(segments.isNotEmpty()) { context.getString(R.string.workflow_media_translate_error_no_segments) }
-            val originalSrt = File(outputDir, "original.srt").apply { writeText(SrtWriter.writeOriginal(segments)) }
+            val originalSrt = File(outputDir, mediaTranslationOriginalSubtitleFileName(spec.sourceName, timestamp))
+                .apply { writeText(SrtWriter.writeOriginal(segments)) }
             File(outputDir, "original_transcript.txt").writeText(originalTxt.ifBlank { segments.joinToString("\n") { it.text } })
             checkpoint = checkpoint.withStage(STAGE_ORIGINAL_READY).copy(
                 originalSrtPath = originalSrt.absolutePath,
@@ -1462,6 +1545,7 @@ object MediaTranslationWorkflowService {
                 backendSnapshot = spec.backendSnapshot,
                 translationContextEnabled = spec.translationContextEnabled,
                 translationContextLines = spec.translationContextLines,
+                skipFailedTranslationLines = spec.skipFailedTranslationLines,
                 segments = segments,
                 checkpoint = checkpoint,
                 kind = KIND_MEDIA,
@@ -1476,7 +1560,8 @@ object MediaTranslationWorkflowService {
             checkpoint = checkpoint.withStage(STAGE_TRANSLATED).copy(
                 translatedSrtPath = translatedSrt.absolutePath,
                 translatedSegmentCount = translated.size,
-                totalSegmentCount = segments.size
+                totalSegmentCount = segments.size,
+                skippedSegmentIds = translatedResult.skippedSegmentIds
             )
             updateRecoverableCheckpoint(context, KIND_MEDIA, checkpoint)
             ensureActive()
@@ -1542,13 +1627,14 @@ object MediaTranslationWorkflowService {
                     put("extractAudioDurationMs", extractionMs)
                     put("transcriptionDurationMs", transcriptionMs)
                     put("translationDurationMs", translationMs)
+                    put("skippedTranslationLines", translatedResult.skippedSegmentIds.size)
                     put("ttsDurationMs", ttsMs)
                     put("audioExportDurationMs", audioExportMs)
                     put("muxOrExportDurationMs", mediaBurnMs)
                 }
             )
             mirrorOutputs(context, listOf(originalSrt, translatedSrt, translatedAudio, finalOutput).distinct())
-            MediaTranslationOutput(originalSrt, translatedSrt, translatedAudio, finalOutput)
+            MediaTranslationOutput(originalSrt, translatedSrt, translatedAudio, finalOutput, checkpoint.skippedSegmentIds.size)
     }
 
     private suspend fun runSubtitleWorkflow(context: Context, spec: SubtitleTranslationJobSpec, jobIndex: Int): SubtitleTranslationOutput = withContext(Dispatchers.IO) {
@@ -1624,7 +1710,8 @@ object MediaTranslationWorkflowService {
             }
             val segments = SrtParser.parse(originalSrtRaw)
             require(segments.isNotEmpty()) { context.getString(R.string.workflow_media_translate_error_no_segments) }
-            val originalSrt = File(outputDir, "original.srt").apply { writeText(SrtWriter.writeOriginal(segments)) }
+            val originalSrt = File(outputDir, mediaTranslationOriginalSubtitleFileName(spec.videoName, timestamp))
+                .apply { writeText(SrtWriter.writeOriginal(segments)) }
             checkpoint = checkpoint.withStage(STAGE_ORIGINAL_READY).copy(
                 originalSrtPath = originalSrt.absolutePath,
                 totalSegmentCount = segments.size
@@ -1642,6 +1729,7 @@ object MediaTranslationWorkflowService {
                     backendSnapshot = spec.backendSnapshot,
                     translationContextEnabled = spec.translationContextEnabled,
                     translationContextLines = spec.translationContextLines,
+                    skipFailedTranslationLines = spec.skipFailedTranslationLines,
                     segments = segments,
                     checkpoint = checkpoint,
                     kind = KIND_SUBTITLE,
@@ -1667,7 +1755,8 @@ object MediaTranslationWorkflowService {
             checkpoint = checkpoint.withStage(STAGE_TRANSLATED).copy(
                 translatedSrtPath = translatedSrt.absolutePath,
                 translatedSegmentCount = translated.size,
-                totalSegmentCount = segments.size
+                totalSegmentCount = segments.size,
+                skippedSegmentIds = if (spec.translateSubtitles) checkpoint.skippedSegmentIds else emptySet()
             )
             updateRecoverableCheckpoint(context, KIND_SUBTITLE, checkpoint)
             ensureActive()
@@ -1698,21 +1787,24 @@ object MediaTranslationWorkflowService {
                     put("extractAudioDurationMs", extractionMs)
                     put("transcriptionDurationMs", transcriptionMs)
                     put("translationDurationMs", translationMs)
+                    put("skippedTranslationLines", checkpoint.skippedSegmentIds.size)
                     put("subtitleBurnDurationMs", burnMs)
                 }
             )
             mirrorOutputs(context, listOf(originalSrt, translatedSrt, finalOutput).distinct(), "SubtitleTranslation")
-            SubtitleTranslationOutput(originalSrt, translatedSrt, finalOutput)
+            SubtitleTranslationOutput(originalSrt, translatedSrt, finalOutput, checkpoint.skippedSegmentIds.size)
     }
 
     private data class TranslationCheckpointLoad(
         val translations: Map<Int, String>,
+        val skippedSegmentIds: Set<Int>,
         val wasCorrupt: Boolean
     )
 
     private data class TranslationCheckpointResult(
         val segments: List<TranslatedTranscriptSegment>,
-        val checkpoint: MediaTranslationJobCheckpoint
+        val checkpoint: MediaTranslationJobCheckpoint,
+        val skippedSegmentIds: Set<Int>
     )
 
     private fun ensureJobCheckpoint(
@@ -1752,10 +1844,11 @@ object MediaTranslationWorkflowService {
         file: File?,
         expectedSegments: List<TimedTranscriptSegment>
     ): TranslationCheckpointLoad {
-        if (file == null || !file.isFile) return TranslationCheckpointLoad(emptyMap(), wasCorrupt = false)
+        if (file == null || !file.isFile) return TranslationCheckpointLoad(emptyMap(), emptySet(), wasCorrupt = false)
         return runCatching {
             val expectedIds = expectedSegments.map { it.id }.toSet()
-            val array = JSONObject(file.readText()).optJSONArray("translations") ?: JSONArray()
+            val root = JSONObject(file.readText())
+            val array = root.optJSONArray("translations") ?: JSONArray()
             val translations = linkedMapOf<Int, String>()
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
@@ -1763,19 +1856,26 @@ object MediaTranslationWorkflowService {
                 val text = item.optString("translatedText").trim()
                 if (id in expectedIds && text.isNotBlank()) translations[id] = text
             }
+            val sanitized = mediaTranslationSanitizeCheckpointTranslations(translations, expectedSegments)
+            val skipped = root.optJSONArray("skippedSegmentIds")
+                .toIntList()
+                .filter { it in sanitized.keys }
+                .toSet()
             TranslationCheckpointLoad(
-                mediaTranslationSanitizeCheckpointTranslations(translations, expectedSegments),
+                sanitized,
+                skipped,
                 wasCorrupt = false
             )
         }.getOrElse {
             DebugLog.log("[MEDIA-TRANSLATE] Translation checkpoint ignored: ${it.message}")
-            TranslationCheckpointLoad(emptyMap(), wasCorrupt = true)
+            TranslationCheckpointLoad(emptyMap(), emptySet(), wasCorrupt = true)
         }
     }
 
     private fun saveTranslatedSegmentsCheckpoint(
         file: File,
         translations: Map<Int, String>,
+        skippedSegmentIds: Set<Int>,
         expectedSegments: List<TimedTranscriptSegment>
     ) {
         runCatching {
@@ -1784,6 +1884,7 @@ object MediaTranslationWorkflowService {
                 JSONObject().apply {
                     put("totalSegments", expectedSegments.size)
                     put("translatedSegmentCount", translations.size)
+                    put("skippedSegmentIds", JSONArray().apply { skippedSegmentIds.sorted().forEach { put(it) } })
                     put("translations", JSONArray().apply {
                         expectedSegments.forEach { segment ->
                             translations[segment.id]?.let { translatedText ->
@@ -1825,6 +1926,7 @@ object MediaTranslationWorkflowService {
         backendSnapshot: RemoteSummarySettingsSnapshot,
         translationContextEnabled: Boolean,
         translationContextLines: Int,
+        skipFailedTranslationLines: Boolean,
         segments: List<TimedTranscriptSegment>,
         checkpoint: MediaTranslationJobCheckpoint,
         kind: String,
@@ -1839,6 +1941,7 @@ object MediaTranslationWorkflowService {
             update(context.getString(R.string.workflow_media_checkpoint_invalid_restarting_stage), baseProgress)
         }
         val translated = linkedMapOf<Int, String>().apply { putAll(partialLoad.translations) }
+        val skippedSegmentIds = partialLoad.skippedSegmentIds.toMutableSet()
         updateTranslationProgress(context, translated.size, segments.size, translated.size + 1, segments.size, baseProgress, progressSpan)
         segments.forEachIndexed { segmentIndex, segment ->
             ensureActive()
@@ -1847,44 +1950,31 @@ object MediaTranslationWorkflowService {
                 return@forEachIndexed
             }
             updateTranslationProgress(context, translated.size, segments.size, segmentIndex + 1, segments.size, baseProgress, progressSpan)
-            val response = requestLineTranslation(
+            val cleaned = translateLineWithRetries(
                 context = context,
-                client = client,
                 sourceLanguage = sourceLanguage,
                 targetLanguage = targetLanguage,
                 backendSnapshot = backendSnapshot,
+                client = client,
                 segments = segments,
                 targetIndex = segmentIndex,
                 translationContextEnabled = translationContextEnabled,
                 translationContextLines = translationContextLines,
-                repair = false
+                skipFailedTranslationLines = skipFailedTranslationLines
             )
-            val cleaned = mediaTranslationCleanLineTranslation(response.output).takeIf { it.isNotBlank() && !mediaTranslationLooksLikePromptEcho(it) }
-                ?: run {
-                    val repair = requestLineTranslation(
-                        context = context,
-                        client = client,
-                        sourceLanguage = sourceLanguage,
-                        targetLanguage = targetLanguage,
-                        backendSnapshot = backendSnapshot,
-                        segments = segments,
-                        targetIndex = segmentIndex,
-                        translationContextEnabled = translationContextEnabled,
-                        translationContextLines = translationContextLines,
-                        repair = true,
-                        previousOutput = response.rawOutput
-                    )
-                    mediaTranslationCleanLineTranslation(repair.output).takeIf { it.isNotBlank() && !mediaTranslationLooksLikePromptEcho(it) }
-                        ?: throw IllegalStateException(context.getString(R.string.workflow_media_translate_error_blank_line, segment.id))
-                }
-            translated[segment.id] = cleaned
-            saveTranslatedSegmentsCheckpoint(partialFile, translated, segments)
+            val finalText = cleaned ?: segment.text.also {
+                skippedSegmentIds += segment.id
+                DebugLog.log("[MEDIA-TRANSLATE] Skipped failed translation line ${segment.id}; original text preserved.")
+            }
+            translated[segment.id] = finalText
+            saveTranslatedSegmentsCheckpoint(partialFile, translated, skippedSegmentIds, segments)
             val checkpointSrt = File(checkpoint.workDirPath, "translated.srt")
             checkpointSrt.writeText(SrtWriter.write(buildTranslatedSegments(segments, translated)))
             val updatedCheckpoint = checkpoint.copy(
                 currentStage = STAGE_TRANSLATED,
                 translatedSegmentCount = translated.size,
                 totalSegmentCount = segments.size,
+                skippedSegmentIds = skippedSegmentIds,
                 translatedSrtPath = checkpointSrt.absolutePath
             )
             updateRecoverableCheckpoint(context, kind, updatedCheckpoint)
@@ -1895,9 +1985,174 @@ object MediaTranslationWorkflowService {
             currentStage = STAGE_TRANSLATED,
             translatedSegmentCount = outputSegments.size,
             totalSegmentCount = segments.size,
+            skippedSegmentIds = skippedSegmentIds,
             translatedSrtPath = File(checkpoint.workDirPath, "translated.srt").absolutePath
         )
-        return TranslationCheckpointResult(outputSegments, updatedCheckpoint)
+        return TranslationCheckpointResult(outputSegments, updatedCheckpoint, skippedSegmentIds)
+    }
+
+    private suspend fun translateLineWithRetries(
+        context: Context,
+        sourceLanguage: String,
+        targetLanguage: String,
+        backendSnapshot: RemoteSummarySettingsSnapshot,
+        client: RemoteSummaryClient,
+        segments: List<TimedTranscriptSegment>,
+        targetIndex: Int,
+        translationContextEnabled: Boolean,
+        translationContextLines: Int,
+        skipFailedTranslationLines: Boolean
+    ): String? {
+        val segment = segments[targetIndex]
+        var previousOutput: String? = null
+        var lastReason = context.getString(R.string.workflow_media_translate_error_unusable_answer)
+        var lastRawOutput: String? = null
+        var lastCleanedOutput: String? = null
+        var lastBackendLabel = mediaTranslationBackendLabel(backendSnapshot)
+        var attemptsUsed = 0
+        suspend fun runAttempt(
+            attempt: Int,
+            maxAttempts: Int,
+            attemptClient: RemoteSummaryClient,
+            attemptSnapshot: RemoteSummarySettingsSnapshot,
+            strict: Boolean,
+            forceNoContext: Boolean,
+            isolatedPrompt: Boolean = false
+        ): String? {
+            ensureActive()
+            lastBackendLabel = mediaTranslationBackendLabel(attemptSnapshot)
+            if (attempt > 1) {
+                val detail = context.getString(
+                    R.string.workflow_media_translate_retrying_line,
+                    segment.id,
+                    attempt,
+                    maxAttempts
+                )
+                MediaTranslationWorkflowStateHolder.update { it.copy(toolProgressDetail = detail) }
+                notificationTaskId?.let { UnifiedNotificationManager.updateProgress(it, MediaTranslationWorkflowStateHolder.state.value.progress, detail) }
+                delay(LINE_TRANSLATION_RETRY_DELAY_MS * (attempt - 1))
+            }
+            attemptsUsed += 1
+            val response = runCatching {
+                requestLineTranslation(
+                    context = context,
+                    client = attemptClient,
+                    sourceLanguage = sourceLanguage,
+                    targetLanguage = targetLanguage,
+                    backendSnapshot = attemptSnapshot,
+                    segments = segments,
+                    targetIndex = targetIndex,
+                    translationContextEnabled = translationContextEnabled && !forceNoContext,
+                    translationContextLines = translationContextLines,
+                    repair = attempt > 1,
+                    previousOutput = previousOutput,
+                    strict = strict,
+                    forceNoContext = forceNoContext,
+                    isolatedPrompt = isolatedPrompt
+                )
+            }.getOrElse { error ->
+                if (error is CancellationException) throw error
+                lastReason = error.message ?: context.getString(R.string.error_generic)
+                DebugLog.log("[MEDIA-TRANSLATE] Line ${segment.id} translation attempt $attempt failed: $lastReason")
+                null
+            } ?: return null
+            previousOutput = response.rawOutput.ifBlank { response.output }
+            lastRawOutput = response.rawOutput
+            lastCleanedOutput = response.output
+            if (!mediaTranslationShouldRetryLineTranslation(response.output)) {
+                return mediaTranslationCleanLineTranslationCandidate(response.output)
+            }
+            lastReason = context.getString(R.string.workflow_media_translate_error_unusable_answer)
+            DebugLog.log(
+                "[MEDIA-TRANSLATE] Line ${segment.id} translation attempt $attempt unusable: " +
+                    "raw=${mediaTranslationDiagnosticSnippet(response.rawOutput)} " +
+                    "cleaned=${mediaTranslationDiagnosticSnippet(response.output)} " +
+                    "tokens=${response.completionTokens}"
+            )
+            return null
+        }
+
+        for (attempt in 1..MAX_LINE_TRANSLATION_ATTEMPTS) {
+            runAttempt(
+                attempt = attempt,
+                maxAttempts = MAX_LINE_TRANSLATION_ATTEMPTS,
+                attemptClient = client,
+                attemptSnapshot = backendSnapshot,
+                strict = attempt >= 2,
+                forceNoContext = attempt == MAX_LINE_TRANSLATION_ATTEMPTS
+            )?.let { return it }
+        }
+        if (shouldTrySaferLiteRtTranslationFallback(backendSnapshot)) {
+            val detail = context.getString(R.string.workflow_media_translate_litert_fallback_line, segment.id)
+            MediaTranslationWorkflowStateHolder.update { it.copy(toolProgressDetail = detail) }
+            notificationTaskId?.let { UnifiedNotificationManager.updateProgress(it, MediaTranslationWorkflowStateHolder.state.value.progress, detail) }
+            DebugLog.log("[MEDIA-TRANSLATE] Line ${segment.id} switching to LiteRT CPU/no-MTP fallback after $attemptsUsed failed attempts.")
+            val fallbackSnapshot = backendSnapshot.copy(
+                liteRtBackend = LITERT_BACKEND_CPU,
+                liteRtMtpEnabled = false,
+                temperature = 0f
+            )
+            val fallbackClient = RemoteSummaryClientFactory.fromSnapshot(context, fallbackSnapshot)
+            currentRemoteClient = fallbackClient
+            try {
+                for (attempt in 1..MAX_LINE_TRANSLATION_FALLBACK_ATTEMPTS) {
+                    runAttempt(
+                        attempt = attempt,
+                        maxAttempts = MAX_LINE_TRANSLATION_FALLBACK_ATTEMPTS,
+                        attemptClient = fallbackClient,
+                        attemptSnapshot = fallbackSnapshot,
+                        strict = true,
+                        forceNoContext = true
+                    )?.let { return it }
+                }
+            } finally {
+                currentRemoteClient = client
+            }
+        }
+        val recoverySnapshot = mediaTranslationLineRecoverySnapshot(backendSnapshot)
+        val recoveryDetail = context.getString(R.string.workflow_media_translate_recovering_line, segment.id)
+        MediaTranslationWorkflowStateHolder.update { it.copy(toolProgressDetail = recoveryDetail) }
+        notificationTaskId?.let { UnifiedNotificationManager.updateProgress(it, MediaTranslationWorkflowStateHolder.state.value.progress, recoveryDetail) }
+        DebugLog.log(
+            "[MEDIA-TRANSLATE] Line ${segment.id} starting fresh isolated recovery after $attemptsUsed failed attempts. " +
+                "backend=${mediaTranslationBackendLabel(recoverySnapshot)} source=${mediaTranslationDiagnosticSnippet(segment.text)}"
+        )
+        val recoveryClient = RemoteSummaryClientFactory.fromSnapshot(context, recoverySnapshot)
+        currentRemoteClient = recoveryClient
+        try {
+            for (attempt in 1..MAX_LINE_TRANSLATION_RECOVERY_ATTEMPTS) {
+                runAttempt(
+                    attempt = attempt,
+                    maxAttempts = MAX_LINE_TRANSLATION_RECOVERY_ATTEMPTS,
+                    attemptClient = recoveryClient,
+                    attemptSnapshot = recoverySnapshot,
+                    strict = true,
+                    forceNoContext = true,
+                    isolatedPrompt = true
+                )?.let { return it }
+            }
+        } finally {
+            currentRemoteClient = client
+        }
+        if (skipFailedTranslationLines) {
+            return null
+        }
+        val detail = context.getString(
+            R.string.workflow_media_translate_error_line_failure_detail,
+            lastReason,
+            mediaTranslationDisplaySnippet(context, lastRawOutput),
+            mediaTranslationDisplaySnippet(context, lastCleanedOutput),
+            mediaTranslationDisplaySnippet(context, segment.text),
+            lastBackendLabel
+        )
+        throw IllegalStateException(
+            context.getString(
+                R.string.workflow_media_translate_error_line_failed_after_retries,
+                segment.id,
+                attemptsUsed,
+                detail
+            )
+        )
     }
 
     private suspend fun requestLineTranslation(
@@ -1911,27 +2166,46 @@ object MediaTranslationWorkflowService {
         translationContextEnabled: Boolean,
         translationContextLines: Int,
         repair: Boolean,
-        previousOutput: String? = null
+        previousOutput: String? = null,
+        strict: Boolean = false,
+        forceNoContext: Boolean = false,
+        isolatedPrompt: Boolean = false
     ): RemoteSummaryResponse {
-        val prompt = mediaTranslationBuildLineTranslationPrompt(
-            sourceLanguage = sourceLanguage,
-            targetLanguage = targetLanguage,
-            segments = segments,
-            targetIndex = targetIndex,
-            includeContext = translationContextEnabled,
-            contextLines = translationContextLines.coerceIn(0, 10)
-        ).let { basePrompt ->
-            if (!repair) {
+        val prompt = if (isolatedPrompt) {
+            mediaTranslationBuildIsolatedLineTranslationPrompt(
+                sourceLanguage = sourceLanguage,
+                targetLanguage = targetLanguage,
+                sourceText = segments.getOrNull(targetIndex)?.text.orEmpty()
+            )
+        } else {
+            mediaTranslationBuildLineTranslationPrompt(
+                sourceLanguage = sourceLanguage,
+                targetLanguage = targetLanguage,
+                segments = segments,
+                targetIndex = targetIndex,
+                includeContext = translationContextEnabled && !forceNoContext,
+                contextLines = translationContextLines.coerceIn(0, 10)
+            )
+        }.let { basePrompt ->
+            if (!repair && !strict) {
                 basePrompt
             } else {
                 buildString {
                     appendLine(basePrompt)
                     appendLine()
-                    appendLine("The previous answer was not usable because it was empty or repeated the prompt.")
-                    appendLine("Previous answer:")
-                    appendLine(previousOutput.orEmpty())
+                    appendLine("Strict retry rules:")
+                    appendLine("- Return exactly one non-empty translated line.")
+                    appendLine("- Do not return punctuation-only text unless the source line is punctuation-only.")
+                    appendLine("- If the line is a name, sound, or fragment, translate it literally or copy it if there is no translation.")
+                    appendLine("- Do not include explanations, labels, quotes, JSON, markdown, or the source line.")
+                    if (repair) {
+                        appendLine()
+                        appendLine("The previous answer was not usable because it was empty, punctuation-only, or repeated the prompt.")
+                        appendLine("Previous answer:")
+                        appendLine(previousOutput.orEmpty())
+                    }
                     appendLine()
-                    append("Return only the translated TARGET line.")
+                    append(if (isolatedPrompt) "Return only the translated line." else "Return only the translated TARGET line.")
                 }
             }
         }
@@ -1940,11 +2214,53 @@ object MediaTranslationWorkflowService {
                 systemPrompt = context.getString(R.string.workflow_media_translate_system_prompt),
                 userPrompt = prompt,
                 contextSize = backendSnapshot.chunkContext,
-                maxTokens = backendSnapshot.chunkMaxTokens,
-                temperature = backendSnapshot.temperature,
-                thinkingEnabled = backendSnapshot.thinkingEnabled
+                maxTokens = minOf(backendSnapshot.chunkMaxTokens.coerceAtLeast(64), LINE_TRANSLATION_MAX_OUTPUT_TOKENS),
+                temperature = if (repair || strict) minOf(backendSnapshot.temperature, 0.05f) else minOf(backendSnapshot.temperature, 0.2f),
+                thinkingEnabled = backendSnapshot.thinkingEnabled && !repair && !strict && !isolatedPrompt
             )
         )
+    }
+
+    private fun shouldTrySaferLiteRtTranslationFallback(snapshot: RemoteSummarySettingsSnapshot): Boolean {
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)
+        if (backend != SettingsRepository.PDF_BACKEND_LITERT || snapshot.liteRtModelId == null) return false
+        val normalizedLiteRtBackend = snapshot.liteRtBackend.trim().lowercase(Locale.US)
+        return snapshot.liteRtMtpEnabled || normalizedLiteRtBackend != LITERT_BACKEND_CPU
+    }
+
+    private fun mediaTranslationLineRecoverySnapshot(snapshot: RemoteSummarySettingsSnapshot): RemoteSummarySettingsSnapshot {
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)
+        val safer = snapshot.copy(
+            temperature = 0f,
+            thinkingEnabled = false,
+            chunkMaxTokens = snapshot.chunkMaxTokens.coerceAtLeast(64)
+        )
+        return if (backend == SettingsRepository.PDF_BACKEND_LITERT && snapshot.liteRtModelId != null) {
+            safer.copy(
+                liteRtBackend = LITERT_BACKEND_CPU,
+                liteRtMtpEnabled = false
+            )
+        } else {
+            safer
+        }
+    }
+
+    private fun mediaTranslationBackendLabel(snapshot: RemoteSummarySettingsSnapshot): String {
+        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)
+        return if (backend == SettingsRepository.PDF_BACKEND_LITERT) {
+            "LiteRT(${snapshot.liteRtBackend}, mtp=${snapshot.liteRtMtpEnabled})"
+        } else {
+            backend
+        }
+    }
+
+    private fun mediaTranslationDisplaySnippet(context: Context, value: String?): String {
+        val snippet = mediaTranslationDiagnosticSnippet(value)
+        return if (snippet == "<empty>") {
+            context.getString(R.string.workflow_media_translate_error_empty_snippet)
+        } else {
+            snippet
+        }
     }
 
     @Deprecated("Kept for old tests and repair diagnostics; media workflows now translate one segment per request.")
@@ -2241,28 +2557,63 @@ object MediaTranslationWorkflowService {
         val whisper = repo.getWhisperCliBinary() ?: throw IllegalStateException(context.getString(R.string.whisper_error_binary_not_found))
         val resolvedWhisperModelPath = WhisperModelPathResolver.resolve(context, whisperModelPath)
             ?: throw IllegalStateException(context.getString(R.string.whisper_error_no_model))
-        val args = listOf(
-            whisper.absolutePath,
-            "-m", resolvedWhisperModelPath,
-            "-f", audioFile.absolutePath,
-            "-l", whisperLanguage,
-            "-t", whisperThreads.toString(),
-            "--no-gpu",
-            "-otxt",
-            "-osrt",
-            "-of", outputBase.absolutePath
-        )
-        runProcessWithSrtProgress(
-            context = context,
-            repo = repo,
-            args = args,
-            srtFile = checkpointSrtFile,
-            existingSegments = existingCheckpointSegments,
-            timestampOffsetMs = timestampOffsetMs,
-            mediaDurationMs = mediaDurationMs,
-            baseProgress = baseProgress,
-            progressSpan = progressSpan
-        )
+        val whisperCandidates = whisperExecutableCandidates(repo, whisper)
+        var lastLinkerFailure: WhisperLinkerOutOfMemoryException? = null
+        whisperCandidates.forEachIndexed { index, whisperCandidate ->
+            val args = listOf(
+                whisperCandidate.absolutePath,
+                "-m", resolvedWhisperModelPath,
+                "-f", audioFile.absolutePath,
+                "-l", whisperLanguage,
+                "-t", whisperThreads.toString(),
+                "--no-gpu",
+                "-otxt",
+                "-osrt",
+                "-of", outputBase.absolutePath
+            )
+            try {
+                runProcessWithSrtProgress(
+                    context = context,
+                    repo = repo,
+                    args = args,
+                    srtFile = checkpointSrtFile,
+                    existingSegments = existingCheckpointSegments,
+                    timestampOffsetMs = timestampOffsetMs,
+                    mediaDurationMs = mediaDurationMs,
+                    baseProgress = baseProgress,
+                    progressSpan = progressSpan,
+                    retryWhisperLinkerOutOfMemory = true
+                )
+                return
+            } catch (e: WhisperLinkerOutOfMemoryException) {
+                lastLinkerFailure = e
+                val next = whisperCandidates.getOrNull(index + 1)
+                if (next != null) {
+                    DebugLog.log(
+                        "[MEDIA-TRANSLATE] Whisper native loader failed for ${whisperCandidate.absolutePath}. " +
+                            "Trying alternate installed executable ${next.absolutePath}."
+                    )
+                }
+            } catch (e: Exception) {
+                if (lastLinkerFailure != null) {
+                    DebugLog.log(
+                        "[MEDIA-TRANSLATE] Alternate Whisper executable ${whisperCandidate.absolutePath} also failed: ${e.message}"
+                    )
+                } else {
+                    throw e
+                }
+            }
+        }
+        throw lastLinkerFailure ?: IllegalStateException(context.getString(R.string.whisper_error_binary_not_found))
+    }
+
+    private fun whisperExecutableCandidates(repo: BinaryRepository, selected: File): List<File> {
+        val candidates = linkedSetOf<File>()
+        candidates += selected
+        repo.getLibraryDir().split(File.pathSeparatorChar)
+            .map { File(it, selected.name) }
+            .filterTo(candidates) { it.exists() && it.isFile }
+        return candidates.toList()
     }
 
     private fun runProcessWithSrtProgress(
@@ -2274,66 +2625,128 @@ object MediaTranslationWorkflowService {
         timestampOffsetMs: Long = 0L,
         mediaDurationMs: Long,
         baseProgress: Float,
-        progressSpan: Float
+        progressSpan: Float,
+        retryWhisperLinkerOutOfMemory: Boolean = false
     ) {
-        ensureActive()
-        DebugLog.log("[MEDIA-TRANSLATE] ${args.joinToString(" ")}")
-        val pb = ProcessBuilder(args).redirectErrorStream(true)
-        val symlinkDir = File(context.filesDir, "ffmpeg_libs").apply { mkdirs() }
-        pb.environment()["LD_LIBRARY_PATH"] = "${symlinkDir.absolutePath}:${repo.getLibraryDir()}"
-        pb.environment()["HOME"] = context.filesDir.absolutePath
-        pb.environment()["TMPDIR"] = context.cacheDir.absolutePath
-        val process = pb.start()
-        currentProcess = process
-        val output = StringBuilder()
+        val maxAttempts = if (retryWhisperLinkerOutOfMemory) MEDIA_TRANSLATION_WHISPER_LINKER_OOM_MAX_ATTEMPTS else 1
         val latestOutputTimestampMs = AtomicLong(existingSegments.maxOfOrNull { it.endMs } ?: timestampOffsetMs)
         val partialSegments = mergeTranscriptSegments(existingSegments, emptyList()).toMutableList()
         val partialSegmentsLock = Any()
-        val readerThread = Thread {
-            runCatching {
-                process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { line ->
-                        mediaTranslationLatestTranscriptTimestampMs(line)
-                            .takeIf { it > 0L }
-                            ?.let { latestOutputTimestampMs.updateAndGet { current -> max(current, it + timestampOffsetMs) } }
-                        mediaTranslationWhisperOutputSegment(line)?.let { segment ->
-                            val timelineSegment = segment.copy(
-                                startMs = segment.startMs + timestampOffsetMs,
-                                endMs = segment.endMs + timestampOffsetMs
-                            )
-                            latestOutputTimestampMs.updateAndGet { current -> max(current, timelineSegment.endMs) }
-                            synchronized(partialSegmentsLock) {
-                                val isDuplicate = partialSegments.any {
-                                    it.startMs == timelineSegment.startMs &&
-                                        it.endMs == timelineSegment.endMs &&
-                                        it.text == timelineSegment.text
+        var lastRetryOutput = ""
+
+        for (attempt in 1..maxAttempts) {
+            ensureActive()
+            DebugLog.log("[MEDIA-TRANSLATE] ${args.joinToString(" ")}")
+            val output = StringBuilder()
+            var process: Process? = null
+            var readerThread: Thread? = null
+            try {
+                val pb = ProcessBuilder(args).redirectErrorStream(true)
+                val symlinkDir = File(context.filesDir, "ffmpeg_libs").apply { mkdirs() }
+                pb.environment()["LD_LIBRARY_PATH"] = "${symlinkDir.absolutePath}:${repo.getLibraryDir()}"
+                pb.environment()["GGML_BACKEND_PATH"] = "/dev/null"
+                pb.environment()["HOME"] = context.filesDir.absolutePath
+                pb.environment()["TMPDIR"] = context.cacheDir.absolutePath
+                pb.directory(context.filesDir)
+                process = pb.start()
+                currentProcess = process
+                readerThread = Thread {
+                    runCatching {
+                        process.inputStream.bufferedReader().useLines { lines ->
+                            lines.forEach { line ->
+                                mediaTranslationLatestTranscriptTimestampMs(line)
+                                    .takeIf { it > 0L }
+                                    ?.let { latestOutputTimestampMs.updateAndGet { current -> max(current, it + timestampOffsetMs) } }
+                                mediaTranslationWhisperOutputSegment(line)?.let { segment ->
+                                    val timelineSegment = segment.copy(
+                                        startMs = segment.startMs + timestampOffsetMs,
+                                        endMs = segment.endMs + timestampOffsetMs
+                                    )
+                                    latestOutputTimestampMs.updateAndGet { current -> max(current, timelineSegment.endMs) }
+                                    synchronized(partialSegmentsLock) {
+                                        val isDuplicate = partialSegments.any {
+                                            it.startMs == timelineSegment.startMs &&
+                                                it.endMs == timelineSegment.endMs &&
+                                                it.text == timelineSegment.text
+                                        }
+                                        if (!isDuplicate) {
+                                            partialSegments += timelineSegment.copy(id = partialSegments.size + 1)
+                                            srtFile.parentFile?.mkdirs()
+                                            srtFile.writeText(SrtWriter.writeOriginal(mergeTranscriptSegments(partialSegments, emptyList())))
+                                        }
+                                    }
                                 }
-                                if (!isDuplicate) {
-                                    partialSegments += timelineSegment.copy(id = partialSegments.size + 1)
-                                    srtFile.parentFile?.mkdirs()
-                                    srtFile.writeText(SrtWriter.writeOriginal(mergeTranscriptSegments(partialSegments, emptyList())))
+                                if (output.length < 24_000) {
+                                    output.appendLine(line)
                                 }
                             }
                         }
-                        if (output.length < 24_000) {
-                            output.appendLine(line)
-                        }
                     }
+                }.apply { isDaemon = true; start() }
+                while (process.isAlive) {
+                    ensureActive()
+                    updateWhisperFileProgress(context, srtFile, mediaDurationMs, baseProgress, progressSpan, latestOutputTimestampMs.get())
+                    Thread.sleep(1_000L)
                 }
+                val exit = process.waitFor()
+                readerThread.join(1_000L)
+                currentProcess = null
+                updateWhisperFileProgress(context, srtFile, mediaDurationMs, baseProgress, progressSpan, latestOutputTimestampMs.get())
+                val outputText = output.toString()
+                if (outputText.isNotBlank()) DebugLog.log("[MEDIA-TRANSLATE] ${outputText.lines().takeLast(10).joinToString("\n")}")
+                ensureActive()
+                if (exit == 0) return
+                lastRetryOutput = outputText
+                if (mediaTranslationWhisperLaunchNeedsMemoryRetry(outputText) && attempt < maxAttempts) {
+                    retryWhisperAfterLinkerOutOfMemory(attempt, maxAttempts)
+                    continue
+                }
+                if (mediaTranslationWhisperLaunchNeedsMemoryRetry(outputText)) {
+                    throw WhisperLinkerOutOfMemoryException(
+                        context.getString(
+                            R.string.workflow_media_translate_whisper_linker_oom_failed,
+                            maxAttempts,
+                            mediaTranslationCompactProcessOutput(outputText)
+                        )
+                    )
+                }
+                throw IllegalStateException("Process failed with exit code $exit")
+            } catch (e: Exception) {
+                currentProcess = null
+                val processOutput = output.toString()
+                val retryable = mediaTranslationWhisperLaunchNeedsMemoryRetry(processOutput, e.message)
+                if (retryable && attempt < maxAttempts) {
+                    lastRetryOutput = processOutput.ifBlank { e.message.orEmpty() }
+                    retryWhisperAfterLinkerOutOfMemory(attempt, maxAttempts)
+                    continue
+                }
+                if (retryable) {
+                    throw WhisperLinkerOutOfMemoryException(
+                        context.getString(
+                            R.string.workflow_media_translate_whisper_linker_oom_failed,
+                            maxAttempts,
+                            mediaTranslationCompactProcessOutput(lastRetryOutput.ifBlank { processOutput.ifBlank { e.message.orEmpty() } })
+                        ),
+                        e
+                    )
+                }
+                throw e
+            } finally {
+                runCatching { readerThread?.join(250L) }
+                currentProcess = null
             }
-        }.apply { isDaemon = true; start() }
-        while (process.isAlive) {
-            ensureActive()
-            updateWhisperFileProgress(context, srtFile, mediaDurationMs, baseProgress, progressSpan, latestOutputTimestampMs.get())
-            Thread.sleep(1_000L)
         }
-        val exit = process.waitFor()
-        readerThread.join(1_000L)
-        currentProcess = null
-        updateWhisperFileProgress(context, srtFile, mediaDurationMs, baseProgress, progressSpan, latestOutputTimestampMs.get())
-        if (output.isNotBlank()) DebugLog.log("[MEDIA-TRANSLATE] ${output.lines().takeLast(10).joinToString("\n")}")
-        ensureActive()
-        require(exit == 0) { "Process failed with exit code $exit" }
+    }
+
+    private fun retryWhisperAfterLinkerOutOfMemory(attempt: Int, maxAttempts: Int) {
+        val delayMs = mediaTranslationWhisperLinkerRetryDelayMs(attempt)
+        DebugLog.log(
+            "[MEDIA-TRANSLATE] Whisper could not start because Android reported native linker out-of-memory. " +
+                "Retrying attempt ${attempt + 1}/$maxAttempts in ${delayMs}ms."
+        )
+        Runtime.getRuntime().gc()
+        System.runFinalization()
+        Thread.sleep(delayMs)
     }
 
     private fun updateWhisperFileProgress(
@@ -2562,12 +2975,31 @@ object MediaTranslationWorkflowService {
                     "txt" -> "text/plain"
                     else -> "application/octet-stream"
                 }
-                val target = dir.findFile(file.name) ?: dir.createFile(mimeType, file.name) ?: return@forEach
+                val target = createUniqueDocumentFile(dir, mimeType, file.name) ?: return@forEach
                 context.contentResolver.openOutputStream(target.uri, "wt")?.use { output ->
                     file.inputStream().use { input -> input.copyTo(output) }
                 }
             }
         }.onFailure { DebugLog.log("[MEDIA-TRANSLATE] Output mirror failed: ${it.message}") }
+    }
+
+    private fun createUniqueDocumentFile(dir: DocumentFile, mimeType: String, fileName: String): DocumentFile? {
+        val base = fileName.substringBeforeLast('.', fileName)
+        val extension = fileName.substringAfterLast('.', "").takeIf { it.isNotBlank() }
+        var candidate = fileName
+        var suffix = 2
+        while (dir.findFile(candidate) != null) {
+            candidate = buildString {
+                append(base)
+                append('_')
+                append(suffix++)
+                extension?.let {
+                    append('.')
+                    append(it)
+                }
+            }
+        }
+        return dir.createFile(mimeType, candidate)
     }
 
     private fun isVideoSpec(spec: MediaTranslationJobSpec): Boolean =
@@ -2611,13 +3043,15 @@ object MediaTranslationWorkflowService {
         val originalSrt: File,
         val translatedSrt: File,
         val translatedAudio: File,
-        val finalOutput: File
+        val finalOutput: File,
+        val skippedTranslationLineCount: Int
     )
 
     private data class SubtitleTranslationOutput(
         val originalSrt: File,
         val translatedSrt: File,
-        val finalOutput: File
+        val finalOutput: File,
+        val skippedTranslationLineCount: Int
     )
 }
 
@@ -2631,8 +3065,39 @@ internal fun mediaTranslationLineProgressPercent(translatedCount: Int, totalCoun
     return ((translatedCount.toDouble() / totalCount.toDouble()).coerceIn(0.0, 1.0) * 100.0).roundToInt()
 }
 
+internal fun mediaTranslationWhisperLaunchNeedsMemoryRetry(vararg details: String?): Boolean =
+    details
+        .filterNotNull()
+        .map { it.lowercase(Locale.US) }
+        .any { detail ->
+            "cannot link executable" in detail &&
+                "relro" in detail &&
+                "out of memory" in detail
+        }
+
+internal fun mediaTranslationWhisperLinkerRetryDelayMs(attempt: Int): Long =
+    (1_500L * attempt.coerceAtLeast(1)).coerceAtMost(8_000L)
+
+internal fun mediaTranslationCompactProcessOutput(output: String, maxChars: Int = 900): String {
+    val compact = output
+        .lines()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .takeLast(8)
+        .joinToString(" ")
+        .ifBlank { "<empty>" }
+    return if (compact.length <= maxChars) {
+        compact
+    } else {
+        compact.take((maxChars - 3).coerceAtLeast(0)) + "..."
+    }
+}
+
 internal fun mediaTranslationTranslatedSubtitleFileName(sourceName: String, timestamp: Long): String =
     "translated_${mediaTranslationSafeOutputBaseName(sourceName)}_$timestamp.srt"
+
+internal fun mediaTranslationOriginalSubtitleFileName(sourceName: String, timestamp: Long): String =
+    "original_${mediaTranslationSafeOutputBaseName(sourceName)}_$timestamp.srt"
 
 internal fun mediaTranslationSafeOutputBaseName(name: String): String =
     name.substringBeforeLast('.')

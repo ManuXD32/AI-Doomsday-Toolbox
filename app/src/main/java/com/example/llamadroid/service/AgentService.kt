@@ -1167,7 +1167,10 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 mmap = sdParams.mmap && spec.supportsMmap,
                 vaeConvDirect = sdParams.vaeConvDirect && spec.supportsVaeConvDirect,
                 qwenImageZeroCondT = sdParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
-                chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask
+                chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask,
+                sdParamsBackendMode = model.sdParamsBackendMode,
+                sdRuntimeBackendMode = model.sdRuntimeBackendMode,
+                maxVramCpuGiB = if (settingsRepo.sdMaxCpuRamEnabled.value) settingsRepo.sdMaxCpuRamGiB.value else ""
             ),
             onProgress = { snapshot ->
                 setStatusText(context.getString(R.string.agent_generating_image_status, "${snapshot.currentStep}/${snapshot.totalSteps}"))
@@ -4509,7 +4512,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             tools = availableTools,
                             modelLabel = model,
                             thinkingEnabled = thinkingEnabled,
-                            numCtx = ollamaService.numCtx.value,
+                            maxTokens = ollamaService.numCtx.value,
                             onChunk = { chunk, thinkingChunk ->
                                 if (isAgentRunActive(runEpoch)) {
                                     chunk?.let {
@@ -10032,7 +10035,7 @@ sys.exit(proc.returncode)
                     settingsRepo.agentLlamaServerModelLabel.value
                 },
                 thinkingEnabled = false,
-                numCtx = summarizerCtx
+                maxTokens = summarizerCtx
             ) { _, _ -> }
         } else {
             ollamaService.chatWithToolsStreaming(

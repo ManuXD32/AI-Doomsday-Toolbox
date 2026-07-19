@@ -45,7 +45,10 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.sd.SdModelFamily
+import com.example.llamadroid.sd.SdParamsBackendMode
+import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.buildSdCompatProfiles
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
@@ -687,6 +690,8 @@ private fun InstalledSDModelsTab(
     var importSdFamily by remember { mutableStateOf<SdModelFamily?>(null) }
     var importSdVariant by remember { mutableStateOf("") }
     var importCompatProfiles by remember { mutableStateOf("") }
+    var importParamsBackendMode by remember { mutableStateOf(SdParamsBackendMode.AUTO) }
+    var importRuntimeBackendMode by remember { mutableStateOf(SdRuntimeBackendMode.AUTO) }
 
     // Import progress tracking
     var isImporting by remember { mutableStateOf(false) }
@@ -703,12 +708,16 @@ private fun InstalledSDModelsTab(
     var editSdFamily by remember { mutableStateOf<SdModelFamily?>(null) }
     var editSdVariant by remember { mutableStateOf("") }
     var editCompatProfiles by remember { mutableStateOf("") }
+    var editParamsBackendMode by remember { mutableStateOf(SdParamsBackendMode.AUTO) }
+    var editRuntimeBackendMode by remember { mutableStateOf(SdRuntimeBackendMode.AUTO) }
 
     LaunchedEffect(editingModel) {
         editingModel?.let { model ->
             editSdFamily = model.sdFamilyEnum()
             editSdVariant = model.sdVariant.orEmpty()
             editCompatProfiles = model.sdCompatProfiles.orEmpty()
+            editParamsBackendMode = SdParamsBackendMode.fromStoredValue(model.sdParamsBackendMode)
+            editRuntimeBackendMode = SdRuntimeBackendMode.fromStoredValue(model.sdRuntimeBackendMode)
         }
     }
     
@@ -917,6 +926,15 @@ private fun InstalledSDModelsTab(
                             compatProfiles = importCompatProfiles,
                             onCompatProfilesChange = { importCompatProfiles = it }
                         )
+                        if (supportsLocalSdBackendPreferences(selectedImportType)) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            SDBackendPreferencesEditor(
+                                paramsBackendMode = importParamsBackendMode,
+                                onParamsBackendModeChange = { importParamsBackendMode = it },
+                                runtimeBackendMode = importRuntimeBackendMode,
+                                onRuntimeBackendModeChange = { importRuntimeBackendMode = it }
+                            )
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             stringResource(R.string.models_import_delete_note),
@@ -959,6 +977,16 @@ private fun InstalledSDModelsTab(
                                 importCompatProfiles.ifBlank { null }
                             } else {
                                 null
+                            },
+                            sdParamsBackendMode = if (supportsLocalSdBackendPreferences(selectedImportType)) {
+                                importParamsBackendMode.storedValue
+                            } else {
+                                SdParamsBackendMode.AUTO.storedValue
+                            },
+                            sdRuntimeBackendMode = if (supportsLocalSdBackendPreferences(selectedImportType)) {
+                                importRuntimeBackendMode.storedValue
+                            } else {
+                                SdRuntimeBackendMode.AUTO.storedValue
                             }
                         ) { progress ->
                             importProgress = progress
@@ -1527,6 +1555,15 @@ private fun InstalledSDModelsTab(
                                 compatProfiles = editCompatProfiles,
                                 onCompatProfilesChange = { editCompatProfiles = it }
                             )
+                            if (supportsLocalSdBackendPreferences(selectedEditType)) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                SDBackendPreferencesEditor(
+                                    paramsBackendMode = editParamsBackendMode,
+                                    onParamsBackendModeChange = { editParamsBackendMode = it },
+                                    runtimeBackendMode = editRuntimeBackendMode,
+                                    onRuntimeBackendModeChange = { editRuntimeBackendMode = it }
+                                )
+                            }
                         }
                     }
                 },
@@ -1554,6 +1591,16 @@ private fun InstalledSDModelsTab(
                                         editCompatProfiles.ifBlank { null }
                                     } else {
                                         null
+                                    },
+                                    sdParamsBackendMode = if (supportsLocalSdBackendPreferences(selectedEditType)) {
+                                        editParamsBackendMode.storedValue
+                                    } else {
+                                        SdParamsBackendMode.AUTO.storedValue
+                                    },
+                                    sdRuntimeBackendMode = if (supportsLocalSdBackendPreferences(selectedEditType)) {
+                                        editRuntimeBackendMode.storedValue
+                                    } else {
+                                        SdRuntimeBackendMode.AUTO.storedValue
                                     }
                                 )
 
@@ -1622,6 +1669,8 @@ private suspend fun importSDModel(
     sdFamily: String? = null,
     sdVariant: String? = null,
     sdCompatProfiles: String? = null,
+    sdParamsBackendMode: String = SdParamsBackendMode.AUTO.storedValue,
+    sdRuntimeBackendMode: String = SdRuntimeBackendMode.AUTO.storedValue,
     onProgress: (Float) -> Unit = {}
 ) {
     var tempFile: File? = null
@@ -1671,7 +1720,9 @@ private suspend fun importSDModel(
             sdCapabilities = capabilities,
             sdFamily = sdFamily,
             sdVariant = sdVariant,
-            sdCompatProfiles = sdCompatProfiles
+            sdCompatProfiles = sdCompatProfiles,
+            sdParamsBackendMode = sdParamsBackendMode,
+            sdRuntimeBackendMode = sdRuntimeBackendMode
         )
         repository.insertModel(modelEntity)
         com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Imported: $targetFilename as ${type.name}")
@@ -2005,6 +2056,102 @@ private fun SDMetadataEditor(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SDBackendPreferencesEditor(
+    paramsBackendMode: SdParamsBackendMode,
+    onParamsBackendModeChange: (SdParamsBackendMode) -> Unit,
+    runtimeBackendMode: SdRuntimeBackendMode,
+    onRuntimeBackendModeChange: (SdRuntimeBackendMode) -> Unit
+) {
+    Text(stringResource(R.string.sd_models_local_backend_title), style = MaterialTheme.typography.labelMedium)
+    Spacer(modifier = Modifier.height(8.dp))
+    Text(
+        stringResource(R.string.sd_models_local_backend_desc),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(12.dp))
+
+    var paramsExpanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = paramsExpanded,
+        onExpandedChange = { paramsExpanded = !paramsExpanded }
+    ) {
+        OutlinedTextField(
+            value = sdParamsBackendModeLabel(paramsBackendMode),
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            label = { Text(stringResource(R.string.sd_models_params_backend_label)) },
+            supportingText = { Text(stringResource(R.string.sd_models_params_backend_help)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = paramsExpanded) }
+        )
+        ExposedDropdownMenu(
+            expanded = paramsExpanded,
+            onDismissRequest = { paramsExpanded = false }
+        ) {
+            SdParamsBackendMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(sdParamsBackendModeLabel(mode)) },
+                    onClick = {
+                        onParamsBackendModeChange(mode)
+                        paramsExpanded = false
+                    }
+                )
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    var runtimeExpanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = runtimeExpanded,
+        onExpandedChange = { runtimeExpanded = !runtimeExpanded }
+    ) {
+        OutlinedTextField(
+            value = sdRuntimeBackendModeLabel(runtimeBackendMode),
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            label = { Text(stringResource(R.string.sd_models_runtime_backend_label)) },
+            supportingText = { Text(stringResource(R.string.sd_models_runtime_backend_help)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = runtimeExpanded) }
+        )
+        ExposedDropdownMenu(
+            expanded = runtimeExpanded,
+            onDismissRequest = { runtimeExpanded = false }
+        ) {
+            SdRuntimeBackendMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(sdRuntimeBackendModeLabel(mode)) },
+                    onClick = {
+                        onRuntimeBackendModeChange(mode)
+                        runtimeExpanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun sdParamsBackendModeLabel(mode: SdParamsBackendMode): String = when (mode) {
+    SdParamsBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
+    SdParamsBackendMode.DISK -> stringResource(R.string.sd_models_params_backend_disk)
+}
+
+@Composable
+private fun sdRuntimeBackendModeLabel(mode: SdRuntimeBackendMode): String = when (mode) {
+    SdRuntimeBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
+    SdRuntimeBackendMode.CPU -> stringResource(R.string.sd_models_runtime_backend_cpu)
+}
+
+private fun supportsLocalSdBackendPreferences(selectionType: SDModelSelectionType): Boolean =
+    selectionType == SDModelSelectionType.CHECKPOINT ||
+        selectionType == SDModelSelectionType.DIFFUSION ||
+        selectionType == SDModelSelectionType.UPSCALER
+
 private fun selectableFamiliesFor(selectionType: SDModelSelectionType): List<SdModelFamily> = when (selectionType) {
     SDModelSelectionType.CHECKPOINT -> listOf(
         SdModelFamily.CHECKPOINT,
@@ -2154,36 +2301,72 @@ private fun DownloadingTab(
     downloadProgress: Map<String, Float>,
     onCancel: (String) -> Unit
 ) {
-    val activeDownloads = downloadProgress.filter { it.value > 0f && it.value < 1f }
+    val sdProgressPrefixes = setOf(
+        "sd_checkpoint|",
+        "sd_upscaler|",
+        "sd_diffusion|",
+        "sd_clip_l|",
+        "sd_clip_g|",
+        "sd_t5xxl|",
+        "sd_tae|",
+        "sd_vae|",
+        "sd_lora|",
+        "sd_controlnet|",
+        "sd_photomaker|"
+    )
+    val activeDownloads = downloadProgress.filter { (key, value) ->
+        sdProgressPrefixes.any { key.startsWith(it) } &&
+            (value == DownloadProgressHolder.INDETERMINATE || value in 0f..0.999f)
+    }
     
-    if (activeDownloads.isEmpty()) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(32.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    Icons.Default.Refresh,
-                    contentDescription = null,
-                    modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            DownloadTaskSection(
+                modelTypes = listOf(
+                    ModelType.SD_CHECKPOINT,
+                    ModelType.SD_UPSCALER,
+                    ModelType.SD_DIFFUSION,
+                    ModelType.SD_CLIP_L,
+                    ModelType.SD_CLIP_G,
+                    ModelType.SD_T5XXL,
+                    ModelType.SD_TAE,
+                    ModelType.SD_VAE,
+                    ModelType.SD_LORA,
+                    ModelType.SD_CONTROLNET,
+                    ModelType.SD_PHOTOMAKER
                 )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    stringResource(R.string.sd_models_no_active_downloads),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            )
         }
-    } else {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+
+        if (activeDownloads.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            stringResource(R.string.sd_models_no_active_downloads),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        } else {
             items(activeDownloads.toList()) { (key, progress) ->
                 val filename = DownloadProgressHolder.getFilename(key) ?: key
                 DownloadingCard(

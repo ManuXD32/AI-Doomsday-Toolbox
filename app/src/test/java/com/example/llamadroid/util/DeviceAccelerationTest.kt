@@ -8,8 +8,20 @@ class DeviceAccelerationTest {
     @Test
     fun isAcceleratorBinary_detectsSpecializedPayloads() {
         assertEquals(true, DeviceAcceleration.isAcceleratorBinary(File("libllama_server_snapdragon_opencl.so")))
-        assertEquals(false, DeviceAcceleration.isAcceleratorBinary(File("libsd_snapdragon_vulkan.so")))
+        assertEquals(true, DeviceAcceleration.isAcceleratorBinary(File("libsd_snapdragon_vulkan.so")))
         assertEquals(false, DeviceAcceleration.isAcceleratorBinary(File("libllama_server_dotprod.so")))
+    }
+
+    @Test
+    fun optionalModuleLists_includeRetainedGpuPayloads() {
+        assertEquals(
+            listOf(DeviceAcceleration.MODULE_LLM_SNAPDRAGON_OPENCL),
+            DeviceAcceleration.modulesFor(AccelerationWorkload.LLM)
+        )
+        assertEquals(
+            listOf(DeviceAcceleration.MODULE_MEDIA_SNAPDRAGON_VULKAN),
+            DeviceAcceleration.modulesFor(AccelerationWorkload.STABLE_DIFFUSION)
+        )
     }
 
     @Test

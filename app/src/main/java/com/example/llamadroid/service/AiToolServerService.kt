@@ -688,6 +688,14 @@ class AiToolServerService : Service() {
             val mode = action.removePrefix("${engine}_")
             val modelPath = body.optString("modelPath").trim()
             val modelName = File(modelPath).name
+            val settings = SettingsRepository(applicationContext)
+            val sdModel = if (engine == "sd") {
+                runBlocking { db.modelDao().getAllModels().first() }.firstOrNull { it.path == modelPath }
+            } else {
+                null
+            }
+            val sdMaxVramCpuGiB = body.optString("maxVramCpuGiB")
+                .ifBlank { if (settings.sdMaxCpuRamEnabled.value) settings.sdMaxCpuRamGiB.value else "" }
             val prompt = body.optString("prompt").ifBlank { "A cute modern AI toolbox illustration" }
             val outputFile = imageOutputFile(engine, mode, jobId)
             val metadata = JSONObject()
@@ -764,7 +772,10 @@ class AiToolServerService : Service() {
                                 inputImagePath = inputPath,
                                 outputPath = outputFile.absolutePath,
                                 upscaleRepeats = body.optInt("upscaleRepeats", 1),
-                                threads = body.optInt("threads", -1)
+                                threads = body.optInt("threads", -1),
+                                sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
+                                sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
+                                maxVramCpuGiB = sdMaxVramCpuGiB
                             )
                         )
                     )
@@ -819,7 +830,10 @@ class AiToolServerService : Service() {
                                 vaeConvDirect = body.optBoolean("vaeConvDirect", false),
                                 qwenImageZeroCondT = body.optBoolean("qwenImageZeroCondT", false),
                                 chromaDisableDitMask = body.optBoolean("chromaDisableDitMask", false),
-                                quantizationType = body.optString("quantizationType")
+                                quantizationType = body.optString("quantizationType"),
+                                sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
+                                sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
+                                maxVramCpuGiB = sdMaxVramCpuGiB
                             )
                         )
                     )
@@ -848,6 +862,10 @@ class AiToolServerService : Service() {
             val modelPath = body.optString("modelPath").trim()
             val prompt = body.optString("prompt").ifBlank { "A cute tiny animated AI toolbox scene" }
             val mode = if (action == "img2vid") VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
+            val settings = SettingsRepository(applicationContext)
+            val sdModel = runBlocking { db.modelDao().getAllModels().first() }.firstOrNull { it.path == modelPath }
+            val sdMaxVramCpuGiB = body.optString("maxVramCpuGiB")
+                .ifBlank { if (settings.sdMaxCpuRamEnabled.value) settings.sdMaxCpuRamGiB.value else "" }
             val dir = File(filesDir, "video_gen_output/${mode.folderName}").apply { mkdirs() }
             val stamp = timestamp()
             val avi = File(dir, "server_${jobId}_$stamp.avi")
@@ -885,7 +903,10 @@ class AiToolServerService : Service() {
                         vaeTileSize = body.optString("vaeTileSize", "24x24"),
                         diffusionFa = body.optBoolean("diffusionFa", true),
                         mmap = body.optBoolean("mmap", true),
-                        threads = body.optInt("threads", -1)
+                        threads = body.optInt("threads", -1),
+                        sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
+                        sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
+                        maxVramCpuGiB = sdMaxVramCpuGiB
                     )
                 )
             )
@@ -1036,7 +1057,8 @@ class AiToolServerService : Service() {
                             ttsSteps = body.optInt("ttsSteps", SUPERTONIC_DEFAULT_TOTAL_STEPS),
                             outputMode = parseEnum(body.optString("outputMode"), MediaTranslationOutputMode.AUTO),
                             replaceOriginalAudio = body.optBoolean("replaceOriginalAudio", true),
-                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage))
+                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage)),
+                            skipFailedTranslationLines = body.optBoolean("skipFailedTranslationLines", false)
                         )
                     )
                     val job = AiServerJob(jobId, type.id, "Media translation", "RUNNING", 0.05f, "Workflow started", ownerUserId)
@@ -1072,7 +1094,8 @@ class AiToolServerService : Service() {
                                 primaryColorBlue = body.optDouble("primaryColorBlue", 1.0).toFloat(),
                                 fontName = body.optString("fontName", "Default")
                             ),
-                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage))
+                            backendSnapshot = settings.copy(targetLanguage = body.optString("targetLanguage", settings.targetLanguage)),
+                            skipFailedTranslationLines = body.optBoolean("skipFailedTranslationLines", false)
                         )
                     )
                     val job = AiServerJob(jobId, type.id, "Subtitle translation", "RUNNING", 0.05f, "Workflow started", ownerUserId)
@@ -1438,11 +1461,19 @@ class AiToolServerService : Service() {
 
         private fun startTxt2ImgUpscaleWorkflow(jobId: String, body: JSONObject, ownerUserId: Long?): AiServerJob {
             val prompt = body.optString("prompt").ifBlank { "A cute modern AI toolbox illustration" }
+            val settings = SettingsRepository(applicationContext)
+            val modelPath = body.optString("modelPath")
+            val upscalerPath = body.optString("upscalerPath")
+            val allModels = runBlocking { db.modelDao().getAllModels().first() }
+            val sdModel = allModels.firstOrNull { it.path == modelPath }
+            val upscalerModel = allModels.firstOrNull { it.path == upscalerPath }
+            val sdMaxVramCpuGiB = body.optString("maxVramCpuGiB")
+                .ifBlank { if (settings.sdMaxCpuRamEnabled.value) settings.sdMaxCpuRamGiB.value else "" }
             val outputDir = File(filesDir, "sd_output/workflow").apply { mkdirs() }
             val firstOutput = File(outputDir, "server_${jobId}_${timestamp()}.png")
             val finalOutput = File(outputDir, "server_${jobId}_upscaled_${timestamp()}.png")
             val txt2img = SDConfig(
-                modelPath = body.optString("modelPath"),
+                modelPath = modelPath,
                 prompt = prompt,
                 negativePrompt = body.optString("negativePrompt"),
                 width = body.optInt("width", 512),
@@ -1461,16 +1492,22 @@ class AiToolServerService : Service() {
                 t5xxlPath = body.optNullableString("t5xxlPath"),
                 llmPath = body.optNullableString("llmPath"),
                 llmVisionPath = body.optNullableString("llmVisionPath"),
-                photoMakerPath = body.optNullableString("photoMakerPath")
+                photoMakerPath = body.optNullableString("photoMakerPath"),
+                sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
+                sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
+                maxVramCpuGiB = sdMaxVramCpuGiB
             )
             val upscale = SDConfig(
-                modelPath = body.optString("upscalerPath"),
+                modelPath = upscalerPath,
                 prompt = prompt,
                 outputPath = finalOutput.absolutePath,
-                upscaleModel = body.optString("upscalerPath"),
+                upscaleModel = upscalerPath,
                 upscaleRepeats = body.optInt("upscaleRepeats", 1),
                 mode = SDMode.UPSCALE,
-                threads = body.optInt("upscaleThreads", 4)
+                threads = body.optInt("upscaleThreads", 4),
+                sdParamsBackendMode = body.optString("upscalerSdParamsBackendMode").ifBlank { upscalerModel?.sdParamsBackendMode ?: "auto" },
+                sdRuntimeBackendMode = body.optString("upscalerSdRuntimeBackendMode").ifBlank { upscalerModel?.sdRuntimeBackendMode ?: "auto" },
+                maxVramCpuGiB = sdMaxVramCpuGiB
             )
             startForegroundService(
                 StableDiffusionService.createStartWorkflowIntent(
@@ -1494,7 +1531,7 @@ class AiToolServerService : Service() {
 
         private fun startMangaTranslationWorkflow(jobId: String, body: JSONObject, ownerUserId: Long?): AiServerJob {
             val inputUris = body.pathList("inputPaths").map(::uriForPath)
-            require(inputUris.isNotEmpty()) { "Upload at least one CBZ file." }
+            require(inputUris.isNotEmpty()) { "Upload at least one CBZ, ZIP, or PDF file." }
             val exportPdf = body.optBoolean("exportPdf", true)
             val exportCbz = body.optBoolean("exportCbz", true)
             require(exportPdf || exportCbz) { "Choose at least one manga output format." }
@@ -2953,7 +2990,7 @@ class AiToolServerService : Service() {
                         tools = availableTools,
                         modelLabel = modelName,
                         thinkingEnabled = useThinking,
-                        numCtx = contextTokens,
+                        maxTokens = contextTokens,
                         samplingParams = LlamaServerSamplingParams.fromParams(params.filterValues { it != null }.mapValues { it.value as Any }),
                         onChunk = onChunk
                     ).getOrElse { throw it }
@@ -3454,7 +3491,7 @@ class AiToolServerService : Service() {
                     tools = emptyList(),
                     modelLabel = modelName,
                     thinkingEnabled = false,
-                    numCtx = 4096,
+                    maxTokens = 4096,
                     samplingParams = LlamaServerSamplingParams(temperature = 0.2f, topP = 0.9f)
                 ).getOrElse { throw it }
             }
@@ -4136,7 +4173,7 @@ class AiToolServerService : Service() {
 
         private fun mangaWorkflowFields(): JSONArray = JSONArray(
             listOf(
-                fileField("inputPaths", "CBZ files", "Archivos CBZ", required = true, accept = ".cbz,application/vnd.comicbook+zip,application/zip", multiple = true),
+                fileField("inputPaths", "CBZ, ZIP, or PDF files", "Archivos CBZ, ZIP o PDF", required = true, accept = ".cbz,.zip,.pdf,application/vnd.comicbook+zip,application/x-cbz,application/zip,application/pdf", multiple = true),
                 fieldJson("exportPdf", "checkbox", "Export translated PDF", "Exportar PDF traducido", defaultValue = true),
                 fieldJson("exportCbz", "checkbox", "Export translated CBZ", "Exportar CBZ traducido", defaultValue = true)
             ) + summaryProviderFields(
@@ -4157,7 +4194,8 @@ class AiToolServerService : Service() {
                 fieldJson("ttsVoiceName", "select", "Voice", "Voz", modelKey = "ttsVoices"),
                 fieldJson("ttsSteps", "number", "TTS steps", "Pasos TTS", defaultValue = SUPERTONIC_DEFAULT_TOTAL_STEPS, min = 1.0, step = 1.0),
                 fieldJson("outputMode", "select", "Output mode", "Modo salida", defaultValue = MediaTranslationOutputMode.AUTO.name, options = enumOptions<MediaTranslationOutputMode>()),
-                fieldJson("replaceOriginalAudio", "checkbox", "Replace original audio", "Reemplazar audio original", defaultValue = true)
+                fieldJson("replaceOriginalAudio", "checkbox", "Replace original audio", "Reemplazar audio original", defaultValue = true),
+                fieldJson("skipFailedTranslationLines", "checkbox", "Skip failed lines after retries", "Omitir lineas fallidas tras reintentos", defaultValue = false)
             ) + summaryProviderFields(
                 includeTargetLanguage = false,
                 summaryPromptDefault = SettingsRepository.DEFAULT_TRANSCRIPT_SUMMARY_PROMPT,
@@ -4174,6 +4212,7 @@ class AiToolServerService : Service() {
                 fieldJson("whisperThreads", "number", "Whisper threads", "Hilos Whisper", defaultValue = 4, min = 1.0, step = 1.0),
                 fieldJson("targetLanguage", "text", "Target language", "Idioma destino", defaultValue = "Spanish"),
                 fieldJson("translateSubtitles", "checkbox", "Translate subtitles", "Traducir subtitulos", defaultValue = true),
+                fieldJson("skipFailedTranslationLines", "checkbox", "Skip failed lines after retries", "Omitir lineas fallidas tras reintentos", defaultValue = false),
                 fieldJson("burnIntoVideo", "checkbox", "Burn into video", "Incrustar en video", defaultValue = true),
                 fieldJson("fontSize", "number", "Font size", "Tamano fuente", defaultValue = 24, min = 8.0, step = 1.0),
                 fieldJson("alignment", "number", "Alignment", "Alineacion", defaultValue = 2, min = 1.0, max = 9.0, step = 1.0),

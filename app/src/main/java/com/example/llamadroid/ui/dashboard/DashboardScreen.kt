@@ -891,6 +891,46 @@ fun DashboardScreen(
                 }
             }
         }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.34f)
+            )
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(Icons.Default.Image, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
+                    Text(
+                        stringResource(R.string.dashboard_sd_distributed_title),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                }
+
+                Text(
+                    stringResource(R.string.dashboard_sd_distributed_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Button(
+                    onClick = { navController.navigate(Screen.SdDistributedHub.route) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.dashboard_sd_distributed_action))
+                }
+            }
+        }
         
         // Memory Stats Card
         Card(

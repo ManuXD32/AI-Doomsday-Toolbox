@@ -78,6 +78,12 @@ import com.example.llamadroid.ui.distributed.DistributedScreen
 import com.example.llamadroid.ui.distributed.WorkerModeScreen
 import com.example.llamadroid.ui.distributed.MasterModeScreen
 import com.example.llamadroid.ui.distributed.NetworkVisualizationScreen
+import com.example.llamadroid.ui.distributed.SdDistributedHubScreen
+import com.example.llamadroid.ui.distributed.SdDistributedGalleryScreen
+import com.example.llamadroid.ui.distributed.SdDistributedMasterScreen
+import com.example.llamadroid.ui.distributed.SdDistributedNetworkScreen
+import com.example.llamadroid.ui.distributed.SdDistributedRunConfigScreen
+import com.example.llamadroid.ui.distributed.SdDistributedWorkerScreen
 import com.example.llamadroid.ui.settings.WelcomeScreen
 import com.example.llamadroid.ui.settings.AboutScreen
 import com.example.llamadroid.ui.settings.BenchmarkHistoryScreen
@@ -465,6 +471,12 @@ fun LlamaApp(
             composable(Screen.WorkerMode.route) { WorkerModeScreen(navController) }
             composable(Screen.MasterMode.route) { MasterModeScreen(navController) }
             composable(Screen.NetworkVisualization.route) { NetworkVisualizationScreen(navController) }
+            composable(Screen.SdDistributedHub.route) { SdDistributedHubScreen(navController) }
+            composable(Screen.SdDistributedWorker.route) { SdDistributedWorkerScreen(navController) }
+            composable(Screen.SdDistributedMaster.route) { SdDistributedMasterScreen(navController) }
+            composable(Screen.SdDistributedNetwork.route) { SdDistributedNetworkScreen(navController) }
+            composable(Screen.SdDistributedRunConfig.route) { SdDistributedRunConfigScreen(navController) }
+            composable(Screen.SdDistributedGallery.route) { SdDistributedGalleryScreen(navController) }
             // Benchmark
             composable(Screen.Benchmark.route) { BenchmarkScreen(navController) }
             composable(Screen.BenchmarkHistory.route) { BenchmarkHistoryScreen(navController) }

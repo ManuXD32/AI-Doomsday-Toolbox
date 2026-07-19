@@ -65,6 +65,8 @@ class LlamaService : Service() {
                     val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 3) else null
                     val draftMin = if (intent.hasExtra(EXTRA_DRAFT_MIN)) intent.getIntExtra(EXTRA_DRAFT_MIN, 0) else null
                     val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.0f) else null
+                    val draftThreads = if (intent.hasExtra(EXTRA_DRAFT_THREADS)) intent.getIntExtra(EXTRA_DRAFT_THREADS, 4) else null
+                    val draftThreadsBatch = if (intent.hasExtra(EXTRA_DRAFT_THREADS_BATCH)) intent.getIntExtra(EXTRA_DRAFT_THREADS_BATCH, 4) else null
                     
                     val parallelOverride = if (intent.hasExtra(EXTRA_PARALLEL)) intent.getIntExtra(EXTRA_PARALLEL, 1) else null
                     val cacheRamOverride = if (intent.hasExtra(EXTRA_CACHE_RAM)) intent.getIntExtra(EXTRA_CACHE_RAM, 0) else null
@@ -88,6 +90,7 @@ class LlamaService : Service() {
                         startServer(modelPath, isEmbedding, mmprojPath, 
                             threadsOverride, contextSizeOverride, temperatureOverride, hostOverride, portOverride,
                             draftModelPath = draftModelPath, draftMax = draftMax, draftMin = draftMin, draftPMin = draftPMin,
+                            draftThreads = draftThreads, draftThreadsBatch = draftThreadsBatch,
                             kvCacheEnabledOverride = kvCacheEnabledOverride,
                             kvCacheTypeKOverride = kvCacheTypeKOverride,
                             kvCacheTypeVOverride = kvCacheTypeVOverride,
@@ -134,6 +137,8 @@ class LlamaService : Service() {
                                 draftMax = params["draftMax"] as? Int,
                                 draftMin = params["draftMin"] as? Int,
                                 draftPMin = params["draftPMin"] as? Float,
+                                draftThreads = params["draftThreads"] as? Int,
+                                draftThreadsBatch = params["draftThreadsBatch"] as? Int,
                                 kvCacheEnabledOverride = params["kvCacheEnabled"] as? Boolean,
                                 kvCacheTypeKOverride = params["kvCacheTypeK"] as? String,
                                 kvCacheTypeVOverride = params["kvCacheTypeV"] as? String,
@@ -172,6 +177,8 @@ class LlamaService : Service() {
                      val draftMax = if (intent.hasExtra(EXTRA_DRAFT_MAX)) intent.getIntExtra(EXTRA_DRAFT_MAX, 3) else null
                      val draftMin = if (intent.hasExtra(EXTRA_DRAFT_MIN)) intent.getIntExtra(EXTRA_DRAFT_MIN, 0) else null
                      val draftPMin = if (intent.hasExtra(EXTRA_DRAFT_P_MIN)) intent.getFloatExtra(EXTRA_DRAFT_P_MIN, 0.0f) else null
+                     val draftThreads = if (intent.hasExtra(EXTRA_DRAFT_THREADS)) intent.getIntExtra(EXTRA_DRAFT_THREADS, 4) else null
+                     val draftThreadsBatch = if (intent.hasExtra(EXTRA_DRAFT_THREADS_BATCH)) intent.getIntExtra(EXTRA_DRAFT_THREADS_BATCH, 4) else null
                      
                      val parallelOverride = if (intent.hasExtra(EXTRA_PARALLEL)) intent.getIntExtra(EXTRA_PARALLEL, 1) else null
                      val cacheRamOverride = if (intent.hasExtra(EXTRA_CACHE_RAM)) intent.getIntExtra(EXTRA_CACHE_RAM, 0) else null
@@ -188,6 +195,7 @@ class LlamaService : Service() {
                              threadsOverride, contextSizeOverride, temperatureOverride, hostOverride, portOverride, 
                              previewMode = true,
                              draftModelPath = draftModelPath, draftMax = draftMax, draftMin = draftMin, draftPMin = draftPMin,
+                             draftThreads = draftThreads, draftThreadsBatch = draftThreadsBatch,
                              kvCacheEnabledOverride = kvCacheEnabledOverride,
                              kvCacheTypeKOverride = kvCacheTypeKOverride,
                              kvCacheTypeVOverride = kvCacheTypeVOverride,
@@ -230,6 +238,8 @@ class LlamaService : Service() {
         draftMax: Int? = null,
         draftMin: Int? = null,
         draftPMin: Float? = null,
+        draftThreads: Int? = null,
+        draftThreadsBatch: Int? = null,
         kvCacheEnabledOverride: Boolean? = null,
         kvCacheTypeKOverride: String? = null,
         kvCacheTypeVOverride: String? = null,
@@ -282,13 +292,26 @@ class LlamaService : Service() {
         val kvCacheTypeK = kvCacheTypeKOverride ?: if (isMasterProfile) DistributedService.masterKvCacheTypeK.value else settingsRepo.serverKvCacheTypeK.value
         val kvCacheTypeV = kvCacheTypeVOverride ?: if (isMasterProfile) DistributedService.masterKvCacheTypeV.value else settingsRepo.serverKvCacheTypeV.value
         val kvCacheReuse = kvCacheReuseOverride ?: if (isMasterProfile) DistributedService.masterKvCacheReuse.value else settingsRepo.serverKvCacheReuse.value
+        val kvOffloadMode = if (isMasterProfile) {
+            com.example.llamadroid.data.SettingsRepository.LLAMA_KV_OFFLOAD_AUTO
+        } else {
+            settingsRepo.llamaKvOffloadMode.value
+        }
         val noMmap = if (isMasterProfile) false else settingsRepo.lowMemoryMode.value
         val parallel = parallelOverride ?: if (isMasterProfile) DistributedService.masterParallel.value else settingsRepo.serverParallel.value
         val cacheRam = cacheRamOverride ?: if (isMasterProfile) DistributedService.masterCacheRam.value else settingsRepo.serverCacheRam.value
         val customFlags = customFlagsOverride ?: if (isMasterProfile) DistributedService.masterCustomFlags.value else settingsRepo.customFlags.value
         val flashAttention = flashAttentionOverride ?: if (isMasterProfile) DistributedService.masterFlashAttention.value else settingsRepo.flashAttentionEnabled.value
-        val speculativeEnabled = !isMasterProfile && settingsRepo.speculativeEnabled.value
-        val speculativeMode = if (speculativeEnabled) settingsRepo.speculativeMode.value else null
+        val speculativeEnabled = if (isMasterProfile) {
+            DistributedService.masterSpeculativeEnabled.value && !draftModelPath.isNullOrBlank()
+        } else {
+            settingsRepo.speculativeEnabled.value
+        }
+        val speculativeMode = if (speculativeEnabled) {
+            if (isMasterProfile) LlamaSpeculativeMode.DRAFT_SIMPLE else settingsRepo.speculativeMode.value
+        } else {
+            null
+        }
         if (speculativeMode?.requiresDraftModel == true && draftModelPath.isNullOrBlank()) {
             handlePreLaunchStartFailure(
                 getString(R.string.dist_speculative_missing_required_draft),
@@ -306,6 +329,13 @@ class LlamaService : Service() {
         val mtpDraftMax = if (isMasterProfile) 3 else settingsRepo.mtpDraftMaxTokens.value
         val mtpDraftMin = if (isMasterProfile) 0 else settingsRepo.mtpDraftMinTokens.value
         val mtpDraftPMin = if (isMasterProfile) 0.0f else settingsRepo.mtpDraftPMin.value
+        val draftDeviceMode = if (isMasterProfile) {
+            com.example.llamadroid.data.SettingsRepository.LLAMA_DRAFT_DEVICE_AUTO
+        } else {
+            settingsRepo.llamaDraftDeviceMode.value
+        }
+        val effectiveDraftThreads = draftThreads ?: if (isMasterProfile) DistributedService.masterDraftThreads.value else settingsRepo.draftThreads.value
+        val effectiveDraftThreadsBatch = draftThreadsBatch ?: if (isMasterProfile) DistributedService.masterDraftThreadsBatch.value else settingsRepo.draftThreadsBatch.value
         val ngramModNMatch = if (isMasterProfile) 24 else settingsRepo.ngramModNMatch.value
         val ngramModNMin = if (isMasterProfile) 48 else settingsRepo.ngramModNMin.value
         val ngramModNMax = if (isMasterProfile) 64 else settingsRepo.ngramModNMax.value
@@ -358,6 +388,8 @@ class LlamaService : Service() {
                 "draftMax" to draftMax,
                 "draftMin" to draftMin,
                 "draftPMin" to draftPMin,
+                "draftThreads" to effectiveDraftThreads,
+                "draftThreadsBatch" to effectiveDraftThreadsBatch,
                 "mtpDraftMax" to mtpDraftMax,
                 "mtpDraftMin" to mtpDraftMin,
                 "mtpDraftPMin" to mtpDraftPMin,
@@ -378,6 +410,8 @@ class LlamaService : Service() {
                 "kvCacheTypeK" to kvCacheTypeK,
                 "kvCacheTypeV" to kvCacheTypeV,
                 "kvCacheReuse" to kvCacheReuse,
+                "kvOffloadMode" to kvOffloadMode,
+                "draftDeviceMode" to draftDeviceMode,
                 "parallel" to parallel,
                 "cacheRam" to cacheRam,
                 "customFlags" to customFlags,
@@ -389,6 +423,7 @@ class LlamaService : Service() {
         if (kvCacheEnabled) {
             DebugLog.log("LlamaService: KV cache enabled - K=$kvCacheTypeK, V=$kvCacheTypeV, reuse=$kvCacheReuse")
         }
+        DebugLog.log("LlamaService: KV offload mode=$kvOffloadMode, draft device mode=$draftDeviceMode")
         
         // Get distributed inference workers from DistributedService (if master mode is active)
         val rpcWorkers = if (DistributedService.mode.value == DistributedMode.MASTER) {
@@ -568,6 +603,7 @@ class LlamaService : Service() {
                     kvCacheTypeK = kvCacheTypeK,
                     kvCacheTypeV = kvCacheTypeV,
                     kvCacheReuse = kvCacheReuse,
+                    kvOffloadMode = kvOffloadMode,
                     rpcWorkers = rpcWorkers,
                     nGpuLayers = nGpuLayers,
                     tensorSplit = tensorSplit,
@@ -577,6 +613,9 @@ class LlamaService : Service() {
                     draftMax = draftMax ?: 3,
                     draftMin = draftMin ?: 0,
                     draftPMin = draftPMin ?: 0.0f,
+                    draftThreads = effectiveDraftThreads,
+                    draftThreadsBatch = effectiveDraftThreadsBatch,
+                    draftDeviceMode = draftDeviceMode,
                     mtpDraftMax = mtpDraftMax,
                     mtpDraftMin = mtpDraftMin,
                     mtpDraftPMin = mtpDraftPMin,
@@ -714,9 +753,25 @@ class LlamaService : Service() {
                 fun acceleratorBackendFailureReason(line: String): String =
                     "GPU backend unavailable: ${line.take(180)}"
 
+                fun openClMtpDiagnosticLog(line: String): Int? {
+                    val lower = line.lowercase()
+                    return when {
+                        lower.contains("does not have support for op top_k") ->
+                            R.string.llama_server_opencl_mtp_top_k_warning
+                        lower.contains("failed to measure draft model memory") ||
+                            lower.contains("failed to create llama_context from model") ->
+                            R.string.llama_server_opencl_mtp_memory_probe_warning
+                        lower.contains("failed to load") &&
+                            lower.contains("is a directory") ->
+                            R.string.llama_server_opencl_backend_path_warning
+                        else -> null
+                    }
+                }
+
                 suspend fun startCandidate(candidateFile: File, candidateConfig: LlamaConfig, args: List<String>): ProcessRunResult {
                     var backendUnavailable = false
                     var stoppedForAcceleratorBackendIssue = false
+                    val reportedOpenClMtpDiagnostics = mutableSetOf<Int>()
                     val metricsCollector = candidateConfig.speculativeMode?.let { LlamaSpeculativeMetricsCollector() }
                     val result = processController.start(
                         candidateFile.absolutePath,
@@ -766,6 +821,17 @@ class LlamaService : Service() {
                                     processController.stop()
                                 }
                             }
+                            if (DeviceAcceleration.isAcceleratorBinary(candidateFile) &&
+                                candidateConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP
+                            ) {
+                                openClMtpDiagnosticLog(line)?.let { warningRes ->
+                                    if (reportedOpenClMtpDiagnostics.add(warningRes)) {
+                                        val warning = getString(warningRes)
+                                        DebugLog.log("LlamaService: $warning")
+                                        Companion.addServerLog(warning)
+                                    }
+                                }
+                            }
                         },
                         onReady = {
                             DeviceAcceleration.reportActiveBinary(
@@ -782,34 +848,42 @@ class LlamaService : Service() {
                 }
 
                 suspend fun startCpuFallback(reason: String): ProcessRunResult? {
-                    val cpuBinaryFile = binaryRepo.getCpuExecutable()
-                        ?.takeIf { it.absolutePath != binaryFile.absolutePath }
-                        ?: return null
+                    val cpuBinaryFiles = binaryRepo.getCpuFallbackExecutables(
+                        name = "llama_server",
+                        excludingPath = primaryBinaryFile.absolutePath
+                    )
+                    if (cpuBinaryFiles.isEmpty()) return null
                     val fallbackStatus = getString(R.string.llama_server_cpu_fallback_retry)
-                    DebugLog.log("LlamaService: $reason; retrying CPU fallback at ${cpuBinaryFile.absolutePath}")
                     Companion.updateState(ServerState.Loading(0f, fallbackStatus))
                     updateNotification(fallbackStatus)
-                    val fallbackConfig = if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP &&
-                        !processController.binarySupportsMtpSpeculative(cpuBinaryFile)
-                    ) {
-                        val warning = getString(R.string.llama_server_mtp_disabled, cpuBinaryFile.name)
-                        DebugLog.log("LlamaService: $warning")
-                        Companion.addServerLog(warning)
-                        launchConfig.copy(speculativeMode = null)
-                    } else if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH &&
-                        !processController.binarySupportsDflashSpeculative(cpuBinaryFile)
-                    ) {
-                        val warning = getString(R.string.llama_server_dflash_unsupported, cpuBinaryFile.name)
-                        DebugLog.log("LlamaService: $warning")
-                        Companion.addServerLog(warning)
-                        return null
-                    } else {
-                        launchConfig
+                    for (cpuBinaryFile in cpuBinaryFiles) {
+                        DebugLog.log("LlamaService: $reason; retrying CPU fallback at ${cpuBinaryFile.absolutePath}")
+                        val fallbackConfig = if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP &&
+                            !processController.binarySupportsMtpSpeculative(cpuBinaryFile)
+                        ) {
+                            val warning = getString(R.string.llama_server_mtp_disabled, cpuBinaryFile.name)
+                            DebugLog.log("LlamaService: $warning")
+                            Companion.addServerLog(warning)
+                            launchConfig.copy(speculativeMode = null)
+                        } else if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH &&
+                            !processController.binarySupportsDflashSpeculative(cpuBinaryFile)
+                        ) {
+                            val warning = getString(R.string.llama_server_dflash_unsupported, cpuBinaryFile.name)
+                            DebugLog.log("LlamaService: $warning")
+                            Companion.addServerLog(warning)
+                            continue
+                        } else {
+                            launchConfig
+                        }
+                        ensureServerPortAvailableOrThrow(fallbackConfig.host, fallbackConfig.port, "before CPU fallback")
+                        val fallbackArgs = buildCommandArgsFor(cpuBinaryFile.absolutePath, fallbackConfig)
+                        DistributedService.setLastCommand(processController.buildCommandString(fallbackArgs))
+                        val fallbackResult = startCandidate(cpuBinaryFile, fallbackConfig, fallbackArgs)
+                        if (fallbackResult.becameReady || fallbackResult.stoppedIntentionally) {
+                            return fallbackResult
+                        }
                     }
-                    ensureServerPortAvailableOrThrow(fallbackConfig.host, fallbackConfig.port, "before CPU fallback")
-                    val fallbackArgs = buildCommandArgsFor(cpuBinaryFile.absolutePath, fallbackConfig)
-                    DistributedService.setLastCommand(processController.buildCommandString(fallbackArgs))
-                    return startCandidate(cpuBinaryFile, fallbackConfig, fallbackArgs)
+                    return null
                 }
 
                 val candidateFiles = if (DeviceAcceleration.isAcceleratorBinary(primaryBinaryFile)) {
@@ -888,8 +962,10 @@ class LlamaService : Service() {
                         (!currentRunResult.stoppedIntentionally && !currentRunResult.becameReady)) &&
                     attemptedAccelerator
                 ) {
-                    val reason = lastCandidateError?.message?.let { "Snapdragon accelerator failed: $it" }
-                        ?: "Snapdragon accelerator exited before the server became ready"
+                    val reason = when {
+                        lastCandidateError?.message != null -> "Snapdragon accelerator failed: ${lastCandidateError?.message}"
+                        else -> "Snapdragon accelerator exited before the server became ready"
+                    }
                     startCpuFallback(reason)?.let {
                         runResult = it
                     }
@@ -904,7 +980,7 @@ class LlamaService : Service() {
                     DebugLog.log("LlamaService: Process terminated unexpectedly")
                     Companion.recordRecentStartupFailure()
                 }
-                stopServer()
+                stopServer(finalError = finalRunResult.startupFailureMessage?.takeIf { !finalRunResult.becameReady })
             } catch (e: Exception) {
                 // Only show error if not intentionally stopped
                 if (!processController.stoppedIntentionally) {
@@ -920,14 +996,18 @@ class LlamaService : Service() {
         }
     }
     
-    private fun stopServer() {
+    private fun stopServer(finalError: String? = null) {
         val portToClean = currentServerPort ?: 8080
         processController.stop()
         NativeProcessCleanup.cleanupSameUidLlamaServersSync("LlamaService stop", port = portToClean)
         serviceScope.coroutineContext.cancelChildren()
         DistributedService.setInferenceRunning(false)
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
-        Companion.updateState(ServerState.Stopped)
+        if (finalError != null) {
+            Companion.updateState(ServerState.Error(finalError))
+        } else {
+            Companion.updateState(ServerState.Stopped)
+        }
         WakeLockManager.release("LlamaService")
         WakeLockManager.releaseWifiLock("LlamaService")
         notificationTaskId?.let { taskId ->
@@ -1098,6 +1178,8 @@ class LlamaService : Service() {
         const val EXTRA_DRAFT_MAX = "DRAFT_MAX"
         const val EXTRA_DRAFT_MIN = "DRAFT_MIN"
         const val EXTRA_DRAFT_P_MIN = "DRAFT_P_MIN"
+        const val EXTRA_DRAFT_THREADS = "DRAFT_THREADS"
+        const val EXTRA_DRAFT_THREADS_BATCH = "DRAFT_THREADS_BATCH"
         const val EXTRA_CUSTOM_COMMAND = "CUSTOM_COMMAND"
         const val EXTRA_COMMAND_TEMPLATE = "COMMAND_TEMPLATE"
         

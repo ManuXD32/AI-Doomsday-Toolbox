@@ -40,6 +40,8 @@ class BinaryRepository(private val context: Context) {
             "ffprobe",
             "whisper-cli",
             "llama_server",
+            "rpc-server",
+            "sd-rpc-server",
             "llama-bench",
             "mtmd",
             "sd",
@@ -71,6 +73,14 @@ class BinaryRepository(private val context: Context) {
             return (preferred + deviceFallbacks).distinct()
         }
 
+        internal fun exactCpuTierForNativeSelection(selection: String): String? =
+            when (selection) {
+                SettingsRepository.NATIVE_BINARY_CPU_BASELINE -> "baseline"
+                SettingsRepository.NATIVE_BINARY_CPU_DOTPROD -> "dotprod"
+                SettingsRepository.NATIVE_BINARY_CPU_ARMV9 -> "armv9"
+                else -> null
+            }
+
         private fun tiersForSelectionStatic(tier: String): List<String> = when (tier) {
             "armv9" -> listOf("armv9", "dotprod", "baseline")
             "dotprod" -> listOf("dotprod", "baseline")
@@ -79,21 +89,21 @@ class BinaryRepository(private val context: Context) {
 
         internal fun acceleratorLibNames(
             name: String,
-            accelerationMode: String = SettingsRepository.ACCELERATION_AUTO
+            nativeBinarySelection: String = SettingsRepository.NATIVE_BINARY_AUTO
         ): List<String> {
-            val normalizedMode = SettingsRepository.normalizeAccelerationMode(accelerationMode)
-            if (normalizedMode == SettingsRepository.ACCELERATION_CPU) return emptyList()
-
             return when (name) {
-                "llama_server" -> when (normalizedMode) {
-                    SettingsRepository.ACCELERATION_GPU -> listOf("libllama_server_snapdragon_opencl.so")
-                    else -> listOf("libllama_server_snapdragon_opencl.so")
+                "llama_server" -> when (SettingsRepository.normalizeLlmNativeBinarySelection(nativeBinarySelection)) {
+                    SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL -> listOf("libllama_server_snapdragon_opencl.so")
+                    else -> emptyList()
                 }
-                "llama-bench" -> when (normalizedMode) {
-                    SettingsRepository.ACCELERATION_GPU -> listOf("libllama-bench_snapdragon_opencl.so")
-                    else -> listOf("libllama-bench_snapdragon_opencl.so")
+                "llama-bench" -> when (SettingsRepository.normalizeLlmNativeBinarySelection(nativeBinarySelection)) {
+                    SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL -> listOf("libllama-bench_snapdragon_opencl.so")
+                    else -> emptyList()
                 }
-                "sd" -> emptyList()
+                "sd" -> when (SettingsRepository.normalizeStableDiffusionNativeBinarySelection(nativeBinarySelection)) {
+                    SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN -> listOf("libsd_snapdragon_vulkan.so")
+                    else -> emptyList()
+                }
                 else -> emptyList()
             }
         }
@@ -176,7 +186,8 @@ class BinaryRepository(private val context: Context) {
         nativeLibraryCandidateDirs().forEach(::addFromDir)
 
         listOf(
-            "com.example.llamadroid.feature.llm.snapdragon.opencl"
+            "com.example.llamadroid.feature.llm.snapdragon.opencl",
+            "com.example.llamadroid.feature.media.snapdragon.vulkan"
         ).forEach { pkgName ->
             runCatching {
                 val featureContext = context.createPackageContext(pkgName, 0)
@@ -185,7 +196,8 @@ class BinaryRepository(private val context: Context) {
         }
 
         listOf(
-            "feature_llm_snapdragon_opencl"
+            "feature_llm_snapdragon_opencl",
+            "feature_media_snapdragon_vulkan"
         ).forEach { splitName ->
             val splitDir = File(context.filesDir.parent, "split_$splitName")
             if (splitDir.exists()) {
@@ -221,6 +233,9 @@ class BinaryRepository(private val context: Context) {
      * @return File path to the binary, or null if not found
      */
     fun getTieredBinary(name: String): File? {
+        nativeBinarySelectionFor(name)?.let { selection ->
+            return getSelectedNativeBinary(name, selection)
+        }
         return getTieredBinary(name, getTier())
     }
 
@@ -232,16 +247,54 @@ class BinaryRepository(private val context: Context) {
 
     fun getAcceleratorBinaries(name: String): List<File> {
         if (!DeviceAcceleration.isSnapdragonCompatible()) return emptyList()
-        val acceleratorNames = acceleratorLibNames(name, accelerationModeFor(name))
+        val acceleratorNames = acceleratorLibNames(
+            name,
+            nativeBinarySelectionFor(name) ?: SettingsRepository.NATIVE_BINARY_AUTO
+        )
         if (acceleratorNames.isEmpty()) return emptyList()
         return findAcceleratorBinaries(acceleratorNames)
     }
 
-    private fun accelerationModeFor(name: String): String = when (name) {
+    private fun nativeBinarySelectionFor(name: String): String? = when (name) {
         "llama_server",
-        "llama-bench" -> settingsRepository.llmAccelerationMode.value
-        "sd" -> settingsRepository.stableDiffusionAccelerationMode.value
-        else -> SettingsRepository.ACCELERATION_AUTO
+        "llama-bench" -> settingsRepository.llmNativeBinarySelection.value
+        "sd" -> settingsRepository.stableDiffusionNativeBinarySelection.value
+        else -> null
+    }
+
+    private fun getSelectedNativeBinary(name: String, selection: String): File? {
+        val normalizedSelection = when (name) {
+            "sd" -> SettingsRepository.normalizeStableDiffusionNativeBinarySelection(selection)
+            else -> SettingsRepository.normalizeLlmNativeBinarySelection(selection)
+        }
+        val deviceTier = getTier()
+
+        exactCpuTierForNativeSelection(normalizedSelection)?.let { exactTier ->
+            return findTieredBinary(
+                name = name,
+                selectedTier = exactTier,
+                tiersToTry = listOf(exactTier),
+                allowAccelerator = false
+            )
+        }
+
+        if (normalizedSelection == SettingsRepository.NATIVE_BINARY_AUTO ||
+            normalizedSelection == SettingsRepository.NATIVE_BINARY_CPU_AUTO
+        ) {
+            return findTieredBinary(
+                name = name,
+                selectedTier = deviceTier,
+                tiersToTry = tiersForSelection(deviceTier),
+                allowAccelerator = false
+            )
+        }
+
+        return findTieredBinary(
+            name = name,
+            selectedTier = deviceTier,
+            tiersToTry = tiersForSelection(deviceTier),
+            allowAccelerator = true
+        )
     }
 
     private fun getTieredBinary(name: String, selectedTier: String): File? {
@@ -261,14 +314,14 @@ class BinaryRepository(private val context: Context) {
         }
         
         val nativeLibDirs = nativeLibraryCandidateDirs()
-        val accelerationMode = accelerationModeFor(name)
+        val nativeBinarySelection = nativeBinarySelectionFor(name) ?: SettingsRepository.NATIVE_BINARY_AUTO
         val acceleratorNames = if (allowAccelerator && DeviceAcceleration.isSnapdragonCompatible()) {
-            acceleratorLibNames(name, accelerationMode)
+            acceleratorLibNames(name, nativeBinarySelection)
         } else {
             emptyList()
         }
         DebugLog.log(
-            "$TAG: Resolving $name allowAccelerator=$allowAccelerator accelerationMode=$accelerationMode modules=" +
+            "$TAG: Resolving $name allowAccelerator=$allowAccelerator nativeBinarySelection=$nativeBinarySelection modules=" +
                 "${DynamicFeatureManager.getOptionalAcceleratorModules().associateWith { DynamicFeatureManager.isModuleInstalled(context, it) }} dirs=" +
                 nativeLibDirs.joinToString { it.absolutePath }
         )
@@ -312,6 +365,7 @@ class BinaryRepository(private val context: Context) {
         val featurePackages = buildList {
             if (acceleratorNames.isNotEmpty()) {
                 add("com.example.llamadroid.feature.llm.snapdragon.opencl")
+                add("com.example.llamadroid.feature.media.snapdragon.vulkan")
             }
             featureSearchTiers.forEach { tier ->
                 add("com.example.llamadroid.feature.llm.$tier")
@@ -362,6 +416,7 @@ class BinaryRepository(private val context: Context) {
             val splitDirs = buildList {
                 if (acceleratorNames.isNotEmpty()) {
                     add("feature_llm_snapdragon_opencl")
+                    add("feature_media_snapdragon_vulkan")
                 }
                 featureSearchTiers.forEach { tier ->
                     add("feature_llm_$tier")
@@ -461,6 +516,21 @@ class BinaryRepository(private val context: Context) {
         getCpuTieredBinary("llama_server")
     }
 
+    suspend fun getCpuFallbackExecutables(name: String, excludingPath: String): List<File> = withContext(Dispatchers.IO) {
+        val deviceTier = getTier()
+        tiersForSelection(deviceTier)
+            .mapNotNull { tier ->
+                findTieredBinary(
+                    name = name,
+                    selectedTier = tier,
+                    tiersToTry = listOf(tier),
+                    allowAccelerator = false
+                )
+            }
+            .filter { it.absolutePath != excludingPath }
+            .distinctBy { it.absolutePath }
+    }
+
     /**
      * Get the library directory path - needed for LD_LIBRARY_PATH
      */
@@ -508,6 +578,16 @@ class BinaryRepository(private val context: Context) {
      * Get llama-server binary (tiered).
      */
     fun getLlamaServerBinary(): File? = getTieredBinary("llama_server")
+
+    /**
+     * Get llama.cpp rpc-server binary (tiered).
+     */
+    fun getRpcServerBinary(): File? = getTieredBinary("rpc-server")
+
+    /**
+     * Get stable-diffusion.cpp-compatible rpc-server binary (tiered).
+     */
+    fun getSdRpcServerBinary(): File? = getTieredBinary("sd-rpc-server")
     
     /**
      * Get mtmd (multimodal) binary (tiered).

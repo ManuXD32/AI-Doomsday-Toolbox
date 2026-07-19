@@ -68,6 +68,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -118,6 +119,8 @@ import com.example.llamadroid.service.VideoGenerationService
 import com.example.llamadroid.service.VideoGenerationState
 import com.example.llamadroid.service.VideoGenerationStateHolder
 import com.example.llamadroid.service.loadGeneratedVideoMetadata
+import com.example.llamadroid.sd.SdParamsBackendMode
+import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -136,6 +139,8 @@ fun VideoGenScreen(navController: NavController) {
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
+    val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
+    val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
     val db = remember { AppDatabase.getDatabase(context) }
 
     val videoGenModels by db.modelDao().getModelsByType(ModelType.SD_DIFFUSION)
@@ -154,6 +159,7 @@ fun VideoGenScreen(navController: NavController) {
     var galleryFilter by remember { mutableIntStateOf(0) }
 
     var selectedVideoModelPath by remember { mutableStateOf<String?>(null) }
+    val selectedVideoModel = availableVideoModels.firstOrNull { it.path == selectedVideoModelPath }
     var prompt by remember { mutableStateOf("") }
     var negativePrompt by remember { mutableStateOf("") }
     var selectedSampler by remember { mutableStateOf(SamplingMethod.EULER) }
@@ -189,6 +195,7 @@ fun VideoGenScreen(navController: NavController) {
     var cacheOption by remember { mutableStateOf("") }
     var scmMask by remember { mutableStateOf("") }
     var scmPolicy by remember { mutableStateOf<SdCacheScmPolicy?>(null) }
+    var manualCommandFlags by remember { mutableStateOf("") }
 
     val outputDir = remember {
         File(context.filesDir, "video_gen_output").apply { mkdirs() }
@@ -386,7 +393,11 @@ fun VideoGenScreen(navController: NavController) {
             vaeTileSize = vaeTileSize,
             diffusionFa = diffusionFa,
             mmap = mmap,
-            threads = threads ?: -1
+            threads = threads ?: -1,
+            sdParamsBackendMode = selectedVideoModel?.sdParamsBackendMode ?: "auto",
+            sdRuntimeBackendMode = selectedVideoModel?.sdRuntimeBackendMode ?: "auto",
+            maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else "",
+            customFlags = manualCommandFlags
         )
 
         batteryGateState.runAfterCheck {
@@ -889,6 +900,32 @@ fun VideoGenScreen(navController: NavController) {
                                 label = { Text(stringResource(R.string.video_gen_mmap_label)) }
                             )
                         }
+                        Spacer(modifier = Modifier.height(16.dp))
+                        VideoLocalSdCliMemoryControls(
+                            selectedModel = selectedVideoModel,
+                            maxRamEnabled = sdMaxCpuRamEnabled,
+                            maxRamGiB = sdMaxCpuRamGiB,
+                            onParamsBackendChange = { mode ->
+                                selectedVideoModel?.let { model ->
+                                    scope.launch {
+                                        db.modelDao().insertModel(
+                                            model.copy(sdParamsBackendMode = mode.storedValue)
+                                        )
+                                    }
+                                }
+                            },
+                            onRuntimeBackendChange = { mode ->
+                                selectedVideoModel?.let { model ->
+                                    scope.launch {
+                                        db.modelDao().insertModel(
+                                            model.copy(sdRuntimeBackendMode = mode.storedValue)
+                                        )
+                                    }
+                                }
+                            },
+                            onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
+                            onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
+                        )
                     }
                 }
 
@@ -908,6 +945,36 @@ fun VideoGenScreen(navController: NavController) {
                     enabled = true,
                     disabledMessage = null
                 )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            stringResource(R.string.sd_manual_flags_label),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        )
+                        Text(
+                            stringResource(R.string.sd_manual_flags_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = manualCommandFlags,
+                            onValueChange = { manualCommandFlags = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.sd_manual_flags_label)) },
+                            placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
+                            minLines = 2,
+                            shape = RoundedCornerShape(12.dp)
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
@@ -1231,6 +1298,183 @@ private fun VideoTextField(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoLocalSdCliMemoryControls(
+    selectedModel: ModelEntity?,
+    maxRamEnabled: Boolean,
+    maxRamGiB: String,
+    onParamsBackendChange: (SdParamsBackendMode) -> Unit,
+    onRuntimeBackendChange: (SdRuntimeBackendMode) -> Unit,
+    onMaxRamEnabledChange: (Boolean) -> Unit,
+    onMaxRamGiBChange: (String) -> Unit
+) {
+    val paramsMode = SdParamsBackendMode.fromStoredValue(selectedModel?.sdParamsBackendMode)
+    val runtimeMode = SdRuntimeBackendMode.fromStoredValue(selectedModel?.sdRuntimeBackendMode)
+    Text(
+        stringResource(R.string.sd_models_local_backend_title),
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary
+    )
+    Text(
+        stringResource(R.string.imagegen_local_sd_memory_help),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        VideoSdParamsBackendDropdown(
+            modifier = Modifier.weight(1f),
+            value = paramsMode,
+            enabled = selectedModel != null,
+            onValueChange = onParamsBackendChange
+        )
+        VideoSdRuntimeBackendDropdown(
+            modifier = Modifier.weight(1f),
+            value = runtimeMode,
+            enabled = selectedModel != null,
+            onValueChange = onRuntimeBackendChange
+        )
+    }
+    Spacer(modifier = Modifier.height(12.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            stringResource(R.string.imagegen_max_cpu_ram_toggle),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f)
+        )
+        Switch(
+            checked = maxRamEnabled,
+            onCheckedChange = onMaxRamEnabledChange
+        )
+    }
+    Text(
+        stringResource(R.string.imagegen_max_cpu_ram_desc),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    if (maxRamEnabled) {
+        Spacer(modifier = Modifier.height(8.dp))
+        VideoTextField(
+            modifier = Modifier.fillMaxWidth(),
+            label = stringResource(R.string.imagegen_max_cpu_ram_label),
+            value = maxRamGiB,
+            keyboardType = KeyboardType.Decimal,
+            onValueChange = onMaxRamGiBChange
+        )
+        Text(
+            stringResource(R.string.imagegen_max_cpu_ram_support),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoSdParamsBackendDropdown(
+    modifier: Modifier = Modifier,
+    value: SdParamsBackendMode,
+    enabled: Boolean,
+    onValueChange: (SdParamsBackendMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = videoSdParamsBackendModeLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            label = { Text(stringResource(R.string.sd_models_params_backend_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = RoundedCornerShape(12.dp)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            SdParamsBackendMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(videoSdParamsBackendModeLabel(mode)) },
+                    onClick = {
+                        onValueChange(mode)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoSdRuntimeBackendDropdown(
+    modifier: Modifier = Modifier,
+    value: SdRuntimeBackendMode,
+    enabled: Boolean,
+    onValueChange: (SdRuntimeBackendMode) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (enabled) expanded = !expanded },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = videoSdRuntimeBackendModeLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            enabled = enabled,
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(),
+            label = { Text(stringResource(R.string.sd_models_runtime_backend_label)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = RoundedCornerShape(12.dp)
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            SdRuntimeBackendMode.entries.forEach { mode ->
+                DropdownMenuItem(
+                    text = { Text(videoSdRuntimeBackendModeLabel(mode)) },
+                    onClick = {
+                        onValueChange(mode)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun videoSdParamsBackendModeLabel(mode: SdParamsBackendMode): String = when (mode) {
+    SdParamsBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
+    SdParamsBackendMode.DISK -> stringResource(R.string.sd_models_params_backend_disk)
+}
+
+@Composable
+private fun videoSdRuntimeBackendModeLabel(mode: SdRuntimeBackendMode): String = when (mode) {
+    SdRuntimeBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
+    SdRuntimeBackendMode.CPU -> stringResource(R.string.sd_models_runtime_backend_cpu)
+}
+
 @Composable
 private fun VideoGalleryCard(
     metadata: GeneratedVideoMetadata,
@@ -1409,6 +1653,11 @@ private fun VideoDetailDialog(
                 }
                 ParameterLine(stringResource(R.string.video_gen_diffusion_fa_label), if (metadata.diffusionFa) stringResource(R.string.video_gen_enabled) else stringResource(R.string.video_gen_disabled))
                 ParameterLine(stringResource(R.string.video_gen_mmap_label), if (metadata.mmap) stringResource(R.string.video_gen_enabled) else stringResource(R.string.video_gen_disabled))
+                ParameterLine(stringResource(R.string.sd_models_params_backend_label), metadata.sdParamsBackendMode)
+                ParameterLine(stringResource(R.string.sd_models_runtime_backend_label), metadata.sdRuntimeBackendMode)
+                if (metadata.maxVramCpuGiB.isNotBlank()) {
+                    ParameterLine(stringResource(R.string.imagegen_max_cpu_ram_label), metadata.maxVramCpuGiB)
+                }
                 metadata.initImagePath?.let {
                     ParameterLine(stringResource(R.string.video_gen_input_image_title), File(it).name)
                 }
@@ -1503,7 +1752,9 @@ private fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVi
         "${context.getString(R.string.video_gen_t5_toggle_label)}: ${if (metadata.t5xxlEnabled) (metadata.t5xxlName ?: "-") else context.getString(R.string.video_gen_disabled)}",
         "${context.getString(R.string.video_gen_vae_tiling_label)}: ${if (metadata.vaeTiling) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
         "${context.getString(R.string.video_gen_diffusion_fa_label)}: ${if (metadata.diffusionFa) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
-        "${context.getString(R.string.video_gen_mmap_label)}: ${if (metadata.mmap) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}"
+        "${context.getString(R.string.video_gen_mmap_label)}: ${if (metadata.mmap) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
+        "${context.getString(R.string.sd_models_params_backend_label)}: ${metadata.sdParamsBackendMode}",
+        "${context.getString(R.string.sd_models_runtime_backend_label)}: ${metadata.sdRuntimeBackendMode}"
     )
 
     if (metadata.negativePrompt.isNotBlank()) {
@@ -1523,6 +1774,9 @@ private fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVi
     }
     if (metadata.scmMask.isNotBlank()) {
         lines.add("${context.getString(R.string.gen_cache_scm_mask_label)}: ${metadata.scmMask}")
+    }
+    if (metadata.maxVramCpuGiB.isNotBlank()) {
+        lines.add("${context.getString(R.string.imagegen_max_cpu_ram_label)}: ${metadata.maxVramCpuGiB}")
     }
     metadata.initImagePath?.let {
         lines.add("${context.getString(R.string.video_gen_input_image_title)}: ${File(it).name}")

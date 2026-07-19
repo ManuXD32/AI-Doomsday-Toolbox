@@ -47,6 +47,12 @@ sealed class Screen(val route: String) {
     object WorkerMode : Screen("distributed_worker")     // Worker configuration
     object MasterMode : Screen("distributed_master")     // Master with worker list
     object NetworkVisualization : Screen("distributed_network") // Network visualization
+    object SdDistributedHub : Screen("sd_distributed")        // Stable Diffusion media distributed hub
+    object SdDistributedWorker : Screen("sd_distributed_worker") // Stable Diffusion RPC worker
+    object SdDistributedMaster : Screen("sd_distributed_master") // Stable Diffusion RPC master
+    object SdDistributedNetwork : Screen("sd_distributed_network") // Stable Diffusion topology
+    object SdDistributedRunConfig : Screen("sd_distributed_run_config") // Stable Diffusion distributed runtime config
+    object SdDistributedGallery : Screen("sd_distributed_gallery") // Stable Diffusion generated media gallery
     // Settings screens
     object Benchmark : Screen("benchmark")               // Thread benchmark tool
     object BenchmarkHistory : Screen("benchmark_history") // Benchmark run history and model comparison

@@ -346,7 +346,7 @@ class TamaAgentService(
                         settingsRepo.tamaLlamaServerModelLabel.value
                     },
                     thinkingEnabled = thinkingEnabled,
-                    numCtx = settingsRepo.tamaOllamaNumCtx.value,
+                    maxTokens = settingsRepo.tamaOllamaNumCtx.value,
                     onChunk = { chunk, thinking ->
                         chunk?.takeUnless { it.equals("null", ignoreCase = true) }?.let {
                             assistantContent += sanitizeTamaReplyChunk(it, assistantContent.isBlank())

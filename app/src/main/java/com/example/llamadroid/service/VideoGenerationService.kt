@@ -12,7 +12,10 @@ import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
+import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.util.DeviceAcceleration
+import com.example.llamadroid.util.WakeLockManager
 import com.example.llamadroid.util.getParcelableExtraCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -35,10 +38,10 @@ class VideoGenerationService : Service() {
 
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val modeJobs = mutableMapOf<VideoGenerationMode, Job>()
-    private val modeProcesses = mutableMapOf<VideoGenerationMode, Process>()
+    private val modeJobs = mutableMapOf<VideoWorkLane, Job>()
+    private val modeProcesses = mutableMapOf<VideoWorkLane, Process>()
     private val modeDiagnostics = mutableMapOf<VideoGenerationMode, ActivityDiagnostics>()
-    private val modeSessionIds = mutableMapOf<VideoGenerationMode, String>()
+    private val modeSessionIds = mutableMapOf<VideoWorkLane, String>()
 
     private var notificationTaskId: Int? = null
     private lateinit var ffmpegLibDir: File
@@ -51,6 +54,9 @@ class VideoGenerationService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
+
+    private fun laneFor(mode: VideoGenerationMode, useDistributedStateHolder: Boolean): VideoWorkLane =
+        VideoWorkLane(mode, useDistributedStateHolder)
 
     override fun onCreate() {
         super.onCreate()
@@ -72,31 +78,34 @@ class VideoGenerationService : Service() {
         when (intent?.action) {
             ACTION_START_GENERATION -> {
                 val config = intent.getParcelableExtraCompat<VideoGenerationConfig>(EXTRA_CONFIG)
+                val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 if (config == null) {
                     DebugLog.log("[VIDEO-GEN] Missing config in start intent")
-                } else if (hasActiveWork()) {
-                    VideoGenerationStateHolder.getForMode(config.mode).updateState(
+                } else if (hasActiveModeJob(config.mode, useDistributedStateHolder)) {
+                    VideoGenerationStateHolder.getForMode(config.mode, useDistributedStateHolder).updateState(
                         VideoGenerationState.Error(getString(R.string.video_gen_error_already_running))
                     )
                 } else {
                     ensureForegroundTask()
-                    startGeneration(config)
+                    startGeneration(config, useDistributedStateHolder)
                 }
             }
             ACTION_CANCEL_MODE -> {
+                val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
                 intent.getStringExtra(EXTRA_MODE)
                     ?.let { runCatching { VideoGenerationMode.valueOf(it) }.getOrNull() }
-                    ?.let(::cancelMode)
+                    ?.let { cancelMode(it, useDistributedStateHolder) }
             }
         }
         return START_NOT_STICKY
     }
 
-    private fun startGeneration(config: VideoGenerationConfig) {
-        val holder = VideoGenerationStateHolder.getForMode(config.mode)
+    private fun startGeneration(config: VideoGenerationConfig, useDistributedStateHolder: Boolean) {
+        val holder = VideoGenerationStateHolder.getForMode(config.mode, useDistributedStateHolder)
+        val lane = laneFor(config.mode, useDistributedStateHolder)
         holder.updatePrompt(config.prompt)
         ensureWakeLockHeld()
-        modeSessionIds[config.mode] = GenerationDiagnosticsStore.startSession(
+        modeSessionIds[lane] = GenerationDiagnosticsStore.startSession(
             source = DIAGNOSTIC_SOURCE,
             mode = config.mode.name,
             details = buildSessionDetails(config),
@@ -110,43 +119,44 @@ class VideoGenerationService : Service() {
         markActivity(config.mode, "starting")
         ensureStallMonitorRunning()
 
-        modeJobs[config.mode] = serviceScope.launch {
+        modeJobs[lane] = serviceScope.launch {
             try {
-                val (metadata, warningMessage) = runGeneration(config, holder)
+                val (metadata, warningMessage) = runGeneration(config, holder, useDistributedStateHolder)
                 markActivity(config.mode, "complete")
                 holder.updateState(VideoGenerationState.Complete(metadata, warningMessage))
-                finishModeSession(config.mode, "complete", metadata.diffusionModelName)
+                finishModeSession(config.mode, useDistributedStateHolder, "complete", metadata.diffusionModelName)
                 completeForegroundTask(getString(R.string.video_gen_notification_complete))
             } catch (cancelled: CancellationException) {
                 markActivity(config.mode, "cancelled")
                 holder.reset()
-                finishModeSession(config.mode, "cancelled")
+                finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
                 DebugLog.log("[VIDEO-GEN] ${config.mode} cancelled")
             } catch (e: Exception) {
                 val message = e.message ?: getString(R.string.error_generic)
                 markActivity(config.mode, "failed")
                 DebugLog.log("[VIDEO-GEN] Failed: $message")
                 holder.updateState(VideoGenerationState.Error(message))
-                finishModeSession(config.mode, "failed", message)
+                finishModeSession(config.mode, useDistributedStateHolder, "failed", message)
                 failForegroundTask(message)
             } finally {
-                modeProcesses.remove(config.mode)
-                modeJobs.remove(config.mode)
+                modeProcesses.remove(lane)
+                modeJobs.remove(lane)
                 clearDiagnostics(config.mode)
                 cleanupAfterWork()
             }
         }
     }
 
-    fun cancelMode(mode: VideoGenerationMode) {
+    fun cancelMode(mode: VideoGenerationMode, useDistributedStateHolder: Boolean = false) {
         markActivity(mode, "cancel-requested")
         recordModeBreadcrumb(mode, "cancel_requested")
-        modeJobs[mode]?.cancel(CancellationException(getString(R.string.video_gen_status_cancelled)))
-        modeProcesses[mode]?.destroy()
-        modeJobs.remove(mode)
-        modeProcesses.remove(mode)
+        val lane = laneFor(mode, useDistributedStateHolder)
+        modeJobs[lane]?.cancel(CancellationException(getString(R.string.video_gen_status_cancelled)))
+        modeProcesses[lane]?.destroy()
+        modeJobs.remove(lane)
+        modeProcesses.remove(lane)
         clearDiagnostics(mode)
-        VideoGenerationStateHolder.getForMode(mode).reset()
+        VideoGenerationStateHolder.getForMode(mode, useDistributedStateHolder).reset()
 
         if (!hasActiveWork()) {
             dismissForegroundTask()
@@ -156,11 +166,30 @@ class VideoGenerationService : Service() {
 
     private suspend fun runGeneration(
         config: VideoGenerationConfig,
-        holder: VideoGenerationStateHolder
+        holder: VideoGenerationStateHolder,
+        useDistributedStateHolder: Boolean
     ): Pair<GeneratedVideoMetadata, String?> = withContext(Dispatchers.IO) {
         val binaryRepo = BinaryRepository(applicationContext)
-        val sdBinary = binaryRepo.getSdBinary()
+        var sdBinary = binaryRepo.getSdBinary()
             ?: throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
+        var binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
+        val missingDistributedFlags = missingSdDistributedFlags(config.distributedRuntime, binaryCapabilities)
+        if (missingDistributedFlags.isNotEmpty()) {
+            val unsupportedFlags = SdUnsupportedFlagsException(missingDistributedFlags)
+            val cpuBinary = binaryRepo.getCpuSdBinary()
+            if (shouldRetrySdGenerationOnCpu(sdBinary, cpuBinary, config.distributedRuntime, unsupportedFlags)) {
+                DebugLog.log(
+                    "[VIDEO-GEN] Accelerator SD binary lacks distributed flags, retrying CPU fallback: " +
+                        missingDistributedFlags.joinToString(", ")
+                )
+                sdBinary = requireNotNull(cpuBinary)
+                binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
+            } else {
+                throw IllegalStateException(
+                    getString(R.string.imagegen_error_binary_missing_flags, missingDistributedFlags.joinToString(", "))
+                )
+            }
+        }
 
         val outputAvi = File(config.outputAviPath).apply {
             parentFile?.mkdirs()
@@ -178,128 +207,187 @@ class VideoGenerationService : Service() {
         holder.updateState(
             VideoGenerationState.Generating(
                 0f,
-                getString(R.string.gen_status_calculating_eta)
+                getString(R.string.gen_status_calculating_eta),
+                currentStep = 0,
+                totalSteps = config.steps.coerceAtLeast(1)
             )
         )
         updateNotification(getString(R.string.gen_status_calculating_eta), 0f)
         markActivity(config.mode, "starting")
 
-        val args = mutableListOf(
-            sdBinary.absolutePath,
-            "-M", "vid_gen",
-            "--diffusion-model", config.diffusionModelPath,
-            "--prompt", config.prompt
-        )
+        suspend fun runSamplingWithBinary(
+            candidateBinary: File,
+            candidateCapabilities: SdBinaryCapabilities?
+        ): File {
+            if (outputAvi.exists()) outputAvi.delete()
 
-        if (config.negativePrompt.isNotBlank()) {
-            args.addAll(listOf("-n", config.negativePrompt))
-        }
-        args.addAll(
-            listOf(
-                "--sampling-method", config.samplingMethod.cliName,
-                "--video-frames", config.videoFrames.toString(),
-                "--fps", config.fps.toString(),
-                "--width", config.width.toString(),
-                "--height", config.height.toString(),
-                "--steps", config.steps.toString(),
-                "--cfg-scale", config.cfgScale.toString(),
-                "-o", outputAvi.absolutePath,
-                "-t", config.threads.toString(),
-                "-v"
+            val args = mutableListOf(
+                candidateBinary.absolutePath,
+                "-M", "vid_gen",
+                "--diffusion-model", config.diffusionModelPath,
+                "--prompt", config.prompt
             )
-        )
-        config.flowShift?.let { flowShift ->
-            args.addAll(listOf("--flow-shift", flowShift.toString()))
-        }
-        config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
-        if (config.cacheOption.isNotBlank()) {
-            args.addAll(listOf("--cache-option", config.cacheOption))
-        }
-        if (config.scmMask.isNotBlank()) {
-            args.addAll(listOf("--scm-mask", config.scmMask))
-        }
-        config.scmPolicy?.let { args.addAll(listOf("--scm-policy", it.cliName)) }
-        if (config.useT5xxl && !config.t5xxlPath.isNullOrBlank()) {
-            args.addAll(listOf("--t5xxl", config.t5xxlPath))
-        }
-        if (config.useVae && !config.vaePath.isNullOrBlank()) {
-            args.addAll(listOf("--vae", config.vaePath))
-        }
-        if (config.mode == VideoGenerationMode.IMG2VID) {
-            val initImagePath = config.initImagePath
-                ?: throw IllegalArgumentException(getString(R.string.video_gen_error_input_image_required))
-            args.addAll(listOf("--init-img", initImagePath))
-        }
-        if (config.vaeTiling) {
-            args.add("--vae-tiling")
-            if (config.vaeTileSize.isNotBlank()) {
-                args.addAll(listOf("--vae-tile-size", config.vaeTileSize))
+
+            if (config.negativePrompt.isNotBlank()) {
+                args.addAll(listOf("-n", config.negativePrompt))
             }
-        }
-        if (config.diffusionFa) {
-            args.add("--diffusion-fa")
-        }
-        if (config.mmap) {
-            args.add("--mmap")
-        }
-
-        DebugLog.log("[VIDEO-GEN] Running command: ${args.joinToString(" ")}")
-
-        val libDir = File(filesDir, "lib").apply { mkdirs() }
-        setupSdLibrarySymlinks(sdBinary.parentFile, libDir, sdBinary.absolutePath)
-
-        val processBuilder = ProcessBuilder(args)
-            .directory(sdBinary.parentFile)
-            .redirectErrorStream(true)
-        processBuilder.environment()["LD_LIBRARY_PATH"] =
-            "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
-
-        modeProcesses[config.mode] = processBuilder.start()
-        val sdProcess = modeProcesses[config.mode]!!
-        val progressTracker = SdProgressTracker(
-            totalStepsHint = config.steps.coerceAtLeast(1),
-            startedAtMs = SystemClock.elapsedRealtime()
-        )
-        val etaTickerJob = launch {
-            while (isActive) {
-                delay(1000)
-                progressTracker.tick(SystemClock.elapsedRealtime())?.let { snapshot ->
-                    val weighted = snapshot.progress * 0.72f
-                    val status = buildVideoSamplingStatus(snapshot)
-                    holder.updateState(VideoGenerationState.Generating(weighted, status))
-                    updateNotification(status, weighted)
+            args.addAll(
+                listOf(
+                    "--sampling-method", config.samplingMethod.cliName,
+                    "--video-frames", config.videoFrames.toString(),
+                    "--fps", config.fps.toString(),
+                    "--width", config.width.toString(),
+                    "--height", config.height.toString(),
+                    "--steps", config.steps.toString(),
+                    "--cfg-scale", config.cfgScale.toString(),
+                    "-o", outputAvi.absolutePath,
+                    "-t", config.threads.toString(),
+                    "-v"
+                )
+            )
+            config.flowShift?.let { flowShift ->
+                args.addAll(listOf("--flow-shift", flowShift.toString()))
+            }
+            config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
+            if (config.cacheOption.isNotBlank()) {
+                args.addAll(listOf("--cache-option", config.cacheOption))
+            }
+            if (config.scmMask.isNotBlank()) {
+                args.addAll(listOf("--scm-mask", config.scmMask))
+            }
+            config.scmPolicy?.let { args.addAll(listOf("--scm-policy", it.cliName)) }
+            if (config.useT5xxl && !config.t5xxlPath.isNullOrBlank()) {
+                args.addAll(listOf("--t5xxl", config.t5xxlPath))
+            }
+            if (config.useVae && !config.vaePath.isNullOrBlank()) {
+                args.addAll(listOf("--vae", config.vaePath))
+            }
+            if (config.mode == VideoGenerationMode.IMG2VID) {
+                val initImagePath = config.initImagePath
+                    ?: throw IllegalArgumentException(getString(R.string.video_gen_error_input_image_required))
+                args.addAll(listOf("--init-img", initImagePath))
+            }
+            if (config.vaeTiling) {
+                args.add("--vae-tiling")
+                if (config.vaeTileSize.isNotBlank()) {
+                    args.addAll(listOf("--vae-tile-size", config.vaeTileSize))
                 }
             }
-        }
+            if (config.diffusionFa) {
+                args.add("--diffusion-fa")
+            }
+            if (config.mmap) {
+                args.add("--mmap")
+            }
+            if (!config.distributedRuntime.enabled) {
+                appendLocalSdBackendArgs(
+                    args = args,
+                    paramsBackendMode = config.sdParamsBackendMode,
+                    runtimeBackendMode = config.sdRuntimeBackendMode,
+                    maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(candidateBinary, config.maxVramCpuGiB),
+                    flagSupported = { flag ->
+                        candidateCapabilities == null ||
+                            candidateCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                            candidateCapabilities.supports(flag)
+                    }
+                )
+            }
+            appendSdDistributedArgs(args, config.distributedRuntime, candidateCapabilities)
+            appendSdCustomFlags(args, config.customFlags)
 
-        try {
-            sdProcess.inputStream.bufferedReader().use { reader ->
-                var line = reader.readLine()
-                while (line != null) {
-                    markActivity(config.mode, "generating")
-                    DebugLog.log("[VIDEO-GEN] $line")
-                    progressTracker.update(line, SystemClock.elapsedRealtime())?.let { snapshot ->
+            DebugLog.log("[VIDEO-GEN] Running command: ${args.joinToString(" ")}")
+
+            val libDir = File(filesDir, "lib").apply { mkdirs() }
+            setupSdLibrarySymlinks(candidateBinary.parentFile, libDir, candidateBinary.absolutePath)
+
+            val processBuilder = ProcessBuilder(args)
+                .directory(candidateBinary.parentFile)
+                .redirectErrorStream(true)
+            processBuilder.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, candidateBinary, libDir)
+
+            val lane = laneFor(config.mode, useDistributedStateHolder)
+            modeProcesses[lane] = processBuilder.start()
+            val sdProcess = modeProcesses[lane]!!
+            val progressTracker = SdProgressTracker(
+                totalStepsHint = config.steps.coerceAtLeast(1),
+                startedAtMs = SystemClock.elapsedRealtime()
+            )
+            val etaTickerJob = launch {
+                while (isActive) {
+                    delay(1000)
+                    progressTracker.tick(SystemClock.elapsedRealtime())?.let { snapshot ->
                         val weighted = snapshot.progress * 0.72f
                         val status = buildVideoSamplingStatus(snapshot)
-                        holder.updateState(VideoGenerationState.Generating(weighted, status))
+                        holder.updateState(
+                            VideoGenerationState.Generating(
+                                progress = weighted,
+                                status = status,
+                                currentStep = snapshot.currentStep,
+                                totalSteps = snapshot.totalSteps,
+                                etaSeconds = snapshot.etaSeconds
+                            )
+                        )
                         updateNotification(status, weighted)
                     }
-                    line = reader.readLine()
                 }
             }
-        } finally {
-            etaTickerJob.cancel()
+
+            try {
+                sdProcess.inputStream.bufferedReader().use { reader ->
+                    var line = reader.readLine()
+                    while (line != null) {
+                        markActivity(config.mode, "generating")
+                        DebugLog.log("[VIDEO-GEN] $line")
+                        progressTracker.update(line, SystemClock.elapsedRealtime())?.let { snapshot ->
+                            val weighted = snapshot.progress * 0.72f
+                            val status = buildVideoSamplingStatus(snapshot)
+                            holder.updateState(
+                                VideoGenerationState.Generating(
+                                    progress = weighted,
+                                    status = status,
+                                    currentStep = snapshot.currentStep,
+                                    totalSteps = snapshot.totalSteps,
+                                    etaSeconds = snapshot.etaSeconds
+                                )
+                            )
+                            updateNotification(status, weighted)
+                        }
+                        line = reader.readLine()
+                    }
+                }
+            } finally {
+                etaTickerJob.cancel()
+            }
+
+            val sdExitCode = sdProcess.waitFor()
+            modeProcesses.remove(lane)
+            if (sdExitCode != 0) {
+                throw IllegalStateException(
+                    getString(R.string.video_gen_error_generation_failed, sdExitCode)
+                )
+            }
+
+            return resolveGeneratedAvi(outputAvi)
         }
 
-        val sdExitCode = sdProcess.waitFor()
-        modeProcesses.remove(config.mode)
-        if (sdExitCode != 0) {
-            throw IllegalStateException(
-                getString(R.string.video_gen_error_generation_failed, sdExitCode)
-            )
+        val generatedAvi = runCatching {
+            runSamplingWithBinary(sdBinary, binaryCapabilities)
+        }.getOrElse { error ->
+            val cpuBinary = binaryRepo.getCpuSdBinary()
+            if (DeviceAcceleration.isAcceleratorBinary(sdBinary) &&
+                shouldRetrySdGenerationOnCpu(sdBinary, cpuBinary, config.distributedRuntime, error)
+            ) {
+                val detail = "Stable Diffusion video accelerator ${sdBinary.name} failed: ${error.message.orEmpty().take(180)}"
+                DebugLog.log("[VIDEO-GEN] $detail")
+                DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
+                DebugLog.log("[VIDEO-GEN] Retrying video generation with CPU SD binary.")
+                sdBinary = requireNotNull(cpuBinary)
+                binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
+                runSamplingWithBinary(sdBinary, binaryCapabilities)
+            } else {
+                throw error
+            }
         }
-
-        val generatedAvi = resolveGeneratedAvi(outputAvi)
         markActivity(config.mode, "converting")
         holder.updateState(VideoGenerationState.Converting(0.8f, getString(R.string.video_gen_status_converting)))
         updateNotification(getString(R.string.video_gen_status_converting), 0.8f)
@@ -308,7 +396,8 @@ class VideoGenerationService : Service() {
             inputAvi = generatedAvi,
             outputMp4 = outputMp4,
             mode = config.mode,
-            holder = holder
+            holder = holder,
+            useDistributedStateHolder = useDistributedStateHolder
         )
 
         var metadata = GeneratedVideoMetadata(
@@ -341,6 +430,10 @@ class VideoGenerationService : Service() {
             vaeTileSize = config.vaeTileSize.takeIf { config.vaeTiling && it.isNotBlank() },
             diffusionFa = config.diffusionFa,
             mmap = config.mmap,
+            sdParamsBackendMode = config.sdParamsBackendMode,
+            sdRuntimeBackendMode = config.sdRuntimeBackendMode,
+            maxVramCpuGiB = config.maxVramCpuGiB,
+            distributedRuntime = config.distributedRuntime,
             createdAt = System.currentTimeMillis(),
             aviPath = generatedAvi.absolutePath,
             mp4Path = outputMp4.absolutePath,
@@ -407,7 +500,8 @@ class VideoGenerationService : Service() {
         inputAvi: File,
         outputMp4: File,
         mode: VideoGenerationMode,
-        holder: VideoGenerationStateHolder
+        holder: VideoGenerationStateHolder,
+        useDistributedStateHolder: Boolean
     ) = withContext(Dispatchers.IO) {
         val binaryRepo = BinaryRepository(applicationContext)
         val ffmpegBinary = binaryRepo.getFFmpegBinary()
@@ -429,8 +523,9 @@ class VideoGenerationService : Service() {
         processBuilder.environment()["LD_LIBRARY_PATH"] =
             "${ffmpegLibDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
-        modeProcesses[mode] = processBuilder.start()
-        val ffmpegProcess = modeProcesses[mode]!!
+        val lane = laneFor(mode, useDistributedStateHolder)
+        modeProcesses[lane] = processBuilder.start()
+        val ffmpegProcess = modeProcesses[lane]!!
         var tick = 0
         ffmpegProcess.inputStream.bufferedReader().use { reader ->
             var line = reader.readLine()
@@ -448,7 +543,7 @@ class VideoGenerationService : Service() {
         }
 
         val exitCode = ffmpegProcess.waitFor()
-        modeProcesses.remove(mode)
+        modeProcesses.remove(lane)
         if (exitCode != 0 || !outputMp4.exists()) {
             throw IllegalStateException(getString(R.string.video_gen_error_conversion_failed, exitCode))
         }
@@ -568,13 +663,17 @@ class VideoGenerationService : Service() {
             DebugLog.log("[VIDEO-GEN] WakeLock acquired")
             recordServiceBreadcrumb("wake_lock_acquired")
         }
+        WakeLockManager.acquireWifiLock(applicationContext, "VideoGenerationService")
     }
 
     private fun releaseWakeLockIfIdle() {
-        if (!hasActiveWork() && wakeLock?.isHeld == true) {
-            wakeLock?.release()
-            DebugLog.log("[VIDEO-GEN] WakeLock released")
-            recordServiceBreadcrumb("wake_lock_released")
+        if (!hasActiveWork()) {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                DebugLog.log("[VIDEO-GEN] WakeLock released")
+                recordServiceBreadcrumb("wake_lock_released")
+            }
+            WakeLockManager.releaseWifiLock("VideoGenerationService")
         }
     }
 
@@ -625,6 +724,11 @@ class VideoGenerationService : Service() {
     }
 
     private fun hasActiveWork(): Boolean = modeJobs.values.any { it.isActive }
+
+    private fun hasActiveModeJob(
+        mode: VideoGenerationMode,
+        useDistributedStateHolder: Boolean
+    ): Boolean = modeJobs[laneFor(mode, useDistributedStateHolder)]?.isActive == true
 
     private fun markActivity(mode: VideoGenerationMode, phase: String) {
         val now = SystemClock.elapsedRealtime()
@@ -707,6 +811,7 @@ class VideoGenerationService : Service() {
 
         val binaryName = File(binaryPath).name
         val tier = when {
+            binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
             binaryName.contains("_armv9") -> "_armv9"
             binaryName.contains("_dotprod") -> "_dotprod"
             binaryName.contains("_baseline") -> "_baseline"
@@ -767,6 +872,7 @@ class VideoGenerationService : Service() {
         if (wakeLock?.isHeld == true) {
             wakeLock?.release()
         }
+        WakeLockManager.releaseWifiLock("VideoGenerationService")
         super.onDestroy()
     }
 
@@ -780,8 +886,13 @@ class VideoGenerationService : Service() {
         super.onTrimMemory(level)
     }
 
-    private fun finishModeSession(mode: VideoGenerationMode, outcome: String, details: String? = null) {
-        val sessionId = modeSessionIds.remove(mode) ?: return
+    private fun finishModeSession(
+        mode: VideoGenerationMode,
+        useDistributedStateHolder: Boolean,
+        outcome: String,
+        details: String? = null
+    ) {
+        val sessionId = modeSessionIds.remove(laneFor(mode, useDistributedStateHolder)) ?: return
         GenerationDiagnosticsStore.finishSession(
             sessionId = sessionId,
             source = DIAGNOSTIC_SOURCE,
@@ -804,7 +915,7 @@ class VideoGenerationService : Service() {
     ) {
         GenerationDiagnosticsStore.recordBreadcrumb(
             source = DIAGNOSTIC_SOURCE,
-            sessionId = modeSessionIds[mode],
+            sessionId = modeSessionIds[laneFor(mode, false)] ?: modeSessionIds[laneFor(mode, true)],
             mode = mode.name,
             event = event,
             phase = phase,
@@ -859,20 +970,36 @@ class VideoGenerationService : Service() {
         private const val ACTION_CANCEL_MODE = "com.example.llamadroid.action.CANCEL_VIDEO_GENERATION"
         private const val EXTRA_CONFIG = "extra_video_generation_config"
         private const val EXTRA_MODE = "extra_video_generation_mode"
+        private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_video_generation_use_distributed_holder"
         private const val DIAGNOSTIC_SOURCE = "video_generation"
 
-        fun createStartIntent(context: Context, config: VideoGenerationConfig): Intent =
+        fun createStartIntent(
+            context: Context,
+            config: VideoGenerationConfig,
+            useDistributedStateHolder: Boolean = false
+        ): Intent =
             Intent(context, VideoGenerationService::class.java).apply {
                 action = ACTION_START_GENERATION
                 putExtra(EXTRA_CONFIG, config)
+                putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
             }
 
-        fun createCancelIntent(context: Context, mode: VideoGenerationMode): Intent =
+        fun createCancelIntent(
+            context: Context,
+            mode: VideoGenerationMode,
+            useDistributedStateHolder: Boolean = false
+        ): Intent =
             Intent(context, VideoGenerationService::class.java).apply {
                 action = ACTION_CANCEL_MODE
                 putExtra(EXTRA_MODE, mode.name)
+                putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
             }
     }
+
+    private data class VideoWorkLane(
+        val mode: VideoGenerationMode,
+        val useDistributedStateHolder: Boolean
+    )
 
     private data class ActivityDiagnostics(
         var phase: String,

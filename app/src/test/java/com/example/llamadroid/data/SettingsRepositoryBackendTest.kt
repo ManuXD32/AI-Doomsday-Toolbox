@@ -90,4 +90,28 @@ class SettingsRepositoryBackendTest {
             SettingsRepository.normalizeStableDiffusionAccelerationMode(SettingsRepository.ACCELERATION_CPU)
         )
     }
+
+    @Test
+    fun `native binary aliases normalize to explicit selections`() {
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL,
+            SettingsRepository.normalizeLlmNativeBinarySelection("libllama_server_snapdragon_opencl.so")
+        )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_CPU_DOTPROD,
+            SettingsRepository.normalizeLlmNativeBinarySelection("libllama_server_dotprod.so")
+        )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN,
+            SettingsRepository.normalizeStableDiffusionNativeBinarySelection("vulkan")
+        )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_CPU_ARMV9,
+            SettingsRepository.normalizeStableDiffusionNativeBinarySelection("libsd_armv9.so")
+        )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_AUTO,
+            SettingsRepository.normalizeStableDiffusionNativeBinarySelection("opencl")
+        )
+    }
 }

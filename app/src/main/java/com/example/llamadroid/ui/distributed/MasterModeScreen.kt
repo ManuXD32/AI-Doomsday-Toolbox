@@ -184,6 +184,10 @@ fun MasterModeScreen(navController: NavController) {
     val draftMinText by DistributedService.masterDraftMinText.collectAsState()
     val draftPMin by DistributedService.masterDraftPMin.collectAsState()
     val draftPMinText by DistributedService.masterDraftPMinText.collectAsState()
+    val draftThreads by DistributedService.masterDraftThreads.collectAsState()
+    val draftThreadsText by DistributedService.masterDraftThreadsText.collectAsState()
+    val draftThreadsBatch by DistributedService.masterDraftThreadsBatch.collectAsState()
+    val draftThreadsBatchText by DistributedService.masterDraftThreadsBatchText.collectAsState()
     
     
     // Network visibility - when enabled, uses 0.0.0.0 to allow external connections
@@ -192,7 +196,7 @@ fun MasterModeScreen(navController: NavController) {
     // Reset custom command when any parameter changes
     LaunchedEffect(
         selectedModel, threads, batchSize, contextSize, temperature, 
-        speculativeEnabled, draftModel, draftMax, draftMin, draftPMin,
+        speculativeEnabled, draftModel, draftMax, draftMin, draftPMin, draftThreads, draftThreadsBatch,
         enableNetworkAccess, masterRamMB, savedWorkers,
         kvCacheEnabled, kvCacheTypeK, kvCacheTypeV, kvCacheReuse,
         masterParallel, masterCacheRam, masterCustomFlags, masterCommandTemplate,
@@ -979,6 +983,68 @@ fun MasterModeScreen(navController: NavController) {
                                 valueRange = 0f..16f,
                                 steps = 15
                             )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(stringResource(R.string.dist_speculative_draft_threads), style = MaterialTheme.typography.bodyMedium)
+                                OutlinedTextField(
+                                    value = draftThreadsText,
+                                    onValueChange = { text ->
+                                        DistributedService.setMasterDraftThreadsText(text)
+                                        text.toIntOrNull()?.let { value ->
+                                            if (value in 1..16) {
+                                                DistributedService.setMasterDraftThreads(value)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.width(90.dp),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            Slider(
+                                value = draftThreads.toFloat(),
+                                onValueChange = {
+                                    DistributedService.setMasterDraftThreads(it.toInt())
+                                    DistributedService.setMasterDraftThreadsText(it.toInt().toString())
+                                },
+                                valueRange = 1f..16f,
+                                steps = 14
+                            )
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(stringResource(R.string.dist_speculative_draft_threads_batch), style = MaterialTheme.typography.bodyMedium)
+                                OutlinedTextField(
+                                    value = draftThreadsBatchText,
+                                    onValueChange = { text ->
+                                        DistributedService.setMasterDraftThreadsBatchText(text)
+                                        text.toIntOrNull()?.let { value ->
+                                            if (value in 1..16) {
+                                                DistributedService.setMasterDraftThreadsBatch(value)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.width(90.dp),
+                                    singleLine = true,
+                                    textStyle = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                            Slider(
+                                value = draftThreadsBatch.toFloat(),
+                                onValueChange = {
+                                    DistributedService.setMasterDraftThreadsBatch(it.toInt())
+                                    DistributedService.setMasterDraftThreadsBatchText(it.toInt().toString())
+                                },
+                                valueRange = 1f..16f,
+                                steps = 14
+                            )
                         }
                         
                         HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
@@ -1304,6 +1370,8 @@ fun MasterModeScreen(navController: NavController) {
                                     putExtra(LlamaService.EXTRA_DRAFT_MAX, draftMax)
                                     putExtra(LlamaService.EXTRA_DRAFT_MIN, draftMin)
                                     putExtra(LlamaService.EXTRA_DRAFT_P_MIN, draftPMin)
+                                    putExtra(LlamaService.EXTRA_DRAFT_THREADS, draftThreads)
+                                    putExtra(LlamaService.EXTRA_DRAFT_THREADS_BATCH, draftThreadsBatch)
                                 }
                                 
                                 putExtra(LlamaService.EXTRA_KV_CACHE_ENABLED, kvCacheEnabled)
@@ -1383,6 +1451,8 @@ fun MasterModeScreen(navController: NavController) {
                                         putExtra(LlamaService.EXTRA_DRAFT_MAX, draftMax)
                                         putExtra(LlamaService.EXTRA_DRAFT_MIN, draftMin)
                                         putExtra(LlamaService.EXTRA_DRAFT_P_MIN, draftPMin)
+                                        putExtra(LlamaService.EXTRA_DRAFT_THREADS, draftThreads)
+                                        putExtra(LlamaService.EXTRA_DRAFT_THREADS_BATCH, draftThreadsBatch)
                                     }
                                     putExtra(LlamaService.EXTRA_KV_CACHE_ENABLED, kvCacheEnabled)
                                     putExtra(LlamaService.EXTRA_KV_CACHE_TYPE_K, kvCacheTypeK)
@@ -1992,6 +2062,8 @@ fun MasterModeScreen(navController: NavController) {
                                     draftMax = draftMax,
                                     draftMin = draftMin,
                                     draftPMin = draftPMin,
+                                    draftThreads = draftThreads,
+                                    draftThreadsBatch = draftThreadsBatch,
                                     parallel = masterParallel,
                                     cacheRam = masterCacheRam,
                                     customFlags = masterCustomFlags,
@@ -2079,6 +2151,10 @@ fun MasterModeScreen(navController: NavController) {
                                             DistributedService.setMasterDraftMinText(cmd.draftMin.toString())
                                             DistributedService.setMasterDraftPMin(cmd.draftPMin)
                                             DistributedService.setMasterDraftPMinText(cmd.draftPMin.toString())
+                                            DistributedService.setMasterDraftThreads(cmd.draftThreads)
+                                            DistributedService.setMasterDraftThreadsText(cmd.draftThreads.toString())
+                                            DistributedService.setMasterDraftThreadsBatch(cmd.draftThreadsBatch)
+                                            DistributedService.setMasterDraftThreadsBatchText(cmd.draftThreadsBatch.toString())
                                             
                                             // Advanced
                                             DistributedService.setMasterParallel(cmd.parallel)

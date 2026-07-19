@@ -96,3 +96,4 @@ AGENTS.md
 tools/
 generated/
 comfyui-output/
+feature_media_snapdragon_vulkan/src/main/jniLibs/arm64-v8a/libsd_snapdragon_vulkan.so

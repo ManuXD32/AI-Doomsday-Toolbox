@@ -10,6 +10,9 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 
+const val NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED = "max_output_tokens_enabled"
+const val NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS = "max_output_tokens"
+
 /**
  * Chat service for llama-server (llama.cpp HTTP server).
  * Uses the OpenAI-compatible /v1/chat/completions endpoint.
@@ -46,7 +49,7 @@ class LlamaServerChatService {
      * @param messages conversation history
      * @param tools available tools for function calling
      * @param thinkingEnabled if false, strip <think> tags from output
-     * @param numCtx context window size (passed as max_tokens hint)
+     * @param maxTokens optional maximum output tokens hint
      * @param onChunk streaming callback: (contentDelta, thinkingDelta)
      */
     internal suspend fun chatWithToolsStreaming(
@@ -55,7 +58,7 @@ class LlamaServerChatService {
         tools: List<AgentTool> = emptyList(),
         modelLabel: String? = null,
         thinkingEnabled: Boolean = true,
-        numCtx: Int = 16384,
+        maxTokens: Int? = null,
         samplingParams: LlamaServerSamplingParams = LlamaServerSamplingParams(),
         onChunk: (String?, String?) -> Unit = { _, _ -> }
     ): Result<OllamaService.ChatResponse> = withContext(Dispatchers.IO) {
@@ -76,7 +79,7 @@ class LlamaServerChatService {
                     },
                     shouldRetry = { !sawStreamOutput }
                 ) {
-                    performChatWithToolsStreaming(baseUrl, messages, tools, modelLabel, thinkingEnabled, numCtx, samplingParams, guardedOnChunk)
+                    performChatWithToolsStreaming(baseUrl, messages, tools, modelLabel, thinkingEnabled, maxTokens, samplingParams, guardedOnChunk)
                 }
             }
             Result.success(chatResponse)
@@ -91,7 +94,7 @@ class LlamaServerChatService {
         tools: List<AgentTool>,
         modelLabel: String?,
         thinkingEnabled: Boolean,
-        numCtx: Int,
+        maxTokens: Int?,
         samplingParams: LlamaServerSamplingParams,
         onChunk: (String?, String?) -> Unit
     ): OllamaService.ChatResponse {
@@ -110,7 +113,7 @@ class LlamaServerChatService {
                 tools = tools,
                 model = modelLabel,
                 thinkingEnabled = thinkingEnabled,
-                maxTokens = numCtx,
+                maxTokens = maxTokens,
                 samplingParams = samplingParams
             )
         )
@@ -316,7 +319,7 @@ internal fun buildLlamaServerChatRequestPayload(
     tools: List<AgentTool>,
     model: String? = null,
     thinkingEnabled: Boolean,
-    maxTokens: Int,
+    maxTokens: Int? = null,
     samplingParams: LlamaServerSamplingParams = LlamaServerSamplingParams()
 ): Map<String, Any?> {
     val normalizedMessages = normalizeLlamaServerMessageSequence(
@@ -363,7 +366,7 @@ internal fun buildLlamaServerChatRequestPayload(
         "chat_template_kwargs" to mapOf("enable_thinking" to thinkingEnabled)
     )
 
-    if (maxTokens > 0) {
+    if (maxTokens != null && maxTokens > 0) {
         payload["max_tokens"] = maxTokens
     }
 

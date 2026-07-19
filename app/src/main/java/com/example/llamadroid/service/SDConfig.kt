@@ -67,8 +67,13 @@ data class SDConfig(
     val vaeConvDirect: Boolean = false,
     val qwenImageZeroCondT: Boolean = false,
     val chromaDisableDitMask: Boolean = false,
+    val sdParamsBackendMode: String = "auto",
+    val sdRuntimeBackendMode: String = "auto",
+    val maxVramCpuGiB: String = "",
     // Quantization type for stable-diffusion.cpp (--type)
-    val quantizationType: String = ""
+    val quantizationType: String = "",
+    val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
+    val customFlags: String = ""
 ) : Parcelable
 
 @Parcelize
@@ -83,7 +88,12 @@ data class SDUpscaleConfig(
     val inputImagePath: String,
     val outputPath: String,
     val upscaleRepeats: Int = 1,
-    val threads: Int = -1
+    val threads: Int = -1,
+    val sdParamsBackendMode: String = "auto",
+    val sdRuntimeBackendMode: String = "auto",
+    val maxVramCpuGiB: String = "",
+    val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
+    val customFlags: String = ""
 ) : Parcelable
 
 enum class SamplingMethod(val cliName: String) {

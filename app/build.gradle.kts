@@ -53,8 +53,8 @@ android {
         applicationId = "com.manuxd32.aidoomsdaytoolbox"
         minSdk = 26
         targetSdk = 35
-        versionCode = 947
-        versionName = "0.947"
+        versionCode = 948
+        versionName = "0.948"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -147,6 +147,7 @@ android {
         ":feature_llm_snapdragon_opencl",
         ":feature_kiwix_baseline", ":feature_kiwix_dotprod", ":feature_kiwix_armv9",
         ":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9",
+        ":feature_media_snapdragon_vulkan",
         ":feature_upscaler"
     )
 }

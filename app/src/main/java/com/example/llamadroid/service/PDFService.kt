@@ -680,7 +680,10 @@ class PDFService(private val context: Context) {
         settingsOverride: RemoteSummarySettingsSnapshot?,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
-        notificationId: Int
+        notificationId: Int,
+        initialTranslations: Map<String, String> = emptyMap(),
+        onCheckpoint: ((Map<String, String>, Set<Int>) -> Unit)? = null,
+        pageScreenshotProvider: (suspend (Int) -> RemoteSummaryImageAttachment?)? = null
     ): PreparedOcrTranslation {
         val qualityMode = settingsRepo.pdfTranslationOptionsSnapshot().qualityMode
         val pageUnits = buildOcrTranslationUnits(ocrResult.pages, qualityMode)
@@ -698,7 +701,10 @@ class PDFService(private val context: Context) {
             settingsOverride = settingsOverride,
             executionController = executionController,
             onProgress = onProgress,
-            notificationId = notificationId
+            notificationId = notificationId,
+            initialTranslations = initialTranslations,
+            onCheckpoint = onCheckpoint,
+            pageScreenshotProvider = pageScreenshotProvider
         )
 
         return PreparedOcrTranslation(
@@ -1005,14 +1011,17 @@ class PDFService(private val context: Context) {
     }
 
     private suspend fun translatePageUnits(
-        pdfUri: Uri,
+        pdfUri: Uri?,
         totalPages: Int,
         pageUnits: Map<Int, List<PdfTranslationUnit>>,
         totalSourceBlocks: Int,
         settingsOverride: RemoteSummarySettingsSnapshot?,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
-        notificationId: Int
+        notificationId: Int,
+        initialTranslations: Map<String, String> = emptyMap(),
+        onCheckpoint: ((Map<String, String>, Set<Int>) -> Unit)? = null,
+        pageScreenshotProvider: (suspend (Int) -> RemoteSummaryImageAttachment?)? = null
     ): LinkedHashMap<String, String> {
         val snapshot = settingsOverride ?: settingsRepo.pdfTranslationSettings.snapshot()
         val options = settingsRepo.pdfTranslationOptionsSnapshot()
@@ -1020,8 +1029,14 @@ class PDFService(private val context: Context) {
         val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
         executionController?.registerRemoteClient(client)
         val targetLanguage = snapshot.targetLanguage
-        var translatedBlocks = 0
-        val translations = linkedMapOf<String, String>()
+        val translations = linkedMapOf<String, String>().apply { putAll(initialTranslations) }
+        var translatedBlocks = pageUnits.values.flatten()
+            .filter { translations.containsKey(it.id) }
+            .sumOf { it.sourceBlockCount }
+        val completedPageIndexes = pageUnits
+            .filter { (_, units) -> units.isNotEmpty() && units.all { translations.containsKey(it.id) } }
+            .keys
+            .toMutableSet()
         val pageContexts = linkedMapOf<Int, String>()
 
         try {
@@ -1032,14 +1047,18 @@ class PDFService(private val context: Context) {
                 val pageChunks = chunkPageBlocks(units, snapshot.chunkContext, qualityMode)
                 val imageAttachment = if (options.usePageScreenshotContext && canUsePageScreenshotContext(snapshot)) {
                     runCatching {
-                        RemoteSummaryImageAttachment(
-                            base64 = renderPdfPageScreenshotBase64(
-                                pdfUri = pdfUri,
-                                pageIndex = pageIndex,
-                                maxSide = options.screenshotMaxSide,
-                                jpegQuality = options.screenshotJpegQuality
-                            )
-                        )
+                        pageScreenshotProvider?.invoke(pageIndex)
+                            ?: pdfUri?.let {
+                                RemoteSummaryImageAttachment(
+                                    base64 = renderPdfPageScreenshotBase64(
+                                        pdfUri = it,
+                                        pageIndex = pageIndex,
+                                        maxSide = options.screenshotMaxSide,
+                                        jpegQuality = options.screenshotJpegQuality
+                                    )
+                                )
+                            }
+                            ?: error("No screenshot provider available")
                     }.onFailure { error ->
                         DebugLog.log("[PDF] Screenshot context unavailable for page ${pageIndex + 1}: ${error.message}")
                     }.getOrNull()
@@ -1081,28 +1100,40 @@ class PDFService(private val context: Context) {
                     context.getString(R.string.pdf_translation_notification_translating, pageIndex + 1, totalPages)
                 )
 
+                var pageCompleted = true
                 pageChunks.forEach { chunk ->
                     ensureTranslationActive(executionController)
-                    val pageTranslations = translateSinglePage(
-                        pageIndex = pageIndex,
-                        totalPages = totalPages,
-                        snapshot = snapshot,
-                        targetLanguage = targetLanguage,
-                        pageChunk = chunk,
-                        fallbackToTextOnly = options.textOnlyFallbackEnabled,
-                        imageAttachment = imageAttachment,
-                        pageContext = pageContext,
-                        qualityMode = qualityMode,
-                        client = client,
-                        executionController = executionController
-                    )
+                    val missingUnits = chunk.units.filterNot { translations.containsKey(it.id) }
+                    val pageTranslations = if (missingUnits.isEmpty()) {
+                        emptyMap()
+                    } else {
+                        translateSinglePage(
+                            pageIndex = pageIndex,
+                            totalPages = totalPages,
+                            snapshot = snapshot,
+                            targetLanguage = targetLanguage,
+                            pageChunk = chunk.copy(units = missingUnits),
+                            fallbackToTextOnly = options.textOnlyFallbackEnabled,
+                            imageAttachment = imageAttachment,
+                            pageContext = pageContext,
+                            qualityMode = qualityMode,
+                            client = client,
+                            executionController = executionController
+                        )
+                    }
                     chunk.units.forEach { unit ->
-                        val translated = pageTranslations[unit.id].orEmpty().trim()
+                        val translated = translations[unit.id]?.trim()
+                            ?: pageTranslations[unit.id].orEmpty().trim()
                         if (translated.isNotBlank()) {
-                            translations[unit.id] = translated
-                            translatedBlocks += unit.sourceBlockCount
+                            if (!translations.containsKey(unit.id)) {
+                                translations[unit.id] = translated
+                                translatedBlocks += unit.sourceBlockCount
+                            }
+                        } else {
+                            pageCompleted = false
                         }
                     }
+                    onCheckpoint?.invoke(translations, completedPageIndexes)
                     onProgress?.invoke(
                         PdfOcrTranslationProgress(
                             stage = PdfOcrTranslationStage.TRANSLATING,
@@ -1112,6 +1143,10 @@ class PDFService(private val context: Context) {
                             totalBlocks = totalSourceBlocks
                         )
                     )
+                }
+                if (pageCompleted && units.all { translations.containsKey(it.id) }) {
+                    completedPageIndexes += pageIndex
+                    onCheckpoint?.invoke(translations, completedPageIndexes)
                 }
             }
             applyTranslationCorrectionPass(
@@ -1255,7 +1290,11 @@ class PDFService(private val context: Context) {
                 pageIndex = pageIndex,
                 unitIndex = unitIndex,
                 text = text,
-                rect = unionPdfRects(ordered.map { it.rect }).padded(1.5f, pdfWidth, pdfHeight),
+                rect = MangaTranslationSupport.expandedBubbleRect(
+                    rect = unionPdfRects(ordered.map { it.rect }).padded(1.5f, pdfWidth, pdfHeight),
+                    pageWidth = pdfWidth,
+                    pageHeight = pdfHeight
+                ),
                 backgroundColor = backgroundColor,
                 textColor = contrastingTextColor(backgroundColor),
                 sourceBlockIds = ordered.map { it.sourceId },
@@ -1333,7 +1372,8 @@ class PDFService(private val context: Context) {
         val rectAreaRatio = (rect.width * rect.height) / pageArea
         val widthRatio = rect.width / pageWidth.coerceAtLeast(1f)
         val heightRatio = rect.height / pageHeight.coerceAtLeast(1f)
-        return rectAreaRatio > 0.14f ||
+        return MangaTranslationSupport.mergedRegionIsTooLarge(rect, pageWidth, pageHeight) ||
+            rectAreaRatio > 0.14f ||
             heightRatio > 0.42f ||
             (widthRatio > 0.72f && heightRatio > 0.18f) ||
             (widthRatio > 0.55f && heightRatio > 0.28f)
@@ -1811,6 +1851,55 @@ class PDFService(private val context: Context) {
             cachedPdf.delete()
         }
     }
+
+    private fun renderImagePageScreenshotBase64(
+        imageFile: File,
+        maxSide: Int,
+        jpegQuality: Int
+    ): String {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath, bounds)
+        val longestSide = maxOf(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+        val targetSide = maxSide.coerceAtLeast(256)
+        var sampleSize = 1
+        while (longestSide / (sampleSize * 2) >= targetSide) {
+            sampleSize *= 2
+        }
+        val decoded = android.graphics.BitmapFactory.decodeFile(
+            imageFile.absolutePath,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        ) ?: throw IllegalStateException("Could not decode image page: ${imageFile.name}")
+        val scale = (targetSide.toFloat() / maxOf(decoded.width, decoded.height).toFloat())
+            .coerceAtMost(1.5f)
+            .coerceAtLeast(0.25f)
+        val bitmap = if (abs(scale - 1f) < 0.05f) {
+            decoded
+        } else {
+            Bitmap.createScaledBitmap(
+                decoded,
+                (decoded.width * scale).roundToInt().coerceAtLeast(1),
+                (decoded.height * scale).roundToInt().coerceAtLeast(1),
+                true
+            )
+        }
+        try {
+            val flattened = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+            try {
+                Canvas(flattened).apply {
+                    drawColor(Color.WHITE)
+                    drawBitmap(bitmap, 0f, 0f, null)
+                }
+                val output = ByteArrayOutputStream()
+                flattened.compress(Bitmap.CompressFormat.JPEG, jpegQuality.coerceIn(40, 95), output)
+                return Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+            } finally {
+                flattened.recycle()
+            }
+        } finally {
+            if (bitmap !== decoded) bitmap.recycle()
+            decoded.recycle()
+        }
+    }
     
     /**
      * Get page count for a PDF
@@ -1983,7 +2072,19 @@ class PDFService(private val context: Context) {
         recognizers: List<TextRecognizer>,
         pageIndex: Int
     ): PdfOcrPageResult {
-        val decoded = android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath)
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath, bounds)
+        val originalWidth = bounds.outWidth.takeIf { it > 0 } ?: 1
+        val originalHeight = bounds.outHeight.takeIf { it > 0 } ?: 1
+        val longestSide = maxOf(originalWidth, originalHeight)
+        var sampleSize = 1
+        while (longestSide / (sampleSize * 2) >= 2600) {
+            sampleSize *= 2
+        }
+        val decoded = android.graphics.BitmapFactory.decodeFile(
+            imageFile.absolutePath,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        )
             ?: throw IllegalStateException("Could not decode image page: ${imageFile.name}")
         val normalized = if (decoded.config == Bitmap.Config.ARGB_8888 && !decoded.hasAlpha()) {
             decoded
@@ -2015,8 +2116,8 @@ class PDFService(private val context: Context) {
                     image = image,
                     bitmap = ocrBitmap,
                     pageIndex = pageIndex,
-                    pdfWidth = normalized.width.toFloat(),
-                    pdfHeight = normalized.height.toFloat()
+                    pdfWidth = originalWidth.toFloat(),
+                    pdfHeight = originalHeight.toFloat()
                 )
             } finally {
                 if (ocrBitmap !== normalized) {
@@ -3361,22 +3462,38 @@ class PDFService(private val context: Context) {
             cbzUris.forEachIndexed { fileIndex, cbzUri ->
                 ensureTranslationActive(executionController)
                 val sourceName = displayNameForUri(cbzUri)
+                val sourceKind = MangaTranslationSupport.sourceKindFor(
+                    name = sourceName,
+                    mimeType = context.contentResolver.getType(cbzUri)
+                ) ?: MangaTranslationSourceKind.CBZ
                 UnifiedNotificationManager.updateProgress(
                     notificationId,
                     fileIndex.toFloat() / cbzUris.size.toFloat(),
                     context.getString(R.string.workflow_manga_notification_file, fileIndex + 1, cbzUris.size, sourceName)
                 )
                 val result = runCatching {
-                    translateSingleCbz(
-                        cbzUri = cbzUri,
-                        sourceName = sourceName,
-                        exportPdf = exportPdf,
-                        exportCbz = exportCbz,
-                        settingsOverride = settingsOverride,
-                        executionController = executionController,
-                        notificationId = notificationId,
-                        onProgress = onProgress
-                    )
+                    when (sourceKind) {
+                        MangaTranslationSourceKind.PDF -> translateSingleMangaPdf(
+                            pdfUri = cbzUri,
+                            sourceName = sourceName,
+                            exportPdf = exportPdf,
+                            exportCbz = exportCbz,
+                            settingsOverride = settingsOverride,
+                            executionController = executionController,
+                            notificationId = notificationId,
+                            onProgress = onProgress
+                        )
+                        MangaTranslationSourceKind.CBZ -> translateSingleCbz(
+                            cbzUri = cbzUri,
+                            sourceName = sourceName,
+                            exportPdf = exportPdf,
+                            exportCbz = exportCbz,
+                            settingsOverride = settingsOverride,
+                            executionController = executionController,
+                            notificationId = notificationId,
+                            onProgress = onProgress
+                        )
+                    }
                 }.getOrElse { error ->
                     if (error is CancellationException) {
                         throw PDFTranslationCancelledException(mangaResults = results.toList())
@@ -3417,6 +3534,53 @@ class PDFService(private val context: Context) {
         }
     }
 
+    private suspend fun translateSingleMangaPdf(
+        pdfUri: Uri,
+        sourceName: String,
+        exportPdf: Boolean,
+        exportCbz: Boolean,
+        settingsOverride: RemoteSummarySettingsSnapshot?,
+        executionController: PDFTranslationExecutionController?,
+        notificationId: Int,
+        onProgress: ((PdfOcrTranslationProgress) -> Unit)?
+    ): MangaTranslationFileResult {
+        val timestamp = System.currentTimeMillis()
+        val baseName = sourceName.substringBeforeLast('.').replace(Regex("""[^A-Za-z0-9._-]+"""), "_").ifBlank { "comic" }
+        val workDir = File(context.filesDir, "manga_translation_runtime/pdf_${baseName}_$timestamp").apply { mkdirs() }
+        var completed = false
+        try {
+            ensureTranslationActive(executionController)
+            onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.READING_TEXT, 0, 1, 0, 0))
+            val translatedPdfName = "translated_${baseName}_$timestamp.pdf"
+            val translatedPdfUri = exportTranslatedTextLayerPdf(
+                pdfUri = pdfUri,
+                outputFileName = translatedPdfName,
+                settingsOverride = settingsOverride,
+                executionController = executionController,
+                onProgress = onProgress
+            ).getOrThrow()
+
+            val savedPdfUri = if (exportPdf) translatedPdfUri else null
+            val savedCbzUri = if (exportCbz) {
+                ensureTranslationActive(executionController)
+                onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.RENDERING, 0, 1, 0, 0))
+                val renderedPages = renderPdfPagesToPng(translatedPdfUri, workDir, baseName)
+                if (renderedPages.isEmpty()) throw IllegalStateException(context.getString(R.string.workflow_manga_error_no_rendered_pages))
+                onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.PACKING, renderedPages.size, renderedPages.size, 0, 0))
+                val cbzName = "translated_${baseName}_$timestamp.cbz"
+                val cbzFile = File(workDir, cbzName)
+                packPngPagesAsCbz(renderedPages, cbzFile)
+                saveFileToOutputFolder(cbzFile, "comics", "application/vnd.comicbook+zip", cbzName)
+            } else {
+                null
+            }
+            completed = true
+            return MangaTranslationFileResult(sourceName = sourceName, pdfUri = savedPdfUri, cbzUri = savedCbzUri)
+        } finally {
+            if (completed) runCatching { workDir.deleteRecursively() }
+        }
+    }
+
     private suspend fun translateSingleCbz(
         cbzUri: Uri,
         sourceName: String,
@@ -3429,7 +3593,10 @@ class PDFService(private val context: Context) {
     ): MangaTranslationFileResult {
         val timestamp = System.currentTimeMillis()
         val baseName = sourceName.substringBeforeLast('.').replace(Regex("""[^A-Za-z0-9._-]+"""), "_").ifBlank { "comic" }
-        val workDir = File(context.cacheDir, "manga_translate_${baseName}_$timestamp").apply { mkdirs() }
+        val workDir = File(context.filesDir, "manga_translation_runtime/cbz_${baseName}_$timestamp").apply { mkdirs() }
+        val checkpointFile = File(workDir, "checkpoint.json")
+        val jobId = "manga_${baseName}_$timestamp"
+        var completed = false
         try {
             ensureTranslationActive(executionController)
             onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.EXTRACTING, 0, 1, 0, 0))
@@ -3437,14 +3604,21 @@ class PDFService(private val context: Context) {
             if (imageFiles.isEmpty()) throw IllegalStateException(context.getString(R.string.pdf_error_no_image_pages_in_cbz))
             DebugLog.log("[PDF] Extracted ${imageFiles.size} comic pages from $sourceName")
 
-            onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.PDF_CREATION, 0, imageFiles.size, 0, 0))
-            val intermediatePdf = File(workDir, "${baseName}_source.pdf")
-            createPdfFromImageFiles(imageFiles, intermediatePdf)
+            MangaTranslationSupport.writeCheckpoint(
+                checkpointFile,
+                MangaTranslationCheckpoint(
+                    jobId = jobId,
+                    sourceName = sourceName,
+                    sourceKind = MangaTranslationSourceKind.CBZ,
+                    exportPdf = exportPdf,
+                    exportCbz = exportCbz,
+                    totalPages = imageFiles.size
+                )
+            )
 
             val pdfName = "translated_${baseName}_$timestamp.pdf"
             val cbzName = "translated_${baseName}_$timestamp.cbz"
             val translatedPdfFile = File(workDir, pdfName)
-            val intermediatePdfUri = Uri.fromFile(intermediatePdf)
             val ocrResult = collectImageOcrText(imageFiles) { progress ->
                 onProgress?.invoke(
                     PdfOcrTranslationProgress(
@@ -3461,12 +3635,40 @@ class PDFService(private val context: Context) {
                     "across ${ocrResult.totalPages} pages for $sourceName"
             )
             val prepared = prepareOcrTranslation(
-                sourcePdfUri = intermediatePdfUri,
+                sourcePdfUri = Uri.EMPTY,
                 ocrResult = ocrResult,
                 settingsOverride = settingsOverride,
                 executionController = executionController,
                 onProgress = onProgress,
-                notificationId = notificationId
+                notificationId = notificationId,
+                initialTranslations = MangaTranslationSupport.readCheckpoint(checkpointFile)?.translations.orEmpty(),
+                onCheckpoint = { translations, completedPages ->
+                    MangaTranslationSupport.writeCheckpoint(
+                        checkpointFile,
+                        MangaTranslationCheckpoint(
+                            jobId = jobId,
+                            sourceName = sourceName,
+                            sourceKind = MangaTranslationSourceKind.CBZ,
+                            exportPdf = exportPdf,
+                            exportCbz = exportCbz,
+                            totalPages = imageFiles.size,
+                            completedPageIndexes = completedPages,
+                            translations = translations
+                        )
+                    )
+                },
+                pageScreenshotProvider = { pageIndex ->
+                    val options = settingsRepo.pdfTranslationOptionsSnapshot()
+                    imageFiles.getOrNull(pageIndex)?.let { imageFile ->
+                        RemoteSummaryImageAttachment(
+                            base64 = renderImagePageScreenshotBase64(
+                                imageFile = imageFile,
+                                maxSide = options.screenshotMaxSide,
+                                jpegQuality = options.screenshotJpegQuality
+                            )
+                        )
+                    }
+                }
             )
 
             val renderedPages = if (exportPdf || exportCbz) {
@@ -3510,9 +3712,26 @@ class PDFService(private val context: Context) {
                 null
             }
 
+            MangaTranslationSupport.writeCheckpoint(
+                checkpointFile,
+                MangaTranslationCheckpoint(
+                    jobId = jobId,
+                    sourceName = sourceName,
+                    sourceKind = MangaTranslationSourceKind.CBZ,
+                    exportPdf = exportPdf,
+                    exportCbz = exportCbz,
+                    totalPages = imageFiles.size,
+                    completedPageIndexes = imageFiles.indices.toSet(),
+                    translations = prepared.translations,
+                    status = MangaTranslationSupport.STATUS_COMPLETE
+                )
+            )
+            completed = true
             return MangaTranslationFileResult(sourceName = sourceName, pdfUri = savedPdfUri, cbzUri = savedCbzUri)
         } finally {
-            runCatching { workDir.deleteRecursively() }
+            if (completed) {
+                runCatching { workDir.deleteRecursively() }
+            }
         }
     }
 
@@ -3529,7 +3748,7 @@ class PDFService(private val context: Context) {
                     .asSequence()
                     .filter { entry ->
                         !entry.isDirectory &&
-                            isSafeZipEntry(entry.name) &&
+                            MangaTranslationSupport.isSafeComicZipEntryName(entry.name) &&
                             isSupportedComicImage(entry.name)
                     }
                     .sortedWith(compareBy { PDFTranslationLogic.naturalSortKey(it.name).joinToString("\u0000") })
@@ -3563,10 +3782,6 @@ class PDFService(private val context: Context) {
             lower.endsWith(".heif") ||
             lower.endsWith(".bmp") ||
             lower.endsWith(".gif")
-    }
-
-    private fun isSafeZipEntry(name: String): Boolean {
-        return !name.contains("..") && !name.startsWith("/") && !name.startsWith("\\")
     }
 
     private fun createPdfFromImageFiles(imageFiles: List<File>, outputFile: File) {
@@ -3608,7 +3823,18 @@ class PDFService(private val context: Context) {
         val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
             ?: throw IllegalStateException("Could not decode image page: ${file.name}")
         try {
-            return com.tom_roush.pdfbox.pdmodel.graphics.image.LosslessFactory.createFromImage(doc, bitmap)
+            val flattened = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+            try {
+                Canvas(flattened).apply {
+                    drawColor(Color.WHITE)
+                    drawBitmap(bitmap, 0f, 0f, null)
+                }
+                val bytes = ByteArrayOutputStream()
+                flattened.compress(Bitmap.CompressFormat.JPEG, 88, bytes)
+                return com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory.createFromByteArray(doc, bytes.toByteArray())
+            } finally {
+                flattened.recycle()
+            }
         } finally {
             bitmap.recycle()
         }
@@ -4104,14 +4330,29 @@ class PDFService(private val context: Context) {
     }
 
     private fun findBitmapTextSize(text: String, paint: TextPaint, maxWidth: Float, maxHeight: Float): Float {
-        var size = minOf(maxHeight * 0.42f, 42f).coerceAtLeast(6f)
-        while (size > 6f) {
-            paint.textSize = size
+        val estimatedLines = text.split(Regex("""\s+""")).size.coerceAtLeast(text.lines().size)
+        val upper = MangaTranslationSupport.fittedTextSize(
+            lineCount = estimatedLines.coerceAtMost(12),
+            maxWidth = maxWidth,
+            maxHeight = maxHeight,
+            preferredMaxSize = minOf(maxHeight * 0.48f, 44f),
+            minSize = 5f
+        ).coerceAtLeast(6f)
+        var low = 5f
+        var high = upper
+        var best = 5f
+        repeat(12) {
+            val mid = (low + high) / 2f
+            paint.textSize = mid
             val layout = buildBitmapTextLayout(text, paint, maxWidth.roundToInt().coerceAtLeast(1))
-            if (layout.height <= maxHeight) return size
-            size -= 0.75f
+            if (layout.height <= maxHeight) {
+                best = mid
+                low = mid
+            } else {
+                high = mid
+            }
         }
-        return 6f
+        return best
     }
 
     private fun buildBitmapTextLayout(text: String, paint: TextPaint, width: Int): StaticLayout {
@@ -4120,6 +4361,8 @@ class PDFService(private val context: Context) {
             .setAlignment(Layout.Alignment.ALIGN_CENTER)
             .setLineSpacing(0f, 0.96f)
             .setIncludePad(false)
+            .setBreakStrategy(Layout.BREAK_STRATEGY_BALANCED)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .build()
     }
 

@@ -1,11 +1,14 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdParamsBackendMode
+import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdImageInputMode
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.inferSdFamily
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.util.DeviceAcceleration
 import java.io.File
 
 data class SdBinaryCapabilities(
@@ -89,7 +92,25 @@ fun buildSdCommandArgs(
         if (config.threads > 0) {
             args.addAll(listOf("-t", config.threads.toString()))
         }
+        if (!config.distributedRuntime.enabled) {
+            appendLocalSdBackendArgs(
+                args = args,
+                paramsBackendMode = config.sdParamsBackendMode,
+                runtimeBackendMode = config.sdRuntimeBackendMode,
+                maxVramCpuGiB = config.maxVramCpuGiB,
+                flagSupported = { flag ->
+                    binaryCapabilities == null ||
+                        binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                        binaryCapabilities.supports(flag)
+                }
+            )
+        }
+        appendSdDistributedArgs(args, config.distributedRuntime, binaryCapabilities)
+        appendSdCustomFlags(args, config.customFlags)
         args.add("-v")
+        if (requiredFlags.isNotEmpty()) {
+            throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
+        }
         return args
     }
 
@@ -244,6 +265,21 @@ fun buildSdCommandArgs(
         args.addAll(listOf("--tensor-type-rules", config.tensorTypeRules))
     }
 
+    if (!config.distributedRuntime.enabled) {
+        appendLocalSdBackendArgs(
+            args = args,
+            paramsBackendMode = config.sdParamsBackendMode,
+            runtimeBackendMode = config.sdRuntimeBackendMode,
+            maxVramCpuGiB = config.maxVramCpuGiB,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            }
+        )
+    }
+    appendSdDistributedArgs(args, config.distributedRuntime, binaryCapabilities)
+    appendSdCustomFlags(args, config.customFlags)
     args.add("-v")
 
     if (requiredFlags.isNotEmpty()) {
@@ -283,6 +319,21 @@ fun buildSdUpscaleCommandArgs(
     if (config.threads > 0) {
         args.addAll(listOf("-t", config.threads.toString()))
     }
+    if (!config.distributedRuntime.enabled) {
+        appendLocalSdBackendArgs(
+            args = args,
+            paramsBackendMode = config.sdParamsBackendMode,
+            runtimeBackendMode = config.sdRuntimeBackendMode,
+            maxVramCpuGiB = config.maxVramCpuGiB,
+            flagSupported = { flag ->
+                binaryCapabilities == null ||
+                    binaryCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
+                    binaryCapabilities.supports(flag)
+            }
+        )
+    }
+    appendSdDistributedArgs(args, config.distributedRuntime, binaryCapabilities)
+    appendSdCustomFlags(args, config.customFlags)
     args.add("-v")
 
     if (requiredFlags.isNotEmpty()) {
@@ -290,4 +341,45 @@ fun buildSdUpscaleCommandArgs(
     }
 
     return args
+}
+
+fun appendSdCustomFlags(args: MutableList<String>, customFlags: String) {
+    if (customFlags.isNotBlank()) {
+        args.addAll(splitShellLikeArgs(customFlags))
+    }
+}
+
+fun appendLocalSdBackendArgs(
+    args: MutableList<String>,
+    paramsBackendMode: String,
+    runtimeBackendMode: String,
+    maxVramCpuGiB: String,
+    flagSupported: (String) -> Boolean = { true }
+) {
+    SdRuntimeBackendMode.fromStoredValue(runtimeBackendMode).cliValue?.let { backend ->
+        if (flagSupported("--backend")) {
+            args.addAll(listOf("--backend", backend))
+        }
+    }
+    SdParamsBackendMode.fromStoredValue(paramsBackendMode).cliValue?.let { paramsBackend ->
+        if (flagSupported("--params-backend")) {
+            args.addAll(listOf("--params-backend", paramsBackend))
+        }
+    }
+    normalizeSdMaxVramCpuGiB(maxVramCpuGiB)?.let { budget ->
+        if (flagSupported("--max-vram")) {
+            args.addAll(listOf("--max-vram", "cpu=$budget"))
+        }
+    }
+}
+
+fun effectiveSdMaxVramCpuGiBForBinary(sdBinary: File, maxVramCpuGiB: String): String =
+    if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) "" else maxVramCpuGiB
+
+fun normalizeSdMaxVramCpuGiB(value: String): String? {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return null
+    val amount = trimmed.toFloatOrNull() ?: return null
+    if (amount <= 0f) return null
+    return trimmed
 }

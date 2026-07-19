@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.io.File
 
 class SdCliSupportTest {
 
@@ -295,6 +296,206 @@ class SdCliSupportTest {
         assertTrue(args.contains("-t"))
         assertTrue(args.contains("4"))
         assertFalse(args.contains("-p"))
+    }
+
+    @Test
+    fun `local backend defaults do not emit backend flags`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                prompt = "a quiet pier",
+                outputPath = "/tmp/out.png"
+            )
+        )
+
+        assertFalse(args.contains("--backend"))
+        assertFalse(args.contains("--params-backend"))
+        assertFalse(args.contains("--max-vram"))
+    }
+
+    @Test
+    fun `local disk params cpu runtime and cpu ram budget emit stable diffusion backend flags`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                prompt = "a low memory render",
+                outputPath = "/tmp/out.png",
+                sdParamsBackendMode = "disk",
+                sdRuntimeBackendMode = "cpu",
+                maxVramCpuGiB = "4"
+            )
+        )
+
+        assertOption(args, "--params-backend", "disk")
+        assertOption(args, "--backend", "cpu")
+        assertOption(args, "--max-vram", "cpu=4")
+        assertFalse(args.windowed(2).any { it == listOf("--backend", "disk") })
+    }
+
+    @Test
+    fun `cpu ram budget is suppressed for experimental accelerator binaries`() {
+        assertEquals(
+            "",
+            effectiveSdMaxVramCpuGiBForBinary(
+                File("/native/libsd_snapdragon_vulkan.so"),
+                "8"
+            )
+        )
+        assertEquals(
+            "8",
+            effectiveSdMaxVramCpuGiBForBinary(
+                File("/native/libsd_dotprod.so"),
+                "8"
+            )
+        )
+    }
+
+    @Test
+    fun `distributed image commands ignore local backend preferences`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                prompt = "distributed render",
+                outputPath = "/tmp/out.png",
+                sdParamsBackendMode = "disk",
+                sdRuntimeBackendMode = "cpu",
+                maxVramCpuGiB = "4",
+                distributedRuntime = SdDistributedRuntimeConfig(
+                    enabled = true,
+                    rpcServers = "127.0.0.1:9090",
+                    placementMode = SdDistributedPlacementMode.MANUAL,
+                    backendSpec = "RPC,CPU",
+                    paramsBackendSpec = "RPC,CPU"
+                )
+            )
+        )
+
+        assertFalse(args.windowed(2).any { it == listOf("--backend", "cpu") })
+        assertFalse(args.windowed(2).any { it == listOf("--params-backend", "disk") })
+        assertFalse(args.windowed(2).any { it == listOf("--max-vram", "cpu=4") })
+        assertTrue(args.contains("--rpc-servers"))
+    }
+
+    @Test
+    fun `local backend flags skip unsupported binary capabilities`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                prompt = "a small phone",
+                outputPath = "/tmp/out.png",
+                sdParamsBackendMode = "disk",
+                sdRuntimeBackendMode = "cpu",
+                maxVramCpuGiB = "3"
+            ),
+            binaryCapabilities = SdBinaryCapabilities(
+                supportedFlags = setOf("-M", "-m", "-p", "-o", "--max-vram")
+            )
+        )
+
+        assertFalse(args.contains("--backend"))
+        assertFalse(args.contains("--params-backend"))
+        assertOption(args, "--max-vram", "cpu=3")
+    }
+
+    @Test
+    fun `upscale builder emits local backend flags`() {
+        val args = buildSdUpscaleCommandArgs(
+            SDUpscaleConfig(
+                modelPath = "/models/realesrgan-x4.bin",
+                inputImagePath = "/tmp/input.png",
+                outputPath = "/tmp/out.png",
+                sdParamsBackendMode = "disk",
+                sdRuntimeBackendMode = "cpu",
+                maxVramCpuGiB = "2.5"
+            )
+        )
+
+        assertOption(args, "--params-backend", "disk")
+        assertOption(args, "--backend", "cpu")
+        assertOption(args, "--max-vram", "cpu=2.5")
+        assertFalse(args.windowed(2).any { it == listOf("--backend", "disk") })
+    }
+
+    @Test
+    fun `distributed upscale commands ignore local backend preferences`() {
+        val args = buildSdUpscaleCommandArgs(
+            SDUpscaleConfig(
+                modelPath = "/models/realesrgan-x4.bin",
+                inputImagePath = "/tmp/input.png",
+                outputPath = "/tmp/out.png",
+                sdParamsBackendMode = "disk",
+                sdRuntimeBackendMode = "cpu",
+                maxVramCpuGiB = "2.5",
+                distributedRuntime = SdDistributedRuntimeConfig(
+                    enabled = true,
+                    rpcServers = "127.0.0.1:9090",
+                    placementMode = SdDistributedPlacementMode.MANUAL,
+                    backendSpec = "RPC,CPU",
+                    paramsBackendSpec = "RPC,CPU"
+                )
+            )
+        )
+
+        assertFalse(args.windowed(2).any { it == listOf("--backend", "cpu") })
+        assertFalse(args.windowed(2).any { it == listOf("--params-backend", "disk") })
+        assertFalse(args.windowed(2).any { it == listOf("--max-vram", "cpu=2.5") })
+        assertTrue(args.contains("--rpc-servers"))
+    }
+
+    @Test
+    fun `video metadata round trip preserves local backend settings`() {
+        val metadata = GeneratedVideoMetadata(
+            mode = VideoGenerationMode.TXT2VID.folderName,
+            prompt = "animated toolbox",
+            diffusionModelPath = "/models/video.gguf",
+            diffusionModelName = "video.gguf",
+            vaeEnabled = false,
+            vaePath = null,
+            vaeName = null,
+            t5xxlEnabled = false,
+            t5xxlPath = null,
+            t5xxlName = null,
+            initImagePath = null,
+            videoFrames = 8,
+            fps = 5,
+            width = 480,
+            height = 832,
+            steps = 18,
+            cfgScale = 6.0f,
+            flowShift = null,
+            samplingMethod = SamplingMethod.EULER,
+            cacheMode = null,
+            cacheOption = "",
+            scmMask = "",
+            scmPolicy = null,
+            threads = -1,
+            vaeTiling = true,
+            vaeTileSize = "24x24",
+            diffusionFa = true,
+            mmap = true,
+            sdParamsBackendMode = "disk",
+            sdRuntimeBackendMode = "cpu",
+            maxVramCpuGiB = "6",
+            distributedRuntime = SdDistributedRuntimeConfig(),
+            createdAt = 123L,
+            aviPath = "/tmp/out.avi",
+            mp4Path = "/tmp/out.mp4",
+            metadataPath = "/tmp/out.json"
+        )
+
+        val restored = GeneratedVideoMetadata.fromJson(metadata.toJson())
+
+        assertEquals("disk", restored.sdParamsBackendMode)
+        assertEquals("cpu", restored.sdRuntimeBackendMode)
+        assertEquals("6", restored.maxVramCpuGiB)
     }
 
     private fun assertOption(args: List<String>, flag: String, value: String) {

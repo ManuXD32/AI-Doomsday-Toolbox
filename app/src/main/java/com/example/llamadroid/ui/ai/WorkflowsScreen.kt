@@ -297,6 +297,8 @@ fun WorkflowsScreen(navController: NavController) {
     val workflowCancelled by WorkflowStateHolder.cancelled.collectAsState()
     val transcribeError by WorkflowStateHolder.error.collectAsState()
     val mediaTranslationState by MediaTranslationWorkflowStateHolder.state.collectAsState()
+    val mediaDubbingRuntimeState = mediaTranslationStateForWorkflow(mediaTranslationState, MEDIA_TRANSLATION_WORKFLOW_KIND_MEDIA)
+    val subtitleTranslationRuntimeState = mediaTranslationStateForWorkflow(mediaTranslationState, MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE)
     val defaultTranslationTargetLanguage = stringResource(R.string.pdf_translation_language_english)
 
     // ===== Media dubbing/audio translation state =====
@@ -315,7 +317,7 @@ fun WorkflowsScreen(navController: NavController) {
     var mediaTranslationReplaceAudio by remember { mutableStateOf(true) }
     var mediaTranslationContextEnabled by remember { mutableStateOf(true) }
     var mediaTranslationContextLines by remember { mutableIntStateOf(2) }
-    var activeMediaWorkflow by remember { mutableIntStateOf(4) }
+    var mediaTranslationSkipFailedLines by remember { mutableStateOf(false) }
 
     // ===== Subtitle translation/subtitled video workflow state =====
     var subtitleTranslationVideoUri by remember { mutableStateOf<Uri?>(null) }
@@ -329,6 +331,7 @@ fun WorkflowsScreen(navController: NavController) {
     var subtitleTranslationTranslateSubtitles by remember { mutableStateOf(true) }
     var subtitleTranslationContextEnabled by remember { mutableStateOf(true) }
     var subtitleTranslationContextLines by remember { mutableIntStateOf(2) }
+    var subtitleTranslationSkipFailedLines by remember { mutableStateOf(false) }
     var subtitleTranslationBurnIntoVideo by remember { mutableStateOf(true) }
     var subtitleTranslationFontSize by remember { mutableIntStateOf(24) }
     var subtitleTranslationAlignment by remember { mutableIntStateOf(2) }
@@ -357,9 +360,9 @@ fun WorkflowsScreen(navController: NavController) {
         }
     }
 
-    LaunchedEffect(mediaTranslationState.isRunning, mediaTranslationState.finalOutputPath) {
+    LaunchedEffect(mediaTranslationState.workflowKind, mediaTranslationState.isRunning, mediaTranslationState.finalOutputPath) {
         if (mediaTranslationState.isRunning || mediaTranslationState.finalOutputPath != null) {
-            selectedWorkflow = activeMediaWorkflow
+            workflowIndexForMediaTranslationKind(mediaTranslationState.workflowKind)?.let { selectedWorkflow = it }
         }
     }
     
@@ -376,6 +379,21 @@ fun WorkflowsScreen(navController: NavController) {
     }
 
     val mangaCbzPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                try {
+                    context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) {
+                }
+            }
+            mangaCbzUris = uris
+            selectedWorkflow = 3
+        }
+    }
+
+    val mangaAllFilesPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
@@ -548,7 +566,7 @@ fun WorkflowsScreen(navController: NavController) {
                 val runningTitle = when {
                     transcribeIsRunning -> stringResource(R.string.workflow_running_transcribe)
                     txt2imgIsRunning -> stringResource(R.string.workflow_running_txt2img)
-                    activeMediaWorkflow == 5 -> stringResource(R.string.workflow_subtitle_translate_running)
+                    mediaTranslationState.workflowKind == MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE -> stringResource(R.string.workflow_subtitle_translate_running)
                     else -> stringResource(R.string.workflow_media_translate_running)
                 }
                 val runningStep = when {
@@ -568,7 +586,9 @@ fun WorkflowsScreen(navController: NavController) {
                             // Switch to the running workflow
                             if (transcribeIsRunning) selectedWorkflow = 1
                             else if (txt2imgIsRunning) selectedWorkflow = 2
-                            else if (mediaTranslationState.isRunning) selectedWorkflow = activeMediaWorkflow
+                            else if (mediaTranslationState.isRunning) {
+                                workflowIndexForMediaTranslationKind(mediaTranslationState.workflowKind)?.let { selectedWorkflow = it }
+                            }
                         },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                     shape = RoundedCornerShape(12.dp)
@@ -886,14 +906,10 @@ fun WorkflowsScreen(navController: NavController) {
                         onExportPdfChange = { mangaExportPdf = it },
                         onExportCbzChange = { mangaExportCbz = it },
                         onPickFiles = {
-                            mangaCbzPicker.launch(
-                                arrayOf(
-                                    "application/vnd.comicbook+zip",
-                                    "application/zip",
-                                    "application/octet-stream",
-                                    "*/*"
-                                )
-                            )
+                            mangaCbzPicker.launch(MangaTranslationSupport.primaryPickerMimeTypes)
+                        },
+                        onBrowseAllFiles = {
+                            mangaAllFilesPicker.launch(MangaTranslationSupport.fallbackPickerMimeTypes)
                         },
                         onOpenSettings = { navController.navigate("settings_pdf_translation") },
                         onCancel = { PDFTranslationJobService.cancel() },
@@ -984,6 +1000,8 @@ fun WorkflowsScreen(navController: NavController) {
                         onTranslationContextEnabledChange = { mediaTranslationContextEnabled = it },
                         translationContextLines = mediaTranslationContextLines,
                         onTranslationContextLinesChange = { mediaTranslationContextLines = it },
+                        skipFailedTranslationLines = mediaTranslationSkipFailedLines,
+                        onSkipFailedTranslationLinesChange = { mediaTranslationSkipFailedLines = it },
                         ttsModelPath = mediaTranslationTtsModelPath,
                         ttsModelName = mediaTranslationTtsModelName,
                         onTtsModelChange = { path, name ->
@@ -1000,7 +1018,7 @@ fun WorkflowsScreen(navController: NavController) {
                         onOutputModeChange = { mediaTranslationOutputMode = it },
                         replaceOriginalAudio = mediaTranslationReplaceAudio,
                         onReplaceOriginalAudioChange = { mediaTranslationReplaceAudio = it },
-                        state = mediaTranslationState,
+                        state = mediaDubbingRuntimeState,
                         onRun = {
                             val backendReady = isWorkflowTranslationBackendReady(
                                 backend = summaryBackend,
@@ -1019,7 +1037,6 @@ fun WorkflowsScreen(navController: NavController) {
                             val ttsPath = mediaTranslationTtsModelPath
                             val ttsName = mediaTranslationTtsModelName
                             if (sourceItems.isNotEmpty() && whisperModelPath != null && ttsPath != null && ttsName != null && backendReady) {
-                                activeMediaWorkflow = 4
                                 val specs = sourceItems.map { item ->
                                     MediaTranslationJobSpec(
                                         sourcePath = item.path,
@@ -1061,7 +1078,8 @@ fun WorkflowsScreen(navController: NavController) {
                                             mergePrompt = null
                                         ),
                                         translationContextEnabled = mediaTranslationContextEnabled,
-                                        translationContextLines = mediaTranslationContextLines
+                                        translationContextLines = mediaTranslationContextLines,
+                                        skipFailedTranslationLines = mediaTranslationSkipFailedLines
                                     )
                                 }
                                 MediaTranslationWorkflowService.startBatch(
@@ -1151,6 +1169,8 @@ fun WorkflowsScreen(navController: NavController) {
                         onTranslationContextEnabledChange = { subtitleTranslationContextEnabled = it },
                         translationContextLines = subtitleTranslationContextLines,
                         onTranslationContextLinesChange = { subtitleTranslationContextLines = it },
+                        skipFailedTranslationLines = subtitleTranslationSkipFailedLines,
+                        onSkipFailedTranslationLinesChange = { subtitleTranslationSkipFailedLines = it },
                         burnIntoVideo = subtitleTranslationBurnIntoVideo,
                         onBurnIntoVideoChange = { subtitleTranslationBurnIntoVideo = it },
                         fontSize = subtitleTranslationFontSize,
@@ -1165,7 +1185,7 @@ fun WorkflowsScreen(navController: NavController) {
                         onPrimaryColorChange = { subtitleTranslationColor = it },
                         fontName = subtitleTranslationFontName,
                         onFontNameChange = { subtitleTranslationFontName = it },
-                        state = mediaTranslationState,
+                        state = subtitleTranslationRuntimeState,
                         onRun = {
                             val backendReady = isWorkflowTranslationBackendReady(
                                 backend = summaryBackend,
@@ -1184,7 +1204,6 @@ fun WorkflowsScreen(navController: NavController) {
                             val translationReady = !subtitleTranslationTranslateSubtitles || backendReady
                             val sourceReady = subtitleTranslationSrtPath != null || whisperModelPath != null
                             if (videoItems.isNotEmpty() && sourceReady && translationReady && !(subtitleTranslationSrtPath != null && videoItems.size > 1)) {
-                                activeMediaWorkflow = 5
                                 val specs = videoItems.map { item ->
                                     SubtitleTranslationJobSpec(
                                         videoPath = item.path,
@@ -1232,7 +1251,8 @@ fun WorkflowsScreen(navController: NavController) {
                                             mergePrompt = null
                                         ),
                                         translationContextEnabled = subtitleTranslationContextEnabled,
-                                        translationContextLines = subtitleTranslationContextLines
+                                        translationContextLines = subtitleTranslationContextLines,
+                                        skipFailedTranslationLines = subtitleTranslationSkipFailedLines
                                     )
                                 }
                                 MediaTranslationWorkflowService.startSubtitleTranslationBatch(
@@ -1379,6 +1399,7 @@ private fun MangaTranslationWorkflowContent(
     onExportPdfChange: (Boolean) -> Unit,
     onExportCbzChange: (Boolean) -> Unit,
     onPickFiles: () -> Unit,
+    onBrowseAllFiles: () -> Unit,
     onOpenSettings: () -> Unit,
     onCancel: () -> Unit,
     onRun: () -> Unit
@@ -1407,6 +1428,11 @@ private fun MangaTranslationWorkflowContent(
                     Icon(Icons.Default.FolderOpen, null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(stringResource(R.string.workflow_manga_select_cbz))
+                }
+                OutlinedButton(onClick = onBrowseAllFiles, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
+                    Icon(Icons.Default.Folder, null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.workflow_manga_browse_all_files))
                 }
                 OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
                     Icon(Icons.Default.Settings, null)
@@ -1625,6 +1651,23 @@ private data class WorkflowMediaInput(
     val name: String,
     val mimeType: String?
 )
+
+internal fun workflowIndexForMediaTranslationKind(kind: String?): Int? =
+    when (kind) {
+        MEDIA_TRANSLATION_WORKFLOW_KIND_MEDIA -> 4
+        MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE -> 5
+        else -> null
+    }
+
+internal fun mediaTranslationStateForWorkflow(
+    state: MediaTranslationWorkflowState,
+    expectedKind: String
+): MediaTranslationWorkflowState =
+    if (state.workflowKind == expectedKind || (state.workflowKind == null && !state.isRunning && state.finalOutputPath == null && state.errorMessage == null)) {
+        state
+    } else {
+        MediaTranslationWorkflowState()
+    }
 
 private data class WorkflowOutputGalleryFile(
     val file: File,
@@ -2250,11 +2293,11 @@ private fun scanWorkflowOutputGallery(context: Context, folderName: String): Lis
             if (files.isEmpty()) return@mapNotNull null
             val primary = files.firstOrNull { it.mimeType.startsWith("video/") }
                 ?: files.firstOrNull { it.mimeType.startsWith("audio/") }
-                ?: files.firstOrNull { it.file.name == "translated.srt" }
+                ?: files.firstOrNull { workflowGalleryIsTranslatedSubtitleFileName(it.file.name) }
                 ?: files.firstOrNull()
             val metadata = readWorkflowGalleryMetadata(directory)
-            val translatedSrt = files.firstOrNull { it.file.name == "translated.srt" }?.file
-            val originalSrt = files.firstOrNull { it.file.name == "original.srt" }?.file
+            val translatedSrt = files.firstOrNull { workflowGalleryIsTranslatedSubtitleFileName(it.file.name) }?.file
+            val originalSrt = files.firstOrNull { workflowGalleryIsOriginalSubtitleFileName(it.file.name) }?.file
             val segmentCount = metadata?.optInt("segments", 0)?.takeIf { it > 0 }
                 ?: (translatedSrt ?: originalSrt)?.let(::countWorkflowSrtSegments)
                 ?: 0
@@ -2312,24 +2355,30 @@ private fun workflowGalleryFilePriority(file: File): Int =
     when (file.extension.lowercase(Locale.US)) {
         "mp4" -> 5
         "m4a", "mp3", "wav" -> 4
-        "srt" -> if (file.name == "translated.srt") 3 else 2
+        "srt" -> if (workflowGalleryIsTranslatedSubtitleFileName(file.name)) 3 else 2
         "txt" -> 1
         else -> 0
     }
 
 private fun workflowGalleryFileKind(context: Context, file: File): String =
-    when (file.name) {
-        "workflow_metadata.json" -> context.getString(R.string.workflow_output_gallery_file_metadata)
-        "original.srt" -> context.getString(R.string.workflow_output_gallery_file_original_srt)
-        "translated.srt" -> context.getString(R.string.workflow_output_gallery_file_translated_srt)
-        "original_transcript.txt" -> context.getString(R.string.workflow_output_gallery_file_original_text)
-        "translated_audio.m4a" -> context.getString(R.string.workflow_output_gallery_file_translated_audio)
+    when {
+        file.name == "workflow_metadata.json" -> context.getString(R.string.workflow_output_gallery_file_metadata)
+        workflowGalleryIsOriginalSubtitleFileName(file.name) -> context.getString(R.string.workflow_output_gallery_file_original_srt)
+        workflowGalleryIsTranslatedSubtitleFileName(file.name) -> context.getString(R.string.workflow_output_gallery_file_translated_srt)
+        file.name == "original_transcript.txt" -> context.getString(R.string.workflow_output_gallery_file_original_text)
+        file.name == "translated_audio.m4a" -> context.getString(R.string.workflow_output_gallery_file_translated_audio)
         else -> when (file.extension.lowercase(Locale.US)) {
             "mp4" -> context.getString(R.string.workflow_output_gallery_file_final_video)
             "m4a", "mp3", "wav" -> context.getString(R.string.workflow_output_gallery_file_final_audio)
             else -> context.getString(R.string.workflow_output_gallery_file_output)
         }
     }
+
+internal fun workflowGalleryIsOriginalSubtitleFileName(fileName: String): Boolean =
+    fileName == "original.srt" || (fileName.startsWith("original_") && fileName.endsWith(".srt", ignoreCase = true))
+
+internal fun workflowGalleryIsTranslatedSubtitleFileName(fileName: String): Boolean =
+    fileName == "translated.srt" || (fileName.startsWith("translated_") && fileName.endsWith(".srt", ignoreCase = true))
 
 private fun workflowGalleryDate(modifiedTimeMillis: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(modifiedTimeMillis))
@@ -2442,7 +2491,8 @@ private fun workflowResumeTranslationOverride(
     timeoutMinutes: Int,
     targetLanguage: String,
     translationContextEnabled: Boolean,
-    translationContextLines: Int
+    translationContextLines: Int,
+    skipFailedTranslationLines: Boolean
 ): MediaTranslationResumeTranslationOverride =
     MediaTranslationResumeTranslationOverride(
         targetLanguage = targetLanguage,
@@ -2471,7 +2521,8 @@ private fun workflowResumeTranslationOverride(
             mergePrompt = null
         ),
         translationContextEnabled = translationContextEnabled,
-        translationContextLines = translationContextLines.coerceIn(0, 10)
+        translationContextLines = translationContextLines.coerceIn(0, 10),
+        skipFailedTranslationLines = skipFailedTranslationLines
     )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2525,6 +2576,8 @@ private fun SubtitleTranslationWorkflowContent(
     onTranslationContextEnabledChange: (Boolean) -> Unit,
     translationContextLines: Int,
     onTranslationContextLinesChange: (Int) -> Unit,
+    skipFailedTranslationLines: Boolean,
+    onSkipFailedTranslationLinesChange: (Boolean) -> Unit,
     burnIntoVideo: Boolean,
     onBurnIntoVideoChange: (Boolean) -> Unit,
     fontSize: Int,
@@ -2573,7 +2626,10 @@ private fun SubtitleTranslationWorkflowContent(
             onVideoSelected(uri, tempFile.absolutePath, displayName)
         } catch (error: Exception) {
             MediaTranslationWorkflowStateHolder.update {
-                it.copy(errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic)))
+                it.copy(
+                    workflowKind = MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE,
+                    errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic))
+                )
             }
         }
     }
@@ -2611,7 +2667,10 @@ private fun SubtitleTranslationWorkflowContent(
             onSubtitleSelected(uri, tempFile.absolutePath, displayName)
         } catch (error: Exception) {
             MediaTranslationWorkflowStateHolder.update {
-                it.copy(errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic)))
+                it.copy(
+                    workflowKind = MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE,
+                    errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic))
+                )
             }
         }
     }
@@ -2650,7 +2709,8 @@ private fun SubtitleTranslationWorkflowContent(
                             timeoutMinutes = timeoutMinutes,
                             targetLanguage = targetLanguage,
                             translationContextEnabled = translationContextEnabled,
-                            translationContextLines = translationContextLines
+                            translationContextLines = translationContextLines,
+                            skipFailedTranslationLines = skipFailedTranslationLines
                         )
                     } else null
                 )
@@ -2708,6 +2768,7 @@ private fun SubtitleTranslationWorkflowContent(
                                             onTranslateSubtitlesChange(json.optBoolean("translateSubtitles", translateSubtitles))
                                             onTranslationContextEnabledChange(json.optBoolean("translationContextEnabled", translationContextEnabled))
                                             onTranslationContextLinesChange(json.optInt("translationContextLines", translationContextLines).coerceIn(0, 10))
+                                            onSkipFailedTranslationLinesChange(json.optBoolean("skipFailedTranslationLines", skipFailedTranslationLines))
                                             onBurnIntoVideoChange(json.optBoolean("burnIntoVideo", burnIntoVideo))
                                             onFontSizeChange(json.optInt("fontSize", fontSize))
                                             onAlignmentChange(json.optInt("alignment", alignment))
@@ -2769,6 +2830,7 @@ private fun SubtitleTranslationWorkflowContent(
                                 put("translateSubtitles", translateSubtitles)
                                 put("translationContextEnabled", translationContextEnabled)
                                 put("translationContextLines", translationContextLines)
+                                put("skipFailedTranslationLines", skipFailedTranslationLines)
                                 put("burnIntoVideo", burnIntoVideo)
                                 put("fontSize", fontSize)
                                 put("alignment", alignment)
@@ -2854,6 +2916,8 @@ private fun SubtitleTranslationWorkflowContent(
                 onTranslationContextEnabledChange = onTranslationContextEnabledChange,
                 translationContextLines = translationContextLines,
                 onTranslationContextLinesChange = onTranslationContextLinesChange,
+                skipFailedTranslationLines = skipFailedTranslationLines,
+                onSkipFailedTranslationLinesChange = onSkipFailedTranslationLinesChange,
                 onMetadataLoaded = onMetadataLoaded
             )
         }
@@ -2903,7 +2967,8 @@ private fun SubtitleTranslationWorkflowContent(
                     timeoutMinutes = timeoutMinutes,
                     targetLanguage = targetLanguage,
                     translationContextEnabled = translationContextEnabled,
-                    translationContextLines = translationContextLines
+                    translationContextLines = translationContextLines,
+                    skipFailedTranslationLines = skipFailedTranslationLines
                 )
             } else null
         )
@@ -3218,6 +3283,8 @@ private fun MediaDubbingTranslationWorkflowContent(
     onTranslationContextEnabledChange: (Boolean) -> Unit,
     translationContextLines: Int,
     onTranslationContextLinesChange: (Int) -> Unit,
+    skipFailedTranslationLines: Boolean,
+    onSkipFailedTranslationLinesChange: (Boolean) -> Unit,
     ttsModelPath: String?,
     ttsModelName: String?,
     onTtsModelChange: (String?, String?) -> Unit,
@@ -3294,7 +3361,10 @@ private fun MediaDubbingTranslationWorkflowContent(
             onMediaSelected(uri, tempFile.absolutePath, displayName, mimeType)
         } catch (error: Exception) {
             MediaTranslationWorkflowStateHolder.update {
-                it.copy(errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic)))
+                it.copy(
+                    workflowKind = MEDIA_TRANSLATION_WORKFLOW_KIND_MEDIA,
+                    errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic))
+                )
             }
         }
     }
@@ -3352,7 +3422,8 @@ private fun MediaDubbingTranslationWorkflowContent(
                         timeoutMinutes = timeoutMinutes,
                         targetLanguage = targetLanguage,
                         translationContextEnabled = translationContextEnabled,
-                        translationContextLines = translationContextLines
+                        translationContextLines = translationContextLines,
+                        skipFailedTranslationLines = skipFailedTranslationLines
                     )
                 )
             }
@@ -3408,6 +3479,7 @@ private fun MediaDubbingTranslationWorkflowContent(
                                             onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
                                             onTranslationContextEnabledChange(json.optBoolean("translationContextEnabled", translationContextEnabled))
                                             onTranslationContextLinesChange(json.optInt("translationContextLines", translationContextLines).coerceIn(0, 10))
+                                            onSkipFailedTranslationLinesChange(json.optBoolean("skipFailedTranslationLines", skipFailedTranslationLines))
                                             onTtsModelChange(
                                                 json.optString("ttsModelPath").takeIf { it.isNotBlank() },
                                                 json.optString("ttsModelName").takeIf { it.isNotBlank() }
@@ -3475,6 +3547,7 @@ private fun MediaDubbingTranslationWorkflowContent(
                                 put("targetLanguage", targetLanguage)
                                 put("translationContextEnabled", translationContextEnabled)
                                 put("translationContextLines", translationContextLines)
+                                put("skipFailedTranslationLines", skipFailedTranslationLines)
                                 put("ttsModelPath", ttsModelPath ?: "")
                                 put("ttsModelName", ttsModelName ?: "")
                                 put("ttsVoice", ttsVoice ?: "")
@@ -3549,6 +3622,8 @@ private fun MediaDubbingTranslationWorkflowContent(
             onTranslationContextEnabledChange = onTranslationContextEnabledChange,
             translationContextLines = translationContextLines,
             onTranslationContextLinesChange = onTranslationContextLinesChange,
+            skipFailedTranslationLines = skipFailedTranslationLines,
+            onSkipFailedTranslationLinesChange = onSkipFailedTranslationLinesChange,
             onMetadataLoaded = onMetadataLoaded
         )
 
@@ -3600,7 +3675,8 @@ private fun MediaDubbingTranslationWorkflowContent(
                 timeoutMinutes = timeoutMinutes,
                 targetLanguage = targetLanguage,
                 translationContextEnabled = translationContextEnabled,
-                translationContextLines = translationContextLines
+                translationContextLines = translationContextLines,
+                skipFailedTranslationLines = skipFailedTranslationLines
             )
         )
 
@@ -3788,6 +3864,8 @@ private fun MediaTranslationBackendCard(
     onTranslationContextEnabledChange: (Boolean) -> Unit,
     translationContextLines: Int,
     onTranslationContextLinesChange: (Int) -> Unit,
+    skipFailedTranslationLines: Boolean,
+    onSkipFailedTranslationLinesChange: (Boolean) -> Unit,
     onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
 ) {
     val context = LocalContext.current
@@ -3836,6 +3914,29 @@ private fun MediaTranslationBackendCard(
                 suffix = { Text(stringResource(R.string.workflow_media_translate_context_lines_suffix)) },
                 modifier = Modifier.fillMaxWidth()
             )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.workflow_media_translate_skip_failed_lines),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        stringResource(R.string.workflow_media_translate_skip_failed_lines_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = skipFailedTranslationLines,
+                    onCheckedChange = onSkipFailedTranslationLinesChange
+                )
+            }
             val promptPreview = remember(targetLanguage, translationContextEnabled, translationContextLines) {
                 mediaTranslationBuildLineTranslationPrompt(
                     sourceLanguage = "auto",
@@ -4108,6 +4209,13 @@ private fun MediaTranslationRuntimeCards(state: MediaTranslationWorkflowState) {
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
             Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(stringResource(R.string.workflow_media_translate_results), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                if (state.skippedTranslationLineCount > 0) {
+                    Text(
+                        stringResource(R.string.workflow_media_translate_skipped_lines_summary, state.skippedTranslationLineCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_final_output), it)
                 state.translatedAudioPath?.let { path -> WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_audio_output), path) }
                 state.originalSrtPath?.let { path -> WorkflowOutputPathRow(stringResource(R.string.workflow_media_translate_original_srt), path) }
@@ -4266,6 +4374,9 @@ private fun Txt2ImgUpscaleWorkflowContent(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    val settingsRepo = remember { SettingsRepository(context) }
+    val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
+    val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
 
     // Models
     val sdCheckpoints by db.modelDao().getModelsByType(ModelType.SD_CHECKPOINT).collectAsState(initial = emptyList())
@@ -4284,6 +4395,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
         model.isSdImageMainModel()
     }
     val selectedGenerationModel = allGenerationModels.firstOrNull { it.path == modelPath }
+    val selectedUpscalerModel = upscalerModels.firstOrNull { it.path == upscalerPath }
     val selectedGenerationFamily = selectedGenerationModel?.resolvedSdFamily()
     val selectedGenerationFamilyEnum = selectedGenerationFamily?.first
     val selectedGenerationVariant = selectedGenerationFamily?.second
@@ -4410,7 +4522,10 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 t5xxlPath = t5xxlPath,
                 llmPath = llmPath,
                 llmVisionPath = llmVisionPath,
-                photoMakerPath = photoMakerPath
+                photoMakerPath = photoMakerPath,
+                sdParamsBackendMode = selectedGenerationModel?.sdParamsBackendMode ?: "auto",
+                sdRuntimeBackendMode = selectedGenerationModel?.sdRuntimeBackendMode ?: "auto",
+                maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
             )
 
             val upscaleConfig = SDConfig(
@@ -4421,7 +4536,10 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 initImage = txt2imgFile.absolutePath,
                 upscaleModel = upscalerPath,
                 upscaleRepeats = upscaleRepeats,
-                threads = upscaleThreads
+                threads = upscaleThreads,
+                sdParamsBackendMode = selectedUpscalerModel?.sdParamsBackendMode ?: "auto",
+                sdRuntimeBackendMode = selectedUpscalerModel?.sdRuntimeBackendMode ?: "auto",
+                maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
             )
 
             val workflowConfig = SDWorkflowConfig(

@@ -619,6 +619,40 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putString("stable_diffusion_acceleration_mode", normalized).apply()
         _stableDiffusionAccelerationMode.value = normalized
     }
+
+    private val _llmNativeBinarySelection = MutableStateFlow(
+        normalizeLlmNativeBinarySelection(
+            prefs.getString(
+                "llm_native_binary_selection",
+                legacyLlmBinarySelectionDefault(prefs.getString("llm_acceleration_mode", ACCELERATION_AUTO))
+            )
+        )
+    )
+    val llmNativeBinarySelection = _llmNativeBinarySelection.asStateFlow()
+
+    fun setLlmNativeBinarySelection(selection: String) {
+        val normalized = normalizeLlmNativeBinarySelection(selection)
+        prefs.edit().putString("llm_native_binary_selection", normalized).apply()
+        _llmNativeBinarySelection.value = normalized
+    }
+
+    private val _stableDiffusionNativeBinarySelection = MutableStateFlow(
+        normalizeStableDiffusionNativeBinarySelection(
+            prefs.getString(
+                "stable_diffusion_native_binary_selection",
+                legacyStableDiffusionBinarySelectionDefault(
+                    prefs.getString("stable_diffusion_acceleration_mode", ACCELERATION_AUTO)
+                )
+            )
+        )
+    )
+    val stableDiffusionNativeBinarySelection = _stableDiffusionNativeBinarySelection.asStateFlow()
+
+    fun setStableDiffusionNativeBinarySelection(selection: String) {
+        val normalized = normalizeStableDiffusionNativeBinarySelection(selection)
+        prefs.edit().putString("stable_diffusion_native_binary_selection", normalized).apply()
+        _stableDiffusionNativeBinarySelection.value = normalized
+    }
     
     // Context Size
     private val _contextSize = MutableStateFlow(prefs.getInt("context_size", AIConstants.Defaults.CONTEXT_SIZE_LLM))
@@ -1528,6 +1562,16 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putInt("server_kv_cache_reuse", tokens).apply()
         _serverKvCacheReuse.value = tokens
     }
+
+    private val _llamaKvOffloadMode = MutableStateFlow(
+        normalizeLlamaKvOffloadMode(prefs.getString("llama_kv_offload_mode", LLAMA_KV_OFFLOAD_AUTO))
+    )
+    val llamaKvOffloadMode = _llamaKvOffloadMode.asStateFlow()
+    fun setLlamaKvOffloadMode(mode: String) {
+        val normalized = normalizeLlamaKvOffloadMode(mode)
+        prefs.edit().putString("llama_kv_offload_mode", normalized).apply()
+        _llamaKvOffloadMode.value = normalized
+    }
     
     // ========== Speculative Decoding Settings ==========
     
@@ -1587,6 +1631,22 @@ class SettingsRepository(private val context: Context) {
         _draftPMin.value = normalized
     }
 
+    private val _draftThreads = MutableStateFlow(prefs.getInt("draft_threads", 4).coerceIn(1, 16))
+    val draftThreads = _draftThreads.asStateFlow()
+    fun setDraftThreads(threads: Int) {
+        val normalized = threads.coerceIn(1, 16)
+        prefs.edit().putInt("draft_threads", normalized).apply()
+        _draftThreads.value = normalized
+    }
+
+    private val _draftThreadsBatch = MutableStateFlow(prefs.getInt("draft_threads_batch", 4).coerceIn(1, 16))
+    val draftThreadsBatch = _draftThreadsBatch.asStateFlow()
+    fun setDraftThreadsBatch(threads: Int) {
+        val normalized = threads.coerceIn(1, 16)
+        prefs.edit().putInt("draft_threads_batch", normalized).apply()
+        _draftThreadsBatch.value = normalized
+    }
+
     // Enable embedded MTP decoding for llama.cpp models with MTP heads
     private val _mtpDecodingEnabled = MutableStateFlow(prefs.getBoolean("mtp_decoding_enabled", false))
     val mtpDecodingEnabled = _mtpDecodingEnabled.asStateFlow()
@@ -1624,6 +1684,16 @@ class SettingsRepository(private val context: Context) {
     fun setMtpUseDraftModel(enabled: Boolean) {
         prefs.edit().putBoolean("mtp_use_draft_model", enabled).apply()
         _mtpUseDraftModel.value = enabled
+    }
+
+    private val _llamaDraftDeviceMode = MutableStateFlow(
+        normalizeLlamaDraftDeviceMode(prefs.getString("llama_draft_device_mode", LLAMA_DRAFT_DEVICE_AUTO))
+    )
+    val llamaDraftDeviceMode = _llamaDraftDeviceMode.asStateFlow()
+    fun setLlamaDraftDeviceMode(mode: String) {
+        val normalized = normalizeLlamaDraftDeviceMode(mode)
+        prefs.edit().putString("llama_draft_device_mode", normalized).apply()
+        _llamaDraftDeviceMode.value = normalized
     }
 
     private val _ngramModNMatch = MutableStateFlow(prefs.getInt("spec_ngram_mod_n_match", 24).coerceAtLeast(1))
@@ -1798,6 +1868,21 @@ class SettingsRepository(private val context: Context) {
     }
 
     // ========== Stable Diffusion Memory Settings ==========
+
+    private val _sdMaxCpuRamEnabled = MutableStateFlow(prefs.getBoolean("sd_max_cpu_ram_enabled", false))
+    val sdMaxCpuRamEnabled = _sdMaxCpuRamEnabled.asStateFlow()
+    fun setSdMaxCpuRamEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("sd_max_cpu_ram_enabled", enabled).apply()
+        _sdMaxCpuRamEnabled.value = enabled
+    }
+
+    private val _sdMaxCpuRamGiB = MutableStateFlow(prefs.getString("sd_max_cpu_ram_gib", "") ?: "")
+    val sdMaxCpuRamGiB = _sdMaxCpuRamGiB.asStateFlow()
+    fun setSdMaxCpuRamGiB(value: String) {
+        val normalized = value.trim().take(12)
+        prefs.edit().putString("sd_max_cpu_ram_gib", normalized).apply()
+        _sdMaxCpuRamGiB.value = normalized
+    }
     
     private val _sdVaeTiling = MutableStateFlow(prefs.getBoolean("sd_vae_tiling", false))
     val sdVaeTiling = _sdVaeTiling.asStateFlow()
@@ -3132,6 +3217,19 @@ class SettingsRepository(private val context: Context) {
         const val ACCELERATION_CPU = "cpu"
         const val ACCELERATION_GPU = "gpu"
         const val ACCELERATION_NPU = "npu"
+        const val NATIVE_BINARY_AUTO = "auto"
+        const val NATIVE_BINARY_CPU_AUTO = "cpu_auto"
+        const val NATIVE_BINARY_CPU_BASELINE = "cpu_baseline"
+        const val NATIVE_BINARY_CPU_DOTPROD = "cpu_dotprod"
+        const val NATIVE_BINARY_CPU_ARMV9 = "cpu_armv9"
+        const val NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL = "llm_snapdragon_opencl"
+        const val NATIVE_BINARY_SD_SNAPDRAGON_VULKAN = "sd_snapdragon_vulkan"
+        const val LLAMA_KV_OFFLOAD_AUTO = "auto"
+        const val LLAMA_KV_OFFLOAD_ACCELERATOR = "accelerator"
+        const val LLAMA_KV_OFFLOAD_CPU = "cpu"
+        const val LLAMA_DRAFT_DEVICE_AUTO = "auto"
+        const val LLAMA_DRAFT_DEVICE_ACCELERATOR = "accelerator"
+        const val LLAMA_DRAFT_DEVICE_CPU = "cpu"
 
         fun normalizeKnowledgeBaseChunkSize(size: Int): Int =
             size.coerceIn(KB_CHUNK_SIZE_RANGE)
@@ -3250,6 +3348,140 @@ class SettingsRepository(private val context: Context) {
         }
 
         fun normalizeStableDiffusionAccelerationMode(@Suppress("UNUSED_PARAMETER") mode: String?): String = ACCELERATION_CPU
+
+        fun normalizeLlamaKvOffloadMode(mode: String?): String {
+            val normalized = mode
+                ?.trim()
+                ?.lowercase(Locale.US)
+                ?.replace('_', '-')
+                ?: return LLAMA_KV_OFFLOAD_AUTO
+            return when (normalized) {
+                LLAMA_KV_OFFLOAD_ACCELERATOR,
+                "gpu",
+                "on",
+                "enabled" -> LLAMA_KV_OFFLOAD_ACCELERATOR
+                LLAMA_KV_OFFLOAD_CPU,
+                "off",
+                "disabled",
+                "no-kv-offload" -> LLAMA_KV_OFFLOAD_CPU
+                else -> LLAMA_KV_OFFLOAD_AUTO
+            }
+        }
+
+        fun normalizeLlamaDraftDeviceMode(mode: String?): String {
+            val normalized = mode
+                ?.trim()
+                ?.lowercase(Locale.US)
+                ?.replace('_', '-')
+                ?: return LLAMA_DRAFT_DEVICE_AUTO
+            return when (normalized) {
+                LLAMA_DRAFT_DEVICE_ACCELERATOR,
+                "gpu",
+                "opencl",
+                "gpuopencl" -> LLAMA_DRAFT_DEVICE_ACCELERATOR
+                LLAMA_DRAFT_DEVICE_CPU,
+                "none",
+                "off",
+                "disabled" -> LLAMA_DRAFT_DEVICE_CPU
+                else -> LLAMA_DRAFT_DEVICE_AUTO
+            }
+        }
+
+        fun normalizeLlmNativeBinarySelection(selection: String?): String {
+            val normalized = normalizeNativeBinaryToken(selection) ?: return NATIVE_BINARY_AUTO
+
+            return when (normalized) {
+                NATIVE_BINARY_AUTO,
+                "automatic" -> NATIVE_BINARY_AUTO
+                NATIVE_BINARY_CPU_AUTO,
+                "cpu" -> NATIVE_BINARY_CPU_AUTO
+                NATIVE_BINARY_CPU_BASELINE,
+                "baseline",
+                "libllama_server_baseline",
+                "libllama_server_baseline_so" -> NATIVE_BINARY_CPU_BASELINE
+                NATIVE_BINARY_CPU_DOTPROD,
+                "dotprod",
+                "libllama_server_dotprod",
+                "libllama_server_dotprod_so" -> NATIVE_BINARY_CPU_DOTPROD
+                NATIVE_BINARY_CPU_ARMV9,
+                "armv9",
+                "libllama_server_armv9",
+                "libllama_server_armv9_so" -> NATIVE_BINARY_CPU_ARMV9
+                NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL,
+                "snapdragon_opencl",
+                "opencl",
+                "gpu",
+                "adreno",
+                "libllama_server_snapdragon_opencl",
+                "libllama_server_snapdragon_opencl_so" -> NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL
+                "vulkan",
+                "hexagon",
+                "htp",
+                "dsp",
+                "qnn",
+                "npu" -> NATIVE_BINARY_AUTO
+                else -> NATIVE_BINARY_AUTO
+            }
+        }
+
+        fun normalizeStableDiffusionNativeBinarySelection(selection: String?): String {
+            val normalized = normalizeNativeBinaryToken(selection) ?: return NATIVE_BINARY_AUTO
+
+            return when (normalized) {
+                NATIVE_BINARY_AUTO,
+                "automatic" -> NATIVE_BINARY_AUTO
+                NATIVE_BINARY_CPU_AUTO,
+                "cpu" -> NATIVE_BINARY_CPU_AUTO
+                NATIVE_BINARY_CPU_BASELINE,
+                "baseline",
+                "libsd_baseline",
+                "libsd_baseline_so" -> NATIVE_BINARY_CPU_BASELINE
+                NATIVE_BINARY_CPU_DOTPROD,
+                "dotprod",
+                "libsd_dotprod",
+                "libsd_dotprod_so" -> NATIVE_BINARY_CPU_DOTPROD
+                NATIVE_BINARY_CPU_ARMV9,
+                "armv9",
+                "libsd_armv9",
+                "libsd_armv9_so" -> NATIVE_BINARY_CPU_ARMV9
+                NATIVE_BINARY_SD_SNAPDRAGON_VULKAN,
+                "snapdragon_vulkan",
+                "vulkan",
+                "gpu",
+                "libsd_snapdragon_vulkan",
+                "libsd_snapdragon_vulkan_so" -> NATIVE_BINARY_SD_SNAPDRAGON_VULKAN
+                "opencl",
+                "adreno",
+                "hexagon",
+                "htp",
+                "dsp",
+                "qnn",
+                "npu" -> NATIVE_BINARY_AUTO
+                else -> NATIVE_BINARY_AUTO
+            }
+        }
+
+        private fun normalizeNativeBinaryToken(selection: String?): String? =
+            selection
+                ?.trim()
+                ?.lowercase(Locale.US)
+                ?.replace('-', '_')
+                ?.replace('.', '_')
+                ?.takeIf { it.isNotBlank() }
+
+        private fun legacyLlmBinarySelectionDefault(accelerationMode: String?): String =
+            when (normalizeAccelerationMode(accelerationMode)) {
+                ACCELERATION_CPU -> NATIVE_BINARY_CPU_AUTO
+                ACCELERATION_GPU -> NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL
+                else -> NATIVE_BINARY_AUTO
+            }
+
+        private fun legacyStableDiffusionBinarySelectionDefault(accelerationMode: String?): String =
+            when (normalizeAccelerationMode(accelerationMode)) {
+                ACCELERATION_CPU -> NATIVE_BINARY_CPU_AUTO
+                ACCELERATION_GPU -> NATIVE_BINARY_SD_SNAPDRAGON_VULKAN
+                else -> NATIVE_BINARY_AUTO
+            }
 
         fun isLlamaServerBackend(backend: String?): Boolean =
             normalizeOllamaOrLlamaBackend(backend) == PDF_BACKEND_LLAMA_SERVER

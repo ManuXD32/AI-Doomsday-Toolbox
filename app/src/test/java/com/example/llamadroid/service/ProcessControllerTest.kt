@@ -38,6 +38,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-draft-n-max", "3")
         assertArgValue(args, "--spec-draft-n-min", "0")
         assertArgValue(args, "--spec-draft-p-min", "0.00")
+        assertArgValue(args, "--spec-draft-threads", "4")
+        assertArgValue(args, "--spec-draft-threads-batch", "4")
         assertFalse(args.contains("--model-draft"))
         assertFalse(args.contains("--draft-p-min"))
         assertFalse(args.contains("--draft-max"))
@@ -67,6 +69,66 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `accelerator ggml backend path resolves to a file only`() {
+        val controller = ProcessController()
+        val tempDir = createTempDir(prefix = "ggml-backend-test")
+        val libDir = File(tempDir, "linked").apply { mkdirs() }
+        val nativeDir = File(tempDir, "native").apply { mkdirs() }
+        val backend = File(nativeDir, "libggml-opencl.so").apply { writeText("test") }
+
+        val resolved = controller.resolveGgmlBackendPathForAccelerator(nativeDir, libDir)
+
+        assertEquals(backend.absolutePath, resolved)
+    }
+
+    @Test
+    fun `accelerator ggml backend path ignores directories`() {
+        val controller = ProcessController()
+        val tempDir = createTempDir(prefix = "ggml-backend-test")
+        val libDir = File(tempDir, "linked").apply { mkdirs() }
+        val nativeDir = File(tempDir, "native").apply { mkdirs() }
+        File(nativeDir, "libggml-opencl.so").mkdirs()
+
+        val resolved = controller.resolveGgmlBackendPathForAccelerator(nativeDir, libDir)
+
+        assertEquals(null, resolved)
+    }
+
+    @Test
+    fun `generated command can keep KV cache on CPU`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                kvCacheEnabled = true,
+                kvOffloadMode = LlamaKvOffloadMode.CPU.value
+            )
+        )
+
+        assertTrue(args.contains("--no-kv-offload"))
+        assertFalse(args.contains("--kv-offload"))
+    }
+
+    @Test
+    fun `generated command can explicitly enable KV offload`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                kvCacheEnabled = true,
+                kvOffloadMode = LlamaKvOffloadMode.ACCELERATOR.value
+            )
+        )
+
+        assertTrue(args.contains("--kv-offload"))
+        assertFalse(args.contains("--no-kv-offload"))
+    }
+
+    @Test
     fun `speculative command template placeholder uses current speculative decoding flags`() {
         val controller = ProcessController()
 
@@ -81,6 +143,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-draft-n-max", "3")
         assertArgValue(args, "--spec-draft-n-min", "0")
         assertArgValue(args, "--spec-draft-p-min", "0.00")
+        assertArgValue(args, "--spec-draft-threads", "4")
+        assertArgValue(args, "--spec-draft-threads-batch", "4")
         assertFalse(args.contains("--model-draft"))
         assertFalse(args.contains("--draft-p-min"))
         assertFalse(args.contains("--draft-max"))
@@ -108,7 +172,62 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-draft-p-min", "0.25")
         assertArgValue(args, "--parallel", "1")
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
         assertFalse(args.contains("--draft-p-min"))
+    }
+
+    @Test
+    fun `MTP command can force CPU draft placement`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/mtp.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.CPU.value
+            )
+        )
+
+        assertArgValue(args, "--device-draft", "none")
+        assertArgValue(args, "--gpu-layers-draft", "0")
+    }
+
+    @Test
+    fun `MTP command can force OpenCL draft placement`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/mtp.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.ACCELERATOR.value
+            )
+        )
+
+        assertArgValue(args, "--device-draft", "GPUOpenCL")
+        assertArgValue(args, "--gpu-layers-draft", "all")
+    }
+
+    @Test
+    fun `custom draft placement flags suppress generated draft placement`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/mtp.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.CPU.value,
+                customFlags = "--device-draft GPUOpenCL --gpu-layers-draft all"
+            )
+        )
+
+        assertEquals(1, args.count { it == "--device-draft" })
+        assertArgValue(args, "--device-draft", "GPUOpenCL")
+        assertArgValue(args, "--gpu-layers-draft", "all")
     }
 
     @Test
@@ -121,6 +240,8 @@ class ProcessControllerTest {
                 modelPath = "/models/mtp.gguf",
                 draftModelPath = "/models/mtp-draft.gguf",
                 speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftThreads = 6,
+                draftThreadsBatch = 5,
                 mtpDraftMax = 5,
                 mtpDraftMin = 1,
                 mtpDraftPMin = 0.15f
@@ -132,6 +253,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-draft-n-max", "5")
         assertArgValue(args, "--spec-draft-n-min", "1")
         assertArgValue(args, "--spec-draft-p-min", "0.15")
+        assertArgValue(args, "--spec-draft-threads", "6")
+        assertArgValue(args, "--spec-draft-threads-batch", "5")
     }
 
     @Test
@@ -145,6 +268,8 @@ class ProcessControllerTest {
                 draftModelPath = "/models/dflash-draft.gguf",
                 speculativeMode = LlamaSpeculativeMode.DRAFT_DFLASH,
                 draftMax = 15,
+                draftThreads = 3,
+                draftThreadsBatch = 2,
                 temperature = 0.7f
             )
         )
@@ -152,6 +277,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-type", "draft-dflash")
         assertArgValue(args, "-md", "/models/dflash-draft.gguf")
         assertArgValue(args, "--spec-draft-n-max", "15")
+        assertArgValue(args, "--spec-draft-threads", "3")
+        assertArgValue(args, "--spec-draft-threads-batch", "2")
         assertArgValue(args, "--temp", "0.7")
         assertFalse(args.contains("--spec-draft-model"))
         assertFalse(args.contains("--spec-draft-n-min"))
@@ -172,6 +299,8 @@ class ProcessControllerTest {
 
         assertFalse(args.contains("--spec-type"))
         assertFalse(args.contains("-md"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -196,6 +325,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-ngram-mod-n-match", "24")
         assertFalse(args.contains("-md"))
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -220,6 +351,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-ngram-simple-min-hits", "1")
         assertFalse(args.contains("-md"))
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -244,6 +377,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-ngram-map-k-min-hits", "2")
         assertFalse(args.contains("-md"))
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -267,6 +402,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-ngram-map-k4v-min-hits", "3")
         assertFalse(args.contains("-md"))
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -285,6 +422,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-type", "ngram-cache")
         assertFalse(args.contains("-md"))
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -325,6 +464,8 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-draft-n-min", "1")
         assertArgValue(args, "--spec-draft-p-min", "0.00")
         assertFalse(args.contains("--spec-draft-model"))
+        assertFalse(args.contains("--spec-draft-threads"))
+        assertFalse(args.contains("--spec-draft-threads-batch"))
     }
 
     @Test
@@ -337,6 +478,9 @@ class ProcessControllerTest {
             config = LlamaConfig(
                 modelPath = "/models/mtp.gguf",
                 speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftModelPath = "/models/mtp-draft.gguf",
+                draftThreads = 8,
+                draftThreadsBatch = 7,
                 mtpDraftMax = 5,
                 mtpDraftMin = 2,
                 mtpDraftPMin = 0.10f
@@ -347,7 +491,9 @@ class ProcessControllerTest {
         assertArgValue(args, "--spec-draft-n-max", "5")
         assertArgValue(args, "--spec-draft-n-min", "2")
         assertArgValue(args, "--spec-draft-p-min", "0.10")
-        assertFalse(args.contains("--spec-draft-model"))
+        assertArgValue(args, "--spec-draft-model", "/models/mtp-draft.gguf")
+        assertArgValue(args, "--spec-draft-threads", "8")
+        assertArgValue(args, "--spec-draft-threads-batch", "7")
     }
 
     @Test
