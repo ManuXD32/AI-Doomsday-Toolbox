@@ -2597,6 +2597,13 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         @Volatile private var lastProgressSignature = ""
         private val recentCompactionEvents = ArrayDeque<PromptCompactionEvent>(4)
         private val promptTokenCalibrationByBackendModel = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        private const val CONTEXT_OVERFLOW_MAX_RETRIES = 1
+        private const val PROMPT_SAFETY_RESERVE_MIN_TOKENS = 1_024
+        private const val PROMPT_SAFETY_RESERVE_PERCENT = 10
+        private val contextOverflowRetriesByEpoch =
+            java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+        private val forceContextCompactionByEpoch =
+            java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicBoolean>()
         private val llamaServerMetadataMutex = Mutex()
         @Volatile
         private var activePromptBackend: String = "ollama"
@@ -2810,6 +2817,181 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 val appContext = com.example.llamadroid.LlamaApplication.instance
                 _statusText.value = idleStatusText(appContext)
             }
+        }
+
+        private data class ContextOverflowInfo(
+            val promptTokens: Int?,
+            val contextTokens: Int?
+        )
+
+        private fun parseContextOverflow(error: Throwable): ContextOverflowInfo? {
+            val combined = buildString {
+                var current: Throwable? = error
+                var depth = 0
+                while (current != null && depth < 8) {
+                    if (isNotEmpty()) append(' ')
+                    append(current.message.orEmpty())
+                    current = current.cause
+                    depth += 1
+                }
+            }
+            val overflowDetected =
+                combined.contains("exceed_context_size_error", ignoreCase = true) ||
+                    combined.contains("exceeds the available context size", ignoreCase = true) ||
+                    (
+                        combined.contains("n_prompt_tokens", ignoreCase = true) &&
+                            combined.contains("n_ctx", ignoreCase = true)
+                        )
+            if (!overflowDetected) return null
+
+            fun firstInteger(vararg patterns: Regex): Int? {
+                patterns.forEach { pattern ->
+                    pattern.find(combined)
+                        ?.groupValues
+                        ?.getOrNull(1)
+                        ?.toIntOrNull()
+                        ?.let { return it }
+                }
+                return null
+            }
+
+            val promptTokens = firstInteger(
+                Regex(
+                    "[\"']?n_prompt_tokens[\"']?\\s*:\\s*(\\d+)",
+                    RegexOption.IGNORE_CASE
+                ),
+                Regex(
+                    "request\\s*\\((\\d+)\\s+tokens\\)",
+                    RegexOption.IGNORE_CASE
+                )
+            )
+            val contextTokens = firstInteger(
+                Regex(
+                    "[\"']?n_ctx[\"']?\\s*:\\s*(\\d+)",
+                    RegexOption.IGNORE_CASE
+                ),
+                Regex(
+                    "available context size\\s*\\((\\d+)\\s+tokens\\)",
+                    RegexOption.IGNORE_CASE
+                )
+            )
+            return ContextOverflowInfo(promptTokens, contextTokens)
+        }
+
+        private fun promptSafetyReserve(contextSize: Int): Int =
+            maxOf(
+                PROMPT_SAFETY_RESERVE_MIN_TOKENS,
+                contextSize * PROMPT_SAFETY_RESERVE_PERCENT / 100
+            )
+
+        private fun safePromptTokenLimit(contextSize: Int): Int =
+            (contextSize - promptSafetyReserve(contextSize))
+                .coerceAtLeast(MIN_PROMPT_CONTEXT_TOKENS)
+
+        private fun conservativePackingContextSize(
+            contextSize: Int,
+            calibrationFactor: Double
+        ): Int {
+            val safeLimit = safePromptTokenLimit(contextSize)
+            val factor = maxOf(1.0, calibrationFactor)
+            return kotlin.math.floor(safeLimit / factor)
+                .toInt()
+                .coerceIn(MIN_PROMPT_CONTEXT_TOKENS, safeLimit)
+        }
+
+        private fun conservativePromptEstimate(
+            estimatedTokens: Int,
+            calibrationFactor: Double
+        ): Int =
+            kotlin.math.ceil(
+                estimatedTokens * maxOf(1.0, calibrationFactor)
+            ).toInt().coerceAtLeast(estimatedTokens)
+
+        private fun requestContextOverflowRecovery(
+            context: Context,
+            ollamaService: OllamaService,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            agentService: AgentService,
+            runEpoch: Long,
+            estimatedPromptTokens: Int,
+            actualPromptTokens: Int?,
+            serverContextTokens: Int?,
+            reason: String
+        ): Boolean {
+            val retryNumber = contextOverflowRetriesByEpoch
+                .getOrPut(runEpoch) {
+                    java.util.concurrent.atomic.AtomicInteger(0)
+                }
+                .incrementAndGet()
+
+            recordAgentEvent(
+                kind = "context_overflow_detected",
+                summary = "Agent prompt exceeded the safe context budget",
+                details = buildString {
+                    append("retry=$retryNumber")
+                    append(" estimated=$estimatedPromptTokens")
+                    append(" actual=${actualPromptTokens ?: "unknown"}")
+                    append(" serverContext=${serverContextTokens ?: "unknown"}")
+                    append(" reason=${reason.take(120)}")
+                }
+            )
+
+            if (retryNumber > CONTEXT_OVERFLOW_MAX_RETRIES) {
+                blockAutomaticContinuations()
+                val friendlyMessage = buildString {
+                    appendLine(
+                        "The active model context is still too small after automatic compaction."
+                    )
+                    appendLine()
+                    appendLine(
+                        "Your project files, complete saved conversation, TODO state, and project memory are safe."
+                    )
+                    append(
+                        "Increase the model context or run /compact, then ask the agent to continue from the current TODO."
+                    )
+                }
+                addMessage(
+                    ChatMessage(
+                        role = "system",
+                        content = friendlyMessage
+                    )
+                )
+                updateActiveConversationResumeState(
+                    RESUME_STATE_NEEDS_DIRECTION,
+                    friendlyMessage
+                )
+                setStatusText("Context needs attention")
+                return false
+            }
+
+            pendingHardCompaction = true
+            forceContextCompactionByEpoch
+                .getOrPut(runEpoch) {
+                    java.util.concurrent.atomic.AtomicBoolean(false)
+                }
+                .set(true)
+
+            pendingContinuations.clear()
+            allowAutomaticContinuations()
+            updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
+            setStatusText(
+                "Context full · compacting older model context and retrying…"
+            )
+
+            enqueueAgentContinuation(
+                context = context,
+                ollamaService = ollamaService,
+                settingsRepo = settingsRepo,
+                agentService = agentService,
+                reason = "context overflow automatic compaction",
+                recoveryInstruction =
+                    "Resume the same unfinished turn after automatic context compaction. " +
+                        "Preserve the current task, approved plan, durable TODO state, " +
+                        "and any pending tool boundary. Do not restart completed work.",
+                recoveryMode = true,
+                runEpoch = runEpoch
+            )
+            return true
         }
 
         private fun publishLivePromptUsage(
@@ -3604,6 +3786,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             activeRootTurnStorageId = java.util.UUID.randomUUID().toString()
             remoteWorkerRootSessionId = AgentRemoteChatClient.newSessionId()
             noProgressContinuationsByEpoch.clear()
+            contextOverflowRetriesByEpoch.clear()
+            forceContextCompactionByEpoch.clear()
             frozenToolsByTurnBranch.clear()
             frozenSystemPromptByTurnBranch.clear()
             frozenOptionalPromptByTurnBranch.clear()
@@ -5110,6 +5294,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             continuationsByEpoch.clear()
             pendingContinuations.clear()
             pendingDelegations.clear()
+            contextOverflowRetriesByEpoch.clear()
+            forceContextCompactionByEpoch.clear()
             return next
         }
 
@@ -6640,6 +6826,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val currentAgent = _currentAgent.value
             val activeCustom = _activeCustomAgent.value
             val runEpoch = currentRunEpoch()
+            val forceContextCompaction =
+                forceContextCompactionByEpoch[runEpoch]
+                    ?.getAndSet(false) == true
             if (recoveryMode) {
                 val recoveryCount = recoveryTurnsByEpoch
                     .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
@@ -6749,12 +6938,28 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     activePromptBackend = backend
 
                     // Set context size for this agent
-                    val contextSize = if (useLiteRtBackend) {
-                        resolveAgentLiteRtContextTokens(settingsRepo.agentLiteRtContextTokens.value, liteRtModel)
+                    val configuredContextSize = if (useLiteRtBackend) {
+                        resolveAgentLiteRtContextTokens(
+                            settingsRepo.agentLiteRtContextTokens.value,
+                            liteRtModel
+                        )
                     } else {
                         settingsRepo.getAgentContextForRole(currentAgent.name)
                     }
-                    val promptProfile = resolvePromptPackingProfile(model, currentAgent, contextSize)
+                    val reportedServerContextSize = if (useLlamaServer) {
+                        _llamaServerRuntimeState.value.contextTokens
+                            ?.takeIf { it > 0 }
+                    } else {
+                        null
+                    }
+                    val contextSize = reportedServerContextSize
+                        ?.let { minOf(configuredContextSize, it) }
+                        ?: configuredContextSize
+                    val promptProfile = resolvePromptPackingProfile(
+                        model,
+                        currentAgent,
+                        contextSize
+                    )
                     ollamaService.setNumCtx(contextSize)
                     setIsLoading(true, context.getString(R.string.agent_status_preparing_prompt))
 
@@ -6776,10 +6981,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             .sortedBy { it.name }
                     }
 
-                    if (userInitiated) {
-                        runHardCompactionIfNeeded(context, contextSize)
-                            .onFailure { addDebugLog("⚠️ Hard compaction failed: ${it.message}") }
-                    }
+                    runHardCompactionIfNeeded(context, contextSize)
+                        .onFailure {
+                            addDebugLog(
+                                "⚠️ Hard compaction failed: ${it.message}"
+                            )
+                        }
                     agentService.ensureStructuredBrainFiles()
                         .onFailure { addDebugLog("⚠️ Failed to ensure structured brain files: ${it.message}") }
                     agentService.syncCurrentTaskMemory(_currentTask.value)
@@ -7008,16 +7215,79 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             compactMode = false
                         )
                     }
-                    val rawEstimatedTokens = estimatePromptTokens(promptAssembly.allMessages())
+                    val rawEstimatedTokens =
+                        estimatePromptTokens(promptAssembly.allMessages())
                     val isAtomicToolContinuation =
                         promptHistoryMessages.lastOrNull()?.role == "tool"
-                    val packedContext = packMessagesForContext(
+                    val packingCalibration =
+                        currentPromptCalibrationFactor().coerceAtLeast(1.0)
+                    val promptPackingContextSize =
+                        conservativePackingContextSize(
+                            contextSize = contextSize,
+                            calibrationFactor = packingCalibration
+                        )
+                    var packedContext = packMessagesForContext(
                         promptAssembly,
-                        contextSize,
-                        if (recoveryMode) promptProfile.forRecovery() else promptProfile,
-                        allowCompaction = !isAtomicToolContinuation
+                        promptPackingContextSize,
+                        if (recoveryMode) {
+                            promptProfile.forRecovery()
+                        } else {
+                            promptProfile
+                        },
+                        allowCompaction =
+                            forceContextCompaction ||
+                                !isAtomicToolContinuation
                     )
-                    val exposePromptSnapshot = _currentSessionId.value == null || currentAgent == AgentRole.ORCHESTRATOR
+                    var conservativePromptTokens =
+                        conservativePromptEstimate(
+                            packedContext.estimatedTokens,
+                            packingCalibration
+                        )
+                    val safePromptLimit =
+                        safePromptTokenLimit(contextSize)
+
+                    if (
+                        conservativePromptTokens > safePromptLimit &&
+                        isAtomicToolContinuation &&
+                        !forceContextCompaction
+                    ) {
+                        packedContext = packMessagesForContext(
+                            promptAssembly,
+                            promptPackingContextSize,
+                            if (recoveryMode) {
+                                promptProfile.forRecovery()
+                            } else {
+                                promptProfile
+                            },
+                            allowCompaction = true
+                        )
+                        conservativePromptTokens =
+                            conservativePromptEstimate(
+                                packedContext.estimatedTokens,
+                                packingCalibration
+                            )
+                    }
+
+                    if (conservativePromptTokens > safePromptLimit) {
+                        requestContextOverflowRecovery(
+                            context = context,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            runEpoch = runEpoch,
+                            estimatedPromptTokens =
+                                packedContext.estimatedTokens,
+                            actualPromptTokens = null,
+                            serverContextTokens =
+                                reportedServerContextSize,
+                            reason = "preflight safety budget"
+                        )
+                        return@launch
+                    }
+
+                    val exposePromptSnapshot =
+                        _currentSessionId.value == null ||
+                            currentAgent == AgentRole.ORCHESTRATOR
                     updatePromptContextSnapshot(
                         rawEstimatedTokens = rawEstimatedTokens,
                         packedContext = packedContext,
@@ -7094,7 +7364,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     val effectiveMaxOutputTokens = resolveAgentEffectiveMaxOutputTokens(
                         configuredMaxOutputTokens = modelClampedOutputTokens,
                         contextTokens = contextSize,
-                        estimatedPromptTokens = packedContext.estimatedTokens
+                        estimatedPromptTokens = conservativePromptTokens
                     )
                     recordAgentEvent(
                         kind = "output_budget",
@@ -7492,7 +7762,13 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
 
                     response.onSuccess { chatResponse ->
-                        if (!isAgentRunActive(runEpoch)) throw CancellationException("Agent run cancelled")
+                        contextOverflowRetriesByEpoch.remove(runEpoch)
+                        forceContextCompactionByEpoch.remove(runEpoch)
+                        if (!isAgentRunActive(runEpoch)) {
+                            throw CancellationException(
+                                "Agent run cancelled"
+                            )
+                        }
                         if (chatResponse.message.content.isNotBlank()) {
                             fullContent = chatResponse.message.content
                         }
@@ -7760,6 +8036,54 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
 
                         }.onFailure { e ->
+                        val contextOverflow = parseContextOverflow(e)
+                        if (contextOverflow != null) {
+                            _streamingContent.value = ""
+                            _streamingThinking.value = ""
+                            _streamingMessageId.value = null
+
+                            deleteMessage(assistantMsgId)
+
+                            contextOverflow.promptTokens
+                                ?.takeIf { it > 0 }
+                                ?.let { actualPromptTokens ->
+                                    registerPromptTokenCalibration(
+                                        backend = backend,
+                                        model = model,
+                                        estimatedPromptTokens =
+                                            packedContext.estimatedTokens,
+                                        actualPromptTokens =
+                                            actualPromptTokens
+                                    )
+                                    publishLivePromptUsage(
+                                        promptTokens =
+                                            actualPromptTokens,
+                                        contextSize = contextSize,
+                                        agentRole = activeAgentRole
+                                    )
+                                }
+
+                            requestContextOverflowRecovery(
+                                context = context,
+                                ollamaService = ollamaService,
+                                settingsRepo = settingsRepo,
+                                agentService = agentService,
+                                runEpoch = runEpoch,
+                                estimatedPromptTokens =
+                                    packedContext.estimatedTokens,
+                                actualPromptTokens =
+                                    contextOverflow.promptTokens,
+                                serverContextTokens =
+                                    contextOverflow.contextTokens
+                                        ?: reportedServerContextSize,
+                                reason = e.message
+                                    ?.replace(Regex("\\s+"), " ")
+                                    ?.take(160)
+                                    ?: "llama-server context overflow"
+                            )
+                            return@onFailure
+                        }
+
                         val errorMessage = e.message ?: ""
                         val cancellationLike = e is kotlinx.coroutines.CancellationException ||
                             e is java.util.concurrent.CancellationException ||
