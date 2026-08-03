@@ -10,13 +10,18 @@ data class SdProgressSnapshot(
     val progress: Float,
     val iterationSeconds: Double? = null,
     val etaSeconds: Double? = null,
-    val statusText: String = ""
+    val statusText: String = "",
+    val phase: SdProgressPhase = SdProgressPhase.DIFFUSION
 )
+
+enum class SdProgressPhase {
+    DIFFUSION,
+    VAE
+}
 
 class SdProgressTracker(
     private val totalStepsHint: Int,
     private val startedAtMs: Long,
-    private val vaeOverheadFraction: Double = 0.15,
     private val smoothingWindow: Int = 5
 ) {
     private var lastObservedStep = 0
@@ -24,11 +29,20 @@ class SdProgressTracker(
     private val recentIterationSeconds = ArrayDeque<Double>()
     private var lastSnapshot: SdProgressSnapshot? = null
     private var estimatedCompletionAtMs: Long? = null
+    private var activePhase = SdProgressPhase.DIFFUSION
 
     @Synchronized
     fun update(line: String, nowMs: Long): SdProgressSnapshot? {
         val (currentStep, totalSteps) = parseStepProgress(line) ?: return null
-        if (totalSteps != totalStepsHint) return null
+        val phase = if (isVaeProgressLine(line)) SdProgressPhase.VAE else SdProgressPhase.DIFFUSION
+        if (phase == SdProgressPhase.DIFFUSION && totalSteps != totalStepsHint) return null
+        if (phase != activePhase) {
+            activePhase = phase
+            lastObservedStep = 0
+            lastObservedTimestampMs = null
+            recentIterationSeconds.clear()
+            estimatedCompletionAtMs = null
+        }
 
         val normalizedTotal = totalSteps.coerceAtLeast(1)
         val normalizedCurrent = currentStep.coerceIn(0, normalizedTotal)
@@ -45,9 +59,8 @@ class SdProgressTracker(
 
         val smoothedIteration = recentIterationSeconds.takeIf { it.isNotEmpty() }?.average()
         val remainingSteps = max(normalizedTotal - normalizedCurrent, 0)
-        val vaeTailSeconds = smoothedIteration?.let { normalizedTotal * it * vaeOverheadFraction }
-        val etaSeconds = if (smoothedIteration != null && vaeTailSeconds != null) {
-            (remainingSteps * smoothedIteration) + vaeTailSeconds
+        val etaSeconds = if (smoothedIteration != null) {
+            remainingSteps * smoothedIteration
         } else {
             null
         }
@@ -59,7 +72,8 @@ class SdProgressTracker(
             totalSteps = normalizedTotal,
             progress = normalizedCurrent.toFloat() / normalizedTotal.toFloat(),
             iterationSeconds = smoothedIteration,
-            etaSeconds = etaSeconds
+            etaSeconds = etaSeconds,
+            phase = phase
         ).also { lastSnapshot = it }
     }
 
@@ -96,6 +110,7 @@ class SdProgressTracker(
         private val STEP_PROGRESS_REGEX = Regex("""step\s+(\d+)/(\d+)""", RegexOption.IGNORE_CASE)
         private val RATE_S_PER_IT_REGEX = Regex("""([0-9]+(?:\.[0-9]+)?)\s*(?:s|sec)/it""", RegexOption.IGNORE_CASE)
         private val RATE_IT_PER_S_REGEX = Regex("""([0-9]+(?:\.[0-9]+)?)\s*it/s""", RegexOption.IGNORE_CASE)
+        private val VAE_PROGRESS_REGEX = Regex("""\b(?:vae|decode|decoding|decoded)\b""", RegexOption.IGNORE_CASE)
 
         fun buildStartingSnapshot(totalSteps: Int, statusText: String): SdProgressSnapshot =
             SdProgressSnapshot(
@@ -130,6 +145,9 @@ class SdProgressTracker(
             }
             return null
         }
+
+        fun isVaeProgressLine(line: String): Boolean =
+            VAE_PROGRESS_REGEX.containsMatchIn(line)
 
         fun progressPercent(snapshot: SdProgressSnapshot): Int =
             (snapshot.progress.coerceIn(0f, 1f) * 100f).roundToInt()

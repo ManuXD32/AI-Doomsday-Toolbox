@@ -8,8 +8,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -53,6 +55,7 @@ private const val MODEL_STORAGE_REFRESH_MILLIS = 15_000L
 
 private fun editableModelTypeOptions(): List<ModelType> = listOf(
     ModelType.LLM,
+    ModelType.LORA,
     ModelType.EMBEDDING,
     ModelType.VISION_PROJECTOR,
     ModelType.QUADTRIX
@@ -61,6 +64,7 @@ private fun editableModelTypeOptions(): List<ModelType> = listOf(
 @Composable
 private fun modelTypeLabel(type: ModelType): String = when (type) {
     ModelType.LLM -> stringResource(R.string.models_type_llm)
+    ModelType.LORA -> stringResource(R.string.models_type_lora)
     ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
     ModelType.VISION_PROJECTOR -> stringResource(R.string.models_type_vision_projector)
     ModelType.QUADTRIX -> stringResource(R.string.models_type_quadtrix)
@@ -178,6 +182,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     var modelToRename by remember { mutableStateOf<ModelEntity?>(null) }
     var newModelName by remember { mutableStateOf("") }
     var editedModelType by remember { mutableStateOf(ModelType.LLM) }
+    var editedVisionSupport by remember { mutableStateOf(false) }
     var useForKnowledgeEmbedding by remember { mutableStateOf(false) }
     
     // Export picker launcher
@@ -261,7 +266,12 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
             },
             title = { Text(stringResource(R.string.models_import)) },
             text = {
-                Column {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
                     Text(stringResource(R.string.models_import_file_label, pendingFilename), style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(16.dp))
                     
@@ -271,6 +281,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     
                     val modelTypes = listOf(
                         ModelType.LLM to stringResource(R.string.models_type_llm),
+                        ModelType.LORA to stringResource(R.string.models_type_lora),
                         ModelType.EMBEDDING to stringResource(R.string.models_type_embedding),
                         ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector),
                         ModelType.QUADTRIX to stringResource(R.string.models_type_quadtrix)
@@ -335,7 +346,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     val uri = pendingUri!!
                     val filename = pendingFilename
                     val type = selectedModelType
-                    val vision = hasVisionSupport
+                    val vision = type == ModelType.LLM && hasVisionSupport
                     
                     // Start import with progress tracking
                     importFileName = filename
@@ -461,9 +472,14 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                 }
             } else {
                 items(models) { model ->
+                    val subtitle = if (model.type == ModelType.LLM && model.isVision) {
+                        "${model.repoId} • ${stringResource(R.string.models_vision_enabled_badge)}"
+                    } else {
+                        model.repoId
+                    }
                     ModelCard(
                         title = model.filename,
-                        subtitle = model.repoId,
+                        subtitle = subtitle,
                         sizeText = FormatUtils.formatFileSize(model.sizeBytes),
                         actionIcon = Icons.Default.Delete,
                         actionColor = MaterialTheme.colorScheme.error,
@@ -473,6 +489,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                             modelToRename = model
                             newModelName = model.filename.substringBeforeLast(".")
                             editedModelType = model.type
+                            editedVisionSupport = model.isVision
                             useForKnowledgeEmbedding = model.type == ModelType.EMBEDDING
                             showRenameDialog = true
                         }
@@ -490,7 +507,13 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                 onDismissRequest = { showRenameDialog = false },
                 title = { Text(stringResource(R.string.models_edit_title)) },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 520.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
                         OutlinedTextField(
                             value = newModelName,
                             onValueChange = { newModelName = it },
@@ -543,6 +566,23 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                 Text(stringResource(R.string.models_use_for_kb_embedding))
                             }
                         }
+                        if (editedModelType == ModelType.LLM) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(
+                                    checked = editedVisionSupport,
+                                    onCheckedChange = { editedVisionSupport = it }
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(stringResource(R.string.models_vision_toggle_title))
+                                    Text(
+                                        stringResource(R.string.models_vision_toggle_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
                 },
                 confirmButton = {
@@ -553,6 +593,8 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                             val fullNewName = if (extension.isNotEmpty()) "$newModelName.$extension" else newModelName
                             val cleanNewName = fullNewName.trim()
                             val typeChanged = editedModelType != model.type
+                            val finalVisionSupport = editedModelType == ModelType.LLM && editedVisionSupport
+                            val visionChanged = finalVisionSupport != model.isVision
                             
                             if (cleanNewName.isNotBlank()) {
                                 scope.launch(Dispatchers.IO) {
@@ -572,13 +614,13 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                             model.path
                                         }
 
-                                        if (renamed || typeChanged) {
+                                        if (renamed || typeChanged || visionChanged) {
                                             db.modelDao().updateMetadata(
                                                 oldFilename = model.filename,
                                                 newFilename = cleanNewName,
                                                 newPath = finalPath,
                                                 newType = editedModelType,
-                                                isVision = editedModelType == ModelType.LLM && model.isVision
+                                                isVision = finalVisionSupport
                                             )
                                         }
 
@@ -1073,6 +1115,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
             DownloadTaskSection(
                 modelTypes = listOf(
                     ModelType.LLM,
+                    ModelType.LORA,
                     ModelType.EMBEDDING,
                     ModelType.VISION,
                     ModelType.VISION_PROJECTOR,

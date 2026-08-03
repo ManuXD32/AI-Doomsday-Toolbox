@@ -15,6 +15,7 @@ import android.os.Message
 import android.os.Messenger
 import android.os.Process
 import com.example.llamadroid.R
+import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.LlamaChatEntity
@@ -685,6 +686,20 @@ internal class LiteRtLmWorkerClient(private val context: Context) {
         request = request.copy(backendMode = LITERT_BACKEND_GPU),
         workerLabel = "GPU",
         workerCrashedMessage = context.getString(R.string.litert_error_gpu_worker_crashed),
+        onStatus = onStatus,
+        onChunk = onChunk,
+        onThinkingChunk = onThinkingChunk
+    )
+
+    suspend fun streamCpuChat(
+        request: LiteRtLmChatRequest,
+        onStatus: suspend (String) -> Unit,
+        onChunk: suspend (String) -> Unit,
+        onThinkingChunk: suspend (String) -> Unit = {}
+    ): LiteRtLmChatStats = streamBackendChat(
+        request = request.copy(backendMode = LITERT_BACKEND_CPU),
+        workerLabel = "CPU",
+        workerCrashedMessage = context.getString(R.string.litert_error_cpu_worker_crashed),
         onStatus = onStatus,
         onChunk = onChunk,
         onThinkingChunk = onThinkingChunk

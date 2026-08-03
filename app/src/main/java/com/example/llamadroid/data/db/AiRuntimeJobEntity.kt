@@ -78,4 +78,7 @@ interface AiRuntimeJobDao {
 
     @Query("DELETE FROM ai_runtime_jobs WHERE jobId = :jobId")
     suspend fun deleteById(jobId: String)
+
+    @Query("DELETE FROM ai_runtime_jobs WHERE conversationId = :conversationId")
+    suspend fun deleteByConversationId(conversationId: Long)
 }

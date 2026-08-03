@@ -21,6 +21,8 @@ data class LlamaServerEntity(
     val whisperLanguage: String = DEFAULT_WHISPER_LANGUAGE,
     val preferWhisperAudioTranscription: Boolean = false,
     val defaultApiParams: String? = null,
+    /** JSON [LlamaServerLaunchProfile] for an app-managed loopback llama-server. */
+    val localLaunchProfileJson: String? = null,
     val lastUsed: Long = System.currentTimeMillis()
 ) {
     fun normalizedEngine(): String = normalizeLlamaServerEngine(engine)
@@ -86,7 +88,10 @@ data class LlamaChatPromptProfileEntity(
         Index("folderId"),
         Index("pinnedToAiHub"),
         Index("pinnedServerId"),
-        Index("pinnedAt")
+        Index("pinnedAt"),
+        Index("isEphemeral"),
+        Index("source"),
+        Index("expiresAtMillis")
     ]
 )
 data class LlamaChatEntity(
@@ -99,7 +104,11 @@ data class LlamaChatEntity(
     val folderId: Long? = null,
     val pinnedToAiHub: Boolean = false,
     val pinnedServerId: Long? = null,
-    val pinnedAt: Long? = null
+    val pinnedAt: Long? = null,
+    val isEphemeral: Boolean = false,
+    val source: String? = null,
+    val deleteAfterSession: Boolean = false,
+    val expiresAtMillis: Long? = null
 )
 
 @Entity(

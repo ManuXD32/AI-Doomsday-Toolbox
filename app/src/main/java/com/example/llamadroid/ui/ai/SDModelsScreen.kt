@@ -105,6 +105,10 @@ enum class SDModelSelectionType(
     VAE(ModelType.SD_VAE, R.string.sd_type_vae),
     CONTROLNET(ModelType.SD_CONTROLNET, R.string.sd_type_controlnet),
     LORA(ModelType.SD_LORA, R.string.sd_type_lora),
+    TEXTUAL_INVERSION(
+        ModelType.SD_TEXTUAL_INVERSION,
+        R.string.sd_type_textual_inversion
+    ),
     PHOTOMAKER(ModelType.SD_PHOTOMAKER, R.string.sd_type_photomaker),
     IMAGE_LLM(ModelType.LLM, R.string.sd_type_image_llm),
     IMAGE_LLM_VISION(ModelType.VISION_PROJECTOR, R.string.sd_type_image_llm_vision),
@@ -1828,6 +1832,8 @@ private fun selectionTypeForModel(model: ModelEntity): SDModelSelectionType = wh
     ModelType.SD_VAE -> SDModelSelectionType.VAE
     ModelType.SD_CONTROLNET -> SDModelSelectionType.CONTROLNET
     ModelType.SD_LORA -> SDModelSelectionType.LORA
+    ModelType.SD_TEXTUAL_INVERSION ->
+        SDModelSelectionType.TEXTUAL_INVERSION
     ModelType.SD_PHOTOMAKER -> SDModelSelectionType.PHOTOMAKER
     ModelType.LLM -> SDModelSelectionType.IMAGE_LLM
     ModelType.VISION_PROJECTOR -> SDModelSelectionType.IMAGE_LLM_VISION
@@ -2336,6 +2342,7 @@ private fun DownloadingTab(
                     ModelType.SD_TAE,
                     ModelType.SD_VAE,
                     ModelType.SD_LORA,
+                    ModelType.SD_TEXTUAL_INVERSION,
                     ModelType.SD_CONTROLNET,
                     ModelType.SD_PHOTOMAKER
                 )

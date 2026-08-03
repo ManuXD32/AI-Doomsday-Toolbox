@@ -18,6 +18,7 @@ data class SDConfig(
     val cfgScale: Float = 7.0f,
     val seed: Long = -1, // -1 for random
     val samplingMethod: SamplingMethod = SamplingMethod.EULER_A,
+    val scheduler: SdScheduler? = null,
     val outputPath: String,
     // img2img specific
     val initImage: String? = null,
@@ -58,11 +59,16 @@ data class SDConfig(
     val loraPath: String? = null,
     val loraStrength: Float = 1.0f,
     val loraApplyMode: SdLoraApplyMode? = null,
+    // Textual inversion embedding (optional). stable-diffusion.cpp loads all
+    // embeddings from its parent directory and resolves this file's stem as a
+    // prompt token.
+    val textualInversionPath: String? = null,
     // PhotoMaker (optional)
     val photoMakerPath: String? = null,
     // Family-specific runtime flags
     val flowShift: Float? = null,
     val diffusionFa: Boolean = false,
+    val diffusionConvDirect: Boolean = false,
     val mmap: Boolean = false,
     val vaeConvDirect: Boolean = false,
     val qwenImageZeroCondT: Boolean = false,
@@ -106,4 +112,29 @@ enum class SamplingMethod(val cliName: String) {
     DPM_PP_2M_V2("dpm++2mv2"),
     LCM("lcm"),
     DDIM_TRAILING("ddim_trailing")
+}
+
+enum class SdScheduler(val cliName: String) {
+    DISCRETE("discrete"),
+    KARRAS("karras"),
+    EXPONENTIAL("exponential"),
+    AYS("ays"),
+    GITS("gits"),
+    SMOOTHSTEP("smoothstep"),
+    SGM_UNIFORM("sgm_uniform"),
+    SIMPLE("simple"),
+    KL_OPTIMAL("kl_optimal"),
+    LCM("lcm"),
+    BONG_TANGENT("bong_tangent");
+
+    companion object {
+        fun fromCliName(value: String?): SdScheduler? {
+            val normalized = value?.trim().orEmpty()
+            if (normalized.isBlank()) return null
+            return entries.firstOrNull {
+                it.cliName.equals(normalized, ignoreCase = true) ||
+                    it.name.equals(normalized, ignoreCase = true)
+            }
+        }
+    }
 }

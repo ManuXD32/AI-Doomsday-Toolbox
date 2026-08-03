@@ -48,4 +48,7 @@ interface ModelDao {
         newType: ModelType,
         isVision: Boolean
     )
+
+    @Query("UPDATE models SET isVision = :isVision WHERE filename = :filename")
+    suspend fun updateVisionSupport(filename: String, isVision: Boolean)
 }

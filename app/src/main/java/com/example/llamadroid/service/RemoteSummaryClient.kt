@@ -46,7 +46,9 @@ data class RemoteSummaryRequest(
     val maxTokens: Int,
     val temperature: Float,
     val thinkingEnabled: Boolean,
-    val imageAttachments: List<RemoteSummaryImageAttachment> = emptyList()
+    val imageAttachments: List<RemoteSummaryImageAttachment> = emptyList(),
+    val preferLlamaMultimodalCompletion: Boolean = false,
+    val allowBlankOutput: Boolean = false
 )
 
 data class RemoteSummaryImageAttachment(
@@ -64,6 +66,9 @@ data class RemoteSummaryMetadata(
     val serverModelLabel: String? = null,
     val serverContextTokens: Int? = null,
     val serverContextLabel: String? = null,
+    val visionSupported: Boolean? = null,
+    val llamaMediaMarker: String? = null,
+    val serverBuildInfo: String? = null,
     val tokenCountMode: TokenCountMode = TokenCountMode.APPROXIMATE
 )
 
@@ -76,7 +81,9 @@ data class RemoteSummaryResponse(
     val output: String,
     val rawOutput: String,
     val promptTokens: Int? = null,
-    val completionTokens: Int? = null
+    val completionTokens: Int? = null,
+    val stopType: String? = null,
+    val runtimeFallbacks: Int = 0
 )
 
 enum class TokenCountMode {
@@ -151,6 +158,7 @@ class LiteRtRemoteSummaryClient(private val config: RemoteSummaryBackendConfig) 
             serverModelLabel = selected.displayName,
             serverContextTokens = selected.advertisedLiteRtMaxContextTokens(),
             serverContextLabel = selected.advertisedLiteRtMaxContextTokens()?.let { "$it tokens" },
+            visionSupported = selected.supportsLiteRtVision(),
             tokenCountMode = TokenCountMode.APPROXIMATE
         )
     }
@@ -204,7 +212,8 @@ class LiteRtRemoteSummaryClient(private val config: RemoteSummaryBackendConfig) 
                 output = result.output,
                 rawOutput = result.rawOutput,
                 promptTokens = result.stats.promptTokens,
-                completionTokens = result.stats.completionTokens
+                completionTokens = result.stats.completionTokens,
+                runtimeFallbacks = result.runtimeFallbacks
             )
         } finally {
             imageFiles.forEach { file -> runCatching { file.delete() } }
@@ -255,6 +264,42 @@ internal fun buildLlamaServerSummaryRequestJson(
 ): JSONObject {
     return buildJsonObject(buildLlamaServerSummaryRequestPayload(config, request))
 }
+
+internal fun buildLlamaServerMultimodalCompletionRequestPayload(
+    request: RemoteSummaryRequest,
+    mediaMarker: String = "<__media__>"
+): Map<String, Any?> {
+    require(request.imageAttachments.isNotEmpty()) {
+        "A multimodal llama.cpp completion requires at least one attachment"
+    }
+    val resolvedMarker = mediaMarker.trim().ifBlank { "<__media__>" }
+    val markers = List(request.imageAttachments.size) { resolvedMarker }.joinToString("\n")
+    val promptText = buildString {
+        append(markers)
+        appendLine()
+        if (request.systemPrompt.isNotBlank()) {
+            appendLine(request.systemPrompt.trim())
+        }
+        append(request.userPrompt.trim())
+    }.trim()
+    return linkedMapOf(
+        "prompt" to linkedMapOf(
+            "prompt_string" to promptText,
+            "multimodal_data" to request.imageAttachments.map { it.base64 }
+        ),
+        "stream" to false,
+        "temperature" to request.temperature.toDouble(),
+        "n_predict" to request.maxTokens,
+        "cache_prompt" to false
+    )
+}
+
+internal fun buildLlamaServerMultimodalCompletionRequestJson(
+    request: RemoteSummaryRequest,
+    mediaMarker: String = "<__media__>"
+): JSONObject = buildJsonObject(
+    buildLlamaServerMultimodalCompletionRequestPayload(request, mediaMarker)
+)
 
 internal fun buildLlamaSwapSummaryRequestJson(
     config: RemoteSummaryBackendConfig,
@@ -388,6 +433,85 @@ internal fun parseLlamaServerContextTokens(body: String): Int? {
         ?.groupValues
         ?.getOrNull(1)
         ?.toIntOrNull()
+}
+
+internal fun parseLlamaServerMediaMarker(body: String): String? {
+    return runCatching {
+        JSONObject(body).optString("media_marker").trim().ifBlank { null }
+    }.getOrNull()
+}
+
+internal fun parseLlamaServerBuildInfo(body: String): String? {
+    return runCatching {
+        JSONObject(body).optString("build_info").trim().ifBlank { null }
+    }.getOrNull()
+}
+
+internal fun parseLlamaServerVisionSupport(body: String): Boolean? {
+    return runCatching {
+        JSONObject(body).optVisionCapability()
+    }.getOrNull()
+}
+
+internal fun parseLlamaServerModelVisionSupport(body: String): Boolean? {
+    return runCatching {
+        val json = JSONObject(body)
+        json.optVisionCapability()?.let { return@runCatching it }
+        val models = json.optJSONArray("data") ?: json.optJSONArray("models") ?: return@runCatching null
+        var sawExplicitTextOnly = false
+        for (index in 0 until models.length()) {
+            val model = models.optJSONObject(index) ?: continue
+            when (model.optVisionCapability()) {
+                true -> return@runCatching true
+                false -> sawExplicitTextOnly = true
+                null -> Unit
+            }
+        }
+        false.takeIf { sawExplicitTextOnly }
+    }.getOrNull()
+}
+
+private fun JSONObject.optVisionCapability(): Boolean? {
+    val modalities = optJSONObject("modalities")
+    if (modalities != null && modalities.has("vision")) {
+        return modalities.optNullableBoolean("vision")
+    }
+    val capabilityObject = optJSONObject("capabilities")
+    if (capabilityObject != null) {
+        capabilityObject.optNullableBoolean("multimodal")?.let { return it }
+        capabilityObject.optNullableBoolean("vision")?.let { return it }
+        capabilityObject.optNullableBoolean("image")?.let { return it }
+    }
+    val capabilities = optJSONArray("capabilities")
+    if (capabilities != null) {
+        return capabilities.containsAny("vision", "image", "multimodal").takeIf { it }
+    }
+    return optNullableBoolean("multimodal")
+        ?: optNullableBoolean("vision")
+        ?: optNullableBoolean("supports_vision")
+}
+
+private fun JSONObject.optNullableBoolean(name: String): Boolean? {
+    if (!has(name) || isNull(name)) return null
+    return when (val value = opt(name)) {
+        is Boolean -> value
+        is String -> when (value.trim().lowercase()) {
+            "true", "1", "yes", "vision", "multimodal" -> true
+            "false", "0", "no", "none", "text" -> false
+            else -> null
+        }
+        is Number -> value.toInt() != 0
+        else -> null
+    }
+}
+
+private fun JSONArray.containsAny(vararg values: String): Boolean {
+    val expected = values.map { it.lowercase() }.toSet()
+    for (index in 0 until length()) {
+        val item = optString(index).trim().lowercase()
+        if (item in expected) return true
+    }
+    return false
 }
 
 internal fun parseOpenAiModelIds(body: String): List<String> {
@@ -620,13 +744,27 @@ private class OllamaRemoteSummaryClient(
     }
 }
 
+private data class LlamaServerProps(
+    val contextTokens: Int? = null,
+    val mediaMarker: String? = null,
+    val visionSupported: Boolean? = null,
+    val buildInfo: String? = null
+)
+
 private class LlamaServerRemoteSummaryClient(
     config: RemoteSummaryBackendConfig
 ) : BaseRemoteSummaryClient(config) {
+    @Volatile
+    private var cachedMediaMarker: String? = null
+    @Volatile
+    private var cachedProps: LlamaServerProps? = null
+
     override suspend fun fetchMetadata(): Result<RemoteSummaryMetadata> = withContext(Dispatchers.IO) {
         runCatching {
+            val props = fetchProps()
             val modelLabel = fetchModelLabel()
-            val contextTokens = fetchContextTokens()
+            val contextTokens = props.contextTokens ?: fetchContextTokens()
+            val visionSupported = props.visionSupported ?: fetchModelVisionSupport()
             RemoteSummaryMetadata(
                 backend = config.backend,
                 baseUrl = config.baseUrl,
@@ -634,6 +772,9 @@ private class LlamaServerRemoteSummaryClient(
                 serverModelLabel = modelLabel,
                 serverContextTokens = contextTokens,
                 serverContextLabel = contextTokens?.let { "$it tokens" },
+                visionSupported = visionSupported,
+                llamaMediaMarker = props.mediaMarker,
+                serverBuildInfo = props.buildInfo,
                 tokenCountMode = TokenCountMode.EXACT
             )
         }
@@ -677,6 +818,9 @@ private class LlamaServerRemoteSummaryClient(
         }
 
     override suspend fun summarize(request: RemoteSummaryRequest): RemoteSummaryResponse = withContext(Dispatchers.IO) {
+        if (request.preferLlamaMultimodalCompletion && request.imageAttachments.isNotEmpty()) {
+            return@withContext summarizeMultimodalCompletion(request)
+        }
         val payload = buildLlamaServerSummaryRequestJson(config, request)
 
         val (status, body) = executeJson(
@@ -702,7 +846,7 @@ private class LlamaServerRemoteSummaryClient(
             append(message?.optString("content").orEmpty())
         }.trim()
         val cleaned = PDFSummaryLogic.cleanLlamaOutput(rawContent)
-        if (cleaned.isBlank()) {
+        if (cleaned.isBlank() && !request.allowBlankOutput) {
             throw IllegalStateException("blank_output")
         }
 
@@ -713,6 +857,92 @@ private class LlamaServerRemoteSummaryClient(
             promptTokens = usage?.optInt("prompt_tokens", -1)?.takeIf { it >= 0 },
             completionTokens = usage?.optInt("completion_tokens", -1)?.takeIf { it >= 0 }
         )
+    }
+
+    private suspend fun summarizeMultimodalCompletion(
+        request: RemoteSummaryRequest
+    ): RemoteSummaryResponse {
+        val mediaMarker = fetchMediaMarker()
+        val payload = buildLlamaServerMultimodalCompletionRequestJson(request = request, mediaMarker = mediaMarker)
+        DebugLog.log(
+            "LlamaServerRemoteSummaryClient: POST /completion multimodal attachments=${request.imageAttachments.size} " +
+                "marker=${describeMediaMarker(mediaMarker)} allowBlank=${request.allowBlankOutput}"
+        )
+        val (status, body) = executeJson(
+            path = "/completion",
+            requestBuilder = Request.Builder()
+                .post(payload.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .header("Content-Type", "application/json")
+        )
+        if (status !in 200..299) {
+            throw classifyFailure(parseErrorMessage(body, "llama-server multimodal OCR request failed"))
+        }
+        val json = JSONObject(body)
+        if (json.has("error")) {
+            throw classifyFailure(parseErrorMessage(body, "llama-server multimodal OCR request failed"))
+        }
+        val rawOutput = json.optString("content")
+            .ifBlank { json.optString("response") }
+            .ifBlank { json.optString("text") }
+        val cleaned = PDFSummaryLogic.cleanLlamaOutput(rawOutput).trim()
+        if (cleaned.isBlank() && !request.allowBlankOutput) {
+            throw IllegalStateException("blank_output")
+        }
+        val tokensEvaluated = json.optInt("tokens_evaluated", -1).takeIf { it >= 0 }
+        val tokensPredicted = json.optInt("tokens_predicted", -1).takeIf { it >= 0 }
+        val stopType = json.optString("stop_type").trim().ifBlank { null }
+        return RemoteSummaryResponse(
+            output = cleaned,
+            rawOutput = body,
+            promptTokens = tokensEvaluated,
+            completionTokens = tokensPredicted,
+            stopType = stopType
+        )
+    }
+
+    private suspend fun fetchMediaMarker(): String {
+        cachedMediaMarker?.let { return it }
+        val marker = fetchProps().mediaMarker ?: "<__media__>"
+        cachedMediaMarker = marker
+        return marker
+    }
+
+    private suspend fun fetchProps(): LlamaServerProps {
+        cachedProps?.let { return it }
+        val props = runCatching {
+            val (status, body) = executeJson(
+                path = "/props",
+                requestBuilder = Request.Builder().get(),
+                timeoutMinutes = 1
+            )
+            if (status !in 200..299) return@runCatching LlamaServerProps()
+            LlamaServerProps(
+                contextTokens = parseLlamaServerContextTokens(body),
+                mediaMarker = parseLlamaServerMediaMarker(body),
+                visionSupported = parseLlamaServerVisionSupport(body),
+                buildInfo = parseLlamaServerBuildInfo(body)
+            )
+        }.getOrElse { error ->
+            DebugLog.log("LlamaServerRemoteSummaryClient: /props unavailable for OCR metadata: ${error.message}")
+            LlamaServerProps()
+        }
+        DebugLog.log(
+            "LlamaServerRemoteSummaryClient: /props context=${props.contextTokens ?: "unknown"} " +
+                "vision=${props.visionSupported?.toString() ?: "unknown"} " +
+                "marker=${props.mediaMarker?.let(::describeMediaMarker) ?: "default"} " +
+                "build=${props.buildInfo?.take(36) ?: "unknown"}"
+        )
+        props.mediaMarker?.let { cachedMediaMarker = it }
+        cachedProps = props
+        return props
+    }
+
+    private fun describeMediaMarker(marker: String): String {
+        return if (marker.length <= 24) {
+            marker
+        } else {
+            "${marker.take(12)}...(${marker.length})"
+        }
     }
 
     private suspend fun fetchModelLabel(): String? = withContext(Dispatchers.IO) {
@@ -726,6 +956,25 @@ private class LlamaServerRemoteSummaryClient(
             if (status !in 200..299) return@runCatching null
             parseOpenAiModelIds(body).firstOrNull()
         }.getOrNull()
+    }
+
+    private suspend fun fetchModelVisionSupport(): Boolean? = withContext(Dispatchers.IO) {
+        val timeoutMinutes = config.timeoutMinutes.coerceAtLeast(1)
+        for (path in listOf("/models", "/v1/models")) {
+            runCatching {
+                val (status, body) = executeJson(
+                    path = path,
+                    requestBuilder = Request.Builder().get(),
+                    timeoutMinutes = timeoutMinutes
+                )
+                if (status !in 200..299) return@runCatching null
+                parseLlamaServerModelVisionSupport(body)
+            }.getOrNull()?.let { vision ->
+                DebugLog.log("LlamaServerRemoteSummaryClient: $path vision capability fallback=$vision")
+                return@withContext vision
+            }
+        }
+        null
     }
 
     private suspend fun fetchContextTokens(): Int? = withContext(Dispatchers.IO) {

@@ -1,10 +1,14 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.data.db.CustomToolEntity
+import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.defaultLiteRtChatContextTokens
+import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.URI
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -25,6 +29,76 @@ enum class RetrievedContextSourceClass {
     PROJECT_CODE,
     UNTRUSTED_FETCHED_CONTENT,
     GENERATED_MEMORY_SUMMARY
+}
+
+data class NormalizedAgentInvocationName(
+    val displayName: String,
+    val key: String
+)
+
+/** Keeps model-provided invocation labels safe while allowing Room to suffix duplicates. */
+fun normalizeAgentInvocationName(rawName: String): NormalizedAgentInvocationName? {
+    val displayName = rawName
+        .filterNot { it.isISOControl() }
+        .trim()
+        .replace(Regex("\\s+"), " ")
+        .take(40)
+        .trim()
+    if (displayName.isBlank()) return null
+    return NormalizedAgentInvocationName(displayName, displayName.lowercase(Locale.ROOT))
+}
+
+fun boundedStreamingPreview(raw: String, maxChars: Int, tailChars: Int = maxChars / 5): String {
+    require(maxChars > 0 && tailChars in 0 until maxChars)
+    if (raw.length <= maxChars) return raw
+    val headChars = (maxChars - tailChars - 3).coerceAtLeast(1)
+    return raw.take(headChars) + "\n…\n" + raw.takeLast(tailChars)
+}
+
+/**
+ * Selects a rollover body that cannot immediately cross the same trigger again.
+ * Keeping a heading is useful for Markdown/event files, but it still counts toward the cap.
+ */
+internal fun selectMemoryRolloverLines(
+    lines: List<String>,
+    sizeBudgetLines: Int,
+    rolloverTriggerLines: Int,
+    preserveFirstLine: Boolean
+): List<String> {
+    val retainedLimit = minOf(sizeBudgetLines, rolloverTriggerLines).coerceAtLeast(1)
+    if (lines.size <= retainedLimit) return lines
+    return if (preserveFirstLine && retainedLimit > 1) {
+        listOf(lines.first()) + lines.takeLast(retainedLimit - 1)
+    } else {
+        lines.takeLast(retainedLimit)
+    }
+}
+
+/** Kept outside the frozen prefix so Plan → Build preserves prompt-cache ownership. */
+internal fun buildAgentRuntimeModeControl(isPlanMode: Boolean, isOrchestrator: Boolean): String =
+    if (isPlanMode) {
+        "CURRENT RUNTIME MODE: PLAN. This is a strict read-only boundary: inspect, research, manage todos, ask at least one structured question and receive an answer, then propose_plan and wait. Build tools are runtime-blocked even though their schemas remain visible. Remember to ask questions to the user before doing the plan proposal and that the plan must contain several microsteps to be able to really delegate and guide the agents."
+    } else if (isOrchestrator) {
+        "CURRENT RUNTIME MODE: BUILD. Implement the approved plan. First call todo_write to create or update the durable todo list, then keep it current after each meaningful implementation, review, recovery, and verification checkpoint."
+    } else {
+        "CURRENT RUNTIME MODE: BUILD. Complete only the assigned work and return control to the Orchestrator."
+    }
+
+/** Tool schemas are prefix-stable across modes; Plan safety is enforced at execution time. */
+internal fun <T> stableAgentToolSchemaAcrossModes(tools: List<T>, @Suppress("UNUSED_PARAMETER") isPlanMode: Boolean): List<T> = tools
+
+internal data class PlanApprovalPromptCacheDecision(
+    val summary: String,
+    val modifiedPlanForToolResult: String?,
+    val retainsRootCacheEpoch: Boolean = true
+)
+
+internal fun planApprovalPromptCacheDecision(originalPlan: String, approvedPlan: String): PlanApprovalPromptCacheDecision {
+    val wasEdited = approvedPlan.trim() != originalPlan.trim()
+    return PlanApprovalPromptCacheDecision(
+        summary = if (wasEdited) "Implement the modified plan." else "Implement the plan.",
+        modifiedPlanForToolResult = approvedPlan.trim().takeIf { wasEdited }
+    )
 }
 
 data class ToolCapabilityPolicy(
@@ -56,6 +130,23 @@ data class LoadingCounterUpdate(
     val count: Int,
     val wasClamped: Boolean
 )
+
+internal fun shouldPersistFullAgentSnapshot(
+    reason: String?,
+    force: Boolean
+): Boolean {
+    if (force) return true
+    // Finalized message mutations are semantic recovery boundaries. AgentService
+    // coalesces them through a short debounce and upserts only changed rows, so they
+    // survive process death without writing on every streaming token or heartbeat.
+    return reason in setOf(
+        "Agent message added",
+        "Agent message updated",
+        "Conversation history replaced",
+        "Conversation history truncated",
+        "Regenerate history truncated"
+    )
+}
 
 data class FileEditComputation(
     val updatedContent: String,
@@ -299,6 +390,84 @@ fun resolveChatNumCtx(baseNumCtx: Int, overrideNumCtx: Int? = null): Int {
     return overrideNumCtx ?: baseNumCtx
 }
 
+fun friendlyBackendModelLabel(rawLabel: String?): String? {
+    val trimmed = rawLabel?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val normalized = trimmed.trimEnd('/', '\\')
+    val separatorIndex = normalized.lastIndexOfAny(charArrayOf('/', '\\'))
+    return if (separatorIndex >= 0 && separatorIndex < normalized.lastIndex) {
+        normalized.substring(separatorIndex + 1)
+    } else {
+        normalized
+    }
+}
+
+fun resolveAgentLiteRtContextTokens(
+    savedContextTokens: Int,
+    model: LiteRtModelEntity?,
+    fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
+    minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
+    safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+): Int {
+    val advertisedCap = (model?.defaultLiteRtEngineMaxTokens() ?: fallbackContextTokens)
+        .coerceAtLeast(minContextTokens)
+    val safeCap = safeMaxContextTokens
+        .takeIf { it > 0 }
+        ?.coerceAtLeast(minContextTokens)
+        ?: advertisedCap
+    val cap = minOf(advertisedCap, safeCap).coerceAtLeast(minContextTokens)
+    val defaultContext = (model?.defaultLiteRtChatContextTokens() ?: cap)
+        .coerceIn(minContextTokens, cap)
+    return savedContextTokens
+        .takeIf { it > 0 }
+        ?.coerceIn(minContextTokens, cap)
+        ?: defaultContext
+}
+
+fun resolveAgentLiteRtMaxOutputTokens(
+    savedMaxOutputTokens: Int,
+    resolvedContextTokens: Int,
+    model: LiteRtModelEntity?,
+    fallbackMaxOutputTokens: Int = AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS,
+    minMaxOutputTokens: Int = AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS
+): Int {
+    val contextCap = listOfNotNull(
+        resolvedContextTokens.takeIf { it > 0 },
+        model?.defaultLiteRtEngineMaxTokens()?.takeIf { it > 0 }
+    ).minOrNull()
+        ?: AGENT_LITERT_FALLBACK_CONTEXT_TOKENS
+    val outputCap = contextCap.coerceAtLeast(minMaxOutputTokens)
+    val defaultOutput = fallbackMaxOutputTokens.coerceIn(minMaxOutputTokens, outputCap)
+    return savedMaxOutputTokens
+        .takeIf { it > 0 }
+        ?.coerceIn(minMaxOutputTokens, outputCap)
+        ?: defaultOutput
+}
+
+/**
+ * Resolves the user-configured output budget independently from the model
+ * context, then clamps the effective request to the remaining prompt space.
+ *
+ * The configured value is intentionally not modified when the current prompt is
+ * large; callers can continue to display and persist the user's original choice.
+ */
+fun resolveAgentEffectiveMaxOutputTokens(
+    configuredMaxOutputTokens: Int,
+    contextTokens: Int,
+    estimatedPromptTokens: Int,
+    fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
+    templateSafetyReserveTokens: Int = AGENT_OUTPUT_TEMPLATE_SAFETY_RESERVE_TOKENS
+): Int {
+    val configured = configuredMaxOutputTokens
+        .takeIf { it > 0 }
+        ?: fallbackMaxOutputTokens
+    if (contextTokens <= 0) return configured.coerceAtLeast(1)
+
+    val remaining = contextTokens -
+        estimatedPromptTokens.coerceAtLeast(0) -
+        templateSafetyReserveTokens.coerceAtLeast(0)
+    return minOf(configured, remaining.coerceAtLeast(1)).coerceAtLeast(1)
+}
+
 fun shouldScheduleHardCompaction(
     percentUsed: Int,
     thresholdPercent: Int,
@@ -396,6 +565,14 @@ fun sanitizeTerminalTranscript(raw: String): String {
     return output.toString()
 }
 
+private const val AGENT_LITERT_MIN_CONTEXT_TOKENS = 512
+private const val AGENT_LITERT_FALLBACK_CONTEXT_TOKENS = 4000
+private const val AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS = 8192
+private const val AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS = 128
+private const val AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS = 8096
+const val AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 8096
+const val AGENT_OUTPUT_TEMPLATE_SAFETY_RESERVE_TOKENS = 256
+
 private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
     "write_file",
     "run_command",
@@ -404,6 +581,10 @@ private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
     "create_folder",
     "generate_image",
     "remove_image_background",
+    "run_project",
+    "stop_project_run",
+    "force_stop_project_run",
+    "install_python_dependency",
     "view_image",
     "cancel_command",
     "send_command_input",
@@ -666,6 +847,45 @@ data class MemoryFilePolicy(
 )
 
 internal object AgentRuntimeSupport {
+    data class ContinuationGuardDecision(
+        val shouldPause: Boolean,
+        val reason: String?
+    )
+
+    fun evaluateContinuationGuard(
+        continuationCount: Int,
+        queueDepth: Int,
+        maxContinuations: Int,
+        maxQueueDepth: Int,
+        reason: String,
+        consecutiveNoProgress: Int = 0,
+        maxNoProgress: Int = 4
+    ): ContinuationGuardDecision {
+        val tooManyContinuations = continuationCount > maxContinuations
+        val queueTooDeep = queueDepth > maxQueueDepth
+        val repeatedNoProgress = consecutiveNoProgress > maxNoProgress
+        return if (tooManyContinuations || queueTooDeep || repeatedNoProgress) {
+            ContinuationGuardDecision(
+                shouldPause = true,
+                reason = "reason=${reason.take(120)} continuations=$continuationCount/$maxContinuations " +
+                    "queueDepth=$queueDepth/$maxQueueDepth noProgress=$consecutiveNoProgress/$maxNoProgress"
+            )
+        } else {
+            ContinuationGuardDecision(shouldPause = false, reason = null)
+        }
+    }
+
+    fun shouldInjectQueuedUserGuidance(
+        pendingCount: Int,
+        toolCallDetected: Boolean,
+        toolResultCommitted: Boolean,
+        modelTurnCompleted: Boolean
+    ): Boolean {
+        if (pendingCount <= 0) return false
+        if (toolResultCommitted) return true
+        return modelTurnCompleted && !toolCallDetected
+    }
+
     private val PLACEHOLDER_REGEX = Regex("""\{([a-zA-Z0-9_]+)\}""")
     private val SHELL_EXPLICIT_PREFIX = "shell:"
     private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
@@ -698,6 +918,54 @@ internal object AgentRuntimeSupport {
     fun resolveChatNumCtx(baseNumCtx: Int, overrideNumCtx: Int? = null): Int {
         return overrideNumCtx ?: baseNumCtx
     }
+
+    fun friendlyBackendModelLabel(rawLabel: String?): String? =
+        com.example.llamadroid.service.friendlyBackendModelLabel(rawLabel)
+
+    fun resolveAgentLiteRtContextTokens(
+        savedContextTokens: Int,
+        model: LiteRtModelEntity?,
+        fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
+        minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
+        safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+    ): Int =
+        com.example.llamadroid.service.resolveAgentLiteRtContextTokens(
+            savedContextTokens = savedContextTokens,
+            model = model,
+            fallbackContextTokens = fallbackContextTokens,
+            minContextTokens = minContextTokens,
+            safeMaxContextTokens = safeMaxContextTokens
+        )
+
+    fun resolveAgentLiteRtMaxOutputTokens(
+        savedMaxOutputTokens: Int,
+        resolvedContextTokens: Int,
+        model: LiteRtModelEntity?,
+        fallbackMaxOutputTokens: Int = AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS,
+        minMaxOutputTokens: Int = AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS
+    ): Int =
+        com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens(
+            savedMaxOutputTokens = savedMaxOutputTokens,
+            resolvedContextTokens = resolvedContextTokens,
+            model = model,
+            fallbackMaxOutputTokens = fallbackMaxOutputTokens,
+            minMaxOutputTokens = minMaxOutputTokens
+        )
+
+    fun resolveAgentEffectiveMaxOutputTokens(
+        configuredMaxOutputTokens: Int,
+        contextTokens: Int,
+        estimatedPromptTokens: Int,
+        fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
+        templateSafetyReserveTokens: Int = AGENT_OUTPUT_TEMPLATE_SAFETY_RESERVE_TOKENS
+    ): Int =
+        com.example.llamadroid.service.resolveAgentEffectiveMaxOutputTokens(
+            configuredMaxOutputTokens = configuredMaxOutputTokens,
+            contextTokens = contextTokens,
+            estimatedPromptTokens = estimatedPromptTokens,
+            fallbackMaxOutputTokens = fallbackMaxOutputTokens,
+            templateSafetyReserveTokens = templateSafetyReserveTokens
+        )
 
     fun stripHtmlTags(html: String): String {
         return com.example.llamadroid.service.stripHtmlTags(html)

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,7 +35,9 @@ import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.service.DistributedMode
 import com.example.llamadroid.service.DistributedService
-import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.RpcWorkerStatus
+import com.example.llamadroid.service.DistributedMasterRuntimeState
+import com.example.llamadroid.service.DistributedMasterLlamaService
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.service.WorkerInfo
 
@@ -58,19 +61,19 @@ fun NetworkVisualizationScreen(navController: NavController) {
     val scrollState = rememberScrollState()
     
     // Collect distributed service states
-    val workers by DistributedService.workers.collectAsState()
-    val isRunning by DistributedService.isRunning.collectAsState()
-    val mode by DistributedService.mode.collectAsState()
-    val masterRamMB by DistributedService.masterRamMB.collectAsState()
-    val modelLayerCount by DistributedService.modelLayerCount.collectAsState()
-    val rpcLayerCount by DistributedService.rpcLayerCount.collectAsState()
-    val modelSizeMB by DistributedService.modelSizeMB.collectAsState()
-    val inferenceRunning by DistributedService.inferenceRunning.collectAsState()
-    val transferProgress by DistributedService.transferProgress.collectAsState()
-    val lastCommand by DistributedService.lastCommand.collectAsState()
+    val workers by DistributedService.workers.collectAsStateWithLifecycle()
+    val isRunning by DistributedService.isRunning.collectAsStateWithLifecycle()
+    val mode by DistributedService.mode.collectAsStateWithLifecycle()
+    val masterRamMB by DistributedService.masterRamMB.collectAsStateWithLifecycle()
+    val modelLayerCount by DistributedService.modelLayerCount.collectAsStateWithLifecycle()
+    val rpcLayerCount by DistributedService.rpcLayerCount.collectAsStateWithLifecycle()
+    val modelSizeMB by DistributedService.modelSizeMB.collectAsStateWithLifecycle()
+    val inferenceRunning by DistributedService.inferenceRunning.collectAsStateWithLifecycle()
+    val transferProgress by DistributedService.transferProgress.collectAsStateWithLifecycle()
+    val lastCommand by DistributedService.lastCommand.collectAsStateWithLifecycle()
     
-    // LlamaService state
-    val serverState by LlamaService.state.collectAsState()
+    LaunchedEffect(Unit) { DistributedMasterRuntimeState.attach(context.applicationContext) }
+    val serverState by DistributedMasterRuntimeState.state.collectAsStateWithLifecycle()
     
     val masterLayers = modelLayerCount - rpcLayerCount
     val totalConnectedRam = masterRamMB + workers.filter { it.isConnected }.sumOf { it.availableRamMB }
@@ -285,8 +288,19 @@ fun NetworkVisualizationScreen(navController: NavController) {
                                 if (workerEstMb > 0) " | EST: ~${workerEstMb}MB" else ""
                             }
                             
-                            val statusColor = if (worker.isConnected) MatrixGreen else MatrixRed
-                            val statusText = if (worker.isConnected) "ONLINE" else "OFFLINE"
+                            val statusColor = when (worker.rpcStatus) {
+                                RpcWorkerStatus.ONLINE -> MatrixGreen
+                                RpcWorkerStatus.FAILED -> MatrixRed
+                                RpcWorkerStatus.CONNECTING -> MatrixCyan
+                                RpcWorkerStatus.UNKNOWN, RpcWorkerStatus.NOT_SELECTED -> MatrixDarkGreen
+                            }
+                            val statusText = when (worker.rpcStatus) {
+                                RpcWorkerStatus.ONLINE -> stringResource(R.string.net_status_online)
+                                RpcWorkerStatus.FAILED -> stringResource(R.string.net_status_failed)
+                                RpcWorkerStatus.CONNECTING -> stringResource(R.string.net_status_connecting)
+                                RpcWorkerStatus.NOT_SELECTED -> stringResource(R.string.net_status_not_selected)
+                                RpcWorkerStatus.UNKNOWN -> stringResource(R.string.net_status_unknown)
+                            }
                             
                             // Use Cyan for Real RAM usage to distinguish from Estimate
                             val usageColor = if (worker.realRamUsageMB != null) MatrixCyan else statusColor
@@ -439,8 +453,8 @@ fun NetworkVisualizationScreen(navController: NavController) {
             TerminalBox(title = stringResource(R.string.net_controls)) {
                 Button(
                     onClick = {
-                        val intent = Intent(context, LlamaService::class.java).apply {
-                            action = LlamaService.ACTION_STOP
+                        val intent = Intent(context, DistributedMasterLlamaService::class.java).apply {
+                            action = DistributedMasterLlamaService.ACTION_STOP
                         }
                         context.startService(intent)
                     },

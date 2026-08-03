@@ -12,6 +12,8 @@ import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
+import com.example.llamadroid.wear.PhoneWearGateway
+import com.example.llamadroid.wear.PinnedOrganizerNoteStore
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_SPEED
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_TOTAL_STEPS
@@ -244,6 +246,7 @@ data class NativeChatToolConfig(
     val dateTimeEnabled: Boolean = true,
     val calculatorEnabled: Boolean = true,
     val noteToolsEnabled: Boolean = false,
+    val pinnedNoteId: Int? = null,
     val todoToolsEnabled: Boolean = false,
     val calendarToolsEnabled: Boolean = false,
     val alarmToolsEnabled: Boolean = false,
@@ -274,6 +277,7 @@ data class NativeChatToolConfig(
             dateTimeEnabled ||
             calculatorEnabled ||
             noteToolsEnabled ||
+            pinnedNoteId != null ||
             todoToolsEnabled ||
             calendarToolsEnabled ||
             alarmToolsEnabled ||
@@ -302,6 +306,7 @@ data class NativeChatToolConfig(
                 knowledgeBaseEnabled &&
                 serverDefaults.knowledgeBaseEnabled
             ) || forceChatDocumentKnowledgeBase
+        val pinnedNoteOnly = pinnedNoteId?.let { it > 0 } == true
         return copy(
             toolsEnabled = effectiveToolsEnabled,
             webSearchEnabled = effectiveChatToolsEnabled && webSearchEnabled && serverDefaults.webSearchEnabled,
@@ -316,8 +321,9 @@ data class NativeChatToolConfig(
             deepResearchSourceLimit = DeepResearchSupport.normalizeSourceLimit(deepResearchSourceLimit),
             dateTimeEnabled = effectiveChatToolsEnabled && dateTimeEnabled && serverDefaults.dateTimeEnabled,
             calculatorEnabled = effectiveChatToolsEnabled && calculatorEnabled && serverDefaults.calculatorEnabled,
-            noteToolsEnabled = effectiveChatToolsEnabled && noteToolsEnabled && serverDefaults.noteToolsEnabled,
-            todoToolsEnabled = effectiveChatToolsEnabled && todoToolsEnabled && serverDefaults.todoToolsEnabled,
+            noteToolsEnabled = effectiveChatToolsEnabled && noteToolsEnabled && serverDefaults.noteToolsEnabled && !pinnedNoteOnly,
+            pinnedNoteId = pinnedNoteId?.takeIf { effectiveChatToolsEnabled && it > 0 },
+            todoToolsEnabled = effectiveChatToolsEnabled && todoToolsEnabled && serverDefaults.todoToolsEnabled && !pinnedNoteOnly,
             calendarToolsEnabled = effectiveChatToolsEnabled && calendarToolsEnabled && serverDefaults.calendarToolsEnabled,
             alarmToolsEnabled = effectiveChatToolsEnabled && alarmToolsEnabled && serverDefaults.alarmToolsEnabled,
             knowledgeBaseEnabled = effectiveKnowledgeBaseEnabled,
@@ -364,6 +370,7 @@ data class NativeChatToolConfig(
         put(KEY_DATETIME_ENABLED, dateTimeEnabled)
         put(KEY_CALCULATOR_ENABLED, calculatorEnabled)
         put(KEY_NOTE_TOOLS_ENABLED, noteToolsEnabled)
+        put(KEY_PINNED_NOTE_ID, pinnedNoteId ?: 0)
         put(KEY_TODO_TOOLS_ENABLED, todoToolsEnabled)
         put(KEY_CALENDAR_TOOLS_ENABLED, calendarToolsEnabled)
         put(KEY_ALARM_TOOLS_ENABLED, alarmToolsEnabled)
@@ -413,6 +420,7 @@ data class NativeChatToolConfig(
         const val KEY_DATETIME_ENABLED = "tool_datetime_enabled"
         const val KEY_CALCULATOR_ENABLED = "tool_calculator_enabled"
         const val KEY_NOTE_TOOLS_ENABLED = "tool_note_tools_enabled"
+        const val KEY_PINNED_NOTE_ID = "tool_pinned_note_id"
         const val KEY_TODO_TOOLS_ENABLED = "tool_todo_tools_enabled"
         const val KEY_CALENDAR_TOOLS_ENABLED = "tool_calendar_tools_enabled"
         const val KEY_ALARM_TOOLS_ENABLED = "tool_alarm_tools_enabled"
@@ -575,6 +583,7 @@ data class NativeChatToolConfig(
             dateTimeEnabled = booleanParam(params, KEY_DATETIME_ENABLED, true),
             calculatorEnabled = booleanParam(params, KEY_CALCULATOR_ENABLED, true),
             noteToolsEnabled = booleanParam(params, KEY_NOTE_TOOLS_ENABLED, false),
+            pinnedNoteId = intParam(params, KEY_PINNED_NOTE_ID, 0).takeIf { it > 0 },
             todoToolsEnabled = booleanParam(params, KEY_TODO_TOOLS_ENABLED, false),
             calendarToolsEnabled = booleanParam(params, KEY_CALENDAR_TOOLS_ENABLED, false),
             alarmToolsEnabled = booleanParam(params, KEY_ALARM_TOOLS_ENABLED, false),
@@ -845,7 +854,8 @@ class NativeChatToolRuntime(
     private val imageGenerator: NativeChatImageGenerator? = null,
     private val backgroundRemover: NativeChatBackgroundRemover? = null,
     private val pdfTextExtractor: (ByteArray, Int) -> String = ::extractNativePdfTextFromBytes,
-    private val clientFactory: () -> OkHttpClient = { defaultNativeChatToolClient() }
+    private val clientFactory: () -> OkHttpClient = { defaultNativeChatToolClient() },
+    private val nowProvider: () -> ZonedDateTime = { ZonedDateTime.now() }
 ) {
     private val client by lazy(clientFactory)
 
@@ -860,8 +870,24 @@ class NativeChatToolRuntime(
 
     fun availableTools(config: NativeChatToolConfig): List<AgentTool> {
         if (!config.toolsEnabled) return emptyList()
-        val currentYear = LocalDate.now(ZoneId.systemDefault()).year
+        val currentYear = nowProvider().year
         return buildList {
+            config.pinnedNoteId?.takeIf { it > 0 }?.let {
+                add(
+                    AgentTool(
+                        name = TOOL_MODIFY_PINNED_NOTE,
+                        description = "Read or modify the single Organizer note pinned for Wear Quick Chat. This tool cannot access any other note. Use operation=read to inspect it, operation=replace_text to change a matching part, or operation=rewrite to replace the whole content.",
+                        parameters = mapOf(
+                            "operation" to "read, replace_text, or rewrite",
+                            "find_text" to "Exact text to replace when operation=replace_text",
+                            "replacement_text" to "Replacement text when operation=replace_text",
+                            "content" to "Complete new content when operation=rewrite",
+                            "replace_all" to "Optional true to replace every exact match"
+                        ),
+                        requiredParams = listOf("operation")
+                    )
+                )
+            }
             if (config.webSearchEnabled) {
                 add(
                     AgentTool(
@@ -953,7 +979,8 @@ class NativeChatToolRuntime(
                     )
                 )
             }
-            if (config.noteToolsEnabled) {
+            val pinnedNoteOnly = config.pinnedNoteId?.let { it > 0 } == true
+            if (config.noteToolsEnabled && !pinnedNoteOnly) {
                 add(
                     AgentTool(
                         name = TOOL_LIST_NOTES,
@@ -1012,7 +1039,7 @@ class NativeChatToolRuntime(
                     )
                 )
             }
-            if (config.todoToolsEnabled) {
+            if (config.todoToolsEnabled && !pinnedNoteOnly) {
                 if (!config.noteToolsEnabled) {
                     add(
                         AgentTool(
@@ -1096,7 +1123,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_LIST_CALENDAR_EVENTS,
-                        description = "List Organizer calendar events by optional date range or search query. Use this before editing or deleting an event when the event ID is unknown.",
+                        description = "List Organizer calendar events by optional date range or search query. Returned event dates include English and Spanish day-of-week names. Use this before editing or deleting an event when the event ID is unknown.",
                         parameters = mapOf(
                             "start_datetime" to "Optional ISO-8601 range start; local timezone is used if no offset is included",
                             "end_datetime" to "Optional ISO-8601 range end; local timezone is used if no offset is included",
@@ -1108,7 +1135,7 @@ class NativeChatToolRuntime(
                 add(
                     AgentTool(
                         name = TOOL_READ_CALENDAR_EVENT,
-                        description = "Read one Organizer calendar event by ID, including any linked alarms.",
+                        description = "Read one Organizer calendar event by ID, including English and Spanish day-of-week names plus any linked alarms.",
                         parameters = mapOf("event_id" to "Numeric event id"),
                         requiredParams = listOf("event_id")
                     )
@@ -1351,6 +1378,20 @@ class NativeChatToolRuntime(
     ): Result<NativeChatToolResult> = withContext(Dispatchers.IO) {
         try {
             val output = when (toolCall.name) {
+                TOOL_MODIFY_PINNED_NOTE -> {
+                    val pinnedId = config.pinnedNoteId
+                    require(config.toolsEnabled && pinnedId != null && pinnedId > 0) {
+                        "No pinned note is available for this Quick Chat."
+                    }
+                    modifyPinnedNote(
+                        noteId = pinnedId,
+                        operation = toolArg(toolCall.arguments, "operation", "action").orEmpty(),
+                        findText = toolArg(toolCall.arguments, "find_text", "findText", "old_text", "oldText"),
+                        replacementText = toolArg(toolCall.arguments, "replacement_text", "replacementText", "new_text", "newText"),
+                        content = toolArg(toolCall.arguments, "content", "body", "text"),
+                        replaceAll = parseOptionalBoolean(toolArg(toolCall.arguments, "replace_all", "replaceAll"), false)
+                    )
+                }
                 TOOL_WEB_SEARCH -> {
                     require(config.toolsEnabled && config.webSearchEnabled) { "web_search is disabled for this chat." }
                     webSearch(
@@ -1583,7 +1624,7 @@ class NativeChatToolRuntime(
                     calculate(toolCall.arguments["expression"].orEmpty())
                 }
                 TOOL_LIST_NOTES -> {
-                    require(config.toolsEnabled && (config.noteToolsEnabled || config.todoToolsEnabled)) { "list_notes is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && (config.noteToolsEnabled || config.todoToolsEnabled)) { "list_notes is disabled for this chat." }
                     listNotes(
                         query = toolArg(toolCall.arguments, "query", "q", "search"),
                         type = toolArg(toolCall.arguments, "type", "note_type", "noteType"),
@@ -1591,20 +1632,20 @@ class NativeChatToolRuntime(
                     )
                 }
                 TOOL_READ_NOTE -> {
-                    require(config.toolsEnabled && (config.noteToolsEnabled || config.todoToolsEnabled)) { "read_note is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && (config.noteToolsEnabled || config.todoToolsEnabled)) { "read_note is disabled for this chat." }
                     readNote(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id")
                     )
                 }
                 TOOL_CREATE_NOTE -> {
-                    require(config.toolsEnabled && config.noteToolsEnabled) { "create_note is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.noteToolsEnabled) { "create_note is disabled for this chat." }
                     createNote(
                         title = toolArg(toolCall.arguments, "title", "name").orEmpty(),
                         content = toolArg(toolCall.arguments, "content", "body", "text").orEmpty()
                     )
                 }
                 TOOL_UPDATE_NOTE -> {
-                    require(config.toolsEnabled && config.noteToolsEnabled) { "update_note is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.noteToolsEnabled) { "update_note is disabled for this chat." }
                     updateNote(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id"),
                         title = toolArg(toolCall.arguments, "title", "name", "new_title", "newTitle"),
@@ -1613,7 +1654,7 @@ class NativeChatToolRuntime(
                     )
                 }
                 TOOL_REPLACE_NOTE_TEXT -> {
-                    require(config.toolsEnabled && config.noteToolsEnabled) { "replace_note_text is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.noteToolsEnabled) { "replace_note_text is disabled for this chat." }
                     replaceNoteText(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id"),
                         findText = toolArg(toolCall.arguments, "find_text", "findText", "old_text", "oldText", "search_text", "searchText", "find").orEmpty(),
@@ -1623,21 +1664,21 @@ class NativeChatToolRuntime(
                     )
                 }
                 TOOL_CREATE_TODO_LIST -> {
-                    require(config.toolsEnabled && config.todoToolsEnabled) { "create_todo_list is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.todoToolsEnabled) { "create_todo_list is disabled for this chat." }
                     createTodoList(
                         title = toolArg(toolCall.arguments, "title", "name").orEmpty(),
                         itemsText = toolArg(toolCall.arguments, "items", "tasks", "todos", "content").orEmpty()
                     )
                 }
                 TOOL_ADD_TODO_ITEM -> {
-                    require(config.toolsEnabled && config.todoToolsEnabled) { "add_todo_item is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.todoToolsEnabled) { "add_todo_item is disabled for this chat." }
                     addTodoItem(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id"),
                         item = toolArg(toolCall.arguments, "item", "text", "content", "task").orEmpty()
                     )
                 }
                 TOOL_UPDATE_TODO_ITEM -> {
-                    require(config.toolsEnabled && config.todoToolsEnabled) { "update_todo_item is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.todoToolsEnabled) { "update_todo_item is disabled for this chat." }
                     updateTodoItem(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id"),
                         itemIndex = parseRequiredInt(toolArg(toolCall.arguments, "item_index", "itemIndex", "index", "position"), "item_index"),
@@ -1645,14 +1686,14 @@ class NativeChatToolRuntime(
                     )
                 }
                 TOOL_REMOVE_TODO_ITEM -> {
-                    require(config.toolsEnabled && config.todoToolsEnabled) { "remove_todo_item is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.todoToolsEnabled) { "remove_todo_item is disabled for this chat." }
                     removeTodoItem(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id"),
                         itemIndex = parseRequiredInt(toolArg(toolCall.arguments, "item_index", "itemIndex", "index", "position"), "item_index")
                     )
                 }
                 TOOL_SET_TODO_ITEM_CHECKED -> {
-                    require(config.toolsEnabled && config.todoToolsEnabled) { "set_todo_item_checked is disabled for this chat." }
+                    require(config.toolsEnabled && config.pinnedNoteId == null && config.todoToolsEnabled) { "set_todo_item_checked is disabled for this chat." }
                     setTodoItemChecked(
                         noteId = parseRequiredInt(toolArg(toolCall.arguments, "note_id", "noteId", "id"), "note_id"),
                         itemIndex = parseRequiredInt(toolArg(toolCall.arguments, "item_index", "itemIndex", "index", "position"), "item_index"),
@@ -1783,10 +1824,18 @@ class NativeChatToolRuntime(
                 }
                 else -> "tool_error: Unknown tool '${toolCall.name}'."
             }
-            Result.success(
-                when (output) {
+            val normalizedResult = when (output) {
                     is NativeChatToolResult -> output
                     else -> NativeChatToolResult(output.toString())
+                }
+            Result.success(
+                if (toolCall.name in ORGANIZER_TIME_CONTEXT_TOOLS) {
+                    normalizedResult.copy(
+                        content = normalizedResult.content.trimEnd() +
+                            "\n\n" + currentDateTimeReminder()
+                    )
+                } else {
+                    normalizedResult
                 }
             )
         } catch (e: CancellationException) {
@@ -2343,7 +2392,7 @@ class NativeChatToolRuntime(
     }
 
     private fun currentDateTime(): String {
-        val now = ZonedDateTime.now()
+        val now = nowProvider()
         return buildString {
             appendLine("tool: get_datetime")
             appendLine("local_datetime: ${now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)}")
@@ -2351,6 +2400,16 @@ class NativeChatToolRuntime(
             appendLine("date: ${now.toLocalDate()}")
             appendLine("time: ${now.toLocalTime().withNano(0)}")
         }.trimEnd()
+    }
+
+    private fun currentDateTimeReminder(): String {
+        val now = nowProvider()
+        return buildString {
+            appendLine("current_datetime_reminder:")
+            appendLine("local_datetime: ${now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)}")
+            appendLine("timezone: ${now.zone.id}")
+            append("instruction: Use this as the current reference for relative calendar and alarm dates.")
+        }
     }
 
     private fun calculate(expression: String): String {
@@ -2424,6 +2483,50 @@ class NativeChatToolRuntime(
                 appendLine(note.content.limitForTool(MAX_NOTE_READ_CHARS))
             }
         }.trimEnd()
+    }
+
+    private suspend fun modifyPinnedNote(
+        noteId: Int,
+        operation: String,
+        findText: String?,
+        replacementText: String?,
+        content: String?,
+        replaceAll: Boolean
+    ): String {
+        val dao = requireNoteDao()
+        val storedPinnedId = context?.let { PinnedOrganizerNoteStore.get(it) }
+        if (context != null) {
+            require(storedPinnedId == noteId) { "The pinned note changed before this tool call could run." }
+        }
+        val currentPinnedId = storedPinnedId ?: noteId
+        val note = dao.getNoteById(currentPinnedId) ?: error("The pinned note no longer exists.")
+        val normalizedOperation = operation.trim().lowercase(Locale.US)
+        if (normalizedOperation == "read") {
+            return buildString {
+                appendLine("tool: $TOOL_MODIFY_PINNED_NOTE")
+                appendLine("operation: read")
+                appendLine("title: ${note.title}")
+                appendLine("content:")
+                append(note.content.limitForTool(MAX_NOTE_READ_CHARS))
+            }
+        }
+        val updatedContent = when (normalizedOperation) {
+            "rewrite", "replace" -> content ?: error("content is required for rewrite.")
+            "replace_text", "patch" -> {
+                val find = findText.orEmpty()
+                require(find.isNotEmpty()) { "find_text is required for replace_text." }
+                require(note.content.contains(find)) { "find_text was not found in the pinned note." }
+                if (replaceAll) note.content.replace(find, replacementText.orEmpty())
+                else note.content.replaceFirst(find, replacementText.orEmpty())
+            }
+            else -> error("operation must be read, replace_text, or rewrite.")
+        }
+        dao.update(note.copy(content = updatedContent, updatedAt = System.currentTimeMillis()))
+        notesChanged?.invoke()
+        context?.let { appContext ->
+            PhoneWearGateway.publishPinnedOrganizerNote(appContext)
+        }
+        return "tool: $TOOL_MODIFY_PINNED_NOTE\noperation: $normalizedOperation\ncontent_chars: ${updatedContent.length}\nstatus: updated"
     }
 
     private suspend fun createNote(title: String, content: String): String {
@@ -3128,7 +3231,13 @@ class NativeChatToolRuntime(
         appendLine("event_id: ${event.id}")
         appendLine("title: ${event.title}")
         appendLine("start_datetime: ${formatOrganizerMillis(event.startAtMillis, event.timezoneId)}")
-        event.endAtMillis?.let { appendLine("end_datetime: ${formatOrganizerMillis(it, event.timezoneId)}") }
+        appendLine("start_day_of_week: ${formatOrganizerWeekday(event.startAtMillis, event.timezoneId, Locale.ENGLISH)}")
+        appendLine("start_day_of_week_es: ${formatOrganizerWeekday(event.startAtMillis, event.timezoneId, Locale.forLanguageTag("es"))}")
+        event.endAtMillis?.let {
+            appendLine("end_datetime: ${formatOrganizerMillis(it, event.timezoneId)}")
+            appendLine("end_day_of_week: ${formatOrganizerWeekday(it, event.timezoneId, Locale.ENGLISH)}")
+            appendLine("end_day_of_week_es: ${formatOrganizerWeekday(it, event.timezoneId, Locale.forLanguageTag("es"))}")
+        }
         appendLine("all_day: ${event.allDay}")
         if (event.location.isNotBlank()) appendLine("location: ${event.location}")
         if (event.description.isNotBlank()) appendLine("description: ${event.description.limitForTool(700)}")
@@ -3153,6 +3262,13 @@ class NativeChatToolRuntime(
         return Instant.ofEpochMilli(millis).atZone(zone).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
     }
 
+    private fun formatOrganizerWeekday(millis: Long, timezoneId: String, locale: Locale): String {
+        val zone = runCatching { ZoneId.of(timezoneId) }.getOrDefault(ZoneId.systemDefault())
+        return Instant.ofEpochMilli(millis)
+            .atZone(zone)
+            .format(DateTimeFormatter.ofPattern("EEEE", locale))
+    }
+
     companion object {
         const val TOOL_WEB_SEARCH = "web_search"
         const val TOOL_SEARCH_PAGE = "search_page"
@@ -3166,6 +3282,7 @@ class NativeChatToolRuntime(
         const val TOOL_CREATE_NOTE = "create_note"
         const val TOOL_UPDATE_NOTE = "update_note"
         const val TOOL_REPLACE_NOTE_TEXT = "replace_note_text"
+        const val TOOL_MODIFY_PINNED_NOTE = "modify_pinned_note"
         const val TOOL_CREATE_TODO_LIST = "create_todo_list"
         const val TOOL_ADD_TODO_ITEM = "add_todo_item"
         const val TOOL_UPDATE_TODO_ITEM = "update_todo_item"
@@ -3181,6 +3298,18 @@ class NativeChatToolRuntime(
         const val TOOL_CREATE_ALARM = "create_alarm"
         const val TOOL_UPDATE_ALARM = "update_alarm"
         const val TOOL_DELETE_ALARM = "delete_alarm"
+        private val ORGANIZER_TIME_CONTEXT_TOOLS = setOf(
+            TOOL_LIST_CALENDAR_EVENTS,
+            TOOL_READ_CALENDAR_EVENT,
+            TOOL_CREATE_CALENDAR_EVENT,
+            TOOL_UPDATE_CALENDAR_EVENT,
+            TOOL_DELETE_CALENDAR_EVENT,
+            TOOL_LIST_ALARMS,
+            TOOL_READ_ALARM,
+            TOOL_CREATE_ALARM,
+            TOOL_UPDATE_ALARM,
+            TOOL_DELETE_ALARM
+        )
         const val TOOL_KB_SEARCH = "kb_search"
         const val TOOL_KB_READ_CHUNK = "kb_read_chunk"
         const val TOOL_KB_READ_SOURCE = "kb_read_source"

@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
 
@@ -66,6 +67,50 @@ class ProcessControllerTest {
         assertArgValue(args, "--ubatch-size", "1024")
         assertArgValue(args, "--parallel", "1")
         assertArgValue(args, "--cache-ram", "0")
+    }
+
+    @Test
+    fun `generated OCR command includes mmproj and custom OCR flags`() {
+        val controller = ProcessController()
+
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/unlimited-ocr.gguf",
+                mmprojPath = "/models/mmproj-unlimited-ocr.gguf",
+                contextSize = 16384,
+                port = 8087,
+                parallel = 1,
+                cacheRam = 4096,
+                flashAttention = false,
+                customFlags = "--chat-template deepseek-ocr --no-warmup"
+            )
+        )
+
+        assertArgValue(args, "-m", "/models/unlimited-ocr.gguf")
+        assertArgValue(args, "--mmproj", "/models/mmproj-unlimited-ocr.gguf")
+        assertArgValue(args, "-c", "16384")
+        assertArgValue(args, "--port", "8087")
+        assertArgValue(args, "--parallel", "1")
+        assertArgValue(args, "--cache-ram", "4096")
+        assertArgValue(args, "--flash-attn", "off")
+        assertArgValue(args, "--chat-template", "deepseek-ocr")
+        assertTrue(args.contains("--no-warmup"))
+    }
+
+    @Test
+    fun `generated llama command applies selected lora adapter once`() {
+        val controller = ProcessController()
+        val args = controller.getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/base.gguf",
+                loraPath = "/models/adapter.gguf"
+            )
+        )
+
+        assertArgValue(args, "--lora", "/models/adapter.gguf")
+        assertEquals(1, args.count { it == "--lora" })
     }
 
     @Test
@@ -212,6 +257,76 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `OpenCL CPU target and GPU drafter preserve KV settings`() {
+        val args = ProcessController().getCommand(
+            "/native/libllama_server_snapdragon_opencl.so",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                draftDeviceMode = LlamaDraftDeviceMode.CPU.value,
+                kvCacheEnabled = true,
+                kvCacheTypeK = "q4_0",
+                kvCacheTypeV = "q8_0",
+                kvCacheReuse = 32,
+                kvOffloadMode = LlamaKvOffloadMode.ACCELERATOR.value,
+                openClCpuTargetGpuDraft = true,
+                customFlags = "--cache-type-k q4_0 --spec-draft-device CPU --spec-draft-ngl 0 --spec-draft-backend-sampling"
+            )
+        )
+
+        assertArgValue(args, "--device", "none")
+        assertArgValue(args, "-ngl", "0")
+        assertFalse(args.contains("--no-kv-offload"))
+        assertTrue(args.contains("--no-spec-draft-backend-sampling"))
+        assertArgValue(args, "--spec-draft-device", "GPUOpenCL")
+        assertArgValue(args, "--spec-draft-ngl", "all")
+        assertArgValue(args, "--cache-type-k", "q4_0")
+        assertArgValue(args, "--cache-type-v", "q8_0")
+        assertArgValue(args, "--cache-reuse", "32")
+        assertTrue(args.contains("--kv-offload"))
+        assertFalse(args.contains("--spec-draft-backend-sampling"))
+        assertFalse(args.contains("--device-draft"))
+        assertFalse(args.contains("--gpu-layers-draft"))
+    }
+
+    @Test
+    fun `OpenCL placement override is ignored for CPU binaries`() {
+        val args = ProcessController().getCommand(
+            "/native/libllama_server_baseline.so",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_MTP,
+                openClCpuTargetGpuDraft = true
+            )
+        )
+
+        assertFalse(args.contains("--device"))
+        assertFalse(args.contains("--no-kv-offload"))
+        assertFalse(args.contains("--spec-draft-device"))
+        assertFalse(args.contains("--spec-draft-ngl"))
+    }
+
+    @Test
+    fun `OpenCL placement override survives a custom command template`() {
+        val args = ProcessController().renderCommandTemplate(
+            template = "{binary} {model} --cache-type-k q4_0 --spec-draft-device CPU",
+            binaryPath = "/native/libllama_server_snapdragon_opencl.so",
+            config = LlamaConfig(
+                modelPath = "/models/main.gguf",
+                openClCpuTargetGpuDraft = true
+            )
+        )
+
+        assertArgValue(args, "--device", "none")
+        assertArgValue(args, "-ngl", "0")
+        assertFalse(args.contains("--no-kv-offload"))
+        assertTrue(args.contains("--no-spec-draft-backend-sampling"))
+        assertArgValue(args, "--spec-draft-device", "GPUOpenCL")
+        assertArgValue(args, "--spec-draft-ngl", "all")
+        assertTrue(args.contains("--cache-type-k"))
+    }
+
+    @Test
     fun `custom draft placement flags suppress generated draft placement`() {
         val controller = ProcessController()
 
@@ -301,6 +416,108 @@ class ProcessControllerTest {
         assertFalse(args.contains("-md"))
         assertFalse(args.contains("--spec-draft-threads"))
         assertFalse(args.contains("--spec-draft-threads-batch"))
+    }
+
+    @Test
+    fun `distributed fit off never emits a fit target`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                rpcWorkers = listOf("192.168.1.20:50052", "192.168.1.21:50052"),
+                nGpuLayers = 12,
+                nGpuLayersArgument = "12",
+                tensorSplit = "3,1",
+                fitEnabled = false,
+                fitTargetMiB = "7168"
+            )
+        )
+
+        assertArgValue(args, "--rpc", "192.168.1.20:50052,192.168.1.21:50052")
+        assertArgValue(args, "-ngl", "12")
+        assertFalse(args.contains("--fit"))
+        assertArgValue(args, "-ts", "3,1")
+        assertFalse(args.contains("--fit-target"))
+    }
+
+    @Test
+    fun `distributed fit on broadcasts one target`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                rpcWorkers = listOf("192.168.1.20:50052", "192.168.1.21:50052"),
+                nGpuLayersArgument = "auto",
+                fitEnabled = true,
+                fitTargetMiB = "7168"
+            )
+        )
+
+        assertArgValue(args, "-ngl", "auto")
+        assertArgValue(args, "--fit", "on")
+        assertArgValue(args, "--fit-target", "7168")
+        assertFalse(args.contains("-ts"))
+    }
+
+    @Test
+    fun `distributed fit target and tensor split preserve device order`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                rpcWorkers = listOf("192.168.1.20:50052", "192.168.1.21:50052"),
+                nGpuLayersArgument = "auto",
+                fitEnabled = true,
+                fitTargetMiB = "2048,8192",
+                tensorSplit = "3,1"
+            )
+        )
+
+        assertArgValue(args, "--fit-target", "2048,8192")
+        assertArgValue(args, "-ts", "3,1")
+    }
+
+    @Test
+    fun `distributed fit rejects mismatched per-device lists`() {
+        try {
+            ProcessController().getCommand(
+                "/bin/llama-server",
+                LlamaConfig(
+                    modelPath = "/models/main.gguf",
+                    rpcWorkers = listOf("worker-a:50052", "worker-b:50052"),
+                    fitEnabled = true,
+                    fitTargetMiB = "1024,2048,4096"
+                )
+            )
+            fail("Expected mismatched fit target to be rejected")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("fit-target"))
+        }
+    }
+
+    @Test
+    fun `DSpark uses the shared draft controls and explicit device placement`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                draftModelPath = "/models/dspark.gguf",
+                speculativeMode = LlamaSpeculativeMode.DRAFT_DSPARK,
+                draftMax = 8,
+                draftMin = 2,
+                draftPMin = 0.2f,
+                draftDeviceId = "RPC1",
+                draftGpuLayers = "all"
+            )
+        )
+
+        assertArgValue(args, "--spec-type", "draft-dspark")
+        assertArgValue(args, "--spec-draft-model", "/models/dspark.gguf")
+        assertArgValue(args, "--spec-draft-device", "RPC1")
+        assertArgValue(args, "--spec-draft-ngl", "all")
+        assertArgValue(args, "--spec-draft-n-max", "8")
+        assertArgValue(args, "--spec-draft-n-min", "2")
+        assertArgValue(args, "--spec-draft-p-min", "0.20")
     }
 
     @Test
@@ -544,6 +761,37 @@ class ProcessControllerTest {
     }
 
     @Test
+    fun `prompt cache controls emit managed flags once and remove custom duplicates`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                parallel = 2,
+                cacheRam = 1024,
+                contextCheckpoints = 128,
+                checkpointMinStep = 512,
+                cachePrompt = true,
+                cacheIdleSlots = false,
+                kvUnifiedMode = LlamaKvUnifiedMode.ENABLED.value,
+                swaFull = true,
+                sleepIdleSeconds = 1800,
+                customFlags = "--parallel 9 --cache-prompt --sleep-idle-seconds=60 --other value"
+            )
+        )
+
+        assertArgValue(args, "--parallel", "2")
+        assertArgValue(args, "--cache-ram", "1024")
+        assertArgValue(args, "--ctx-checkpoints", "128")
+        assertArgValue(args, "--checkpoint-min-step", "512")
+        assertArgValue(args, "--sleep-idle-seconds", "1800")
+        assertEquals(1, args.count { it == "--cache-prompt" })
+        assertEquals(1, args.count { it == "--no-cache-idle-slots" })
+        assertEquals(1, args.count { it == "--kv-unified" })
+        assertEquals(1, args.count { it == "--swa-full" })
+        assertArgValue(args, "--other", "value")
+    }
+
+    @Test
     fun `MTP binary capability check detects advertised draft-mtp marker`() {
         val controller = ProcessController()
         val supported = File.createTempFile("llama-server-mtp", ".so")
@@ -581,11 +829,40 @@ class ProcessControllerTest {
         }
     }
 
+    @Test
+    fun `native child pid fallback selects matching direct child`() {
+        val proc = kotlin.io.path.createTempDirectory("proc-children").toFile()
+        try {
+            File(proc, "77/task/77").mkdirs()
+            File(proc, "77/task/77/children").writeText("100 101")
+            File(proc, "100").mkdirs()
+            File(proc, "101").mkdirs()
+            File(proc, "100/cmdline").writeBytes("/system/bin/sh\u0000".toByteArray())
+            File(proc, "101/cmdline").writeBytes("/data/app/libllama_server_i8mm.so\u0000--port\u00008081".toByteArray())
+
+            assertEquals(
+                101,
+                ProcessController().resolveNativeChildPid(
+                    "/data/app/libllama_server_i8mm.so",
+                    procRoot = proc,
+                    selfPid = 77
+                )
+            )
+        } finally {
+            proc.deleteRecursively()
+        }
+    }
+
     private fun speculativeConfig() = LlamaConfig(
         modelPath = "/models/main.gguf",
         speculativeMode = LlamaSpeculativeMode.DRAFT_SIMPLE,
         draftModelPath = "/models/draft.gguf"
     )
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `command tokenizer rejects incomplete quoting`() {
+        ProcessController().splitCommandLine("/bin/llama-server --model 'unfinished")
+    }
 
     private fun assertArgValue(args: List<String>, flag: String, expected: String) {
         val index = args.indexOf(flag)

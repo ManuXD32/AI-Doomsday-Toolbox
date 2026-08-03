@@ -2337,6 +2337,648 @@ object Migrations {
         }
     }
 
+    val MIGRATION_96_97 = object : Migration(96, 97) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 96 -> 97: agent local sandbox workspace metadata")
+
+            fun addConversationColumn(name: String, definition: String) {
+                if (tableExists(db, "agent_conversations") &&
+                    !columnExists(db, "agent_conversations", name)
+                ) {
+                    db.execSQL("ALTER TABLE `agent_conversations` ADD COLUMN `$name` $definition")
+                }
+            }
+
+            addConversationColumn("workspaceBackend", "TEXT NOT NULL DEFAULT 'REMOTE_SSH'")
+            addConversationColumn("runtimeCapabilitiesJson", "TEXT NOT NULL DEFAULT ''")
+            addConversationColumn("runEntrypointPath", "TEXT DEFAULT NULL")
+            addConversationColumn("runUiMode", "TEXT NOT NULL DEFAULT 'CONSOLE'")
+            addConversationColumn("lastRunProfileJson", "TEXT NOT NULL DEFAULT ''")
+
+            if (!tableExists(db, "agent_project_runs")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_project_runs` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `conversationId` INTEGER NOT NULL,
+                        `projectFolder` TEXT NOT NULL,
+                        `backend` TEXT NOT NULL DEFAULT 'LOCAL_SANDBOX',
+                        `runtime` TEXT NOT NULL DEFAULT '',
+                        `entrypoint` TEXT NOT NULL DEFAULT '',
+                        `uiMode` TEXT NOT NULL DEFAULT 'CONSOLE',
+                        `status` TEXT NOT NULL DEFAULT 'STOPPED',
+                        `logs` TEXT NOT NULL DEFAULT '',
+                        `previewUrl` TEXT DEFAULT NULL,
+                        `startedAt` INTEGER DEFAULT NULL,
+                        `endedAt` INTEGER DEFAULT NULL,
+                        `exitCode` INTEGER DEFAULT NULL,
+                        `stopRequestedAt` INTEGER DEFAULT NULL,
+                        `forceStopRequestedAt` INTEGER DEFAULT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_runs_conversationId` ON `agent_project_runs` (`conversationId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_runs_status` ON `agent_project_runs` (`status`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_runs_updatedAt` ON `agent_project_runs` (`updatedAt`)")
+            }
+
+            DebugLog.log("[DB] Migration 96 -> 97 complete")
+        }
+    }
+
+    val MIGRATION_97_98 = object : Migration(97, 98) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 97 -> 98: agent project organization and resume controls")
+
+            fun addConversationColumn(name: String, definition: String) {
+                if (tableExists(db, "agent_conversations") &&
+                    !columnExists(db, "agent_conversations", name)
+                ) {
+                    db.execSQL("ALTER TABLE `agent_conversations` ADD COLUMN `$name` $definition")
+                }
+            }
+
+            if (!tableExists(db, "agent_project_folders")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_project_folders` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `parentId` INTEGER DEFAULT NULL,
+                        `name` TEXT NOT NULL,
+                        `sortOrder` INTEGER NOT NULL DEFAULT 0,
+                        `isCollapsed` INTEGER NOT NULL DEFAULT 0,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_folders_parentId` ON `agent_project_folders` (`parentId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_folders_sortOrder` ON `agent_project_folders` (`sortOrder`)")
+            }
+
+            addConversationColumn("projectFolderId", "INTEGER DEFAULT NULL")
+            addConversationColumn("sortOrder", "INTEGER NOT NULL DEFAULT 0")
+            addConversationColumn("planningModeEnabled", "INTEGER NOT NULL DEFAULT 0")
+            addConversationColumn("resumeState", "TEXT NOT NULL DEFAULT 'IDLE'")
+            addConversationColumn("lastStopReason", "TEXT DEFAULT NULL")
+
+            if (tableExists(db, "agent_conversations")) {
+                db.execSQL(
+                    """
+                    UPDATE `agent_conversations`
+                    SET `sortOrder` = (
+                        SELECT COUNT(*)
+                        FROM `agent_conversations` AS newer
+                        WHERE newer.`updatedAt` > `agent_conversations`.`updatedAt`
+                           OR (newer.`updatedAt` = `agent_conversations`.`updatedAt` AND newer.`id` < `agent_conversations`.`id`)
+                    )
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 97 -> 98 complete")
+        }
+    }
+
+    val MIGRATION_98_99 = object : Migration(98, 99) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 98 -> 99: split SD distributed image and video run settings")
+
+            fun addMasterColumn(name: String, definition: String) {
+                if (tableExists(db, "sd_distributed_master_settings") &&
+                    !columnExists(db, "sd_distributed_master_settings", name)
+                ) {
+                    db.execSQL("ALTER TABLE `sd_distributed_master_settings` ADD COLUMN `$name` $definition")
+                }
+            }
+
+            addMasterColumn("imagePrompt", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageNegativePrompt", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageWidth", "TEXT NOT NULL DEFAULT '512'")
+            addMasterColumn("imageHeight", "TEXT NOT NULL DEFAULT '512'")
+            addMasterColumn("imageSteps", "TEXT NOT NULL DEFAULT '20'")
+            addMasterColumn("imageCfg", "TEXT NOT NULL DEFAULT '7.0'")
+            addMasterColumn("imageSeed", "TEXT NOT NULL DEFAULT '-1'")
+            addMasterColumn("imageSampler", "TEXT NOT NULL DEFAULT 'euler_a'")
+            addMasterColumn("imageScheduler", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("imageFlowShift", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoPrompt", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoNegativePrompt", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoWidth", "TEXT NOT NULL DEFAULT '480'")
+            addMasterColumn("videoHeight", "TEXT NOT NULL DEFAULT '832'")
+            addMasterColumn("videoSteps", "TEXT NOT NULL DEFAULT '18'")
+            addMasterColumn("videoCfg", "TEXT NOT NULL DEFAULT '6.0'")
+            addMasterColumn("videoSeed", "TEXT NOT NULL DEFAULT '-1'")
+            addMasterColumn("videoSampler", "TEXT NOT NULL DEFAULT 'euler'")
+            addMasterColumn("videoScheduler", "TEXT NOT NULL DEFAULT ''")
+            addMasterColumn("videoFlowShift", "TEXT NOT NULL DEFAULT ''")
+
+            if (tableExists(db, "sd_distributed_master_settings")) {
+                db.execSQL(
+                    """
+                    UPDATE `sd_distributed_master_settings`
+                    SET
+                        `imagePrompt` = `prompt`,
+                        `videoPrompt` = `prompt`,
+                        `imageNegativePrompt` = `negativePrompt`,
+                        `videoNegativePrompt` = `negativePrompt`,
+                        `imageSteps` = `steps`,
+                        `videoSteps` = `steps`,
+                        `imageCfg` = `cfg`,
+                        `videoCfg` = `cfg`,
+                        `imageSeed` = `seed`,
+                        `videoSeed` = `seed`,
+                        `imageSampler` = `sampler`,
+                        `videoSampler` = `sampler`,
+                        `imageScheduler` = `scheduler`,
+                        `videoScheduler` = `scheduler`,
+                        `imageFlowShift` = `flowShift`,
+                        `videoFlowShift` = `flowShift`
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    UPDATE `sd_distributed_master_settings`
+                    SET
+                        `imageWidth` = substr(replace(lower(`dimensions`), ' ', ''), 1, instr(replace(lower(`dimensions`), ' ', ''), 'x') - 1),
+                        `videoWidth` = substr(replace(lower(`dimensions`), ' ', ''), 1, instr(replace(lower(`dimensions`), ' ', ''), 'x') - 1),
+                        `imageHeight` = substr(replace(lower(`dimensions`), ' ', ''), instr(replace(lower(`dimensions`), ' ', ''), 'x') + 1),
+                        `videoHeight` = substr(replace(lower(`dimensions`), ' ', ''), instr(replace(lower(`dimensions`), ' ', ''), 'x') + 1)
+                    WHERE instr(replace(lower(`dimensions`), ' ', ''), 'x') > 1
+                        AND CAST(substr(replace(lower(`dimensions`), ' ', ''), 1, instr(replace(lower(`dimensions`), ' ', ''), 'x') - 1) AS INTEGER) >= 64
+                        AND CAST(substr(replace(lower(`dimensions`), ' ', ''), instr(replace(lower(`dimensions`), ' ', ''), 'x') + 1) AS INTEGER) >= 64
+                    """.trimIndent()
+                )
+            }
+
+            DebugLog.log("[DB] Migration 98 -> 99 complete")
+        }
+    }
+
+    val MIGRATION_99_100 = object : Migration(99, 100) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 99 -> 100: add Wear ephemeral llama chat metadata")
+
+            if (tableExists(db, "llama_chats")) {
+                if (!columnExists(db, "llama_chats", "isEphemeral")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `isEphemeral` INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!columnExists(db, "llama_chats", "source")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `source` TEXT")
+                }
+                if (!columnExists(db, "llama_chats", "deleteAfterSession")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `deleteAfterSession` INTEGER NOT NULL DEFAULT 0")
+                }
+                if (!columnExists(db, "llama_chats", "expiresAtMillis")) {
+                    db.execSQL("ALTER TABLE `llama_chats` ADD COLUMN `expiresAtMillis` INTEGER")
+                }
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_chats_isEphemeral` ON `llama_chats` (`isEphemeral`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_chats_source` ON `llama_chats` (`source`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_llama_chats_expiresAtMillis` ON `llama_chats` (`expiresAtMillis`)")
+            }
+
+            DebugLog.log("[DB] Migration 99 -> 100 complete")
+        }
+    }
+
+    val MIGRATION_100_101 = object : Migration(100, 101) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 100 -> 101: add durable AI Agent project event journal")
+
+            if (!tableExists(db, "agent_project_events")) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `agent_project_events` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `conversationId` INTEGER NOT NULL,
+                        `projectFolder` TEXT NOT NULL DEFAULT 'default_project',
+                        `timestamp` INTEGER NOT NULL,
+                        `sequenceNumber` INTEGER NOT NULL DEFAULT 0,
+                        `category` TEXT NOT NULL DEFAULT 'UI',
+                        `eventType` TEXT NOT NULL DEFAULT 'event',
+                        `phase` TEXT,
+                        `agentRole` TEXT,
+                        `customAgentName` TEXT,
+                        `toolName` TEXT,
+                        `toolCallId` TEXT,
+                        `status` TEXT,
+                        `durationMs` INTEGER,
+                        `contentChars` INTEGER,
+                        `contentLines` INTEGER,
+                        `toolOutputChars` INTEGER,
+                        `toolOutputLines` INTEGER,
+                        `contextPercent` INTEGER,
+                        `activeJobCount` INTEGER,
+                        `foregroundState` TEXT,
+                        `protectionState` TEXT,
+                        `connectionState` TEXT,
+                        `errorClass` TEXT,
+                        `errorMessage` TEXT,
+                        `summary` TEXT NOT NULL DEFAULT '',
+                        `createdAt` INTEGER NOT NULL,
+                        FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+            }
+
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_conversationId` ON `agent_project_events` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_timestamp` ON `agent_project_events` (`timestamp`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_sequenceNumber` ON `agent_project_events` (`sequenceNumber`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_category` ON `agent_project_events` (`category`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_eventType` ON `agent_project_events` (`eventType`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_toolCallId` ON `agent_project_events` (`toolCallId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_status` ON `agent_project_events` (`status`)")
+
+            DebugLog.log("[DB] Migration 100 -> 101 complete")
+        }
+    }
+
+    val MIGRATION_101_102 = object : Migration(101, 102) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 101 -> 102: add durable Agent workflow, skills, and compaction state")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_message_parts` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `messageOriginalId` TEXT NOT NULL,
+                    `position` INTEGER NOT NULL,
+                    `type` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `textPreview` TEXT,
+                    `canonicalJson` TEXT,
+                    `contentRef` TEXT,
+                    `toolName` TEXT,
+                    `toolCallId` TEXT,
+                    `safeTarget` TEXT,
+                    `durationMs` INTEGER,
+                    `metadataJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_message_parts_conversationId` ON `agent_message_parts` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_message_parts_messageOriginalId` ON `agent_message_parts` (`messageOriginalId`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_message_parts_messageOriginalId_position` ON `agent_message_parts` (`messageOriginalId`, `position`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_message_parts_type` ON `agent_message_parts` (`type`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_message_parts_toolCallId` ON `agent_message_parts` (`toolCallId`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_turn_contexts` (
+                    `rootTurnId` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `agentKey` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `backend` TEXT NOT NULL,
+                    `modelLabel` TEXT NOT NULL,
+                    `endpointGeneration` TEXT NOT NULL,
+                    `contextTokens` INTEGER NOT NULL,
+                    `configuredOutputTokens` INTEGER NOT NULL,
+                    `effectiveOutputTokens` INTEGER NOT NULL,
+                    `systemPromptHash` TEXT NOT NULL,
+                    `toolDefinitionsHash` TEXT NOT NULL,
+                    `stablePrefixHash` TEXT NOT NULL,
+                    `parametersHash` TEXT NOT NULL,
+                    `messageCount` INTEGER NOT NULL,
+                    `messagesHash` TEXT NOT NULL,
+                    `previousPrefixCompatible` INTEGER,
+                    `cacheMissReason` TEXT,
+                    `skillIdsJson` TEXT NOT NULL,
+                    `slotId` INTEGER,
+                    `cacheMode` TEXT NOT NULL,
+                    `messageStartSequence` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `completedAt` INTEGER,
+                    PRIMARY KEY(`rootTurnId`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_turn_contexts_conversationId` ON `agent_turn_contexts` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_turn_contexts_status` ON `agent_turn_contexts` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_turn_contexts_createdAt` ON `agent_turn_contexts` (`createdAt`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_skills` (
+                    `id` TEXT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `description` TEXT NOT NULL,
+                    `version` TEXT,
+                    `license` TEXT,
+                    `sourceType` TEXT NOT NULL,
+                    `sourceUri` TEXT,
+                    `installPath` TEXT NOT NULL,
+                    `manifestJson` TEXT NOT NULL,
+                    `contentHash` TEXT NOT NULL,
+                    `enabled` INTEGER NOT NULL,
+                    `installedAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_skills_name` ON `agent_skills` (`name`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_skills_sourceType` ON `agent_skills` (`sourceType`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_skills_enabled` ON `agent_skills` (`enabled`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_skill_assignments` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `skillId` TEXT NOT NULL,
+                    `conversationId` INTEGER,
+                    `agentKey` TEXT NOT NULL,
+                    `permission` TEXT NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    FOREIGN KEY(`skillId`) REFERENCES `agent_skills`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_skill_assignments_skillId` ON `agent_skill_assignments` (`skillId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_skill_assignments_conversationId` ON `agent_skill_assignments` (`conversationId`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_skill_assignments_skillId_conversationId_agentKey` ON `agent_skill_assignments` (`skillId`, `conversationId`, `agentKey`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_pending_questions` (
+                    `id` TEXT NOT NULL,
+                        `conversationId` INTEGER NOT NULL,
+                        `rootTurnId` TEXT NOT NULL,
+                        `agentSessionId` TEXT NOT NULL,
+                        `toolCallId` TEXT NOT NULL,
+                        `specificationJson` TEXT NOT NULL,
+                    `answerJson` TEXT,
+                    `status` TEXT NOT NULL,
+                    `continuationEnqueued` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `answeredAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_questions_conversationId` ON `agent_pending_questions` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_questions_status` ON `agent_pending_questions` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_questions_rootTurnId` ON `agent_pending_questions` (`rootTurnId`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_todos` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `text` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `priority` TEXT NOT NULL,
+                    `position` INTEGER NOT NULL,
+                    `source` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_todos_conversationId` ON `agent_todos` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_todos_status` ON `agent_todos` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_todos_conversationId_position` ON `agent_todos` (`conversationId`, `position`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_compactions` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT,
+                    `summaryText` TEXT NOT NULL,
+                    `focus` TEXT,
+                    `previousCompactionId` TEXT,
+                    `sourceStartSequence` INTEGER NOT NULL,
+                    `sourceEndSequence` INTEGER NOT NULL,
+                    `tailStartSequence` INTEGER,
+                    `summarizedMessageCount` INTEGER NOT NULL,
+                    `retainedTailTokens` INTEGER NOT NULL,
+                    `targetTailTokens` INTEGER NOT NULL,
+                    `modelLabel` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_compactions_conversationId` ON `agent_compactions` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_compactions_createdAt` ON `agent_compactions` (`createdAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_compactions_rootTurnId` ON `agent_compactions` (`rootTurnId`)")
+
+            DebugLog.log("[DB] Migration 101 -> 102 complete")
+        }
+    }
+
+    val MIGRATION_102_103 = object : Migration(102, 103) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 102 -> 103: add saved local llama launch profiles")
+            if (!columnExists(db, "llama_servers", "localLaunchProfileJson")) {
+                db.execSQL("ALTER TABLE `llama_servers` ADD COLUMN `localLaunchProfileJson` TEXT DEFAULT NULL")
+            }
+            DebugLog.log("[DB] Migration 102 -> 103 complete")
+        }
+    }
+
+    val MIGRATION_103_104 = object : Migration(103, 104) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 103 -> 104: durable plan workflow, question drafts, and canonical saved llama launch profiles")
+            if (!columnExists(db, "saved_commands", "launchProfileJson")) {
+                db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `launchProfileJson` TEXT DEFAULT NULL")
+            }
+            if (!columnExists(db, "saved_commands", "launchProfileSchemaVersion")) {
+                db.execSQL("ALTER TABLE `saved_commands` ADD COLUMN `launchProfileSchemaVersion` INTEGER NOT NULL DEFAULT 1")
+            }
+            if (!columnExists(db, "agent_pending_questions", "draftAnswerJson")) {
+                db.execSQL("ALTER TABLE `agent_pending_questions` ADD COLUMN `draftAnswerJson` TEXT NOT NULL DEFAULT '{}'")
+            }
+            if (!columnExists(db, "agent_pending_questions", "currentPage")) {
+                db.execSQL("ALTER TABLE `agent_pending_questions` ADD COLUMN `currentPage` INTEGER NOT NULL DEFAULT 0")
+            }
+            if (!columnExists(db, "agent_pending_questions", "isCollapsed")) {
+                db.execSQL("ALTER TABLE `agent_pending_questions` ADD COLUMN `isCollapsed` INTEGER NOT NULL DEFAULT 0")
+            }
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_pending_plans` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT NOT NULL,
+                    `agentSessionId` TEXT NOT NULL,
+                    `planMessageId` TEXT NOT NULL,
+                    `toolCallId` TEXT NOT NULL,
+                    `originalPlan` TEXT NOT NULL,
+                    `editedPlan` TEXT,
+                    `summary` TEXT NOT NULL,
+                    `state` TEXT NOT NULL,
+                    `approvalOperationId` TEXT,
+                    `approvedAt` INTEGER,
+                    `planFileWritten` INTEGER NOT NULL,
+                    `buildModeActivated` INTEGER NOT NULL,
+                    `continuationEnqueued` INTEGER NOT NULL,
+                    `errorMessage` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_plans_conversationId` ON `agent_pending_plans` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_plans_state` ON `agent_pending_plans` (`state`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_plans_rootTurnId` ON `agent_pending_plans` (`rootTurnId`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_pending_plans_planMessageId` ON `agent_pending_plans` (`planMessageId`)")
+            DebugLog.log("[DB] Migration 103 -> 104 complete")
+        }
+    }
+
+    val MIGRATION_104_105 = object : Migration(104, 105) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 104 -> 105: rootless system statistics history")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `system_stats_samples` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `timestampEpochMs` INTEGER NOT NULL,
+                    `deviceId` TEXT NOT NULL,
+                    `snapshotJson` TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_system_stats_samples_timestampEpochMs` ON `system_stats_samples` (`timestampEpochMs`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_system_stats_samples_deviceId` ON `system_stats_samples` (`deviceId`)")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `system_stats_events` (
+                    `id` TEXT NOT NULL,
+                    `category` TEXT NOT NULL,
+                    `phase` TEXT NOT NULL,
+                    `scope` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `label` TEXT NOT NULL,
+                    `startedAtEpochMs` INTEGER NOT NULL,
+                    `endedAtEpochMs` INTEGER,
+                    PRIMARY KEY(`id`)
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_system_stats_events_startedAtEpochMs` ON `system_stats_events` (`startedAtEpochMs`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_system_stats_events_category` ON `system_stats_events` (`category`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_system_stats_events_status` ON `system_stats_events` (`status`)")
+            DebugLog.log("[DB] Migration 104 -> 105 complete")
+        }
+    }
+
+    /**
+     * Durable delegated-agent workspaces and FIFO user guidance.
+     *
+     * Existing records intentionally retain a NULL invocationId: those rows
+     * remain part of the historic orchestrator timeline after upgrade.
+     */
+    val MIGRATION_105_106 = object : Migration(105, 106) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 105 -> 106: durable agent invocations and pending inputs")
+
+            addNullableInvocationId(db, "agent_messages")
+            addNullableInvocationId(db, "agent_message_parts")
+            addNullableInvocationId(db, "agent_turn_contexts")
+            addNullableInvocationId(db, "agent_compactions")
+            addNullableInvocationId(db, "agent_project_events")
+
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_messages_invocationId` ON `agent_messages` (`invocationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_message_parts_invocationId` ON `agent_message_parts` (`invocationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_turn_contexts_invocationId` ON `agent_turn_contexts` (`invocationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_compactions_invocationId` ON `agent_compactions` (`invocationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_project_events_invocationId` ON `agent_project_events` (`invocationId`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_invocations` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `rootTurnId` TEXT NOT NULL,
+                    `runtimeEpoch` INTEGER NOT NULL,
+                    `parentToolCallId` TEXT NOT NULL,
+                    `agentClass` TEXT NOT NULL,
+                    `agentKey` TEXT NOT NULL,
+                    `requestedName` TEXT NOT NULL,
+                    `baseNameKey` TEXT NOT NULL,
+                    `occurrence` INTEGER NOT NULL,
+                    `resolvedName` TEXT NOT NULL,
+                    `resolvedNameKey` TEXT NOT NULL,
+                    `sessionId` TEXT,
+                    `task` TEXT NOT NULL,
+                    `context` TEXT,
+                    `status` TEXT NOT NULL,
+                    `resultSummary` TEXT,
+                    `errorClass` TEXT,
+                    `errorMessage` TEXT,
+                    `backend` TEXT,
+                    `modelLabel` TEXT,
+                    `serverPhase` TEXT,
+                    `contextSize` INTEGER,
+                    `rawEstimatedTokens` INTEGER,
+                    `packedEstimatedTokens` INTEGER,
+                    `actualPromptTokens` INTEGER,
+                    `actualCompletionTokens` INTEGER,
+                    `contextPercent` INTEGER,
+                    `compactionCount` INTEGER NOT NULL,
+                    `startedAt` INTEGER NOT NULL,
+                    `endedAt` INTEGER,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_invocations_conversationId` ON `agent_invocations` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_invocations_status` ON `agent_invocations` (`status`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_invocations_startedAt` ON `agent_invocations` (`startedAt`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_invocations_parentToolCallId` ON `agent_invocations` (`parentToolCallId`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_invocations_conversationId_resolvedNameKey` ON `agent_invocations` (`conversationId`, `resolvedNameKey`)")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_pending_inputs` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `targetInvocationId` TEXT,
+                    `batchId` TEXT,
+                    `kind` TEXT NOT NULL,
+                    `content` TEXT NOT NULL,
+                    `imagePath` TEXT,
+                    `status` TEXT NOT NULL,
+                    `sequenceNumber` INTEGER NOT NULL,
+                    `boundaryToolCallId` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `deliveredAt` INTEGER,
+                    `cancelledAt` INTEGER,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_inputs_conversationId` ON `agent_pending_inputs` (`conversationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_inputs_targetInvocationId` ON `agent_pending_inputs` (`targetInvocationId`)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS `index_agent_pending_inputs_status` ON `agent_pending_inputs` (`status`)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_pending_inputs_conversationId_sequenceNumber` ON `agent_pending_inputs` (`conversationId`, `sequenceNumber`)")
+
+            DebugLog.log("[DB] Migration 105 -> 106 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -2406,7 +3048,17 @@ object Migrations {
         MIGRATION_92_93,
         MIGRATION_93_94,
         MIGRATION_94_95,
-        MIGRATION_95_96
+        MIGRATION_95_96,
+        MIGRATION_96_97,
+        MIGRATION_97_98,
+        MIGRATION_98_99,
+        MIGRATION_99_100,
+        MIGRATION_100_101,
+        MIGRATION_101_102,
+        MIGRATION_102_103,
+        MIGRATION_103_104,
+        MIGRATION_104_105,
+        MIGRATION_105_106
     )
     /**
      * Check if a column exists in a table.
@@ -2424,6 +3076,12 @@ object Migrations {
         }
         cursor.close()
         return false
+    }
+
+    private fun addNullableInvocationId(database: SupportSQLiteDatabase, tableName: String) {
+        if (!columnExists(database, tableName, "invocationId")) {
+            database.execSQL("ALTER TABLE `$tableName` ADD COLUMN `invocationId` TEXT DEFAULT NULL")
+        }
     }
     
     /**

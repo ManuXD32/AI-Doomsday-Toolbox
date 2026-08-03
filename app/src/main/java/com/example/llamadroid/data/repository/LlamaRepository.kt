@@ -47,20 +47,32 @@ class LlamaRepository(
         contextSize: Int = 8192,
         systemPrompt: String? = null,
         apiParams: String? = null,
-        folderId: Long? = null
+        folderId: Long? = null,
+        isEphemeral: Boolean = false,
+        source: String? = null,
+        deleteAfterSession: Boolean = false,
+        expiresAtMillis: Long? = null
     ): Long {
         val chat = LlamaChatEntity(
             title = title,
             contextSize = contextSize,
             systemPrompt = systemPrompt,
             apiParams = apiParams,
-            folderId = folderId
+            folderId = folderId,
+            isEphemeral = isEphemeral,
+            source = source,
+            deleteAfterSession = deleteAfterSession,
+            expiresAtMillis = expiresAtMillis
         )
         return chatDao.insertChat(chat)
     }
     
     suspend fun getChat(id: Long) = chatDao.getChatById(id)
     suspend fun deleteChat(chat: LlamaChatEntity) = chatDao.deleteChat(chat)
+    suspend fun deleteEphemeralChat(id: Long) = chatDao.deleteEphemeralChatById(id)
+    suspend fun deleteExpiredEphemeralChats(now: Long = System.currentTimeMillis()) {
+        chatDao.getExpiredEphemeralChats(now).forEach { chatDao.deleteChat(it) }
+    }
     suspend fun updateChatTitle(id: Long, title: String) = chatDao.updateTitle(id, title)
     suspend fun updateChatContextSize(id: Long, contextSize: Int) = chatDao.updateContextSize(id, contextSize)
     suspend fun updateChatModified(id: Long) = chatDao.updateLastModified(id)

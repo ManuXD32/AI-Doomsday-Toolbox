@@ -1,0 +1,12 @@
+<resources>
+    <string name="agent_workflow_toggle_questions">Expand or collapse questions</string>
+    <string name="agent_workflow_questions_collapsed">Questions %1$d of %2$d ready</string>
+    <string name="agent_workflow_back">Back</string>
+    <string name="agent_workflow_next">Next</string>
+    <string name="agent_workflow_plan_approval_failed">Plan approval could not be completed: %1$s</string>
+    <string name="agent_plan_resolution_missing">No pending plan is available for approval.</string>
+    <string name="agent_plan_resolution_blank">The approved plan cannot be empty.</string>
+    <string name="agent_plan_resolution_in_progress">This plan approval is already being processed.</string>
+    <string name="agent_plan_resolution_failed">The approved plan could not be saved.</string>
+    <string name="agent_plan_saving">Starting…</string>
+</resources>

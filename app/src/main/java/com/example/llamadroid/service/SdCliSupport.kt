@@ -29,6 +29,11 @@ class SdUnsupportedFlagsException(
     val flags: List<String>
 ) : IllegalStateException("Unsupported stable-diffusion.cpp flags: ${flags.joinToString(", ")}")
 
+class SdDisallowedDistributedFlagException(
+    val flag: String,
+    override val message: String = "Disallowed distributed stable-diffusion.cpp flag: $flag"
+) : IllegalStateException(message)
+
 fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     val flagRegex = Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
     return SdBinaryCapabilities(
@@ -142,8 +147,10 @@ fun buildSdCommandArgs(
 
     config.vaePath?.let { args.addAll(listOf("--vae", it)) }
     config.taePath?.let {
-        requireFlag("--tae")
-        args.addAll(listOf("--tae", it))
+        // TAESD is a decode-only VAE; TAE/TAEHV remain the family component path.
+        val decoderFlag = if (File(it).name.contains("taesd", ignoreCase = true)) "--taesd" else "--tae"
+        requireFlag(decoderFlag)
+        args.addAll(listOf(decoderFlag, it))
     }
     config.clipLPath?.let { args.addAll(listOf("--clip_l", it)) }
     config.clipGPath?.let {
@@ -164,7 +171,20 @@ fun buildSdCommandArgs(
         args.addAll(listOf("--photo-maker", it))
     }
 
-    args.addAll(listOf("-p", config.prompt))
+    val promptAdapters = buildList {
+        config.loraPath?.let { path ->
+            val name = File(path).nameWithoutExtension
+            if (name.isNotBlank()) add("<lora:$name:${config.loraStrength}>")
+        }
+        config.textualInversionPath?.let { path ->
+            val token = File(path).nameWithoutExtension
+            if (token.isNotBlank()) add(token)
+        }
+    }
+    val effectivePrompt = (promptAdapters + config.prompt)
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+    args.addAll(listOf("-p", effectivePrompt))
     if (config.negativePrompt.isNotBlank()) {
         args.addAll(listOf("-n", config.negativePrompt))
     }
@@ -173,6 +193,10 @@ fun buildSdCommandArgs(
     args.addAll(listOf("--steps", config.steps.toString()))
     args.addAll(listOf("--cfg-scale", config.cfgScale.toString()))
     args.addAll(listOf("--sampling-method", config.samplingMethod.cliName))
+    config.scheduler?.let {
+        requireFlag("--scheduler")
+        args.addAll(listOf("--scheduler", it.cliName))
+    }
     args.addAll(listOf("-s", config.seed.toString()))
 
     config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
@@ -191,13 +215,26 @@ fun buildSdCommandArgs(
     }
 
     if (config.loraPath != null) {
-        args.addAll(listOf("--lora-model-dir", File(config.loraPath).parent ?: ""))
-        val loraFilename = File(config.loraPath).name
-        args.addAll(listOf("--lora", "$loraFilename:${config.loraStrength}"))
+        requireFlag("--lora-model-dir")
+        args.addAll(
+            listOf(
+                "--lora-model-dir",
+                File(config.loraPath).parent ?: "."
+            )
+        )
         config.loraApplyMode?.let {
             requireFlag("--lora-apply-mode")
             args.addAll(listOf("--lora-apply-mode", it.cliName))
         }
+    }
+    if (config.textualInversionPath != null) {
+        requireFlag("--embd-dir")
+        args.addAll(
+            listOf(
+                "--embd-dir",
+                File(config.textualInversionPath).parent ?: "."
+            )
+        )
     }
 
     if (config.quantizationType.isNotBlank()) {
@@ -211,6 +248,10 @@ fun buildSdCommandArgs(
     if (config.diffusionFa && spec.supportsDiffusionFa) {
         requireFlag("--diffusion-fa")
         args.add("--diffusion-fa")
+    }
+    if (config.diffusionConvDirect) {
+        requireFlag("--diffusion-conv-direct")
+        args.add("--diffusion-conv-direct")
     }
     if (config.mmap && spec.supportsMmap) {
         requireFlag("--mmap")
@@ -356,7 +397,8 @@ fun appendLocalSdBackendArgs(
     maxVramCpuGiB: String,
     flagSupported: (String) -> Boolean = { true }
 ) {
-    SdRuntimeBackendMode.fromStoredValue(runtimeBackendMode).cliValue?.let { backend ->
+    val explicitBackend = runtimeBackendMode.takeIf { it.contains('=') }
+    (explicitBackend ?: SdRuntimeBackendMode.fromStoredValue(runtimeBackendMode).cliValue)?.let { backend ->
         if (flagSupported("--backend")) {
             args.addAll(listOf("--backend", backend))
         }
@@ -375,6 +417,16 @@ fun appendLocalSdBackendArgs(
 
 fun effectiveSdMaxVramCpuGiBForBinary(sdBinary: File, maxVramCpuGiB: String): String =
     if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) "" else maxVramCpuGiB
+
+/** The upstream device names are `vulkan0` and `opencl0`; CPU keeps text and VAE memory off GPU by default. */
+fun effectiveSdRuntimeBackendModeForBinary(sdBinary: File, requested: String): String {
+    if (requested.contains('=')) return requested
+    return when (sdBinary.name) {
+        "libsd_snapdragon_vulkan.so" -> "te=cpu,diffusion=vulkan0,vae=cpu"
+        "libsd_snapdragon_opencl.so" -> "te=cpu,diffusion=opencl0,vae=cpu"
+        else -> requested
+    }
+}
 
 fun normalizeSdMaxVramCpuGiB(value: String): String? {
     val trimmed = value.trim()

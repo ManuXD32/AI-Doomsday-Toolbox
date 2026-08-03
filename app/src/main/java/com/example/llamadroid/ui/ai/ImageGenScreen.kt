@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -60,6 +62,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.DraftLongTextField
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.SdSchedulerPicker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -81,6 +84,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val db = remember { AppDatabase.getDatabase(context) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
+    val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdVaeTiling by settingsRepo.sdVaeTiling.collectAsState()
@@ -90,6 +94,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val sdTensorTypeRules by settingsRepo.sdTensorTypeRules.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
+    val selectedSdNativeBinary by settingsRepo.stableDiffusionNativeBinarySelection.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Available SD models - Classic checkpoints (SD1.5/SDXL)
@@ -113,6 +118,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
     val loraModels by db.modelDao().getModelsByType(ModelType.SD_LORA)
         .collectAsState(initial = emptyList())
+    val textualInversionModels by db.modelDao()
+        .getModelsByType(ModelType.SD_TEXTUAL_INVERSION)
+        .collectAsState(initial = emptyList())
     val photoMakerModels by db.modelDao().getModelsByType(ModelType.SD_PHOTOMAKER)
         .collectAsState(initial = emptyList())
     val imageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
@@ -123,45 +131,64 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
 
     // Mode selection: 0 = txt2img, 1 = img2img, 2 = upscale
-    var selectedMode by remember(initialMode) { mutableIntStateOf(if (initialMode == 1) 1 else 0) }
+    var selectedMode by remember(initialMode) { mutableIntStateOf(restoredDraft?.optInt("mode", if (initialMode == 1) 1 else 0) ?: if (initialMode == 1) 1 else 0) }
 
     // Combined model list for selection (checkpoints + FLUX diffusion)
     val allGenerationModels = (sdCheckpoints + fluxDiffusionModels)
         .filter { it.isSdImageMainModel() }
     // UI State
-    var selectedGenerationModelPath by remember { mutableStateOf<String?>(null) }
-    var selectedUpscalerModelPath by remember { mutableStateOf<String?>(null) }
-    var prompt by remember { mutableStateOf("") }
-    var negativePrompt by remember { mutableStateOf("") }
-    var showAdvanced by remember { mutableStateOf(false) }
+    var selectedGenerationModelPath by remember { mutableStateOf(restoredDraft?.optString("model").orEmpty().ifBlank { null }) }
+    var selectedUpscalerModelPath by remember { mutableStateOf(restoredDraft?.optString("upscaler").orEmpty().ifBlank { null }) }
+    var prompt by remember { mutableStateOf(restoredDraft?.optString("prompt").orEmpty()) }
+    var negativePrompt by remember { mutableStateOf(restoredDraft?.optString("negativePrompt").orEmpty()) }
+    var showAdvanced by remember { mutableStateOf(restoredDraft?.optBoolean("advanced", false) ?: false) }
     var showInfoDialog by remember { mutableStateOf(false) }
 
     // Family component selections
-    var selectedVaePath by remember { mutableStateOf<String?>(null) }
-    var selectedTaePath by remember { mutableStateOf<String?>(null) }
-    var selectedClipLPath by remember { mutableStateOf<String?>(null) }
-    var selectedClipGPath by remember { mutableStateOf<String?>(null) }
-    var selectedT5xxlPath by remember { mutableStateOf<String?>(null) }
-    var selectedLlmPath by remember { mutableStateOf<String?>(null) }
-    var selectedLlmVisionPath by remember { mutableStateOf<String?>(null) }
-    var selectedPhotoMakerPath by remember { mutableStateOf<String?>(null) }
+    var selectedVaePath by remember { mutableStateOf(restoredDraft?.optString("vae").orEmpty().ifBlank { null }) }
+    var selectedTaePath by remember { mutableStateOf(restoredDraft?.optString("tae").orEmpty().ifBlank { null }) }
+    var selectedClipLPath by remember { mutableStateOf(restoredDraft?.optString("clipL").orEmpty().ifBlank { null }) }
+    var selectedClipGPath by remember { mutableStateOf(restoredDraft?.optString("clipG").orEmpty().ifBlank { null }) }
+    var selectedT5xxlPath by remember { mutableStateOf(restoredDraft?.optString("t5").orEmpty().ifBlank { null }) }
+    var selectedLlmPath by remember { mutableStateOf(restoredDraft?.optString("llm").orEmpty().ifBlank { null }) }
+    var selectedLlmVisionPath by remember { mutableStateOf(restoredDraft?.optString("llmVision").orEmpty().ifBlank { null }) }
+    var selectedPhotoMakerPath by remember { mutableStateOf(restoredDraft?.optString("photoMaker").orEmpty().ifBlank { null }) }
 
     // ControlNet settings (optional)
-    var controlNetEnabled by remember { mutableStateOf(false) }
-    var selectedControlNetPath by remember { mutableStateOf<String?>(null) }
-    var controlStrength by remember { mutableFloatStateOf(0.9f) }
+    var controlNetEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("controlEnabled", false) ?: false) }
+    var selectedControlNetPath by remember { mutableStateOf(restoredDraft?.optString("control").orEmpty().ifBlank { null }) }
+    var controlStrength by remember { mutableFloatStateOf((restoredDraft?.optDouble("controlStrength", 0.9) ?: 0.9).toFloat()) }
 
     // LoRA settings (optional)
-    var loraEnabled by remember { mutableStateOf(false) }
-    var selectedLoraPath by remember { mutableStateOf<String?>(null) }
-    var loraStrength by remember { mutableFloatStateOf(1.0f) }
-    var selectedLoraApplyMode by remember { mutableStateOf<SdLoraApplyMode?>(null) }
-    var flowShiftText by remember { mutableStateOf("") }
-    var diffusionFaEnabled by remember { mutableStateOf(false) }
-    var mmapEnabled by remember { mutableStateOf(false) }
-    var vaeConvDirectEnabled by remember { mutableStateOf(false) }
-    var qwenImageZeroCondTEnabled by remember { mutableStateOf(false) }
-    var chromaDisableDitMaskEnabled by remember { mutableStateOf(false) }
+    var loraEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("loraEnabled", false) ?: false) }
+    var selectedLoraPath by remember { mutableStateOf(restoredDraft?.optString("lora").orEmpty().ifBlank { null }) }
+    var loraStrength by remember { mutableFloatStateOf((restoredDraft?.optDouble("loraStrength", 1.0) ?: 1.0).toFloat()) }
+    var selectedLoraApplyMode by remember { mutableStateOf(restoredDraft?.optString("loraApply").orEmpty().let { stored -> SdLoraApplyMode.entries.firstOrNull { it.cliName == stored } }) }
+    var textualInversionEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("textualEnabled", false) ?: false) }
+    var selectedTextualInversionPath by remember {
+        mutableStateOf(restoredDraft?.optString("textual").orEmpty().ifBlank { null })
+    }
+    var flowShiftText by remember { mutableStateOf(restoredDraft?.optString("flowShift").orEmpty()) }
+    var selectedScheduler by remember { mutableStateOf(SdScheduler.fromCliName(restoredDraft?.optString("scheduler"))) }
+    var diffusionFaEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("diffusionFa", false) ?: false) }
+    var diffusionConvDirectEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("diffConv", false) ?: false) }
+    var mmapEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("mmap", false) ?: false) }
+    var vaeConvDirectEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("vaeConv", false) ?: false) }
+    var qwenImageZeroCondTEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("qwenZero", false) ?: false) }
+    var chromaDisableDitMaskEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("chromaMask", false) ?: false) }
+    val acceleratorPlacement = when (selectedSdNativeBinary) {
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN -> "vulkan0"
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_OPENCL -> "opencl0"
+        else -> null
+    }
+    var textEncoderPlacement by remember { mutableStateOf(restoredDraft?.optString("tePlacement").orEmpty().ifBlank { "cpu" }) }
+    var diffusionPlacement by remember { mutableStateOf(restoredDraft?.optString("diffusionPlacement").orEmpty().ifBlank { acceleratorPlacement ?: "cpu" }) }
+    var vaePlacement by remember { mutableStateOf(restoredDraft?.optString("vaePlacement").orEmpty().ifBlank { "cpu" }) }
+    LaunchedEffect(acceleratorPlacement) {
+        if (acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
+            diffusionPlacement = acceleratorPlacement
+        }
+    }
 
     // Main tab selection: 0 = Generate, 1 = Gallery
     var mainTab by remember { mutableIntStateOf(0) }
@@ -176,21 +203,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     // Image input for img2img/upscale
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedImagePath by remember { mutableStateOf<String?>(null) }
+    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
     // Img2img strength
-    var strength by remember { mutableFloatStateOf(0.75f) }
+    var strength by remember { mutableFloatStateOf((restoredDraft?.optDouble("strength", 0.75) ?: 0.75).toFloat()) }
 
     // Quantization type for --type
-    var selectedQuantType by remember { mutableStateOf("") }
+    var selectedQuantType by remember { mutableStateOf(restoredDraft?.optString("quant").orEmpty()) }
 
     // Upscale factor and repeats
-    var upscaleFactor by remember { mutableIntStateOf(2) } // Default 2, will be auto-detected from model
-    var upscaleRepeats by remember { mutableIntStateOf(1) } // User-controlled repeats (1-4)
+    var upscaleFactor by remember { mutableIntStateOf(restoredDraft?.optInt("upscaleFactor", 2) ?: 2) } // Default 2, will be auto-detected from model
+    var upscaleRepeats by remember { mutableIntStateOf(restoredDraft?.optInt("upscaleRepeats", 1) ?: 1) } // User-controlled repeats (1-4)
 
     // Threads for generation (user-controlled, -1 = auto)
-    var threads by remember { mutableIntStateOf(-1) }
+    var threads by remember { mutableIntStateOf(restoredDraft?.optInt("threads", -1) ?: -1) }
 
     // Keep the generation and upscale selections separate so mode switches do not
     // overwrite the last valid choice for the other mode.
@@ -250,6 +277,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     )
     val compatibleControlNetModels = filterSdComponents(controlNetModels, selectedFamily, selectedVariant)
     val compatibleLoraModels = filterSdComponents(loraModels, selectedFamily, selectedVariant)
+    val compatibleTextualInversionModels = filterSdComponents(
+        textualInversionModels,
+        selectedFamily,
+        selectedVariant
+    )
     val compatiblePhotoMakerModels = filterSdComponents(photoMakerModels, selectedFamily, selectedVariant)
     val missingRequiredComponents = selectedFamilySpec?.requiredRoles?.filter { role ->
         when (role) {
@@ -338,17 +370,33 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     // Generation parameters
-    var width by remember { mutableIntStateOf(512) }
-    var height by remember { mutableIntStateOf(512) }
-    var steps by remember { mutableIntStateOf(20) }
-    var cfgScale by remember { mutableFloatStateOf(7.0f) }
-    var seed by remember { mutableLongStateOf(-1L) }
-    var selectedSampler by remember { mutableStateOf(SamplingMethod.EULER_A) }
-    var cacheMode by remember { mutableStateOf<SdCacheMode?>(null) }
-    var cacheOption by remember { mutableStateOf("") }
-    var scmMask by remember { mutableStateOf("") }
-    var scmPolicy by remember { mutableStateOf<SdCacheScmPolicy?>(null) }
-    var manualCommandFlags by remember { mutableStateOf("") }
+    var width by remember { mutableIntStateOf(restoredDraft?.optInt("width", 512) ?: 512) }
+    var height by remember { mutableIntStateOf(restoredDraft?.optInt("height", 512) ?: 512) }
+    var steps by remember { mutableIntStateOf(restoredDraft?.optInt("steps", 20) ?: 20) }
+    var cfgScale by remember { mutableFloatStateOf((restoredDraft?.optDouble("cfg", 7.0) ?: 7.0).toFloat()) }
+    var seed by remember { mutableLongStateOf(restoredDraft?.optLong("seed", -1L) ?: -1L) }
+    var selectedSampler by remember { mutableStateOf(SamplingMethod.entries.firstOrNull { it.name == restoredDraft?.optString("sampler") } ?: SamplingMethod.EULER_A) }
+    var cacheMode by remember { mutableStateOf(SdCacheMode.fromStoredValue(restoredDraft?.optString("cacheMode").orEmpty().ifBlank { null })) }
+    var cacheOption by remember { mutableStateOf(restoredDraft?.optString("cacheOption").orEmpty()) }
+    var scmMask by remember { mutableStateOf(restoredDraft?.optString("scmMask").orEmpty()) }
+    var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
+    var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            settingsRepo.setImageGenerationDraft(org.json.JSONObject().apply {
+                put("mode", selectedMode); put("model", selectedGenerationModelPath); put("upscaler", selectedUpscalerModelPath)
+                put("prompt", prompt); put("negativePrompt", negativePrompt); put("advanced", showAdvanced)
+                put("vae", selectedVaePath); put("tae", selectedTaePath); put("clipL", selectedClipLPath); put("clipG", selectedClipGPath); put("t5", selectedT5xxlPath); put("llm", selectedLlmPath); put("llmVision", selectedLlmVisionPath); put("photoMaker", selectedPhotoMakerPath)
+                put("controlEnabled", controlNetEnabled); put("control", selectedControlNetPath); put("controlStrength", controlStrength)
+                put("loraEnabled", loraEnabled); put("lora", selectedLoraPath); put("loraStrength", loraStrength); put("loraApply", selectedLoraApplyMode?.cliName)
+                put("textualEnabled", textualInversionEnabled); put("textual", selectedTextualInversionPath); put("flowShift", flowShiftText); put("diffusionFa", diffusionFaEnabled); put("diffConv", diffusionConvDirectEnabled); put("vaeConv", vaeConvDirectEnabled); put("mmap", mmapEnabled); put("qwenZero", qwenImageZeroCondTEnabled); put("chromaMask", chromaDisableDitMaskEnabled)
+                put("input", selectedImagePath); put("strength", strength); put("quant", selectedQuantType); put("upscaleFactor", upscaleFactor); put("upscaleRepeats", upscaleRepeats); put("threads", threads)
+                put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
+                put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
+            })
+        }
+    }
 
     fun clearDiffusionModeState() {
         selectedVaePath = null
@@ -623,7 +671,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
                     sdParamsBackendMode = selectedActiveModel?.sdParamsBackendMode ?: "auto",
-                    sdRuntimeBackendMode = selectedActiveModel?.sdRuntimeBackendMode ?: "auto",
+                    sdRuntimeBackendMode = acceleratorPlacement?.let {
+                        "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
+                    } ?: selectedActiveModel?.sdRuntimeBackendMode ?: "auto",
                     maxVramCpuGiB = localMaxVramCpuGiB,
                     customFlags = manualCommandFlags
                 )
@@ -676,6 +726,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     cfgScale = cfgScale,
                     seed = seed,
                     samplingMethod = selectedSampler,
+                    scheduler = selectedScheduler,
                     outputPath = outputFile.absolutePath,
                     initImage = inputImagePath,
                     strength = strength,
@@ -698,15 +749,23 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     loraPath = if (loraEnabled) selectedLoraPath else null,
                     loraStrength = loraStrength,
                     loraApplyMode = if (loraEnabled) selectedLoraApplyMode else null,
+                    textualInversionPath = if (textualInversionEnabled) {
+                        selectedTextualInversionPath
+                    } else {
+                        null
+                    },
                     photoMakerPath = selectedPhotoMakerPath,
                     flowShift = flowShiftText.toFloatOrNull(),
                     diffusionFa = diffusionFaEnabled,
+                    diffusionConvDirect = diffusionConvDirectEnabled,
                     mmap = mmapEnabled,
                     vaeConvDirect = vaeConvDirectEnabled,
                     qwenImageZeroCondT = qwenImageZeroCondTEnabled,
                     chromaDisableDitMask = chromaDisableDitMaskEnabled,
                     sdParamsBackendMode = selectedMainModel?.sdParamsBackendMode ?: "auto",
-                    sdRuntimeBackendMode = selectedMainModel?.sdRuntimeBackendMode ?: "auto",
+                    sdRuntimeBackendMode = acceleratorPlacement?.let {
+                        "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
+                    } ?: selectedMainModel?.sdRuntimeBackendMode ?: "auto",
                     maxVramCpuGiB = localMaxVramCpuGiB,
                     vaeTiling = sdVaeTiling,
                     vaeTileOverlap = sdVaeTileOverlap,
@@ -779,10 +838,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         )
     }
 
-    @Composable
-    fun GenerationModePaneContent() {
+    fun LazyListScope.generationModePaneContent() {
         // Image Input (for img2img and upscale modes)
-        if (selectedMode > 0) {
+        if (selectedMode > 0) item(key = "input") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -989,7 +1047,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
             Spacer(modifier = Modifier.height(12.dp))
         }
-        Card(
+        item(key = "model") { Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -1072,9 +1130,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     }
                 }
             }
-        }
+        } }
 
-        if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) {
+        if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) item(key = "components") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1217,7 +1275,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || compatibleLoraModels.isNotEmpty())) {
+        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || compatibleLoraModels.isNotEmpty())) item(key = "adapters") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1301,11 +1359,44 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             )
                         }
                     }
+
+                    if (compatibleTextualInversionModels.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LabeledSwitchRow(
+                            label = stringResource(
+                                R.string.imagegen_textual_inversion
+                            ),
+                            checked = textualInversionEnabled,
+                            onCheckedChange = {
+                                textualInversionEnabled = it
+                                if (!it) {
+                                    selectedTextualInversionPath = null
+                                }
+                            }
+                        )
+                        if (textualInversionEnabled) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            SdComponentPickerField(
+                                label = stringResource(
+                                    R.string.imagegen_textual_inversion
+                                ),
+                                models = compatibleTextualInversionModels,
+                                selectedPath = selectedTextualInversionPath,
+                                onSelectionChange = {
+                                    selectedTextualInversionPath = it
+                                },
+                                allowNone = false,
+                                emptyMessage = stringResource(
+                                    R.string.imagegen_no_textual_inversion
+                                )
+                            )
+                        }
+                    }
                 }
             }
         }
 
-        if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) {
+        if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) item(key = "tensor-types") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1343,7 +1434,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2) {
+        if (selectedMode != 2) item(key = "prompts-and-parameters") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1499,6 +1590,12 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
+                        SdSchedulerPicker(
+                            value = selectedScheduler,
+                            onValueChange = { selectedScheduler = it }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1564,9 +1661,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (selectedMode != 2 && selectedFamilySpec != null) {
+        if (selectedMode != 2 && selectedFamilySpec != null) item(key = "runtime") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -1653,6 +1748,26 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         )
                     }
 
+                    acceleratorPlacement?.let { accelerator ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SdBackendPlacementControls(
+                            accelerator = accelerator,
+                            textEncoder = textEncoderPlacement,
+                            diffusion = diffusionPlacement,
+                            vae = vaePlacement,
+                            onTextEncoderChange = { textEncoderPlacement = it },
+                            onDiffusionChange = { diffusionPlacement = it },
+                            onVaeChange = { vaePlacement = it }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LabeledSwitchRow(
+                        label = stringResource(R.string.imagegen_diffusion_conv_direct_label),
+                        checked = diffusionConvDirectEnabled,
+                        onCheckedChange = { diffusionConvDirectEnabled = it }
+                    )
+
                     if (selectedFamilySpec.supportsMmap) {
                         Spacer(modifier = Modifier.height(12.dp))
                         LabeledSwitchRow(
@@ -1737,7 +1852,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        GenerationCachingCard(
+        item(key = "cache") { GenerationCachingCard(
             title = stringResource(R.string.gen_cache_title),
             cacheMode = if (selectedMode == 2) null else cacheMode,
             onCacheModeChange = { cacheMode = it },
@@ -1754,11 +1869,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             },
             enabled = selectedMode != 2,
             disabledMessage = stringResource(R.string.gen_cache_disabled_for_upscale)
-        )
+        ) }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Card(
+        item(key = "manual-flags") { Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -1784,11 +1897,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     shape = RoundedCornerShape(12.dp)
                 )
             }
-        }
+        } }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isGenerating) {
+        item(key = "run-state") { if (isGenerating) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -1872,11 +1983,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     fontWeight = FontWeight.Bold
                 )
             }
-        }
+        } }
 
         errorMessage?.let { error ->
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
+            item(key = "error") { Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer
                 ),
@@ -1887,12 +1997,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     modifier = Modifier.padding(12.dp),
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
-            }
+            } }
         }
 
         if (generationState is SDGenerationState.Complete) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
+            item(key = "complete") { Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 ),
@@ -1909,10 +2018,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
-            }
+            } }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
     }
 
     @Composable
@@ -2146,49 +2253,49 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         }
 
         if (mainTab == 0) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                val modes = listOf(
-                    stringResource(R.string.imagegen_mode_txt2img),
-                    stringResource(R.string.imagegen_mode_img2img),
-                    stringResource(R.string.imagegen_mode_upscale)
-                )
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    modes.forEachIndexed { index, mode ->
-                        val modeEnabled = when (index) {
-                            0 -> supportsTxt2Img
-                            1 -> supportsImg2Img
-                            else -> true
-                        }
-                        SegmentedButton(
-                            selected = selectedMode == index,
-                            onClick = {
-                                if (index == 2) {
-                                    navController.navigate(Screen.ImageGenUpscale.route)
-                                } else {
-                                    switchGenerationMode(index)
-                                }
-                            },
-                            enabled = modeEnabled,
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = modes.size
-                            )
-                        ) {
-                            Text(mode)
+                item(key = "mode") {
+                    val modes = listOf(
+                        stringResource(R.string.imagegen_mode_txt2img),
+                        stringResource(R.string.imagegen_mode_img2img),
+                        stringResource(R.string.imagegen_mode_upscale)
+                    )
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        modes.forEachIndexed { index, mode ->
+                            val modeEnabled = when (index) {
+                                0 -> supportsTxt2Img
+                                1 -> supportsImg2Img
+                                else -> true
+                            }
+                            SegmentedButton(
+                                selected = selectedMode == index,
+                                onClick = {
+                                    if (index == 2) {
+                                        navController.navigate(Screen.ImageGenUpscale.route)
+                                    } else {
+                                        switchGenerationMode(index)
+                                    }
+                                },
+                                enabled = modeEnabled,
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = modes.size
+                                )
+                            ) {
+                                Text(mode)
+                            }
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                GenerationModePaneContent()
+                generationModePaneContent()
             }
         } else {
             key("gallery") {
@@ -2214,6 +2321,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     // Fullscreen image viewer dialog
     if (fullscreenImage != null) {
         val bitmap by rememberPreviewImageBitmap(fullscreenImage?.absolutePath, maxDimension = 1600)
+        val imageMetadata = remember(fullscreenImage?.absolutePath) {
+            fullscreenImage?.let { SdGeneratedImageMetadata.fromFile(SdGeneratedImageMetadata.metadataFileForImage(it)) }
+        }
 
         AlertDialog(
             onDismissRequest = { fullscreenImage = null },
@@ -2298,11 +2408,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }
             },
             text = {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState())
                 ) {
+                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
                     bitmap?.let {
                         Image(
                             bitmap = it,
@@ -2310,6 +2419,20 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit
                         )
+                    }
+                    }
+                    imageMetadata?.let { metadata ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(metadata.prompt, style = MaterialTheme.typography.bodyMedium)
+                        if (metadata.negativePrompt.isNotBlank()) Text(metadata.negativePrompt, style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.sd_gallery_image_details, metadata.modelName, metadata.width, metadata.height, metadata.steps, metadata.samplingMethod.cliName), style = MaterialTheme.typography.bodySmall)
+                        Text("${Date(metadata.createdAt)} • ${metadata.generationDurationMs?.let { formatGenerationDuration(it) } ?: stringResource(R.string.sd_gallery_unavailable)}", style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.sd_gallery_image_runtime, metadata.sdRuntimeBackendMode, metadata.quantizationType.ifBlank { stringResource(R.string.sd_gallery_default) }), style = MaterialTheme.typography.bodySmall)
+                        metadata.conditioningDurationMs?.let { Text(stringResource(R.string.sd_stage_conditioning, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
+                        metadata.samplingDurationMs?.let { Text(stringResource(R.string.sd_stage_sampling, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
+                        metadata.decodingDurationMs?.let { Text(stringResource(R.string.sd_stage_decoding, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
+                        Text(stringResource(R.string.sd_gallery_image_components, metadata.vaeName ?: metadata.taeName ?: stringResource(R.string.sd_gallery_unavailable), metadata.cacheMode?.cliName ?: stringResource(R.string.gen_cache_mode_off), metadata.diffusionConvDirect, metadata.vaeConvDirect), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -2324,6 +2447,12 @@ private data class PreparedImageInput(
 )
 
 private const val IMAGE_GEN_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
+
+private fun formatGenerationDuration(durationMs: Long): String = when {
+    durationMs < 1_000L -> "${durationMs} ms"
+    durationMs < 60_000L -> String.format(Locale.getDefault(), "%.1f s", durationMs / 1_000.0)
+    else -> String.format(Locale.getDefault(), "%dm %02ds", durationMs / 60_000L, (durationMs / 1_000L) % 60L)
+}
 
 private suspend fun prepareImageInputForMode(
     context: Context,

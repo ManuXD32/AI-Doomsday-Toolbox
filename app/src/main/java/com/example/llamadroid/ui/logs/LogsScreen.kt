@@ -42,6 +42,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 private enum class LogTab { APP, GENERATION_DIAGNOSTICS, RPC }
 
@@ -376,6 +378,14 @@ private fun GenerationDiagnosticsContent(
                 }
 
                 if (exitSnapshot != null) {
+                    exitSnapshot.appVersion?.let { version ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_app_version, version),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
                     item {
                         Text(
                             text = stringResource(
@@ -385,6 +395,30 @@ private fun GenerationDiagnosticsContent(
                             ),
                             style = MaterialTheme.typography.bodySmall
                         )
+                    }
+                    item {
+                        Text(
+                            text = stringResource(
+                                R.string.logs_generation_diag_process,
+                                exitSnapshot.processName ?: stringResource(R.string.logs_generation_diag_unknown),
+                                exitSnapshot.pid?.toString() ?: stringResource(R.string.logs_generation_diag_unknown),
+                                exitSnapshot.status,
+                                exitSnapshot.importance
+                            ),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    if (exitSnapshot.processPssKb != null || exitSnapshot.processRssKb != null) {
+                        item {
+                            Text(
+                                text = stringResource(
+                                    R.string.logs_generation_diag_process_memory,
+                                    exitSnapshot.processPssKb?.toString() ?: "—",
+                                    exitSnapshot.processRssKb?.toString() ?: "—"
+                                ),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                     }
                     item {
                         Text(
@@ -418,6 +452,78 @@ private fun GenerationDiagnosticsContent(
                                     R.string.logs_generation_diag_trace,
                                     traceSnippet.take(600)
                                 ),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.tombstoneSummary?.takeIf { it.isNotBlank() }?.let { summary ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_tombstone, summary),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.traceSha256?.let { traceHash ->
+                        item {
+                            Text(
+                                text = stringResource(
+                                    R.string.logs_generation_diag_trace_identity,
+                                    exitSnapshot.traceFormat ?: stringResource(R.string.logs_generation_diag_unknown),
+                                    exitSnapshot.traceByteCount ?: 0,
+                                    traceHash
+                                ),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.deviceSummary?.let { summary ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_device, summary),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                    exitSnapshot.memorySummary?.let { summary ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_memory, summary),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.activeSessionDetails.takeIf { it.isNotEmpty() }?.let { sessions ->
+                        item {
+                            Text(
+                                text = stringResource(
+                                    R.string.logs_generation_diag_session_details,
+                                    sessions.joinToString("\n")
+                                ),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.correlationSummary?.let { summary ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_correlation, summary),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.agentJournalSummary?.let { summary ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_agent_journal, summary),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
+                            )
+                        }
+                    }
+                    exitSnapshot.relatedProcessSummary?.let { summary ->
+                        item {
+                            Text(
+                                text = stringResource(R.string.logs_generation_diag_related_processes, summary),
                                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
                             )
                         }
@@ -571,11 +677,30 @@ private fun shareDiagnosticsExport(
 ) {
     runCatching {
         val exportDir = File(context.cacheDir, "log_exports").apply { mkdirs() }
-        val exportFile = File(exportDir, "generation_diagnostics_${System.currentTimeMillis()}.txt")
-        exportFile.writeText(exportText)
+        exportDir.listFiles()?.filter {
+            System.currentTimeMillis() - it.lastModified() > 24L * 60L * 60L * 1000L
+        }?.forEach { it.delete() }
+        val timestamp = System.currentTimeMillis()
+        val traceFile = GenerationDiagnosticsStore.latestTraceFileForExport()
+        val exportFile = if (traceFile != null) {
+            File(exportDir, "generation_diagnostics_$timestamp.zip").also { zipFile ->
+                ZipOutputStream(zipFile.outputStream().buffered()).use { zip ->
+                    zip.putNextEntry(ZipEntry("generation_diagnostics.txt"))
+                    zip.write(exportText.toByteArray())
+                    zip.closeEntry()
+                    zip.putNextEntry(ZipEntry("last_exit_trace.bin"))
+                    traceFile.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+        } else {
+            File(exportDir, "generation_diagnostics_$timestamp.txt").also {
+                it.writeText(exportText)
+            }
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", exportFile)
         val shareIntent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
+            type = if (traceFile != null) "application/zip" else "text/plain"
             putExtra(Intent.EXTRA_SUBJECT, context.getString(R.string.logs_generation_diag_title))
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -601,6 +726,9 @@ private fun buildDiagnosticsExport(
     val lines = mutableListOf<String>()
     lines += context.getString(R.string.logs_generation_diag_title)
     exitSnapshot?.let { snapshot ->
+        snapshot.appVersion?.let {
+            lines += context.getString(R.string.logs_generation_diag_app_version, it)
+        }
         lines += context.getString(
             R.string.logs_generation_diag_reason,
             snapshot.reasonLabel,
@@ -610,6 +738,20 @@ private fun buildDiagnosticsExport(
             R.string.logs_generation_diag_time,
             dateFormat.format(Date(snapshot.timestamp))
         )
+        lines += context.getString(
+            R.string.logs_generation_diag_process,
+            snapshot.processName ?: context.getString(R.string.logs_generation_diag_unknown),
+            snapshot.pid?.toString() ?: context.getString(R.string.logs_generation_diag_unknown),
+            snapshot.status,
+            snapshot.importance
+        )
+        if (snapshot.processPssKb != null || snapshot.processRssKb != null) {
+            lines += context.getString(
+                R.string.logs_generation_diag_process_memory,
+                snapshot.processPssKb?.toString() ?: "—",
+                snapshot.processRssKb?.toString() ?: "—"
+            )
+        }
         snapshot.sessionSummary?.let {
             lines += context.getString(R.string.logs_generation_diag_session, it)
         }
@@ -618,6 +760,35 @@ private fun buildDiagnosticsExport(
         }
         snapshot.traceSnippet?.takeIf { it.isNotBlank() }?.let {
             lines += context.getString(R.string.logs_generation_diag_trace, it)
+        }
+        snapshot.tombstoneSummary?.takeIf { it.isNotBlank() }?.let {
+            lines += context.getString(R.string.logs_generation_diag_tombstone, it)
+        }
+        snapshot.traceSha256?.let {
+            lines += context.getString(
+                R.string.logs_generation_diag_trace_identity,
+                snapshot.traceFormat ?: context.getString(R.string.logs_generation_diag_unknown),
+                snapshot.traceByteCount ?: 0,
+                it
+            )
+        }
+        snapshot.deviceSummary?.let {
+            lines += context.getString(R.string.logs_generation_diag_device, it)
+        }
+        snapshot.memorySummary?.let {
+            lines += context.getString(R.string.logs_generation_diag_memory, it)
+        }
+        snapshot.activeSessionDetails.takeIf { it.isNotEmpty() }?.let {
+            lines += context.getString(R.string.logs_generation_diag_session_details, it.joinToString("\n"))
+        }
+        snapshot.correlationSummary?.let {
+            lines += context.getString(R.string.logs_generation_diag_correlation, it)
+        }
+        snapshot.agentJournalSummary?.let {
+            lines += context.getString(R.string.logs_generation_diag_agent_journal, it)
+        }
+        snapshot.relatedProcessSummary?.let {
+            lines += context.getString(R.string.logs_generation_diag_related_processes, it)
         }
     }
     if (breadcrumbs.isNotEmpty()) {

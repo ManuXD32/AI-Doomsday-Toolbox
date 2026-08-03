@@ -21,6 +21,7 @@ object ModelLibraryManager {
 
     private val MANAGED_EXTERNAL_CANONICAL_TYPES = setOf(
         ModelType.LLM,
+        ModelType.LORA,
         ModelType.EMBEDDING,
         ModelType.VISION,
         ModelType.VISION_PROJECTOR,
@@ -35,12 +36,14 @@ object ModelLibraryManager {
         ModelType.SD_TAE,
         ModelType.SD_VAE,
         ModelType.SD_LORA,
+        ModelType.SD_TEXTUAL_INVERSION,
         ModelType.SD_CONTROLNET,
         ModelType.SD_PHOTOMAKER
     )
 
     fun relativeDirFor(type: ModelType): String = when (type) {
         ModelType.LLM,
+        ModelType.LORA,
         ModelType.EMBEDDING,
         ModelType.VISION -> "llm"
         ModelType.VISION_PROJECTOR,
@@ -55,6 +58,7 @@ object ModelLibraryManager {
         ModelType.SD_TAE -> "sd/tae"
         ModelType.SD_VAE -> "sd/vae"
         ModelType.SD_LORA -> "sd/lora"
+        ModelType.SD_TEXTUAL_INVERSION -> "sd/embeddings"
         ModelType.SD_CONTROLNET -> "sd/controlnet"
         ModelType.SD_PHOTOMAKER -> "sd/photomaker"
         ModelType.ONNX_IMAGE_GEN,

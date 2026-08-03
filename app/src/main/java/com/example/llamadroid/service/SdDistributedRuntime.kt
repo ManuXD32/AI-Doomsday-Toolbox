@@ -82,10 +82,12 @@ fun appendSdDistributedArgs(
         args.addAll(listOf("--max-vram", maxVramSpec))
     }
 
-    args.addAll(listOf("--split-mode", config.splitMode.cliName))
+    args.addAll(listOf("--split-mode", SdDistributedSplitMode.LAYER.cliName))
 
     if (config.customFlags.isNotBlank()) {
-        args.addAll(splitShellLikeArgs(config.customFlags))
+        val customArgs = splitShellLikeArgs(config.customFlags)
+        validateSdDistributedCustomFlags(customArgs)
+        args.addAll(customArgs)
     }
 
     val requiredFlags = missingSdDistributedFlags(config, binaryCapabilities)
@@ -122,6 +124,20 @@ fun missingSdDistributedFlags(
     return requiredFlags
         .filterNot { flag -> binaryCapabilities.supports(flag) }
         .sorted()
+}
+
+fun validateSdDistributedCustomFlags(customArgs: List<String>) {
+    customArgs.forEachIndexed { index, arg ->
+        val lower = arg.lowercase()
+        val splitModeValue = when {
+            lower == "--split-mode" -> customArgs.getOrNull(index + 1)?.lowercase()
+            lower.startsWith("--split-mode=") -> lower.substringAfter("=")
+            else -> null
+        }
+        if (splitModeValue == SdDistributedSplitMode.ROW.cliName) {
+            throw SdDisallowedDistributedFlagException("--split-mode row")
+        }
+    }
 }
 
 data class SdDistributedPlanningWorker(
@@ -181,15 +197,17 @@ data class SdDistributedPlacementPlan(
     val rpcServers: String,
     val backendSpec: String,
     val paramsBackendSpec: String = "",
+    val maxVramSpec: String = "",
     val assignments: List<SdDistributedModuleAssignment> = emptyList()
 ) {
-    val isEmpty: Boolean = rpcServers.isBlank() || backendSpec.isBlank()
+    val isEmpty: Boolean = rpcServers.isBlank() || (backendSpec.isBlank() && maxVramSpec.isBlank())
 }
 
 data class SdRamPlannerOptions(
     val autoRamScope: SdDistributedAutoRamScope = SdDistributedAutoRamScope.DIFFUSION_ONLY,
     val useDiskParamsForSplitDiffusion: Boolean = false,
-    val diffusionReserveMB: Int = 512
+    val diffusionReserveMB: Int = 512,
+    val firstRpcOverheadMB: Int = 512
 ) {
     val assignTextEncoder: Boolean
         get() = autoRamScope == SdDistributedAutoRamScope.FULL_PIPELINE
@@ -205,11 +223,33 @@ fun buildRamWeightedSdPlacementPlan(
 ): SdDistributedPlacementPlan {
     val orderedWorkers = workers
         .filter { it.host.isNotBlank() && (it.isLocalMaster || it.port > 0) && it.ramMB > 0 }
-        .sortedWith(compareBy<SdDistributedPlanningWorker> { if (it.isLocalMaster) -1 else it.rpcIndex }.thenBy { it.displayName })
+        .sortedWith(
+            compareBy<SdDistributedPlanningWorker> { if (it.isLocalMaster) -1 else 0 }
+                .thenByDescending { if (it.isLocalMaster) Int.MAX_VALUE else it.ramMB }
+                .thenByDescending { it.threads }
+                .thenBy { it.rpcIndex }
+                .thenBy { it.displayName.lowercase() }
+        )
+        .let { sorted ->
+            var nextRpcIndex = 0
+            sorted.map { worker ->
+                if (worker.isLocalMaster) {
+                    worker
+                } else {
+                    worker.copy(rpcIndex = nextRpcIndex++)
+                }
+            }
+        }
 
     if (orderedWorkers.isEmpty()) return SdDistributedPlacementPlan(rpcServers = "", backendSpec = "")
-
     val remainingRam = orderedWorkers.associate { it.rpcName to it.ramMB }.toMutableMap()
+    val firstRemote = orderedWorkers.firstOrNull { !it.isLocalMaster }
+    if (firstRemote != null && options.firstRpcOverheadMB > 0) {
+        remainingRam[firstRemote.rpcName] = (remainingRam[firstRemote.rpcName] ?: firstRemote.ramMB)
+            .minus(options.firstRpcOverheadMB)
+            .coerceAtLeast(1)
+    }
+    val maxVramSpec = buildSdDistributedMaxVramSpec(orderedWorkers, remainingRam)
     val assignments = mutableListOf<SdDistributedModuleAssignment>()
 
     fun assignWholeModule(module: String, budgetMB: Int) {
@@ -250,6 +290,7 @@ fun buildRamWeightedSdPlacementPlan(
         return SdDistributedPlacementPlan(
             rpcServers = orderedWorkers.filterNot { it.isLocalMaster }.joinToString(",") { it.endpoint },
             backendSpec = backendParts.joinToString(","),
+            maxVramSpec = maxVramSpec,
             assignments = assignments
         )
     }
@@ -285,7 +326,7 @@ fun buildRamWeightedSdPlacementPlan(
     assignments.add(
         0,
         SdDistributedModuleAssignment(
-            module = "diffusion",
+            module = SdDistributedModules.DIFFUSION,
             devices = diffusionWorkers.map { it.rpcName },
             estimatedRamShares = estimatedShares,
             estimatedLayerShares = estimatedLayers
@@ -311,8 +352,28 @@ fun buildRamWeightedSdPlacementPlan(
         rpcServers = orderedWorkers.filterNot { it.isLocalMaster }.joinToString(",") { it.endpoint },
         backendSpec = backendParts.joinToString(","),
         paramsBackendSpec = paramsBackendSpec,
+        maxVramSpec = maxVramSpec,
         assignments = assignments
     )
+}
+
+private fun buildSdDistributedMaxVramSpec(
+    workers: List<SdDistributedPlanningWorker>,
+    effectiveRamByDevice: Map<String, Int>
+): String =
+    workers.joinToString(",") { worker ->
+        val effectiveRam = effectiveRamByDevice[worker.rpcName] ?: worker.ramMB
+        "${worker.rpcName}=${formatSdMaxVramGiB(effectiveRam)}"
+    }
+
+private fun formatSdMaxVramGiB(ramMB: Int): String {
+    val gib = ramMB.toFloat() / 1024f
+    val roundedTenths = kotlin.math.round(gib * 10f) / 10f
+    return if (roundedTenths % 1f == 0f) {
+        roundedTenths.toInt().toString()
+    } else {
+        "%.1f".format(java.util.Locale.US, roundedTenths)
+    }
 }
 
 private fun normalizePercentages(shares: Map<String, Float>): Map<String, Int> {

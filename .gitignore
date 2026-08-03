@@ -84,16 +84,21 @@ build_log*.txt
 .codex/
 .vscode/
 .gradle-home/
+.agent_build/
 tmp/
 Delete/
 
 # Local docs not intended for GitHub
 CHANGELOG.md
 docs/
+docs/*
+docs/build-and-release.md
 AGENTS.md
+
 
 # Local sprite-generation tooling and outputs
 tools/
+tools/*
 generated/
 comfyui-output/
 feature_media_snapdragon_vulkan/src/main/jniLibs/arm64-v8a/libsd_snapdragon_vulkan.so

@@ -153,6 +153,14 @@ private class FakeLlamaChatDao(
         flowOf(chats.values.filter { it.pinnedToAiHub })
 
     override suspend fun getChatById(id: Long): LlamaChatEntity? = chats[id]
+    override suspend fun getExpiredEphemeralChats(now: Long): List<LlamaChatEntity> =
+        chats.values.filter { chat ->
+            val expiresAt = chat.expiresAtMillis
+            chat.isEphemeral &&
+                chat.deleteAfterSession &&
+                expiresAt != null &&
+                expiresAt <= now
+        }
     override suspend fun insertChat(chat: LlamaChatEntity): Long {
         val id = chat.id.takeIf { it != 0L } ?: ((chats.keys.maxOrNull() ?: 0L) + 1L)
         chats[id] = chat.copy(id = id)
@@ -160,6 +168,12 @@ private class FakeLlamaChatDao(
     }
     override suspend fun deleteChat(chat: LlamaChatEntity) {
         chats.remove(chat.id)
+    }
+    override suspend fun deleteEphemeralChatById(id: Long) {
+        val chat = chats[id] ?: return
+        if (chat.isEphemeral && chat.deleteAfterSession) {
+            chats.remove(id)
+        }
     }
     override suspend fun updateTitle(id: Long, title: String) {
         chats[id] = chats.getValue(id).copy(title = title)

@@ -4,11 +4,62 @@ import com.example.llamadroid.data.SettingsRepository
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.flow.MutableStateFlow
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentServiceToolVisibilityTest {
+    @Test
+    fun `orchestrator call agent schema requires a name and documents duplicate suffixing`() {
+        val callAgent = AgentService.getAgentTools(settingsRepo = mockAgentSettings(
+            webSearchEnabled = false,
+            kiwixEnabled = false,
+            imageGenerationEnabled = false,
+            backgroundRemovalEnabled = false,
+            visionEnabled = false
+        )).single { it.name == "call_agent" }
+
+        assertEquals(listOf("agent", "name", "task"), callAgent.requiredParams)
+        assertTrue(callAgent.parameters.containsKey("context"))
+        assertTrue(callAgent.description.contains("Orchestrator-only"))
+        assertTrue(callAgent.description.contains("automatically adds 2, 3"))
+        assertTrue(callAgent.parameters.getValue("name").contains("maximum 40"))
+        assertTrue(callAgent.description.contains("exactly ONE atomic todo-sized task"))
+        assertTrue(callAgent.parameters.getValue("task").contains("never the whole plan"))
+    }
+
+    @Test
+    fun `LiteRT agent history preserves tool call and tool result roles`() {
+        val call = OllamaService.ToolCall(
+            id = "call-1",
+            name = "read_file",
+            arguments = mapOf("path" to "src/main.kt")
+        )
+        val assistant = AgentService.Companion.ChatMessage(
+            role = "assistant",
+            content = "",
+            pendingToolCall = call,
+            toolCallId = call.id,
+            toolName = call.name
+        )
+        val result = AgentService.Companion.ChatMessage(
+            role = "tool",
+            content = "file contents",
+            toolCallId = call.id,
+            toolName = call.name
+        )
+
+        val mappedAssistant = AgentService.chatMessageToLiteRtConversationMessage(assistant)
+        val mappedResult = AgentService.chatMessageToLiteRtConversationMessage(result, call.name)
+
+        assertEquals("assistant", mappedAssistant.role)
+        assertEquals("read_file", mappedAssistant.toolCalls.single().name)
+        assertEquals("src/main.kt", mappedAssistant.toolCalls.single().arguments["path"])
+        assertEquals("tool", mappedResult.role)
+        assertEquals("read_file", mappedResult.toolName)
+    }
+
     @Test
     fun `agent tools hide web and image tools when settings are disabled`() {
         val repo = mockAgentSettings(
@@ -66,6 +117,7 @@ class AgentServiceToolVisibilityTest {
         every { repo.agentKiwixEnabled } returns MutableStateFlow(kiwixEnabled)
         every { repo.agentImageGenerationToolEnabled } returns MutableStateFlow(imageGenerationEnabled)
         every { repo.agentBackgroundRemovalToolEnabled } returns MutableStateFlow(backgroundRemovalEnabled)
+        every { repo.agentVisualTestingEnabled } returns MutableStateFlow(false)
         every { repo.getAgentVisionEnabledForRole(any()) } returns visionEnabled
         return repo
     }

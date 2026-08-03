@@ -347,4 +347,3 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 ## Author
 
 **ManuXD32** - [GitHub](https://github.com/ManuXD32)
-- Built with the help of codex and antigravity

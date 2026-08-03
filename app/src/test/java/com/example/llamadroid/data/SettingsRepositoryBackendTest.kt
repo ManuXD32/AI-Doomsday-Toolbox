@@ -102,6 +102,10 @@ class SettingsRepositoryBackendTest {
             SettingsRepository.normalizeLlmNativeBinarySelection("libllama_server_dotprod.so")
         )
         assertEquals(
+            SettingsRepository.NATIVE_BINARY_CPU_I8MM,
+            SettingsRepository.normalizeLlmNativeBinarySelection("libllama_server_i8mm.so")
+        )
+        assertEquals(
             SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN,
             SettingsRepository.normalizeStableDiffusionNativeBinarySelection("vulkan")
         )
@@ -110,8 +114,62 @@ class SettingsRepositoryBackendTest {
             SettingsRepository.normalizeStableDiffusionNativeBinarySelection("libsd_armv9.so")
         )
         assertEquals(
-            SettingsRepository.NATIVE_BINARY_AUTO,
+            SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_OPENCL,
             SettingsRepository.normalizeStableDiffusionNativeBinarySelection("opencl")
         )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_CPU_I8MM,
+            SettingsRepository.normalizeStableDiffusionNativeBinarySelection("libsd_i8mm.so")
+        )
+    }
+
+    @Test
+    fun `valid custom binary selections survive normalization`() {
+        assertEquals(
+            "custom:my-llama-build",
+            SettingsRepository.normalizeLlmNativeBinarySelection(" custom:my-llama-build ")
+        )
+        assertEquals(
+            "custom:sd_build.2026",
+            SettingsRepository.normalizeStableDiffusionNativeBinarySelection("custom:sd_build.2026")
+        )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_AUTO,
+            SettingsRepository.normalizeLlmNativeBinarySelection("custom:../escape")
+        )
+        assertEquals(
+            SettingsRepository.NATIVE_BINARY_AUTO,
+            SettingsRepository.normalizeStableDiffusionNativeBinarySelection("custom:")
+        )
+    }
+
+    @Test
+    fun `llama OCR prompt presets default to Unlimited OCR`() {
+        assertEquals(LlamaOcrPromptPreset.UNLIMITED_OCR, LlamaOcrPromptPreset.fromName(null))
+        assertEquals(LlamaOcrPromptPreset.UNLIMITED_OCR, LlamaOcrPromptPreset.fromName("unlimited_ocr"))
+        assertEquals(LlamaOcrPromptPreset.GLM_OCR, LlamaOcrPromptPreset.fromName("GLM_OCR"))
+        assertTrue(LlamaOcrPromptPreset.UNLIMITED_OCR.recommendedFlags.contains("deepseek-ocr"))
+    }
+
+    @Test
+    fun `llama OCR snapshot requires mmproj and falls back to preset prompt`() {
+        val snapshot = LlamaOcrSettingsSnapshot(
+            modelPath = "/models/ocr.gguf",
+            mmprojPath = "/models/mmproj.gguf",
+            promptPreset = LlamaOcrPromptPreset.GENERIC_OCR,
+            customPrompt = null,
+            contextSize = 8192,
+            maxTokens = 512,
+            port = 8087,
+            flashAttention = false,
+            cacheRam = 0,
+            parallel = 1,
+            customFlags = null,
+            commandTemplate = null,
+            temporarilyReplaceRunningServer = true
+        )
+
+        assertEquals("http://127.0.0.1:8087", snapshot.baseUrl)
+        assertEquals(LlamaOcrPromptPreset.GENERIC_OCR.prompt, snapshot.prompt)
     }
 }

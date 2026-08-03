@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.util.CpuFeatures
+import com.example.llamadroid.util.CustomBinaryFamily
+import com.example.llamadroid.util.CustomBinaryPackageManager
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.DynamicFeatureManager
@@ -13,6 +16,86 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
+
+enum class RequestedLlamaBinary(val preferenceValue: String) {
+    AUTO(SettingsRepository.NATIVE_BINARY_AUTO),
+    CPU_BASELINE(SettingsRepository.NATIVE_BINARY_CPU_BASELINE),
+    CPU_DOTPROD(SettingsRepository.NATIVE_BINARY_CPU_DOTPROD),
+    CPU_ARMV9(SettingsRepository.NATIVE_BINARY_CPU_ARMV9),
+    CPU_I8MM(SettingsRepository.NATIVE_BINARY_CPU_I8MM),
+    OPENCL(SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL),
+    VULKAN(SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN);
+
+    companion object {
+        fun fromPreference(value: String?): RequestedLlamaBinary =
+            when (SettingsRepository.normalizeLlmNativeBinarySelection(value)) {
+                SettingsRepository.NATIVE_BINARY_CPU_BASELINE -> CPU_BASELINE
+                SettingsRepository.NATIVE_BINARY_CPU_DOTPROD -> CPU_DOTPROD
+                SettingsRepository.NATIVE_BINARY_CPU_ARMV9 -> CPU_ARMV9
+                SettingsRepository.NATIVE_BINARY_CPU_I8MM -> CPU_I8MM
+                SettingsRepository.NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL -> OPENCL
+                else -> AUTO
+            }
+    }
+}
+
+enum class EffectiveLlamaBinary(val tier: String?) {
+    CPU_BASELINE("baseline"),
+    CPU_DOTPROD("dotprod"),
+    CPU_ARMV9("armv9"),
+    CPU_I8MM("i8mm"),
+    OPENCL(null),
+    VULKAN(null)
+}
+
+data class NativeCpuCapabilities(
+    val arm64: Boolean,
+    val fp16: Boolean,
+    val dotProd: Boolean,
+    val armV9: Boolean,
+    val i8mm: Boolean
+)
+
+data class BinaryAvailability(
+    val installed: Boolean,
+    val hardwareCompatible: Boolean,
+    val complete: Boolean,
+    val abiCompatible: Boolean,
+    val quarantined: Boolean = false,
+    val unavailableReason: String? = null
+) {
+    val usable: Boolean
+        get() = installed && hardwareCompatible && complete && abiCompatible && !quarantined
+}
+
+data class InstalledNativeModules(
+    val baseline: BinaryAvailability,
+    val dotprod: BinaryAvailability,
+    val armv9: BinaryAvailability,
+    val i8mm: BinaryAvailability,
+    val opencl: BinaryAvailability,
+    val vulkan: BinaryAvailability
+)
+
+data class BinaryResolution(
+    val requested: RequestedLlamaBinary,
+    val effective: EffectiveLlamaBinary,
+    val fallbackUsed: Boolean,
+    val fallbackReason: String?
+)
+
+enum class RequestedKvBackend {
+    AUTO,
+    CPU,
+    ACCELERATOR
+}
+
+enum class EffectiveKvBackend {
+    CPU,
+    OPENCL,
+    VULKAN
+}
 
 /**
  * Repository for managing native binaries with CPU tier support.
@@ -53,6 +136,12 @@ class BinaryRepository(private val context: Context) {
         // Preference keys
         private const val PREFS_NAME = "llamadroid_settings"
         private const val KEY_PREFERRED_TIER = "preferred_cpu_tier"
+        private const val KEY_I8MM_QUARANTINE_PREFIX = "i8mm_failed"
+        const val TIER_BASELINE = "baseline"
+        const val TIER_DOTPROD = "dotprod"
+        const val TIER_ARMV9 = "armv9"
+        const val TIER_I8MM = "i8mm"
+        private val CPU_TIER_SUFFIXES = setOf(TIER_BASELINE, TIER_DOTPROD, TIER_ARMV9, TIER_I8MM)
 
         // Required shared libraries (not tiered, always same version)
         val SHARED_LIBS = listOf(
@@ -75,17 +164,102 @@ class BinaryRepository(private val context: Context) {
 
         internal fun exactCpuTierForNativeSelection(selection: String): String? =
             when (selection) {
-                SettingsRepository.NATIVE_BINARY_CPU_BASELINE -> "baseline"
-                SettingsRepository.NATIVE_BINARY_CPU_DOTPROD -> "dotprod"
-                SettingsRepository.NATIVE_BINARY_CPU_ARMV9 -> "armv9"
+                SettingsRepository.NATIVE_BINARY_CPU_BASELINE -> TIER_BASELINE
+                SettingsRepository.NATIVE_BINARY_CPU_DOTPROD -> TIER_DOTPROD
+                SettingsRepository.NATIVE_BINARY_CPU_ARMV9 -> TIER_ARMV9
+                SettingsRepository.NATIVE_BINARY_CPU_I8MM -> TIER_I8MM
                 else -> null
             }
 
         private fun tiersForSelectionStatic(tier: String): List<String> = when (tier) {
-            "armv9" -> listOf("armv9", "dotprod", "baseline")
-            "dotprod" -> listOf("dotprod", "baseline")
-            else -> listOf("baseline")
+            TIER_I8MM -> listOf(TIER_I8MM, TIER_ARMV9, TIER_DOTPROD, TIER_BASELINE)
+            TIER_ARMV9 -> listOf(TIER_ARMV9, TIER_DOTPROD, TIER_BASELINE)
+            TIER_DOTPROD -> listOf(TIER_DOTPROD, TIER_BASELINE)
+            else -> listOf(TIER_BASELINE)
         }
+
+        fun resolveAutomaticCpuBinary(
+            installed: InstalledNativeModules
+        ): EffectiveLlamaBinary {
+            if (installed.i8mm.usable) return EffectiveLlamaBinary.CPU_I8MM
+            if (installed.armv9.usable) return EffectiveLlamaBinary.CPU_ARMV9
+            if (installed.dotprod.usable) return EffectiveLlamaBinary.CPU_DOTPROD
+            return EffectiveLlamaBinary.CPU_BASELINE
+        }
+
+        fun resolveLlamaBinary(
+            requested: RequestedLlamaBinary,
+            installed: InstalledNativeModules
+        ): BinaryResolution {
+            val automatic = resolveAutomaticCpuBinary(installed)
+            fun fallback(reason: String?) = BinaryResolution(
+                requested = requested,
+                effective = automatic,
+                fallbackUsed = true,
+                fallbackReason = reason
+            )
+
+            return when (requested) {
+                RequestedLlamaBinary.AUTO -> BinaryResolution(
+                    requested = requested,
+                    effective = automatic,
+                    fallbackUsed = automatic != EffectiveLlamaBinary.CPU_I8MM &&
+                        (installed.i8mm.installed || installed.i8mm.hardwareCompatible),
+                    fallbackReason = when (automatic) {
+                        EffectiveLlamaBinary.CPU_I8MM -> null
+                        else -> installed.i8mm.unavailableReason?.takeIf { !installed.i8mm.usable }
+                    }
+                )
+                RequestedLlamaBinary.CPU_I8MM ->
+                    if (installed.i8mm.usable) BinaryResolution(requested, EffectiveLlamaBinary.CPU_I8MM, false, null)
+                    else fallback(installed.i8mm.unavailableReason ?: "i8mm is unavailable")
+                RequestedLlamaBinary.CPU_ARMV9 ->
+                    if (installed.armv9.usable) BinaryResolution(requested, EffectiveLlamaBinary.CPU_ARMV9, false, null)
+                    else fallback(installed.armv9.unavailableReason ?: "CPU Armv9 binary is unavailable")
+                RequestedLlamaBinary.CPU_DOTPROD ->
+                    if (installed.dotprod.usable) BinaryResolution(requested, EffectiveLlamaBinary.CPU_DOTPROD, false, null)
+                    else fallback(installed.dotprod.unavailableReason ?: "CPU dot-product binary is unavailable")
+                RequestedLlamaBinary.CPU_BASELINE ->
+                    if (installed.baseline.usable) BinaryResolution(requested, EffectiveLlamaBinary.CPU_BASELINE, false, null)
+                    else BinaryResolution(requested, automatic, true, installed.baseline.unavailableReason ?: "CPU baseline binary is unavailable")
+                RequestedLlamaBinary.OPENCL ->
+                    if (installed.opencl.usable) BinaryResolution(requested, EffectiveLlamaBinary.OPENCL, false, null)
+                    else fallback(installed.opencl.unavailableReason ?: "OpenCL binary is unavailable")
+                RequestedLlamaBinary.VULKAN ->
+                    if (installed.vulkan.usable) BinaryResolution(requested, EffectiveLlamaBinary.VULKAN, false, null)
+                    else fallback(installed.vulkan.unavailableReason ?: "Vulkan binary is unavailable")
+            }
+        }
+
+        fun resolveKvBackend(
+            requested: RequestedKvBackend,
+            binary: EffectiveLlamaBinary
+        ): EffectiveKvBackend {
+            val accelerator = when (binary) {
+                EffectiveLlamaBinary.VULKAN -> EffectiveKvBackend.VULKAN
+                EffectiveLlamaBinary.OPENCL -> EffectiveKvBackend.OPENCL
+                else -> null
+            }
+            return when (requested) {
+                RequestedKvBackend.AUTO -> accelerator ?: EffectiveKvBackend.CPU
+                RequestedKvBackend.CPU -> EffectiveKvBackend.CPU
+                RequestedKvBackend.ACCELERATOR -> accelerator ?: EffectiveKvBackend.CPU
+            }
+        }
+
+        fun requestedKvBackendFromPreference(value: String?): RequestedKvBackend =
+            when (SettingsRepository.normalizeLlamaKvOffloadMode(value)) {
+                SettingsRepository.LLAMA_KV_OFFLOAD_ACCELERATOR -> RequestedKvBackend.ACCELERATOR
+                SettingsRepository.LLAMA_KV_OFFLOAD_CPU -> RequestedKvBackend.CPU
+                else -> RequestedKvBackend.AUTO
+            }
+
+        fun kvOffloadPreferenceForEffectiveBackend(backend: EffectiveKvBackend): String =
+            when (backend) {
+                EffectiveKvBackend.CPU -> SettingsRepository.LLAMA_KV_OFFLOAD_CPU
+                EffectiveKvBackend.OPENCL,
+                EffectiveKvBackend.VULKAN -> SettingsRepository.LLAMA_KV_OFFLOAD_ACCELERATOR
+            }
 
         internal fun acceleratorLibNames(
             name: String,
@@ -102,6 +276,7 @@ class BinaryRepository(private val context: Context) {
                 }
                 "sd" -> when (SettingsRepository.normalizeStableDiffusionNativeBinarySelection(nativeBinarySelection)) {
                     SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN -> listOf("libsd_snapdragon_vulkan.so")
+                    SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_OPENCL -> listOf("libsd_snapdragon_opencl.so")
                     else -> emptyList()
                 }
                 else -> emptyList()
@@ -132,10 +307,19 @@ class BinaryRepository(private val context: Context) {
         return cachedTier!!
     }
 
-    private fun tiersForSelection(tier: String): List<String> = when (tier) {
-        "armv9" -> listOf("armv9", "dotprod", "baseline")
-        "dotprod" -> listOf("dotprod", "baseline")
-        else -> listOf("baseline")
+    private fun tiersForSelection(tier: String): List<String> = tiersForSelectionStatic(tier)
+
+    private fun llamaAutomaticTiers(deviceTier: String, name: String): List<String> {
+        val fallbackTiers = tiersForSelection(deviceTier)
+        if (name !in setOf("llama_server", "llama-bench", "rpc-server", "mtmd")) {
+            return fallbackTiers
+        }
+        val i8mmAvailability = binaryAvailabilityForTier(name, TIER_I8MM)
+        return if (i8mmAvailability.usable) {
+            (listOf(TIER_I8MM) + fallbackTiers).distinct()
+        } else {
+            fallbackTiers
+        }
     }
 
     private fun nativeLibraryCandidateDirs(): List<File> {
@@ -187,7 +371,8 @@ class BinaryRepository(private val context: Context) {
 
         listOf(
             "com.example.llamadroid.feature.llm.snapdragon.opencl",
-            "com.example.llamadroid.feature.media.snapdragon.vulkan"
+            "com.example.llamadroid.feature.media.snapdragon.vulkan",
+            "com.example.llamadroid.feature.media.snapdragon.opencl"
         ).forEach { pkgName ->
             runCatching {
                 val featureContext = context.createPackageContext(pkgName, 0)
@@ -197,7 +382,8 @@ class BinaryRepository(private val context: Context) {
 
         listOf(
             "feature_llm_snapdragon_opencl",
-            "feature_media_snapdragon_vulkan"
+            "feature_media_snapdragon_vulkan",
+            "feature_media_snapdragon_opencl"
         ).forEach { splitName ->
             val splitDir = File(context.filesDir.parent, "split_$splitName")
             if (splitDir.exists()) {
@@ -209,6 +395,246 @@ class BinaryRepository(private val context: Context) {
         }
 
         return results.values.toList()
+    }
+
+    private fun packageNamesForTier(name: String, tier: String): List<String> = buildList {
+        if (name in setOf("llama_server", "llama-bench", "rpc-server", "mtmd", "whisper-cli", "quadtrix_trainer")) {
+            add("com.example.llamadroid.feature.llm.$tier")
+        }
+        if (name in setOf("ffmpeg", "ffprobe", "sd", "sd-rpc-server", "whisper-cli")) {
+                add("com.example.llamadroid.feature.media.$tier")
+        }
+        if (tier != TIER_I8MM) {
+            if (name in setOf("kiwix-serve", "kiwix-manage")) {
+                add("com.example.llamadroid.feature.kiwix.$tier")
+            }
+        }
+    }.distinct()
+
+    private fun splitNamesForTier(name: String, tier: String): List<String> =
+        moduleNamesForTier(name, tier)
+
+    private fun moduleNameForTier(name: String, tier: String): String? =
+        moduleNamesForTier(name, tier).firstOrNull()
+
+    private fun moduleNamesForTier(name: String, tier: String): List<String> = buildList {
+        if (name in setOf("llama_server", "llama-bench", "rpc-server", "mtmd", "whisper-cli", "quadtrix_trainer")) {
+            add("feature_llm_$tier")
+        }
+        if (name in setOf("ffmpeg", "ffprobe", "sd", "sd-rpc-server", "whisper-cli")) {
+                add("feature_media_$tier")
+        }
+        if (tier != TIER_I8MM) {
+            if (name in setOf("kiwix-serve", "kiwix-manage")) {
+                add("feature_kiwix_$tier")
+            }
+        }
+    }.distinct()
+
+    private fun isModuleDeliveredForTier(name: String, tier: String): Boolean {
+        val module = moduleNameForTier(name, tier) ?: return false
+        return DynamicFeatureManager.isModuleInstalled(context, module)
+    }
+
+    private fun exactTieredFileName(name: String, tier: String): String = "lib${name}_${tier}.so"
+
+    private fun findExactTieredFile(name: String, tier: String): File? {
+        val libName = exactTieredFileName(name, tier)
+        nativeLibraryCandidateDirs().forEach { dir ->
+            File(dir, libName).takeIf { it.isFile }?.let { return it }
+        }
+
+        packageNamesForTier(name, tier).forEach { pkgName ->
+            runCatching {
+                val featureContext = context.createPackageContext(pkgName, 0)
+                File(featureContext.applicationInfo.nativeLibraryDir, libName)
+                    .takeIf { it.isFile }
+            }.getOrNull()?.let { return it }
+        }
+
+        splitNamesForTier(name, tier).forEach { splitName ->
+            val splitDir = File(context.filesDir.parent, "split_$splitName")
+            listOf(CpuFeatures.getArch(), "arm64", "arm64-v8a")
+                .map { File(splitDir, "lib/$it/$libName") }
+                .firstOrNull { it.isFile }
+                ?.let { return it }
+        }
+
+        if (canUseDeployedBinExecutables()) {
+            File(context.filesDir, "bin/$libName").takeIf { it.isFile }?.let { return it }
+        }
+
+        return null
+    }
+
+    fun isTierInstalledForBinary(name: String, tier: String): Boolean =
+        isModuleDeliveredForTier(name, tier) || findExactTieredFile(name, tier) != null
+
+    private fun hasLibraryCandidateInDir(dir: File, names: List<String>): Boolean =
+        names.any { File(dir, it).isFile }
+
+    private fun isI8mmBinarySetComplete(name: String): Boolean {
+        val binaryFile = findExactTieredFile(name, TIER_I8MM) ?: return false
+        val sourceDir = binaryFile.parentFile ?: return false
+
+        val requiredExecutables = buildList {
+            add(listOf(exactTieredFileName(name, TIER_I8MM)))
+            if (name == "llama_server") {
+                add(listOf("libmtmd_i8mm.so", "libmtmd.so"))
+            }
+        }
+        if (!requiredExecutables.all { candidates -> hasLibraryCandidateInDir(sourceDir, candidates) }) {
+            return false
+        }
+
+        val sharedRuntimeFamilies = listOf(
+            listOf("libllama_i8mm.so", "libllama.so", "libllama.so.0.so"),
+            listOf("libggml_i8mm.so", "libggml.so", "libggml.so.0.so"),
+            listOf("libggml-base_i8mm.so", "libggml-base.so", "libggml-base.so.0.so"),
+            listOf("libggml-cpu_i8mm.so", "libggml-cpu.so", "libggml-cpu.so.0.so")
+        )
+        val hasSharedRuntime = sharedRuntimeFamilies.any { candidates ->
+            hasLibraryCandidateInDir(sourceDir, candidates)
+        }
+        return !hasSharedRuntime || sharedRuntimeFamilies.all { candidates ->
+            hasLibraryCandidateInDir(sourceDir, candidates)
+        }
+    }
+
+    private fun isHardwareCompatibleWithTier(tier: String): Boolean =
+        when (tier) {
+            TIER_I8MM -> runCatching { CpuFeatures.hasI8mm() }.getOrDefault(false)
+            TIER_ARMV9 -> runCatching { CpuFeatures.hasArmV9() }.getOrDefault(false)
+            TIER_DOTPROD -> runCatching { CpuFeatures.hasDotProd() }.getOrDefault(false)
+            else -> true
+        }
+
+    private fun binaryAvailabilityForTier(name: String, tier: String): BinaryAvailability {
+        val installed = isTierInstalledForBinary(name, tier)
+        val hardwareCompatible = isHardwareCompatibleWithTier(tier)
+        val abiCompatible = CpuFeatures.getArch().lowercase(Locale.US).contains("arm64")
+        val complete = if (tier == TIER_I8MM && name in setOf("llama_server", "llama-bench", "rpc-server", "mtmd")) {
+            isI8mmBinarySetComplete(name)
+        } else {
+            findExactTieredFile(name, tier) != null
+        }
+        val quarantined = tier == TIER_I8MM && isI8mmQuarantined()
+        val reason = when {
+            !installed -> if (tier == TIER_I8MM) "i8mm module not delivered in this installation" else "module not delivered in this installation"
+            !hardwareCompatible -> if (tier == TIER_I8MM) "i8mm library present but CPU capability absent" else "CPU capability absent for $tier"
+            !complete -> if (tier == TIER_I8MM) "i8mm module incomplete or invalid" else "binary module incomplete or invalid"
+            !abiCompatible -> "native ABI is not arm64-compatible"
+            quarantined -> "i8mm is quarantined after a previous startup failure"
+            else -> null
+        }
+        return BinaryAvailability(
+            installed = installed,
+            hardwareCompatible = hardwareCompatible,
+            complete = complete,
+            abiCompatible = abiCompatible,
+            quarantined = quarantined,
+            unavailableReason = reason
+        )
+    }
+
+    fun currentNativeCpuCapabilities(): NativeCpuCapabilities =
+        NativeCpuCapabilities(
+            arm64 = CpuFeatures.getArch().lowercase(Locale.US).contains("arm64"),
+            fp16 = true,
+            dotProd = runCatching { CpuFeatures.hasDotProd() }.getOrDefault(false),
+            armV9 = runCatching { CpuFeatures.hasArmV9() }.getOrDefault(false),
+            i8mm = runCatching { CpuFeatures.hasI8mm() }.getOrDefault(false)
+        )
+
+    fun installedNativeModulesForLlama(): InstalledNativeModules =
+        InstalledNativeModules(
+            baseline = binaryAvailabilityForTier("llama_server", TIER_BASELINE),
+            dotprod = binaryAvailabilityForTier("llama_server", TIER_DOTPROD),
+            armv9 = binaryAvailabilityForTier("llama_server", TIER_ARMV9),
+            i8mm = binaryAvailabilityForTier("llama_server", TIER_I8MM),
+            opencl = BinaryAvailability(
+                installed = findAcceleratorBinaries(listOf("libllama_server_snapdragon_opencl.so")).isNotEmpty() ||
+                    DynamicFeatureManager.isModuleInstalled(context, DynamicFeatureManager.MODULE_LLM_SNAPDRAGON_OPENCL),
+                hardwareCompatible = DeviceAcceleration.isSnapdragonCompatible(),
+                complete = findAcceleratorBinaries(listOf("libllama_server_snapdragon_opencl.so")).isNotEmpty(),
+                abiCompatible = CpuFeatures.getArch().lowercase(Locale.US).contains("arm64"),
+                unavailableReason = null
+            ),
+            vulkan = BinaryAvailability(
+                installed = false,
+                hardwareCompatible = false,
+                complete = false,
+                abiCompatible = CpuFeatures.getArch().lowercase(Locale.US).contains("arm64"),
+                unavailableReason = "Vulkan is not an LLM binary"
+            )
+        )
+
+    fun llamaCpuTierAvailability(tier: String): BinaryAvailability =
+        binaryAvailabilityForTier("llama_server", tier)
+
+    fun resolveCurrentLlamaBinary(requestedSelection: String = settingsRepository.llmNativeBinarySelection.value): BinaryResolution =
+        resolveLlamaBinary(
+            requested = RequestedLlamaBinary.fromPreference(requestedSelection),
+            installed = installedNativeModulesForLlama()
+        )
+
+    private fun nativeBuildRevisionKey(): String =
+        runCatching {
+            context.assets.open("native_build_commits.txt").bufferedReader().use { reader ->
+                reader.readText().hashCode().toString(16)
+            }
+        }.getOrDefault("unknown")
+
+    private fun i8mmQuarantineKey(): String =
+        "${KEY_I8MM_QUARANTINE_PREFIX}_${BuildConfig.VERSION_CODE}_${nativeBuildRevisionKey()}"
+
+    fun isI8mmQuarantined(): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(i8mmQuarantineKey(), false)
+
+    fun quarantineI8mmForCurrentVersion(reason: String) {
+        val key = i8mmQuarantineKey()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(key, true)
+            .putString("${key}_reason", reason.take(240))
+            .apply()
+        DebugLog.log("$TAG: Quarantined i8mm for current native revision: $reason")
+    }
+
+    /** Lets a user retry after installing a newly verified i8mm module. */
+    fun clearI8mmQuarantineForCurrentVersion() {
+        val key = i8mmQuarantineKey()
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .remove(key)
+            .remove("${key}_reason")
+            .apply()
+        DebugLog.log("$TAG: Cleared i8mm quarantine for current native revision")
+    }
+
+    private fun logLlamaResolutionIfNeeded(
+        name: String,
+        requestedSelection: String,
+        tiersToTry: List<String>
+    ) {
+        if (name != "llama_server") return
+        val modules = installedNativeModulesForLlama()
+        val requested = RequestedLlamaBinary.fromPreference(requestedSelection)
+        val resolution = resolveLlamaBinary(requested, modules)
+        val cpu = currentNativeCpuCapabilities()
+        DebugLog.log(
+            "$TAG:\n" +
+                "  requestedBinary=${requested.preferenceValue}\n" +
+                "  installationSource=${if (BuildConfig.IS_FAT_APK_BUILD) "sideload_or_fat_apk" else "google_play_or_split"}\n" +
+                "  installedModules={baseline=${modules.baseline.installed}, dotprod=${modules.dotprod.installed}, armv9=${modules.armv9.installed}, i8mm=${modules.i8mm.installed}, opencl=${modules.opencl.installed}}\n" +
+                "  cpuFeatures={arm64=${cpu.arm64}, dotprod=${cpu.dotProd}, armv9=${cpu.armV9}, i8mm=${cpu.i8mm}}\n" +
+                "  i8mm={installed=${modules.i8mm.installed}, cpuCompatible=${modules.i8mm.hardwareCompatible}, complete=${modules.i8mm.complete}, quarantined=${modules.i8mm.quarantined}}\n" +
+                "  effectiveBinary=${resolution.effective.name.lowercase(Locale.US)}\n" +
+                "  fallbackUsed=${resolution.fallbackUsed}\n" +
+                "  fallbackReason=${resolution.fallbackReason}\n" +
+                "  searchTiers=$tiersToTry"
+        )
     }
 
     private fun canUseDeployedBinExecutables(): Boolean =
@@ -241,7 +667,7 @@ class BinaryRepository(private val context: Context) {
 
     fun getCpuTieredBinary(name: String): File? {
         val deviceTier = getTier()
-        val tiersToTry = buildBinarySearchTiers(deviceTier, deviceTier)
+        val tiersToTry = llamaAutomaticTiers(deviceTier, name)
         return findTieredBinary(name, deviceTier, tiersToTry, allowAccelerator = false)
     }
 
@@ -267,9 +693,41 @@ class BinaryRepository(private val context: Context) {
             "sd" -> SettingsRepository.normalizeStableDiffusionNativeBinarySelection(selection)
             else -> SettingsRepository.normalizeLlmNativeBinarySelection(selection)
         }
+        if (CustomBinaryPackageManager.selectionId(normalizedSelection) != null) {
+            val family = if (name == "sd") {
+                CustomBinaryFamily.STABLE_DIFFUSION
+            } else {
+                CustomBinaryFamily.LLM_SERVER
+            }
+            val customPackage = CustomBinaryPackageManager(context).resolve(normalizedSelection, family)
+            if (customPackage != null && name in setOf("llama_server", "sd")) {
+                DebugLog.log("$TAG: Using custom ${family.manifestValue} package ${customPackage.id}")
+                return customPackage.entrypointFile
+            }
+            DebugLog.log("$TAG: Custom package selection $normalizedSelection is unavailable for $name; using CPU fallback.")
+        }
         val deviceTier = getTier()
 
         exactCpuTierForNativeSelection(normalizedSelection)?.let { exactTier ->
+            val availability = binaryAvailabilityForTier(name, exactTier)
+            if (!availability.usable) {
+                val fallbackTiers = if (name in setOf("llama_server", "llama-bench")) {
+                    llamaAutomaticTiers(deviceTier, name)
+                } else {
+                    tiersForSelection(deviceTier)
+                }
+                DebugLog.log(
+                    "$TAG: Requested CPU tier $exactTier for $name is unavailable; " +
+                        "falling back through $fallbackTiers reason=${availability.unavailableReason}"
+                )
+                return findTieredBinary(
+                    name = name,
+                    selectedTier = deviceTier,
+                    tiersToTry = fallbackTiers,
+                    allowAccelerator = false
+                )
+            }
+            logLlamaResolutionIfNeeded(name, normalizedSelection, listOf(exactTier))
             return findTieredBinary(
                 name = name,
                 selectedTier = exactTier,
@@ -281,10 +739,18 @@ class BinaryRepository(private val context: Context) {
         if (normalizedSelection == SettingsRepository.NATIVE_BINARY_AUTO ||
             normalizedSelection == SettingsRepository.NATIVE_BINARY_CPU_AUTO
         ) {
+            val tiersToTry = if (name in setOf("llama_server", "llama-bench")) {
+                llamaAutomaticTiers(deviceTier, name)
+            } else if (name == "sd" && binaryAvailabilityForTier("sd", TIER_I8MM).usable) {
+                (listOf(TIER_I8MM) + tiersForSelection(deviceTier)).distinct()
+            } else {
+                tiersForSelection(deviceTier)
+            }
+            logLlamaResolutionIfNeeded(name, normalizedSelection, tiersToTry)
             return findTieredBinary(
                 name = name,
                 selectedTier = deviceTier,
-                tiersToTry = tiersForSelection(deviceTier),
+                tiersToTry = tiersToTry,
                 allowAccelerator = false
             )
         }
@@ -366,6 +832,7 @@ class BinaryRepository(private val context: Context) {
             if (acceleratorNames.isNotEmpty()) {
                 add("com.example.llamadroid.feature.llm.snapdragon.opencl")
                 add("com.example.llamadroid.feature.media.snapdragon.vulkan")
+                add("com.example.llamadroid.feature.media.snapdragon.opencl")
             }
             featureSearchTiers.forEach { tier ->
                 add("com.example.llamadroid.feature.llm.$tier")
@@ -417,6 +884,7 @@ class BinaryRepository(private val context: Context) {
                 if (acceleratorNames.isNotEmpty()) {
                     add("feature_llm_snapdragon_opencl")
                     add("feature_media_snapdragon_vulkan")
+                    add("feature_media_snapdragon_opencl")
                 }
                 featureSearchTiers.forEach { tier ->
                     add("feature_llm_$tier")
@@ -499,16 +967,6 @@ class BinaryRepository(private val context: Context) {
      * Get the llama-server executable (tiered).
      */
     suspend fun getExecutable(): File? = withContext(Dispatchers.IO) {
-        // First check for user-uploaded binary
-        val customBinDir = File(context.filesDir, "binaries")
-        val customServer = File(customBinDir, "libllama_server.so")
-        
-        if (customServer.exists() && customServer.canExecute()) {
-            DebugLog.log("$TAG: Using custom binary: ${customServer.absolutePath}")
-            return@withContext customServer
-        }
-        
-        // Use tiered binary
         return@withContext getTieredBinary("llama_server")
     }
 
@@ -536,6 +994,13 @@ class BinaryRepository(private val context: Context) {
      */
     fun getLibraryDir(): String {
         val paths = mutableListOf<String>()
+        val customManager = CustomBinaryPackageManager(context)
+        listOf(
+            settingsRepository.llmNativeBinarySelection.value to CustomBinaryFamily.LLM_SERVER,
+            settingsRepository.stableDiffusionNativeBinarySelection.value to CustomBinaryFamily.STABLE_DIFFUSION
+        ).mapNotNull { (selection, family) ->
+            customManager.resolve(selection, family)?.libraryDirectory?.absolutePath
+        }.forEach(paths::add)
         val customBinDir = File(context.filesDir, "binaries") // User uploaded
         if (customBinDir.exists() && customBinDir.listFiles()?.isNotEmpty() == true) {
             paths.add(customBinDir.absolutePath)
@@ -732,10 +1197,10 @@ class BinaryRepository(private val context: Context) {
         
         val deviceTier = getTier()
         // Tiers preference: Device Tier -> ... -> Baseline
-        val tiersToTry = when (deviceTier) {
-            "armv9" -> listOf("armv9", "dotprod", "baseline")
-            "dotprod" -> listOf("dotprod", "baseline")
-            else -> listOf("baseline")
+        val tiersToTry = if (runCatching { CpuFeatures.hasI8mm() }.getOrDefault(false) && !isI8mmQuarantined()) {
+            (listOf(TIER_I8MM) + tiersForSelection(deviceTier)).distinct()
+        } else {
+            tiersForSelection(deviceTier)
         }
 
         Log.i(TAG, "Deploying binaries for tier: $deviceTier (fallback: $tiersToTry)")
@@ -816,7 +1281,7 @@ class BinaryRepository(private val context: Context) {
                 val parts = bareName.split("_")
                 if (parts.size > 1) {
                     val potentialTier = parts.last()
-                    if (potentialTier in listOf("baseline", "dotprod", "armv9")) {
+                    if (potentialTier in CPU_TIER_SUFFIXES) {
                         key = bareName.substringBeforeLast("_")
                     }
                 }
@@ -827,7 +1292,7 @@ class BinaryRepository(private val context: Context) {
         fileGroups.forEach { (_, groupFiles) ->
             val isTiered = groupFiles.any { f -> 
                 val n = f.name
-                n.contains("_baseline.so") || n.contains("_dotprod.so") || n.contains("_armv9.so")
+                CPU_TIER_SUFFIXES.any { tier -> n.contains("_$tier.so") }
             }
 
             val bestFile = if (isTiered) {
@@ -884,7 +1349,7 @@ class BinaryRepository(private val context: Context) {
                     val parts = bareName.split("_")
                     if (parts.size > 1) {
                         val potentialTier = parts.last()
-                         if (potentialTier in listOf("baseline", "dotprod", "armv9")) {
+                         if (potentialTier in CPU_TIER_SUFFIXES) {
                             key = bareName.substringBeforeLast("_")
                         }
                     }
@@ -895,7 +1360,7 @@ class BinaryRepository(private val context: Context) {
             fileGroups.forEach { (_, groupEntries) ->
                 val isTiered = groupEntries.any { e ->
                     val n = File(e.name).name
-                    n.contains("_baseline.so") || n.contains("_dotprod.so") || n.contains("_armv9.so")
+                    CPU_TIER_SUFFIXES.any { tier -> n.contains("_$tier.so") }
                 }
 
                 val bestEntry = if (isTiered) {
@@ -958,7 +1423,7 @@ class BinaryRepository(private val context: Context) {
                             val parts = bareName.split("_")
                             if (parts.size > 1) {
                                 val potentialTier = parts.last()
-                                if (potentialTier in listOf("baseline", "dotprod", "armv9")) {
+                                if (potentialTier in CPU_TIER_SUFFIXES) {
                                     key = bareName.substringBeforeLast("_")
                                 }
                             }
@@ -969,7 +1434,7 @@ class BinaryRepository(private val context: Context) {
                     fileGroups.forEach groupLoop@ { (_, groupFiles) ->
                         val isTiered = groupFiles.any { f ->
                             val n = f.name
-                            n.contains("_baseline.so") || n.contains("_dotprod.so") || n.contains("_armv9.so")
+                            CPU_TIER_SUFFIXES.any { tier -> n.contains("_$tier.so") }
                         }
 
                         val bestFile = if (isTiered) {

@@ -66,7 +66,7 @@ object ToolCatalog {
                 Color(0xFF512DA8).copy(alpha = 0.3f)
             ),
             route = Screen.Agent.route,
-            routePatterns = listOf(Screen.Agent.route, Screen.AgentWorkspace.route),
+            routePatterns = listOf(Screen.Agent.route, Screen.AgentWorkspace.route, Screen.AgentInvocation.route),
             keywords = listOf("agent", "coding", "workspace")
         ),
         AIToolDefinition(
@@ -204,6 +204,20 @@ object ToolCatalog {
             keywords = listOf("upscale", "video", "realesrgan")
         ),
         AIToolDefinition(
+            id = "video_interpolation",
+            category = ToolCategory.VOICE_MEDIA,
+            emoji = "\uD83C\uDF9E\uFE0F",
+            titleRes = R.string.ai_video_interpolation,
+            descriptionRes = R.string.ai_video_interpolation_desc,
+            gradientColors = listOf(
+                Color(0xFF3F51B5).copy(alpha = 0.15f),
+                Color(0xFF00897B).copy(alpha = 0.3f)
+            ),
+            route = Screen.VideoInterpolation.route,
+            settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.VIDEO_UPSCALER),
+            keywords = listOf("interpolate", "rife", "fps", "smooth", "video")
+        ),
+        AIToolDefinition(
             id = "subtitle_burn",
             category = ToolCategory.VOICE_MEDIA,
             emoji = "\uD83D\uDD24",
@@ -241,7 +255,7 @@ object ToolCatalog {
                 Color(0xFFC2185B).copy(alpha = 0.3f)
             ),
             route = "pdf_toolbox",
-            routePatterns = listOf("pdf_toolbox", "pdf_summary", "settings_pdf_translation"),
+            routePatterns = listOf("pdf_toolbox", "pdf_summary"),
             settingsAction = ToolSettingsAction.Sheet(ToolSettingsSheet.PDF_SUMMARY),
             keywords = listOf("pdf", "ocr", "summary", "translation")
         ),

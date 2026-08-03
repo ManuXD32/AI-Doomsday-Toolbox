@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.api.OllamaModel
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
@@ -80,7 +81,9 @@ import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.service.NativeChatToolConfig
+import com.example.llamadroid.service.LlamaServerLaunchProfile
 import com.example.llamadroid.service.WhisperLanguages
+import com.example.llamadroid.service.isNativeChatLoopbackHost
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.navigation.Screen
 import com.google.gson.Gson
@@ -92,6 +95,7 @@ fun LlamaServerListScreen(
     navController: NavController
 ) {
     val context = LocalContext.current
+    val settingsRepository = remember { SettingsRepository(context.applicationContext) }
     val database = AppDatabase.getDatabase(context)
     val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, database) }
     val liteRtModelRepository = remember {
@@ -178,6 +182,7 @@ fun LlamaServerListScreen(
             whisperModelPaths = whisperModels.map { it.path },
             liteRtModels = liteRtModels,
             knowledgeBases = knowledgeBases,
+            settingsRepository = settingsRepository,
             onDismiss = {
                 showAddDialog = false
                 serverToEdit = null
@@ -201,6 +206,7 @@ private fun LlamaServerDialog(
     whisperModelPaths: List<String>,
     liteRtModels: List<LiteRtModelEntity>,
     knowledgeBases: List<KnowledgeBaseEntity>,
+    settingsRepository: SettingsRepository,
     onDismiss: () -> Unit,
     onSave: (LlamaServerEntity) -> Unit,
     onLoadOllamaModels: (String, Int, (Result<List<OllamaModel>>) -> Unit) -> Unit,
@@ -225,6 +231,9 @@ private fun LlamaServerDialog(
     }
     var preferWhisperAudioTranscription by remember(dialogKey) {
         mutableStateOf(initialServer?.preferWhisperAudioTranscription ?: false)
+    }
+    var saveLocalLaunchProfile by remember(dialogKey) {
+        mutableStateOf(initialServer?.localLaunchProfileJson != null)
     }
     var liteRtModelId by remember(dialogKey) { mutableStateOf(initialServer?.liteRtModelId) }
     var liteRtBackend by remember(dialogKey) {
@@ -306,6 +315,7 @@ private fun LlamaServerDialog(
         LlamaServerEntity.ENGINE_LLAMA_SERVER -> host.isNotBlank()
         else -> host.isNotBlank() && ollamaModelName.isNotBlank()
     }
+    val isLocalLlamaServer = engine == LlamaServerEntity.ENGINE_LLAMA_SERVER && isNativeChatLoopbackHost(host)
 
     fun refreshOllamaModels() {
         if (host.isBlank()) return
@@ -535,6 +545,41 @@ private fun LlamaServerDialog(
                 }
 
                 if (engine == LlamaServerEntity.ENGINE_LLAMA_SERVER || engine == LlamaServerEntity.ENGINE_LLAMA_SWAP) {
+                    if (isLocalLlamaServer) {
+                        Text(
+                            text = stringResource(R.string.llama_local_launch_profile_title),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = stringResource(R.string.llama_local_launch_profile_toggle),
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Switch(
+                                checked = saveLocalLaunchProfile,
+                                onCheckedChange = { saveLocalLaunchProfile = it }
+                            )
+                        }
+                        val profileSummary = initialServer?.localLaunchProfileJson
+                            ?.let(LlamaServerLaunchProfile::decode)
+                            ?.summary()
+                            ?: LlamaServerLaunchProfile.capture(settingsRepository).summary()
+                        Text(
+                            text = if (saveLocalLaunchProfile) {
+                                stringResource(R.string.llama_local_launch_profile_desc, profileSummary)
+                            } else {
+                                stringResource(R.string.llama_local_launch_profile_disabled_desc)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1044,7 +1089,12 @@ private fun LlamaServerDialog(
                                 imageIterationEnabled = defaultImageIterationEnabled,
                                 backgroundRemovalEnabled = defaultBackgroundRemovalEnabled,
                                 maxToolRounds = defaultMaxToolRounds
-                            )
+                            ),
+                            localLaunchProfileJson = if (isLocalLlamaServer && saveLocalLaunchProfile) {
+                                LlamaServerLaunchProfile.encode(LlamaServerLaunchProfile.capture(settingsRepository))
+                            } else {
+                                null
+                            }
                         )
                     )
                 },
@@ -1527,7 +1577,30 @@ fun LlamaServerCard(
                         contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                     )
                 }
+                if (server.isLlamaServerEngine() &&
+                    isNativeChatLoopbackHost(server.host) &&
+                    server.localLaunchProfileJson != null
+                ) {
+                    LlamaServerBadge(
+                        label = stringResource(R.string.llama_local_launch_profile_badge),
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
             }
+
+            server.localLaunchProfileJson
+                ?.let(LlamaServerLaunchProfile::decode)
+                ?.takeIf { server.isLlamaServerEngine() && isNativeChatLoopbackHost(server.host) }
+                ?.let { profile ->
+                    Text(
+                        text = stringResource(R.string.llama_local_launch_profile_saved_summary, profile.summary()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
             server.whisperModelPath?.takeIf { it.isNotBlank() }?.let { whisperPath ->
                 Text(

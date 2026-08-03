@@ -1,6 +1,8 @@
 package com.example.llamadroid.ui.agent
 
 import android.widget.Toast
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -9,6 +11,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
@@ -36,15 +39,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.llamadroid.service.AgentForegroundService
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.service.AgentLocalRuntimeCapabilities
+import com.example.llamadroid.service.AgentLocalRunState
+import com.example.llamadroid.service.AgentPreviewBridge
+import com.example.llamadroid.service.AgentWorkspaceBackendType
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.AgentService.Companion.setIsLoading
 import com.example.llamadroid.service.FileInfo
+import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -66,16 +76,20 @@ fun AgentWorkspaceScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     
     val agentService = remember { AgentForegroundService.getAgentService(context) }
+    val db = remember { AppDatabase.getDatabase(context) }
     
     val currentProjectFolder by AgentService.currentProjectFolder.collectAsState()
     val activeConversationId by AgentService.activeConversationId.collectAsState()
     val preferredConversationId by AgentService.preferredConversationId.collectAsState()
+    val workspaceBackend by AgentService.currentWorkspaceBackend.collectAsState()
+    val runtimeCapabilities by AgentService.currentRuntimeCapabilities.collectAsState()
+    val localRunStates by agentService.localProjectRunStates.collectAsState()
     val workspaceTerminalStates by AgentService.workspaceTerminalStates.collectAsState()
     val workspaceConversationAnchor = remember(preferredConversationId, activeConversationId) {
         resolveWorkspaceConversationAnchor(preferredConversationId, activeConversationId)
     }
-    val resolvedProjectRoot = remember(workspaceConversationAnchor, currentProjectFolder) {
-        resolveWorkspaceProjectRoot(workspaceConversationAnchor, currentProjectFolder)
+    val resolvedProjectRoot = remember(workspaceConversationAnchor, currentProjectFolder, workspaceBackend) {
+        resolveWorkspaceProjectRoot(workspaceConversationAnchor, currentProjectFolder, workspaceBackend)
     }
     val workspaceTerminalState = resolvedProjectRoot?.let { workspaceTerminalStates[it] }
     var currentPath by remember { mutableStateOf("") }
@@ -84,6 +98,18 @@ fun AgentWorkspaceScreen(navController: NavController) {
     var error by remember { mutableStateOf<String?>(null) }
     var showTerminalDialog by remember { mutableStateOf(false) }
     var stopProjectShellSummary by remember { mutableStateOf<com.example.llamadroid.service.ProjectShellSessionSummary?>(null) }
+    val requestedInitialTab = remember {
+        navController.previousBackStackEntry?.savedStateHandle
+            ?.remove<String>("agent_workspace_initial_tab")
+    }
+    var selectedWorkspaceTab by rememberSaveable { mutableStateOf(requestedInitialTab ?: "files") }
+    val localRunState = activeConversationId?.let { localRunStates[it] }
+    val localBackendActive = workspaceBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val invocationsFlow = remember(activeConversationId) {
+        activeConversationId?.let { db.agentWorkflowDao().observeInvocations(it) }
+            ?: kotlinx.coroutines.flow.flowOf(emptyList())
+    }
+    val invocations by invocationsFlow.collectAsState(initial = emptyList())
     
     // File viewer state
     var viewingFile by remember { mutableStateOf<FileInfo?>(null) }
@@ -109,9 +135,17 @@ fun AgentWorkspaceScreen(navController: NavController) {
     val isConnected by AgentService.isConnected.collectAsState()
     val agentConnectionStatus by AgentService.connectionStatus.collectAsState()
     val retryMessage by AgentService.retryMessage.collectAsState()
-    val showSshWarning = !isConnected &&
-        agentConnectionStatus != AgentService.Companion.ConnectionStatus.CONNECTING &&
-        agentConnectionStatus != AgentService.Companion.ConnectionStatus.RECONNECTING
+    val connectionVisibility = remember(workspaceBackend, isConnected, agentConnectionStatus) {
+        agentWorkspaceConnectionVisibility(
+            backend = workspaceBackend,
+            isSshConnected = isConnected,
+            isSshConnecting = agentConnectionStatus in setOf(
+                AgentService.Companion.ConnectionStatus.CONNECTING,
+                AgentService.Companion.ConnectionStatus.RECONNECTING
+            )
+        )
+    }
+    val showSshWarning = connectionVisibility.showSshWarning
     
     // Download state
     var downloadTarget by remember { mutableStateOf<FileInfo?>(null) }
@@ -205,9 +239,9 @@ fun AgentWorkspaceScreen(navController: NavController) {
     }
 
     // Connect and load using a single path to avoid double startup reloads
-    LaunchedEffect(isConnected, currentPath, resolvedProjectRoot) {
+    LaunchedEffect(isConnected, currentPath, resolvedProjectRoot, localBackendActive) {
         if (resolvedProjectRoot.isNullOrBlank() || currentPath.isBlank()) return@LaunchedEffect
-        if (!isConnected) {
+        if (!localBackendActive && !isConnected) {
             val connectResult = agentService.connect()
             if (connectResult.isFailure) {
                 val connectError = connectResult.exceptionOrNull()
@@ -246,79 +280,81 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     }
                 },
                 actions = {
-                    IconButton(
-                        onClick = {
-                            val projectRoot = resolvedProjectRoot ?: return@IconButton
-                            showTerminalDialog = true
-                            scope.launch {
-                                agentService.openWorkspaceTerminal(projectRoot).onFailure { e: Throwable ->
+                    if (!localBackendActive) {
+                        IconButton(
+                            onClick = {
+                                val projectRoot = resolvedProjectRoot ?: return@IconButton
+                                showTerminalDialog = true
+                                scope.launch {
+                                    agentService.openWorkspaceTerminal(projectRoot).onFailure { e: Throwable ->
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.agent_error_prefix, e.message ?: ""),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            },
+                            enabled = resolvedProjectRoot != null
+                        ) {
+                            val tint = when {
+                                workspaceTerminalState?.isConnecting == true -> MaterialTheme.colorScheme.tertiary
+                                workspaceTerminalState?.isConnected == true -> Color(0xFF4CAF50)
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            BadgedBox(
+                                badge = {
+                                    workspaceTerminalState?.let { terminalState ->
+                                        Badge(
+                                            containerColor = when {
+                                                terminalState.isConnecting -> MaterialTheme.colorScheme.tertiary
+                                                terminalState.isConnected -> Color(0xFF4CAF50)
+                                                else -> MaterialTheme.colorScheme.error
+                                            }
+                                        )
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.Code,
+                                    stringResource(R.string.agent_workspace_terminal_title),
+                                    tint = tint
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = {
+                                val projectRoot = resolvedProjectRoot ?: return@IconButton
+                                val summary = agentService.getProjectShellSessionSummary(projectRoot)
+                                if (summary.totalActiveSessions == 0) {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.agent_error_prefix, e.message ?: ""),
-                                        Toast.LENGTH_LONG
+                                        context.getString(R.string.agent_workspace_stop_project_shells_none),
+                                        Toast.LENGTH_SHORT
                                     ).show()
+                                } else {
+                                    stopProjectShellSummary = summary
                                 }
-                            }
-                        },
-                        enabled = resolvedProjectRoot != null
-                    ) {
-                        val tint = when {
-                            workspaceTerminalState?.isConnecting == true -> MaterialTheme.colorScheme.tertiary
-                            workspaceTerminalState?.isConnected == true -> Color(0xFF4CAF50)
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                        BadgedBox(
-                            badge = {
-                                workspaceTerminalState?.let { terminalState ->
-                                    Badge(
-                                        containerColor = when {
-                                            terminalState.isConnecting -> MaterialTheme.colorScheme.tertiary
-                                            terminalState.isConnected -> Color(0xFF4CAF50)
-                                            else -> MaterialTheme.colorScheme.error
-                                        }
-                                    )
-                                }
-                            }
+                            },
+                            enabled = resolvedProjectRoot != null
                         ) {
                             Icon(
-                                Icons.Default.Code,
-                                stringResource(R.string.agent_workspace_terminal_title),
-                                tint = tint
+                                Icons.Default.PowerSettingsNew,
+                                stringResource(R.string.agent_workspace_stop_project_shells),
+                                tint = MaterialTheme.colorScheme.error
                             )
                         }
                     }
-                    IconButton(
-                        onClick = {
-                            val projectRoot = resolvedProjectRoot ?: return@IconButton
-                            val summary = agentService.getProjectShellSessionSummary(projectRoot)
-                            if (summary.totalActiveSessions == 0) {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.agent_workspace_stop_project_shells_none),
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            } else {
-                                stopProjectShellSummary = summary
-                            }
-                        },
-                        enabled = resolvedProjectRoot != null
-                    ) {
-                        Icon(
-                            Icons.Default.PowerSettingsNew,
-                            stringResource(R.string.agent_workspace_stop_project_shells),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
                     // Upload
-                    IconButton(onClick = { uploadLauncher.launch("*/*") }, enabled = currentPath.isNotBlank()) {
+                    IconButton(onClick = { uploadLauncher.launch("*/*") }, enabled = selectedWorkspaceTab == "files" && currentPath.isNotBlank()) {
                         Icon(Icons.Default.Upload, stringResource(R.string.action_upload))
                     }
                     // New file/folder
-                    IconButton(onClick = { showNewDialog = true }, enabled = currentPath.isNotBlank()) {
+                    IconButton(onClick = { showNewDialog = true }, enabled = selectedWorkspaceTab == "files" && currentPath.isNotBlank()) {
                         Icon(Icons.Default.Add, stringResource(R.string.agent_new))
                     }
                     // Refresh
-                    IconButton(onClick = { loadFiles() }, enabled = currentPath.isNotBlank()) {
+                    IconButton(onClick = { loadFiles() }, enabled = selectedWorkspaceTab == "files" && currentPath.isNotBlank()) {
                         Icon(Icons.Default.Refresh, stringResource(R.string.agent_refresh))
                     }
                 }
@@ -326,16 +362,18 @@ fun AgentWorkspaceScreen(navController: NavController) {
         }
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
-            ConnectionStatusBar(
-                isBackendConnected = true,
-                backendIsRecovering = false,
-                backendHasChecked = true,
-                backendOfflineMessage = "",
-                backendReconnectingMessage = "",
-                agentConnectionStatus = agentConnectionStatus,
-                retryMessage = retryMessage,
-                onRetry = { scope.launch { agentService.connect() } }
-            )
+            if (connectionVisibility.showConnectionStatus) {
+                ConnectionStatusBar(
+                    isBackendConnected = true,
+                    backendIsRecovering = false,
+                    backendHasChecked = true,
+                    backendOfflineMessage = "",
+                    backendReconnectingMessage = "",
+                    agentConnectionStatus = agentConnectionStatus,
+                    retryMessage = retryMessage,
+                    onRetry = { scope.launch { agentService.connect() } }
+                )
+            }
 
             if (showSshWarning) {
                 SshConnectionWarningCard(
@@ -344,6 +382,104 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     onRetry = { scope.launch { agentService.connect() } }
                 )
             }
+
+            ScrollableTabRow(
+                selectedTabIndex = when (selectedWorkspaceTab) {
+                    "run" -> 1
+                    "preview" -> 2
+                    "agents" -> 3
+                    else -> 0
+                },
+                edgePadding = 12.dp
+            ) {
+                Tab(
+                    selected = selectedWorkspaceTab == "files",
+                    onClick = { selectedWorkspaceTab = "files" },
+                    text = { Text(stringResource(R.string.agent_workspace_tab_files), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    icon = { Icon(Icons.Default.Folder, contentDescription = null) }
+                )
+                Tab(
+                    selected = selectedWorkspaceTab == "run",
+                    onClick = { selectedWorkspaceTab = "run" },
+                    text = { Text(stringResource(R.string.agent_workspace_tab_run), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
+                )
+                Tab(
+                    selected = selectedWorkspaceTab == "preview",
+                    onClick = { selectedWorkspaceTab = "preview" },
+                    text = { Text(stringResource(R.string.agent_workspace_tab_preview), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    icon = { Icon(Icons.Default.Web, contentDescription = null) }
+                )
+                Tab(
+                    selected = selectedWorkspaceTab == "agents",
+                    onClick = { selectedWorkspaceTab = "agents" },
+                    text = { Text(stringResource(R.string.agent_workspace_tab_agents), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    icon = { Icon(Icons.Default.Groups, contentDescription = null) }
+                )
+            }
+
+            if (selectedWorkspaceTab == "agents") {
+                AgentInvocationsTab(
+                    invocations = invocations,
+                    onOpen = { navController.navigate(Screen.AgentInvocation.createRoute(it)) }
+                )
+            } else if (selectedWorkspaceTab == "run") {
+                LocalSandboxRunTab(
+                    modifier = Modifier.fillMaxSize(),
+                    conversationId = activeConversationId,
+                    projectFolder = currentProjectFolder,
+                    backend = workspaceBackend,
+                    capabilities = runtimeCapabilities,
+                    runState = localRunState,
+                    onCapabilitiesChanged = { updated ->
+                        val conversationId = activeConversationId ?: return@LocalSandboxRunTab
+                        scope.launch {
+                            db.agentChatDao().updateRuntimeSettings(
+                                id = conversationId,
+                                workspaceBackend = workspaceBackend.name,
+                                runtimeCapabilitiesJson = updated.toJson(),
+                                runEntrypointPath = null,
+                                runUiMode = "CONSOLE",
+                                lastRunProfileJson = ""
+                            )
+                            AgentService.setCurrentRuntimeCapabilities(updated)
+                        }
+                    },
+                    onRun = {
+                        scope.launch {
+                            agentService.runLocalProject().onFailure { e ->
+                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    onStop = {
+                        scope.launch {
+                            agentService.stopLocalProjectRun(force = false).onFailure { e ->
+                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    onForceStop = {
+                        scope.launch {
+                            agentService.stopLocalProjectRun(force = true).onFailure { e ->
+                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    onOpenPreview = { url ->
+                        selectedWorkspaceTab = "preview"
+                    }
+                )
+            } else if (selectedWorkspaceTab == "preview") {
+                AgentWorkspacePreviewTab(
+                    modifier = Modifier.fillMaxSize(),
+                    previewUrl = localRunState?.previewUrl,
+                    backend = workspaceBackend,
+                    onOpenExternal = { url ->
+                        navController.navigate(Screen.TermuxWebView.createRoute(url, context.getString(R.string.agent_workspace_preview_title), "agent_local"))
+                    }
+                )
+            } else {
             
             // Selection Toolbar
             AnimatedVisibility(visible = isMultiSelectMode) {
@@ -620,6 +756,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                         }
                     }
                 }
+            }
             }
         }
         } // end Column(padding)
@@ -1478,6 +1615,581 @@ fun WorkspaceTerminalDialog(
             }
         }
     }
+}
+
+@Composable
+private fun LocalSandboxRunTab(
+    modifier: Modifier,
+    conversationId: Long?,
+    projectFolder: String,
+    backend: AgentWorkspaceBackendType,
+    capabilities: AgentLocalRuntimeCapabilities,
+    runState: AgentLocalRunState?,
+    onCapabilitiesChanged: (AgentLocalRuntimeCapabilities) -> Unit,
+    onRun: () -> Unit,
+    onStop: () -> Unit,
+    onForceStop: () -> Unit,
+    onOpenPreview: (String) -> Unit
+) {
+    val localEnabled = backend == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    val running = runState?.status == "RUNNING"
+    val logScrollState = rememberScrollState()
+    LazyColumn(
+        modifier = modifier,
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(stringResource(R.string.agent_workspace_run_backend_title), fontWeight = FontWeight.Bold)
+                    AssistChip(
+                        onClick = {},
+                        label = {
+                            Text(
+                                if (localEnabled) stringResource(R.string.agent_project_backend_local)
+                                else stringResource(R.string.agent_project_backend_remote)
+                            )
+                        },
+                        leadingIcon = { Icon(if (localEnabled) Icons.Default.Security else Icons.Default.Terminal, null, modifier = Modifier.size(18.dp)) }
+                    )
+                    Text(
+                        stringResource(R.string.agent_workspace_backend_locked),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        if (localEnabled) {
+                            stringResource(R.string.agent_workspace_local_root, projectFolder)
+                        } else {
+                            stringResource(R.string.agent_workspace_remote_root, projectFolder)
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(stringResource(R.string.agent_workspace_run_manifest_title), fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.agent_workspace_run_manifest_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    SelectionContainer {
+                        Text(
+                            ".adt/run.json",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(stringResource(R.string.agent_workspace_dependencies_title), fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            stringResource(R.string.agent_workspace_dependencies_toggle),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = capabilities.allowPythonDependencies,
+                            enabled = localEnabled && conversationId != null,
+                            onCheckedChange = { enabled ->
+                                onCapabilitiesChanged(capabilities.copy(allowPythonDependencies = enabled))
+                            }
+                        )
+                    }
+                    Text(
+                        stringResource(R.string.agent_workspace_dependencies_warning),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.agent_workspace_run_status_title), fontWeight = FontWeight.Bold)
+                            Text(
+                                runState?.status ?: stringResource(R.string.agent_workspace_run_status_none),
+                                color = if (running) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (running) {
+                            AssistChip(
+                                onClick = {},
+                                label = { Text(stringResource(R.string.agent_workspace_background_running)) },
+                                leadingIcon = { Icon(Icons.Default.Sync, null, modifier = Modifier.size(18.dp)) }
+                            )
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = onRun,
+                            enabled = localEnabled && conversationId != null,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.action_run), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                        OutlinedButton(
+                            onClick = onStop,
+                            enabled = localEnabled && running,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.Stop, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.action_stop), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onForceStop,
+                        enabled = localEnabled && running,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.PowerSettingsNew, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.agent_workspace_force_stop))
+                    }
+                    runState?.previewUrl?.let { url ->
+                        Button(
+                            onClick = { onOpenPreview(url) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.OpenInNew, null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.agent_workspace_open_preview), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(stringResource(R.string.agent_workspace_logs_title), fontWeight = FontWeight.Bold)
+                    SelectionContainer {
+                        Text(
+                            runState?.logs?.ifBlank { stringResource(R.string.agent_workspace_logs_empty) }
+                                ?: stringResource(R.string.agent_workspace_logs_empty),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 180.dp, max = 420.dp)
+                                .verticalScroll(logScrollState)
+                                .background(Color(0xFF111827), RoundedCornerShape(8.dp))
+                                .padding(12.dp),
+                            color = Color(0xFFE5E7EB),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentWorkspacePreviewTab(
+    modifier: Modifier,
+    previewUrl: String?,
+    backend: AgentWorkspaceBackendType,
+    onOpenExternal: (String) -> Unit
+) {
+    Column(
+        modifier = modifier.padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(stringResource(R.string.agent_workspace_tab_preview), fontWeight = FontWeight.Bold)
+        if (previewUrl.isNullOrBlank()) {
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                            stringResource(R.string.agent_workspace_preview_empty_local)
+                        } else {
+                            stringResource(R.string.agent_workspace_preview_empty_remote)
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                AssistChip(
+                    onClick = {},
+                    label = { Text(previewUrl, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingIcon = { Icon(Icons.Default.Link, null, modifier = Modifier.size(18.dp)) },
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = { onOpenExternal(previewUrl) }) {
+                    Icon(Icons.Default.OpenInNew, stringResource(R.string.agent_workspace_open_preview))
+                }
+            }
+            Card(modifier = Modifier.fillMaxSize(), shape = RoundedCornerShape(8.dp)) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { context ->
+                        WebView(context).apply {
+                            webViewClient = WebViewClient()
+                            settings.javaScriptEnabled = true
+                            settings.domStorageEnabled = true
+                            loadUrl(previewUrl)
+                            AgentPreviewBridge.register(this, AgentService.activeConversationId.value, previewUrl)
+                        }
+                    },
+                    update = { webView ->
+                        AgentPreviewBridge.register(webView, AgentService.activeConversationId.value, previewUrl)
+                        if (webView.url != previewUrl) webView.loadUrl(previewUrl)
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AgentInvocationDetailScreen(
+    navController: NavController,
+    invocationId: String
+) {
+    val context = LocalContext.current
+    val db = remember(context) { AppDatabase.getDatabase(context.applicationContext) }
+    val invocationFlow = remember(invocationId) { db.agentWorkflowDao().observeInvocation(invocationId) }
+    val invocation by invocationFlow.collectAsState(initial = null)
+    val messageFlow = remember(invocationId) { db.agentChatDao().observeMessagesForInvocation(invocationId) }
+    val messages by messageFlow.collectAsState(initial = emptyList())
+    val liveMessages by AgentService.messages.collectAsState()
+    val loadedInvocation = invocation
+    if (loadedInvocation == null) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text(stringResource(R.string.agent_workspace_tab_agents)) },
+                    navigationIcon = {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Text(stringResource(R.string.agent_invocation_messages_empty))
+            }
+        }
+    } else {
+        AgentInvocationDetailContent(
+            invocation = loadedInvocation,
+            messages = messages,
+            liveMessages = liveMessages,
+            onBack = { navController.popBackStack() }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AgentInvocationDetailContent(
+    invocation: com.example.llamadroid.data.db.AgentInvocationEntity,
+    messages: List<com.example.llamadroid.data.db.AgentMessageEntity>,
+    liveMessages: List<AgentService.Companion.ChatMessage>,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val database = remember { com.example.llamadroid.data.db.AppDatabase.getDatabase(context.applicationContext) }
+    var guidance by rememberSaveable(invocation.id) { mutableStateOf("") }
+    var showContextDetails by rememberSaveable(invocation.id) { mutableStateOf(false) }
+    val running = invocation.status == "RUNNING"
+    val queuedInputsFlow = remember(invocation.conversationId, invocation.id) {
+        database.agentWorkflowDao().observeQueuedInputs(invocation.conversationId, invocation.id)
+    }
+    val queuedInputs by queuedInputsFlow.collectAsState(initial = emptyList())
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = {
+                            Column {
+                                Text(
+                                    "${invocation.agentClass} - ${invocation.resolvedName}",
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    invocationStatusLabel(invocation.status),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = onBack) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                            }
+                        },
+                        actions = {
+                            val contextPercent = invocation.contextPercent ?: 0
+                            Box(
+                                modifier = Modifier.size(52.dp).clickable { showContextDetails = true },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    progress = { (contextPercent.coerceIn(0, 100)) / 100f },
+                                    modifier = Modifier.fillMaxSize().padding(4.dp),
+                                    strokeWidth = 4.dp
+                                )
+                                Text("$contextPercent%", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    )
+                },
+                bottomBar = {
+                    AgentComposerHost(
+                        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        if (running) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                OutlinedTextField(
+                                    value = guidance,
+                                    onValueChange = { guidance = it },
+                                    modifier = Modifier.weight(1f),
+                                    placeholder = { Text(stringResource(R.string.agent_invocation_guidance_hint)) },
+                                    maxLines = 4
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                FilledIconButton(
+                                    onClick = {
+                                        val text = guidance.trim()
+                                        if (text.isNotEmpty()) {
+                                            AgentService.queueUrgentUserGuidance(
+                                                AgentService.Companion.ChatMessage(
+                                                    role = "user",
+                                                    content = text,
+                                                    invocationId = invocation.id
+                                                )
+                                            )
+                                            guidance = ""
+                                        }
+                                    },
+                                    enabled = guidance.isNotBlank()
+                                ) { Icon(Icons.Default.Send, stringResource(R.string.action_send)) }
+                            }
+                        } else {
+                            Text(
+                                stringResource(R.string.agent_invocation_guidance_unavailable),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            ) { padding ->
+                val timelineMessages = remember(messages, liveMessages, queuedInputs, invocation.id) {
+                    val canonicalIds = buildSet {
+                        messages.forEach { add(it.originalId) }
+                        liveMessages.forEach { add(it.id) }
+                    }
+                    val visibleQueuedMessages = queuedInputs
+                        .asSequence()
+                        .filter { it.content.isNotBlank() && it.id !in canonicalIds }
+                        .map { AgentService.queuedInputAsChatMessage(it) }
+                        .toList()
+                    mergeInvocationTimelineMessages(
+                        persistedMessages = messages.map { AgentService.chatMessageFromEntity(it) },
+                        liveMessages = liveMessages + visibleQueuedMessages,
+                        invocationId = invocation.id
+                    )
+                }
+                val timelineState = rememberLazyListState()
+                Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                    ElevatedCard(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(invocation.task, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                stringResource(
+                                    R.string.agent_invocation_context_details,
+                                    invocation.modelLabel ?: "—",
+                                    invocation.serverPhase ?: "—",
+                                    invocation.compactionCount,
+                                    invocation.contextPercent ?: 0
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    if (timelineMessages.isEmpty()) {
+                        Text(
+                            stringResource(R.string.agent_invocation_messages_empty),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    } else {
+                        AgentChatList(
+                            messages = timelineMessages,
+                            listState = timelineState,
+                            showAllOutput = false,
+                            onApprove = {},
+                            onDeny = {},
+                            onDelete = {},
+                            onRegenerate = {},
+                            onEdit = { _, _ -> },
+                            editingMessageId = null,
+                            editingText = "",
+                            onEditingTextChange = {},
+                            onSaveEdit = {},
+                            onCancelEdit = {},
+                            onToggleOutput = {},
+                            readOnly = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+    }
+    if (showContextDetails) {
+        AlertDialog(
+            onDismissRequest = { showContextDetails = false },
+            title = { Text(stringResource(R.string.agent_invocation_context_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.agent_invocation_context_details,
+                        invocation.modelLabel ?: "—",
+                        invocation.serverPhase ?: "—",
+                        invocation.compactionCount,
+                        invocation.contextPercent ?: 0
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showContextDetails = false }) {
+                    Text(stringResource(android.R.string.ok))
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AgentInvocationsTab(
+    invocations: List<com.example.llamadroid.data.db.AgentInvocationEntity>,
+    onOpen: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (invocations.isEmpty()) {
+        Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+            Text(
+                stringResource(R.string.agent_invocations_empty),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        return
+    }
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(invocations.sortedByDescending { it.startedAt }, key = { it.id }) { invocation ->
+            ElevatedCard(
+                onClick = { onOpen(invocation.id) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = "${invocation.agentClass} - ${invocation.resolvedName}",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    AssistChip(
+                        onClick = { onOpen(invocation.id) },
+                        label = { Text(invocationStatusLabel(invocation.status)) }
+                    )
+                    Text(
+                        invocation.task,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        listOfNotNull(
+                            invocation.modelLabel?.takeIf { it.isNotBlank() },
+                            invocation.backend?.takeIf { it.isNotBlank() },
+                            invocation.contextPercent?.let { "$it%" }
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun invocationStatusLabel(status: String): String = when (status.uppercase()) {
+    "RUNNING" -> stringResource(R.string.agent_invocation_status_running)
+    "COMPLETED" -> stringResource(R.string.agent_invocation_status_completed)
+    "FAILED" -> stringResource(R.string.agent_invocation_status_failed)
+    "CANCELLED" -> stringResource(R.string.agent_invocation_status_cancelled)
+    "INTERRUPTED" -> stringResource(R.string.agent_invocation_status_interrupted)
+    else -> status
 }
 
 @Composable

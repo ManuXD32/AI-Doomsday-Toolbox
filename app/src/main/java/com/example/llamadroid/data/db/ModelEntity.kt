@@ -38,6 +38,7 @@ const val ONNX_CAPABILITY_TXT2IMG = "txt2img"
 const val ONNX_CAPABILITY_IMG2IMG = "img2img"
 const val ONNX_CAPABILITY_TTS = "tts"
 const val ONNX_CAPABILITY_BACKGROUND_REMOVAL = "background_removal"
+const val QUADTRIX_LORA_REPO_PREFIX = "quadtrix/lora/"
 
 fun String?.parseSdCapabilities(): Set<String> =
     this
@@ -79,9 +80,13 @@ fun ModelEntity.onnxCapabilityTokens(): Set<String> = onnxCapabilities.parseOnnx
 
 fun ModelEntity.hasOnnxCapability(token: String): Boolean = onnxCapabilityTokens().contains(token)
 
+fun ModelEntity.isLegacyQuadtrixLoraAdapter(): Boolean =
+    type == ModelType.QUADTRIX && repoId.startsWith(QUADTRIX_LORA_REPO_PREFIX)
+
 enum class ModelType {
     // LLM types
     LLM,
+    LORA,             // llama.cpp GGUF LoRA adapter
     EMBEDDING,
     VISION,
     VISION_PROJECTOR,
@@ -90,6 +95,7 @@ enum class ModelType {
     SD_CHECKPOINT,    // Base SD model (supports txt2img, img2img) - SD1.5/SDXL
     SD_VAE,           // Standalone VAE for SD
     SD_LORA,          // LoRA for SD
+    SD_TEXTUAL_INVERSION, // Prompt embedding for stable-diffusion.cpp
     SD_UPSCALER,      // ESRGAN upscaling model
     // FLUX-specific types (multi-component architecture)
     SD_DIFFUSION,     // Standalone diffusion/transformer model (FLUX)

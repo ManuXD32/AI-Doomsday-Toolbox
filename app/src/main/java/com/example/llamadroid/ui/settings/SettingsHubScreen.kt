@@ -82,6 +82,16 @@ fun SettingsHubScreen(navController: NavController) {
             route = Screen.Logs.route
         ),
         SettingsItem(
+            emoji = "📊",
+            title = stringResource(R.string.settings_stats),
+            description = stringResource(R.string.settings_stats_desc),
+            gradientColors = listOf(
+                Color(0xFF00897B).copy(alpha = 0.15f),
+                Color(0xFF00695C).copy(alpha = 0.3f)
+            ),
+            route = Screen.Stats.route
+        ),
+        SettingsItem(
             emoji = "ℹ️",
             title = stringResource(R.string.settings_about),
             description = stringResource(R.string.settings_about_desc),

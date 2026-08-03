@@ -216,6 +216,9 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.CHROMA_RADIANCE.storedValue,
         SdModelFamily.SD3.storedValue
     )
+    ModelType.SD_TEXTUAL_INVERSION -> setOf(
+        SdModelFamily.CHECKPOINT.storedValue
+    )
     ModelType.SD_PHOTOMAKER -> setOf("${SdModelFamily.CHECKPOINT.storedValue}:sdxl")
     ModelType.SD_UPSCALER -> setOf(SdComponentRole.UPSCALER.compatToken)
     else -> emptySet()

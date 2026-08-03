@@ -1,8 +1,3 @@
-FFmpeg: d4ff0020b40b (n6.1)
-whisper.cpp: 8a9ad7844d6e (v1.7.4)
-stable-diffusion.cpp: ea4e566ccffa
-llama.cpp: 571d0d540df0 (b10068)
+stable-diffusion.cpp: e31a86ce9110 (master-805-e31a86c)
+llama.cpp: de699957b92f (b10218)
 llama.cpp-sd-rpc: ded1561b4228
-ncnn: dda2e28bae2a
-realcugan-ncnn-vulkan: 395302c5c70f (20220728)
-realsr-ncnn-vulkan: b7f890ee2704 (20220728)

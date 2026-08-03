@@ -10,14 +10,18 @@ import com.example.llamadroid.data.AppContainer
 import com.example.llamadroid.data.DefaultAppContainer
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.isLegacyQuadtrixLoraAdapter
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.LlamaScheduledTaskScheduler
+import com.example.llamadroid.service.LlamaRuntimeStateProjection
+import com.example.llamadroid.service.LlamaService
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.wear.PhoneWearGateway
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -43,10 +47,17 @@ class LlamaApplication : Application() {
         UnifiedNotificationManager.init(this)
         DebugLog.init(this)
         GenerationDiagnosticsStore.init(this)
+        if (!isMainProcess()) {
+            installCrashBreadcrumbHandler()
+            return
+        }
+        LlamaRuntimeStateProjection.registerMainProcess(this, LlamaService.mutableStateForProjection(), LlamaService.mutableServerLogsForProjection())
+        PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runRemovedLlmTrainingCleanupOnce()
             pruneLegacyPortableModelRows()
+            normalizeLegacyQuadtrixLoraRows()
             val staleJobs = AiRuntimeJobStore.markStaleActiveJobsTerminal(this@LlamaApplication)
             runCatching {
                 GenerationDiagnosticsStore.recordBreadcrumb(
@@ -95,6 +106,11 @@ class LlamaApplication : Application() {
             
             return context.createConfigurationContext(config)
         }
+    }
+
+    private fun isMainProcess(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P) return true
+        return runCatching { android.app.Application.getProcessName() == applicationInfo.processName }.getOrDefault(true)
     }
 
     private fun installCrashBreadcrumbHandler() {
@@ -221,6 +237,16 @@ class LlamaApplication : Application() {
                 "[StartupCleanup] Removed $removedOnnx legacy ONNX row(s) and $removedLiteRt legacy LiteRT row(s); re-import required."
             )
         }
+    }
+
+    private suspend fun normalizeLegacyQuadtrixLoraRows() {
+        val db = AppDatabase.getDatabase(this)
+        db.modelDao()
+            .getModelsByTypesSync(listOf(ModelType.QUADTRIX))
+            .filter { it.isLegacyQuadtrixLoraAdapter() }
+            .forEach { model ->
+                db.modelDao().insertModel(model.copy(type = ModelType.LORA))
+            }
     }
 
     private fun isWithinRoot(file: File, root: File): Boolean {

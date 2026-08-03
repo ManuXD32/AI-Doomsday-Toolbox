@@ -10,11 +10,13 @@ import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.service.LlamaSpeculativeMode
+import com.example.llamadroid.service.AgentPromptComparisonStore
 import com.example.llamadroid.tama.data.TamaPicGenDefaults
 import com.example.llamadroid.util.AIConstants
 import com.example.llamadroid.util.PromptUtils
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONObject
 import java.util.Locale
 
 data class RemoteSummarySettingsSnapshot(
@@ -47,13 +49,97 @@ data class PdfTranslationOptionsSnapshot(
     val screenshotMaxSide: Int,
     val screenshotJpegQuality: Int,
     val textOnlyFallbackEnabled: Boolean,
-    val qualityMode: PdfTranslationQualityMode
+    val qualityMode: PdfTranslationQualityMode,
+    val ocrProvider: PdfOcrProvider,
+    val bubbleGuidedOcrEnabled: Boolean,
+    val llamaOcr: LlamaOcrSettingsSnapshot
 )
 
 enum class PdfTranslationQualityMode {
     BEST_QUALITY,
     BALANCED,
     FASTER
+}
+
+enum class PdfOcrProvider {
+    ML_KIT,
+    LLAMA_CPP_GGUF
+}
+
+enum class LlamaOcrPromptPreset(
+    val label: String,
+    val prompt: String,
+    val recommendedFlags: String
+) {
+    UNLIMITED_OCR(
+        label = "Unlimited-OCR",
+        prompt = "document parsing.",
+        recommendedFlags = "--chat-template deepseek-ocr --flash-attn off"
+    ),
+    GLM_OCR(
+        label = "GLM-OCR",
+        prompt = "Extract all text from this image. Preserve reading order and line breaks.",
+        recommendedFlags = "--flash-attn off -fit off"
+    ),
+    DEEPSEEK_OCR(
+        label = "DeepSeek-OCR",
+        prompt = "<|grounding|>Convert the document to markdown.",
+        recommendedFlags = "--chat-template deepseek-ocr --flash-attn off --no-warmup"
+    ),
+    HUNYUAN_OCR(
+        label = "HunyuanOCR",
+        prompt = "Recognize all readable text in this image. Preserve reading order and line breaks.",
+        recommendedFlags = "--flash-attn off"
+    ),
+    PADDLEOCR_VL(
+        label = "PaddleOCR-VL",
+        prompt = "Extract all document text from the image. Return only OCR text.",
+        recommendedFlags = "--flash-attn off"
+    ),
+    DOTS_OCR(
+        label = "Dots.OCR",
+        prompt = "Extract the text from this image. Keep line breaks and reading order.",
+        recommendedFlags = "--flash-attn off"
+    ),
+    LIGHTON_OCR(
+        label = "LightOnOCR",
+        prompt = "OCR this page image. Return only the recognized text.",
+        recommendedFlags = "--flash-attn off"
+    ),
+    QIANFAN_OCR(
+        label = "Qianfan-OCR",
+        prompt = "Recognize the text in this image. Preserve natural reading order.",
+        recommendedFlags = "--flash-attn off"
+    ),
+    GENERIC_OCR(
+        label = "Generic OCR",
+        prompt = "OCR this image. Return only the recognized text in reading order.",
+        recommendedFlags = "--flash-attn off"
+    );
+
+    companion object {
+        fun fromName(value: String?): LlamaOcrPromptPreset =
+            entries.firstOrNull { it.name.equals(value?.trim(), ignoreCase = true) } ?: UNLIMITED_OCR
+    }
+}
+
+data class LlamaOcrSettingsSnapshot(
+    val modelPath: String?,
+    val mmprojPath: String?,
+    val promptPreset: LlamaOcrPromptPreset,
+    val customPrompt: String?,
+    val contextSize: Int,
+    val maxTokens: Int,
+    val port: Int,
+    val flashAttention: Boolean,
+    val cacheRam: Int,
+    val parallel: Int,
+    val customFlags: String?,
+    val commandTemplate: String?,
+    val temporarilyReplaceRunningServer: Boolean
+) {
+    val prompt: String get() = customPrompt?.takeIf { it.isNotBlank() } ?: promptPreset.prompt
+    val baseUrl: String get() = "http://127.0.0.1:$port"
 }
 
 class SettingsRepository(private val context: Context) {
@@ -433,6 +519,31 @@ class SettingsRepository(private val context: Context) {
                 mergePrompt = mergePrompt.value ?: defaultMergePrompt
             )
         }
+
+        fun applySnapshot(value: RemoteSummarySettingsSnapshot) {
+            setBackend(value.backend)
+            setOllamaUrl(value.ollamaUrl)
+            setLlamaServerUrl(value.llamaServerUrl)
+            setLlamaSwapUrl(value.llamaSwapUrl)
+            setOllamaModel(value.ollamaModel)
+            setLlamaSwapModel(value.llamaSwapModel)
+            setLiteRtModelId(value.liteRtModelId)
+            setLiteRtBackend(value.liteRtBackend)
+            setLiteRtMtpEnabled(value.liteRtMtpEnabled)
+            setThinkingEnabled(value.thinkingEnabled)
+            setLlamaServerModelLabel(value.llamaServerModelLabel)
+            setLlamaServerContextTokens(value.llamaServerContextTokens.takeIf { it > 0 })
+            setLlamaServerContextLabel(value.llamaServerContextLabel)
+            setChunkContext(value.chunkContext)
+            setChunkMaxTokens(value.chunkMaxTokens)
+            setMergeContext(value.mergeContext)
+            setMergeMaxTokens(value.mergeMaxTokens)
+            setTemperature(value.temperature)
+            setTimeoutMinutes(value.timeoutMinutes)
+            setTargetLanguage(value.targetLanguage)
+            setSummaryPrompt(value.summaryPrompt)
+            setMergePrompt(value.mergePrompt)
+        }
     }
     
     // Selected LLM Model Path
@@ -442,6 +553,16 @@ class SettingsRepository(private val context: Context) {
     fun setSelectedModelPath(path: String?) {
         prefs.edit().putString("selected_model_path", path).apply()
         _selectedModelPath.value = path
+    }
+
+    private val _selectedLlmLoraPath = MutableStateFlow(
+        prefs.getString("selected_llm_lora_path", null)
+    )
+    val selectedLlmLoraPath = _selectedLlmLoraPath.asStateFlow()
+
+    fun setSelectedLlmLoraPath(path: String?) {
+        prefs.edit().putString("selected_llm_lora_path", path).apply()
+        _selectedLlmLoraPath.value = path
     }
     
     // Selected Embedding Model Path
@@ -771,6 +892,29 @@ class SettingsRepository(private val context: Context) {
     fun setAgentLiteRtMtpEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("agent_litert_mtp_enabled", enabled).apply()
         _agentLiteRtMtpEnabled.value = enabled
+    }
+
+    private val _agentLiteRtContextTokens = MutableStateFlow(prefs.getInt("agent_litert_context_tokens", -1))
+    val agentLiteRtContextTokens = _agentLiteRtContextTokens.asStateFlow()
+    fun setAgentLiteRtContextTokens(value: Int?) {
+        val normalized = value?.takeIf { it > 0 } ?: -1
+        prefs.edit().putInt("agent_litert_context_tokens", normalized).apply()
+        _agentLiteRtContextTokens.value = normalized
+    }
+
+    private val _agentLiteRtMaxOutputTokens = MutableStateFlow(prefs.getInt("agent_litert_max_output_tokens", -1))
+    val agentLiteRtMaxOutputTokens = _agentLiteRtMaxOutputTokens.asStateFlow()
+    fun setAgentLiteRtMaxOutputTokens(value: Int?) {
+        val normalized = value?.takeIf { it > 0 } ?: -1
+        prefs.edit().putInt("agent_litert_max_output_tokens", normalized).apply()
+        _agentLiteRtMaxOutputTokens.value = normalized
+    }
+
+    private val _agentLiteRtThinkingEnabled = MutableStateFlow(prefs.getBoolean("agent_litert_thinking_enabled", true))
+    val agentLiteRtThinkingEnabled = _agentLiteRtThinkingEnabled.asStateFlow()
+    fun setAgentLiteRtThinkingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_litert_thinking_enabled", enabled).apply()
+        _agentLiteRtThinkingEnabled.value = enabled
     }
 
     // Show Extra Output (thinking, tool calls, etc.)
@@ -1114,6 +1258,108 @@ class SettingsRepository(private val context: Context) {
         }.apply()
         _serverCacheRam.value = normalized
     }
+
+    private val _serverContextCheckpoints = MutableStateFlow(
+        prefs.getInt("server_context_checkpoints", -1).takeIf { it >= 0 }
+    )
+    val serverContextCheckpoints = _serverContextCheckpoints.asStateFlow()
+    fun setServerContextCheckpoints(value: Int?) {
+        val normalized = value?.coerceIn(0, 4096)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_context_checkpoints")
+            else putInt("server_context_checkpoints", normalized)
+        }.apply()
+        _serverContextCheckpoints.value = normalized
+    }
+
+    private val _serverCheckpointMinStep = MutableStateFlow(
+        prefs.getInt("server_checkpoint_min_step", -1).takeIf { it >= 0 }
+    )
+    val serverCheckpointMinStep = _serverCheckpointMinStep.asStateFlow()
+    fun setServerCheckpointMinStep(value: Int?) {
+        val normalized = value?.coerceIn(0, 1_048_576)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_checkpoint_min_step")
+            else putInt("server_checkpoint_min_step", normalized)
+        }.apply()
+        _serverCheckpointMinStep.value = normalized
+    }
+
+    private val _serverCachePrompt = MutableStateFlow(prefs.getBoolean("server_cache_prompt", true))
+    val serverCachePrompt = _serverCachePrompt.asStateFlow()
+    fun setServerCachePrompt(enabled: Boolean) {
+        prefs.edit().putBoolean("server_cache_prompt", enabled).apply()
+        _serverCachePrompt.value = enabled
+    }
+
+    private val _serverCacheIdleSlots = MutableStateFlow(prefs.getBoolean("server_cache_idle_slots", true))
+    val serverCacheIdleSlots = _serverCacheIdleSlots.asStateFlow()
+    fun setServerCacheIdleSlots(enabled: Boolean) {
+        prefs.edit().putBoolean("server_cache_idle_slots", enabled).apply()
+        _serverCacheIdleSlots.value = enabled
+    }
+
+    private val _serverKvUnifiedMode = MutableStateFlow(
+        com.example.llamadroid.service.LlamaKvUnifiedMode.fromValue(
+            prefs.getString("server_kv_unified_mode", "auto")
+        ).value
+    )
+    val serverKvUnifiedMode = _serverKvUnifiedMode.asStateFlow()
+    fun setServerKvUnifiedMode(value: String) {
+        val normalized = com.example.llamadroid.service.LlamaKvUnifiedMode.fromValue(value).value
+        prefs.edit().putString("server_kv_unified_mode", normalized).apply()
+        _serverKvUnifiedMode.value = normalized
+    }
+
+    private val _serverSwaFull = MutableStateFlow(prefs.getBoolean("server_swa_full", false))
+    val serverSwaFull = _serverSwaFull.asStateFlow()
+    fun setServerSwaFull(enabled: Boolean) {
+        prefs.edit().putBoolean("server_swa_full", enabled).apply()
+        _serverSwaFull.value = enabled
+    }
+
+    private val _serverSleepIdleSeconds = MutableStateFlow(
+        prefs.getInt("server_sleep_idle_seconds", 1800).coerceIn(-1, 604_800)
+    )
+    val serverSleepIdleSeconds = _serverSleepIdleSeconds.asStateFlow()
+    fun setServerSleepIdleSeconds(value: Int?) {
+        val normalized = value?.coerceIn(-1, 604_800) ?: -1
+        prefs.edit().putInt("server_sleep_idle_seconds", normalized).apply()
+        _serverSleepIdleSeconds.value = normalized
+    }
+
+    private val _agentLlamaSlotAffinityMode = MutableStateFlow(
+        com.example.llamadroid.service.LlamaSlotAffinityMode.fromValue(
+            prefs.getString("agent_llama_slot_affinity_mode", "automatic")
+        ).value
+    )
+    val agentLlamaSlotAffinityMode = _agentLlamaSlotAffinityMode.asStateFlow()
+    fun setAgentLlamaSlotAffinityMode(value: String) {
+        val normalized = com.example.llamadroid.service.LlamaSlotAffinityMode.fromValue(value).value
+        prefs.edit().putString("agent_llama_slot_affinity_mode", normalized).apply()
+        _agentLlamaSlotAffinityMode.value = normalized
+    }
+
+    private val _agentPromptCacheDiagnostics = MutableStateFlow(
+        prefs.getBoolean("agent_prompt_cache_diagnostics", false)
+    )
+    val agentPromptCacheDiagnostics = _agentPromptCacheDiagnostics.asStateFlow()
+    fun setAgentPromptCacheDiagnostics(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_prompt_cache_diagnostics", enabled).apply()
+        _agentPromptCacheDiagnostics.value = enabled
+    }
+
+    private val _agentDeveloperPromptComparison = MutableStateFlow(
+        prefs.getBoolean("agent_developer_prompt_comparison", false)
+    )
+    val agentDeveloperPromptComparison = _agentDeveloperPromptComparison.asStateFlow()
+    fun setAgentDeveloperPromptComparison(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_developer_prompt_comparison", enabled).apply()
+        _agentDeveloperPromptComparison.value = enabled
+        if (!enabled) {
+            AgentPromptComparisonStore.sync(context, false, "", "")
+        }
+    }
     
     // Ollama num_thread option (number of threads for inference)
     private val _ollamaThreads = MutableStateFlow(prefs.getInt("ollama_threads", 4))
@@ -1360,6 +1606,14 @@ class SettingsRepository(private val context: Context) {
         defaultTargetLanguage = defaultPdfTranslationLanguage()
     )
 
+    val mangaTranslationSettings = RemoteSummarySettingsGroup(
+        keyPrefix = "manga_translation",
+        defaultSummaryPrompt = com.example.llamadroid.service.PDFTranslationLogic.DEFAULT_PAGE_TRANSLATION_SYSTEM_PROMPT,
+        defaultMergePrompt = null,
+        defaultLlamaServerUrl = PDF_LLAMA_SERVER_DEFAULT_URL,
+        defaultTargetLanguage = defaultPdfTranslationLanguage()
+    )
+
     val pdfTranslationBackend = pdfTranslationSettings.backend
     fun setPdfTranslationBackend(backend: String) = pdfTranslationSettings.setBackend(backend)
 
@@ -1466,14 +1720,224 @@ class SettingsRepository(private val context: Context) {
         _pdfTranslationQualityMode.value = mode
     }
 
+    private val _pdfOcrProvider = MutableStateFlow(
+        enumPref("pdf_ocr_provider", PdfOcrProvider.ML_KIT)
+    )
+    val pdfOcrProvider = _pdfOcrProvider.asStateFlow()
+    fun setPdfOcrProvider(provider: PdfOcrProvider) {
+        prefs.edit().putString("pdf_ocr_provider", provider.name).apply()
+        _pdfOcrProvider.value = provider
+    }
+
+    private val _pdfOcrBubbleGuided = MutableStateFlow(
+        prefs.getBoolean("pdf_ocr_bubble_guided", false)
+    )
+    val pdfOcrBubbleGuided = _pdfOcrBubbleGuided.asStateFlow()
+    fun setPdfOcrBubbleGuided(enabled: Boolean) {
+        prefs.edit().putBoolean("pdf_ocr_bubble_guided", enabled).apply()
+        _pdfOcrBubbleGuided.value = enabled
+    }
+
+    private val _pdfOcrLlamaModelPath = MutableStateFlow(prefs.getString("pdf_ocr_llama_model_path", null))
+    val pdfOcrLlamaModelPath = _pdfOcrLlamaModelPath.asStateFlow()
+    fun setPdfOcrLlamaModelPath(path: String?) {
+        prefs.edit().putString("pdf_ocr_llama_model_path", path?.trim()?.ifBlank { null }).apply()
+        _pdfOcrLlamaModelPath.value = path?.trim()?.ifBlank { null }
+    }
+
+    private val _pdfOcrLlamaMmprojPath = MutableStateFlow(prefs.getString("pdf_ocr_llama_mmproj_path", null))
+    val pdfOcrLlamaMmprojPath = _pdfOcrLlamaMmprojPath.asStateFlow()
+    fun setPdfOcrLlamaMmprojPath(path: String?) {
+        prefs.edit().putString("pdf_ocr_llama_mmproj_path", path?.trim()?.ifBlank { null }).apply()
+        _pdfOcrLlamaMmprojPath.value = path?.trim()?.ifBlank { null }
+    }
+
+    private val _pdfOcrLlamaPromptPreset = MutableStateFlow(
+        LlamaOcrPromptPreset.fromName(prefs.getString("pdf_ocr_llama_prompt_preset", null))
+    )
+    val pdfOcrLlamaPromptPreset = _pdfOcrLlamaPromptPreset.asStateFlow()
+    fun setPdfOcrLlamaPromptPreset(preset: LlamaOcrPromptPreset) {
+        prefs.edit().putString("pdf_ocr_llama_prompt_preset", preset.name).apply()
+        _pdfOcrLlamaPromptPreset.value = preset
+    }
+
+    private val _pdfOcrLlamaCustomPrompt = MutableStateFlow(prefs.getString("pdf_ocr_llama_custom_prompt", null))
+    val pdfOcrLlamaCustomPrompt = _pdfOcrLlamaCustomPrompt.asStateFlow()
+    fun setPdfOcrLlamaCustomPrompt(prompt: String?) {
+        prefs.edit().putString("pdf_ocr_llama_custom_prompt", prompt?.trim()?.ifBlank { null }).apply()
+        _pdfOcrLlamaCustomPrompt.value = prompt?.trim()?.ifBlank { null }
+    }
+
+    private val _pdfOcrLlamaContextSize = MutableStateFlow(
+        prefs.getInt("pdf_ocr_llama_context_size", 16384).coerceIn(2048, 65536)
+    )
+    val pdfOcrLlamaContextSize = _pdfOcrLlamaContextSize.asStateFlow()
+    fun setPdfOcrLlamaContextSize(value: Int) {
+        val normalized = value.coerceIn(2048, 65536)
+        prefs.edit().putInt("pdf_ocr_llama_context_size", normalized).apply()
+        _pdfOcrLlamaContextSize.value = normalized
+    }
+
+    private val _pdfOcrLlamaMaxTokens = MutableStateFlow(
+        prefs.getInt("pdf_ocr_llama_max_tokens", 2600).coerceIn(128, 32768)
+    )
+    val pdfOcrLlamaMaxTokens = _pdfOcrLlamaMaxTokens.asStateFlow()
+    fun setPdfOcrLlamaMaxTokens(value: Int) {
+        val normalized = value.coerceIn(128, 32768)
+        prefs.edit().putInt("pdf_ocr_llama_max_tokens", normalized).apply()
+        _pdfOcrLlamaMaxTokens.value = normalized
+    }
+
+    private val _pdfOcrLlamaPort = MutableStateFlow(
+        prefs.getInt("pdf_ocr_llama_port", 8087).coerceIn(1024, 65535)
+    )
+    val pdfOcrLlamaPort = _pdfOcrLlamaPort.asStateFlow()
+    fun setPdfOcrLlamaPort(value: Int) {
+        val normalized = value.coerceIn(1024, 65535)
+        prefs.edit().putInt("pdf_ocr_llama_port", normalized).apply()
+        _pdfOcrLlamaPort.value = normalized
+    }
+
+    private val _pdfOcrLlamaFlashAttention = MutableStateFlow(
+        prefs.getBoolean("pdf_ocr_llama_flash_attention", false)
+    )
+    val pdfOcrLlamaFlashAttention = _pdfOcrLlamaFlashAttention.asStateFlow()
+    fun setPdfOcrLlamaFlashAttention(enabled: Boolean) {
+        prefs.edit().putBoolean("pdf_ocr_llama_flash_attention", enabled).apply()
+        _pdfOcrLlamaFlashAttention.value = enabled
+    }
+
+    private val _pdfOcrLlamaCacheRam = MutableStateFlow(
+        prefs.getInt("pdf_ocr_llama_cache_ram", 0).coerceIn(0, 131072)
+    )
+    val pdfOcrLlamaCacheRam = _pdfOcrLlamaCacheRam.asStateFlow()
+    fun setPdfOcrLlamaCacheRam(value: Int) {
+        val normalized = value.coerceIn(0, 131072)
+        prefs.edit().putInt("pdf_ocr_llama_cache_ram", normalized).apply()
+        _pdfOcrLlamaCacheRam.value = normalized
+    }
+
+    private val _pdfOcrLlamaParallel = MutableStateFlow(
+        prefs.getInt("pdf_ocr_llama_parallel", 1).coerceIn(1, 8)
+    )
+    val pdfOcrLlamaParallel = _pdfOcrLlamaParallel.asStateFlow()
+    fun setPdfOcrLlamaParallel(value: Int) {
+        val normalized = value.coerceIn(1, 8)
+        prefs.edit().putInt("pdf_ocr_llama_parallel", normalized).apply()
+        _pdfOcrLlamaParallel.value = normalized
+    }
+
+    private val _pdfOcrLlamaCustomFlags = MutableStateFlow(prefs.getString("pdf_ocr_llama_custom_flags", null))
+    val pdfOcrLlamaCustomFlags = _pdfOcrLlamaCustomFlags.asStateFlow()
+    fun setPdfOcrLlamaCustomFlags(flags: String?) {
+        prefs.edit().putString("pdf_ocr_llama_custom_flags", flags?.trim()?.ifBlank { null }).apply()
+        _pdfOcrLlamaCustomFlags.value = flags?.trim()?.ifBlank { null }
+    }
+
+    private val _pdfOcrLlamaCommandTemplate = MutableStateFlow(prefs.getString("pdf_ocr_llama_command_template", null))
+    val pdfOcrLlamaCommandTemplate = _pdfOcrLlamaCommandTemplate.asStateFlow()
+    fun setPdfOcrLlamaCommandTemplate(template: String?) {
+        prefs.edit().putString("pdf_ocr_llama_command_template", template?.trim()?.ifBlank { null }).apply()
+        _pdfOcrLlamaCommandTemplate.value = template?.trim()?.ifBlank { null }
+    }
+
+    private val _pdfOcrLlamaReplaceRunningServer = MutableStateFlow(
+        prefs.getBoolean("pdf_ocr_llama_replace_running_server", true)
+    )
+    val pdfOcrLlamaReplaceRunningServer = _pdfOcrLlamaReplaceRunningServer.asStateFlow()
+    fun setPdfOcrLlamaReplaceRunningServer(enabled: Boolean) {
+        prefs.edit().putBoolean("pdf_ocr_llama_replace_running_server", enabled).apply()
+        _pdfOcrLlamaReplaceRunningServer.value = enabled
+    }
+
     fun pdfTranslationOptionsSnapshot(): PdfTranslationOptionsSnapshot {
         return PdfTranslationOptionsSnapshot(
             usePageScreenshotContext = pdfTranslationScreenshotContext.value,
             screenshotMaxSide = pdfTranslationScreenshotMaxSide.value,
             screenshotJpegQuality = pdfTranslationScreenshotJpegQuality.value,
             textOnlyFallbackEnabled = pdfTranslationTextFallback.value,
-            qualityMode = pdfTranslationQualityMode.value
+            qualityMode = pdfTranslationQualityMode.value,
+            ocrProvider = pdfOcrProvider.value,
+            bubbleGuidedOcrEnabled = pdfOcrBubbleGuided.value,
+            llamaOcr = LlamaOcrSettingsSnapshot(
+                modelPath = pdfOcrLlamaModelPath.value,
+                mmprojPath = pdfOcrLlamaMmprojPath.value,
+                promptPreset = pdfOcrLlamaPromptPreset.value,
+                customPrompt = pdfOcrLlamaCustomPrompt.value,
+                contextSize = pdfOcrLlamaContextSize.value,
+                maxTokens = pdfOcrLlamaMaxTokens.value,
+                port = pdfOcrLlamaPort.value,
+                flashAttention = pdfOcrLlamaFlashAttention.value,
+                cacheRam = pdfOcrLlamaCacheRam.value,
+                parallel = pdfOcrLlamaParallel.value,
+                customFlags = pdfOcrLlamaCustomFlags.value,
+                commandTemplate = pdfOcrLlamaCommandTemplate.value,
+                temporarilyReplaceRunningServer = pdfOcrLlamaReplaceRunningServer.value
+            )
         )
+    }
+
+    fun defaultMangaTranslationRunConfig(): com.example.llamadroid.service.MangaTranslationRunConfig {
+        val profile = com.example.llamadroid.service.MangaTranslationProfile.BEST_READING
+        val settings = mangaTranslationSettings.snapshot()
+        val llamaOcr = LlamaOcrSettingsSnapshot(
+            modelPath = null,
+            mmprojPath = null,
+            promptPreset = LlamaOcrPromptPreset.GENERIC_OCR,
+            customPrompt = null,
+            contextSize = 16384,
+            maxTokens = 2600,
+            port = 8087,
+            flashAttention = false,
+            cacheRam = 0,
+            parallel = 1,
+            customFlags = LlamaOcrPromptPreset.GENERIC_OCR.recommendedFlags,
+            commandTemplate = null,
+            temporarilyReplaceRunningServer = true
+        )
+        val translationConfig = com.example.llamadroid.service.DocumentTranslationRunConfig(
+            settings = settings,
+            usePageImageContext = true,
+            pageImageMaxSide = 1400,
+            pageImageJpegQuality = 82,
+            textOnlyFallbackEnabled = true,
+            qualityMode = PdfTranslationQualityMode.BEST_QUALITY
+        )
+        return com.example.llamadroid.service.MangaTranslationRunConfig(
+            profile = profile,
+            targetLanguage = settings.targetLanguage,
+            readingDirection = com.example.llamadroid.service.MangaReadingDirection.AUTO,
+            translationConfig = translationConfig,
+            ocrConfig = com.example.llamadroid.service.DocumentOcrRunConfig(
+                provider = PdfOcrProvider.ML_KIT,
+                strategy = com.example.llamadroid.service.MangaOcrStrategy.HYBRID,
+                llamaOcr = llamaOcr
+            ),
+            behavior = com.example.llamadroid.service.MangaTranslationSupport.defaultBehavior(profile),
+            pageImageContextAvailable = true,
+            pageImageContextReason = null
+        )
+    }
+
+    fun mangaTranslationRunConfigSnapshot(): com.example.llamadroid.service.MangaTranslationRunConfig {
+        val fallback = defaultMangaTranslationRunConfig()
+        val stored = prefs.getString(MANGA_TRANSLATION_CONFIG_KEY, null) ?: return fallback
+        return runCatching {
+            com.example.llamadroid.service.MangaTranslationSupport.runConfigFromJson(
+                JSONObject(stored),
+                fallback
+            )
+        }.getOrDefault(fallback)
+    }
+
+    fun saveMangaTranslationRunConfig(config: com.example.llamadroid.service.MangaTranslationRunConfig) {
+        mangaTranslationSettings.applySnapshot(config.translationSettings)
+        prefs.edit()
+            .putString(
+                MANGA_TRANSLATION_CONFIG_KEY,
+                com.example.llamadroid.service.MangaTranslationSupport.runConfigToJson(config).toString()
+            )
+            .apply()
     }
     
     // PDF Summary system prompt (for summarizing each chunk)
@@ -1694,6 +2158,20 @@ class SettingsRepository(private val context: Context) {
         val normalized = normalizeLlamaDraftDeviceMode(mode)
         prefs.edit().putString("llama_draft_device_mode", normalized).apply()
         _llamaDraftDeviceMode.value = normalized
+    }
+
+    /**
+     * General local-LLM OpenCL placement experiment. Distributed profiles deliberately do not
+     * read this preference; their worker placement remains owned by DistributedService.
+     */
+    private val _llamaOpenClCpuTargetGpuDraft = MutableStateFlow(
+        prefs.getBoolean("llama_opencl_cpu_target_gpu_draft", false)
+    )
+    val llamaOpenClCpuTargetGpuDraft = _llamaOpenClCpuTargetGpuDraft.asStateFlow()
+
+    fun setLlamaOpenClCpuTargetGpuDraft(enabled: Boolean) {
+        prefs.edit().putBoolean("llama_opencl_cpu_target_gpu_draft", enabled).apply()
+        _llamaOpenClCpuTargetGpuDraft.value = enabled
     }
 
     private val _ngramModNMatch = MutableStateFlow(prefs.getInt("spec_ngram_mod_n_match", 24).coerceAtLeast(1))
@@ -2341,6 +2819,21 @@ class SettingsRepository(private val context: Context) {
         _agentSummarizerModel.value = model
     }
 
+    // Visual tester agent model (observes/interacts with local WebUI previews only)
+    private val _agentVisualTesterModel = MutableStateFlow(prefs.getString("agent_visual_tester_model", "qwen3.5:9b") ?: "qwen3.5:9b")
+    val agentVisualTesterModel = _agentVisualTesterModel.asStateFlow()
+    fun setAgentVisualTesterModel(model: String) {
+        prefs.edit().putString("agent_visual_tester_model", model).apply()
+        _agentVisualTesterModel.value = model
+    }
+
+    private val _agentVisualTestingEnabled = MutableStateFlow(prefs.getBoolean("agent_visual_testing_enabled", true))
+    val agentVisualTestingEnabled = _agentVisualTestingEnabled.asStateFlow()
+    fun setAgentVisualTestingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_visual_testing_enabled", enabled).apply()
+        _agentVisualTestingEnabled.value = enabled
+    }
+
     // Summarizer Thinking
     private val _agentSummarizerThinkingEnabled = MutableStateFlow(prefs.getBoolean("agent_summarizer_thinking_enabled", true))
     val agentSummarizerThinkingEnabled = _agentSummarizerThinkingEnabled.asStateFlow()
@@ -2383,6 +2876,13 @@ class SettingsRepository(private val context: Context) {
     fun setAgentSummarizerVisionEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("agent_summarizer_vision_enabled", enabled).apply()
         _agentSummarizerVisionEnabled.value = enabled
+    }
+
+    private val _agentVisualTesterVisionEnabled = MutableStateFlow(prefs.getBoolean("agent_visual_tester_vision_enabled", true))
+    val agentVisualTesterVisionEnabled = _agentVisualTesterVisionEnabled.asStateFlow()
+    fun setAgentVisualTesterVisionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_visual_tester_vision_enabled", enabled).apply()
+        _agentVisualTesterVisionEnabled.value = enabled
     }
 
     // Shared agent image-generation tool settings
@@ -2925,6 +3425,7 @@ class SettingsRepository(private val context: Context) {
             "REVIEWER" -> _agentReviewerModel.value
             "EXECUTOR" -> _agentExecutorModel.value
             "SUMMARIZER" -> _agentSummarizerModel.value
+            "VISUAL_TESTER" -> _agentVisualTesterModel.value
             else -> _agentOrchestratorModel.value
         }
     }
@@ -2939,6 +3440,7 @@ class SettingsRepository(private val context: Context) {
             "REVIEWER" -> setAgentReviewerModel(model)
             "EXECUTOR" -> setAgentExecutorModel(model)
             "SUMMARIZER" -> setAgentSummarizerModel(model)
+            "VISUAL_TESTER" -> setAgentVisualTesterModel(model)
         }
     }
 
@@ -2952,6 +3454,7 @@ class SettingsRepository(private val context: Context) {
             "REVIEWER" -> _agentReviewerThinkingEnabled.value
             "EXECUTOR" -> _agentExecutorThinkingEnabled.value
             "SUMMARIZER" -> _agentSummarizerThinkingEnabled.value
+            "VISUAL_TESTER" -> false
             "WEB_SEARCH" -> _agentWebSearchThinkingEnabled.value
             "KIWIX" -> _agentKiwixThinkingEnabled.value
             else -> _agentOrchestratorThinkingEnabled.value
@@ -2968,6 +3471,7 @@ class SettingsRepository(private val context: Context) {
             "REVIEWER" -> setAgentReviewerThinkingEnabled(enabled)
             "EXECUTOR" -> setAgentExecutorThinkingEnabled(enabled)
             "SUMMARIZER" -> setAgentSummarizerThinkingEnabled(enabled)
+            "VISUAL_TESTER" -> Unit
             "WEB_SEARCH" -> setAgentWebSearchThinkingEnabled(enabled)
             "KIWIX" -> setAgentKiwixThinkingEnabled(enabled)
         }
@@ -2980,6 +3484,7 @@ class SettingsRepository(private val context: Context) {
             "REVIEWER" -> _agentReviewerVisionEnabled.value
             "EXECUTOR" -> _agentExecutorVisionEnabled.value
             "SUMMARIZER" -> _agentSummarizerVisionEnabled.value
+            "VISUAL_TESTER" -> _agentVisualTesterVisionEnabled.value
             else -> _agentOrchestratorVisionEnabled.value
         }
     }
@@ -2991,6 +3496,7 @@ class SettingsRepository(private val context: Context) {
             "REVIEWER" -> setAgentReviewerVisionEnabled(enabled)
             "EXECUTOR" -> setAgentExecutorVisionEnabled(enabled)
             "SUMMARIZER" -> setAgentSummarizerVisionEnabled(enabled)
+            "VISUAL_TESTER" -> setAgentVisualTesterVisionEnabled(enabled)
         }
     }
     
@@ -3118,6 +3624,15 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putInt("agent_orchestrator_ctx", size).apply()
         _agentOrchestratorCtx.value = size
     }
+
+    private val _agentOrchestratorMaxOutputTokens =
+        MutableStateFlow(prefs.getInt("agent_orchestrator_max_output_tokens", 8096).coerceAtLeast(1))
+    val agentOrchestratorMaxOutputTokens = _agentOrchestratorMaxOutputTokens.asStateFlow()
+    fun setAgentOrchestratorMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 262_144)
+        prefs.edit().putInt("agent_orchestrator_max_output_tokens", normalized).apply()
+        _agentOrchestratorMaxOutputTokens.value = normalized
+    }
     
     // Orchestrator Thinking
     private val _agentOrchestratorThinkingEnabled = MutableStateFlow(prefs.getBoolean("agent_orchestrator_thinking_enabled", true))
@@ -3132,6 +3647,15 @@ class SettingsRepository(private val context: Context) {
     fun setAgentCoderCtx(size: Int) {
         prefs.edit().putInt("agent_coder_ctx", size).apply()
         _agentCoderCtx.value = size
+    }
+
+    private val _agentCoderMaxOutputTokens =
+        MutableStateFlow(prefs.getInt("agent_coder_max_output_tokens", 8096).coerceAtLeast(1))
+    val agentCoderMaxOutputTokens = _agentCoderMaxOutputTokens.asStateFlow()
+    fun setAgentCoderMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 262_144)
+        prefs.edit().putInt("agent_coder_max_output_tokens", normalized).apply()
+        _agentCoderMaxOutputTokens.value = normalized
     }
     
     // Coder Thinking
@@ -3148,6 +3672,15 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putInt("agent_reviewer_ctx", size).apply()
         _agentReviewerCtx.value = size
     }
+
+    private val _agentReviewerMaxOutputTokens =
+        MutableStateFlow(prefs.getInt("agent_reviewer_max_output_tokens", 8096).coerceAtLeast(1))
+    val agentReviewerMaxOutputTokens = _agentReviewerMaxOutputTokens.asStateFlow()
+    fun setAgentReviewerMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 262_144)
+        prefs.edit().putInt("agent_reviewer_max_output_tokens", normalized).apply()
+        _agentReviewerMaxOutputTokens.value = normalized
+    }
     
     // Reviewer Thinking
     private val _agentReviewerThinkingEnabled = MutableStateFlow(prefs.getBoolean("agent_reviewer_thinking_enabled", true))
@@ -3162,6 +3695,15 @@ class SettingsRepository(private val context: Context) {
     fun setAgentExecutorCtx(size: Int) {
         prefs.edit().putInt("agent_executor_ctx", size).apply()
         _agentExecutorCtx.value = size
+    }
+
+    private val _agentExecutorMaxOutputTokens =
+        MutableStateFlow(prefs.getInt("agent_executor_max_output_tokens", 8096).coerceAtLeast(1))
+    val agentExecutorMaxOutputTokens = _agentExecutorMaxOutputTokens.asStateFlow()
+    fun setAgentExecutorMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 262_144)
+        prefs.edit().putInt("agent_executor_max_output_tokens", normalized).apply()
+        _agentExecutorMaxOutputTokens.value = normalized
     }
     
     // Executor Thinking
@@ -3178,6 +3720,15 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putInt("agent_summarizer_ctx", size).apply()
         _agentSummarizerCtx.value = size
     }
+
+    private val _agentSummarizerMaxOutputTokens =
+        MutableStateFlow(prefs.getInt("agent_summarizer_max_output_tokens", 8096).coerceAtLeast(1))
+    val agentSummarizerMaxOutputTokens = _agentSummarizerMaxOutputTokens.asStateFlow()
+    fun setAgentSummarizerMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 262_144)
+        prefs.edit().putInt("agent_summarizer_max_output_tokens", normalized).apply()
+        _agentSummarizerMaxOutputTokens.value = normalized
+    }
     
     /**
      * Get context size for a specific agent role
@@ -3193,9 +3744,21 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    fun getAgentMaxOutputTokensForRole(role: String): Int {
+        return when (role.uppercase()) {
+            "ORCHESTRATOR" -> _agentOrchestratorMaxOutputTokens.value
+            "CODER" -> _agentCoderMaxOutputTokens.value
+            "REVIEWER" -> _agentReviewerMaxOutputTokens.value
+            "EXECUTOR" -> _agentExecutorMaxOutputTokens.value
+            "SUMMARIZER" -> _agentSummarizerMaxOutputTokens.value
+            else -> _agentOrchestratorMaxOutputTokens.value
+        }
+    }
+
     // ========== AI Agent Per-Role System Prompts ==========
     
     companion object {
+        private const val MANGA_TRANSLATION_CONFIG_KEY = "manga_translation_run_config_v4"
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"
         const val PDF_BACKEND_LLAMA_SWAP = "llama-swap"
@@ -3222,8 +3785,10 @@ class SettingsRepository(private val context: Context) {
         const val NATIVE_BINARY_CPU_BASELINE = "cpu_baseline"
         const val NATIVE_BINARY_CPU_DOTPROD = "cpu_dotprod"
         const val NATIVE_BINARY_CPU_ARMV9 = "cpu_armv9"
+        const val NATIVE_BINARY_CPU_I8MM = "cpu_i8mm"
         const val NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL = "llm_snapdragon_opencl"
         const val NATIVE_BINARY_SD_SNAPDRAGON_VULKAN = "sd_snapdragon_vulkan"
+        const val NATIVE_BINARY_SD_SNAPDRAGON_OPENCL = "sd_snapdragon_opencl"
         const val LLAMA_KV_OFFLOAD_AUTO = "auto"
         const val LLAMA_KV_OFFLOAD_ACCELERATOR = "accelerator"
         const val LLAMA_KV_OFFLOAD_CPU = "cpu"
@@ -3388,6 +3953,7 @@ class SettingsRepository(private val context: Context) {
         }
 
         fun normalizeLlmNativeBinarySelection(selection: String?): String {
+            CustomBinarySelection.normalize(selection)?.let { return it }
             val normalized = normalizeNativeBinaryToken(selection) ?: return NATIVE_BINARY_AUTO
 
             return when (normalized) {
@@ -3407,6 +3973,10 @@ class SettingsRepository(private val context: Context) {
                 "armv9",
                 "libllama_server_armv9",
                 "libllama_server_armv9_so" -> NATIVE_BINARY_CPU_ARMV9
+                NATIVE_BINARY_CPU_I8MM,
+                "i8mm",
+                "libllama_server_i8mm",
+                "libllama_server_i8mm_so" -> NATIVE_BINARY_CPU_I8MM
                 NATIVE_BINARY_LLM_SNAPDRAGON_OPENCL,
                 "snapdragon_opencl",
                 "opencl",
@@ -3425,6 +3995,7 @@ class SettingsRepository(private val context: Context) {
         }
 
         fun normalizeStableDiffusionNativeBinarySelection(selection: String?): String {
+            CustomBinarySelection.normalize(selection)?.let { return it }
             val normalized = normalizeNativeBinaryToken(selection) ?: return NATIVE_BINARY_AUTO
 
             return when (normalized) {
@@ -3444,14 +4015,22 @@ class SettingsRepository(private val context: Context) {
                 "armv9",
                 "libsd_armv9",
                 "libsd_armv9_so" -> NATIVE_BINARY_CPU_ARMV9
+                NATIVE_BINARY_CPU_I8MM,
+                "i8mm",
+                "libsd_i8mm",
+                "libsd_i8mm_so" -> NATIVE_BINARY_CPU_I8MM
                 NATIVE_BINARY_SD_SNAPDRAGON_VULKAN,
                 "snapdragon_vulkan",
                 "vulkan",
                 "gpu",
                 "libsd_snapdragon_vulkan",
                 "libsd_snapdragon_vulkan_so" -> NATIVE_BINARY_SD_SNAPDRAGON_VULKAN
+                NATIVE_BINARY_SD_SNAPDRAGON_OPENCL,
+                "snapdragon_opencl",
                 "opencl",
                 "adreno",
+                "libsd_snapdragon_opencl",
+                "libsd_snapdragon_opencl_so" -> NATIVE_BINARY_SD_SNAPDRAGON_OPENCL
                 "hexagon",
                 "htp",
                 "dsp",
@@ -3468,6 +4047,13 @@ class SettingsRepository(private val context: Context) {
                 ?.replace('-', '_')
                 ?.replace('.', '_')
                 ?.takeIf { it.isNotBlank() }
+
+        private object CustomBinarySelection {
+            private val pattern = Regex("custom:[a-z0-9][a-z0-9._-]{2,47}")
+
+            fun normalize(selection: String?): String? =
+                selection?.trim()?.lowercase(Locale.US)?.takeIf(pattern::matches)
+        }
 
         private fun legacyLlmBinarySelectionDefault(accelerationMode: String?): String =
             when (normalizeAccelerationMode(accelerationMode)) {
@@ -4000,6 +4586,19 @@ Keep it brief but capture essential details."""
         val normalized = resolution.coerceAtLeast(256)
         prefs.edit().putInt("adventure_onnx_resolution", normalized).apply()
         _adventureOnnxResolution.value = normalized
+    }
+
+    /** Durable local drafts for the native Stable Diffusion image and video forms. */
+    fun imageGenerationDraft(): JSONObject? = readJsonDraft("sd_image_generation_draft")
+    fun setImageGenerationDraft(draft: JSONObject) = saveJsonDraft("sd_image_generation_draft", draft)
+    fun videoGenerationDraft(): JSONObject? = readJsonDraft("sd_video_generation_draft")
+    fun setVideoGenerationDraft(draft: JSONObject) = saveJsonDraft("sd_video_generation_draft", draft)
+
+    private fun readJsonDraft(key: String): JSONObject? = prefs.getString(key, null)
+        ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
+
+    private fun saveJsonDraft(key: String, draft: JSONObject) {
+        prefs.edit().putString(key, draft.toString()).apply()
     }
 
 }

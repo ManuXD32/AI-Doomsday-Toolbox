@@ -19,7 +19,8 @@ class SdProgressSupportTest {
         assertEquals(20, snapshot.totalSteps)
         assertEquals(0.2f, snapshot.progress, 0.0001f)
         assertEquals(0.5, snapshot.iterationSeconds ?: 0.0, 0.0001)
-        assertEquals(9.5, snapshot.etaSeconds ?: 0.0, 0.0001)
+        assertEquals(8.0, snapshot.etaSeconds ?: 0.0, 0.0001)
+        assertEquals(SdProgressPhase.DIFFUSION, snapshot.phase)
     }
 
     @Test
@@ -32,7 +33,7 @@ class SdProgressSupportTest {
         assertEquals(3, snapshot.currentStep)
         assertEquals(10, snapshot.totalSteps)
         assertEquals(1.25, snapshot.iterationSeconds ?: 0.0, 0.0001)
-        assertEquals(10.625, snapshot.etaSeconds ?: 0.0, 0.0001)
+        assertEquals(8.75, snapshot.etaSeconds ?: 0.0, 0.0001)
     }
 
     @Test
@@ -46,7 +47,7 @@ class SdProgressSupportTest {
         requireNotNull(second)
         assertEquals(1.0, first.iterationSeconds ?: 0.0, 0.0001)
         assertEquals(1.3, second.iterationSeconds ?: 0.0, 0.0001)
-        assertEquals(9.36, second.etaSeconds ?: 0.0, 0.01)
+        assertEquals(7.8, second.etaSeconds ?: 0.0, 0.01)
     }
 
     @Test
@@ -76,21 +77,26 @@ class SdProgressSupportTest {
 
         requireNotNull(first)
         requireNotNull(ticked)
-        assertEquals(1_651.292, first.etaSeconds ?: 0.0, 0.001)
-        assertEquals(1_641.292, ticked.etaSeconds ?: 0.0, 0.001)
+        assertEquals(1_399.4, first.etaSeconds ?: 0.0, 0.001)
+        assertEquals(1_389.4, ticked.etaSeconds ?: 0.0, 0.001)
     }
 
     @Test
-    fun `eta keeps counting through vae tail after final denoising step`() {
+    fun `vae progress uses its own ETA phase when emitted`() {
         val tracker = SdProgressTracker(totalStepsHint = 6, startedAtMs = 0L)
 
-        val final = tracker.update("| 6/6 - 10.0 s/it", nowMs = 60_000L)
-        val ticked = tracker.tick(nowMs = 65_000L)
+        val diffusion = tracker.update("| 6/6 - 10.0 s/it", nowMs = 60_000L)
+        val vae = tracker.update("VAE decoding | 1/4 - 2.0 s/it", nowMs = 62_000L)
+        val ticked = tracker.tick(nowMs = 63_000L)
 
-        requireNotNull(final)
+        requireNotNull(diffusion)
+        requireNotNull(vae)
         requireNotNull(ticked)
-        assertEquals(9.0, final.etaSeconds ?: 0.0, 0.0001)
-        assertEquals(4.0, ticked.etaSeconds ?: 0.0, 0.0001)
+        assertEquals(SdProgressPhase.DIFFUSION, diffusion.phase)
+        assertEquals(SdProgressPhase.VAE, vae.phase)
+        assertEquals(6.0, vae.etaSeconds ?: 0.0, 0.0001)
+        assertEquals(5.0, ticked.etaSeconds ?: 0.0, 0.0001)
+        assertEquals(SdProgressPhase.VAE, ticked.phase)
     }
 
     @Test

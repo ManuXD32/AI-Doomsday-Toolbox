@@ -41,13 +41,15 @@ data class AcceleratorModuleState(
 object DeviceAcceleration {
     const val MODULE_LLM_SNAPDRAGON_OPENCL = "feature_llm_snapdragon_opencl"
     const val MODULE_MEDIA_SNAPDRAGON_VULKAN = "feature_media_snapdragon_vulkan"
+    const val MODULE_MEDIA_SNAPDRAGON_OPENCL = "feature_media_snapdragon_opencl"
 
     val llamaSnapdragonModules = listOf(
         MODULE_LLM_SNAPDRAGON_OPENCL
     )
 
     val stableDiffusionSnapdragonModules = listOf(
-        MODULE_MEDIA_SNAPDRAGON_VULKAN
+        MODULE_MEDIA_SNAPDRAGON_VULKAN,
+        MODULE_MEDIA_SNAPDRAGON_OPENCL
     )
 
     private val _activeBinaries = MutableStateFlow<Map<AccelerationWorkload, String>>(emptyMap())
@@ -93,8 +95,16 @@ object DeviceAcceleration {
         return listOf("qualcomm", "snapdragon", "qcom", "sm8", "sm7", "sdm", "msm").any { it in values }
     }
 
+    /**
+     * The optional Snapdragon executables are compiled with
+     * `-march=armv8.2-a+dotprod`. A vendor/SoC match alone would therefore
+     * allow an illegal instruction on older Qualcomm hardware.
+     */
+    fun supportsSnapdragonNativeBinaries(): Boolean =
+        isSnapdragonCompatible() && runCatching { CpuFeatures.hasDotProd() }.getOrDefault(false)
+
     fun optionalModulesForDevice(): List<String> {
-        if (!isSnapdragonCompatible()) return emptyList()
+        if (!supportsSnapdragonNativeBinaries()) return emptyList()
         return (llamaSnapdragonModules + stableDiffusionSnapdragonModules).distinct()
     }
 
@@ -109,7 +119,7 @@ object DeviceAcceleration {
         activeBinary: File?,
         accelerationMode: String = "auto"
     ): AcceleratorReadiness {
-        if (!isSnapdragonCompatible()) {
+        if (!supportsSnapdragonNativeBinaries()) {
             return AcceleratorReadiness(workload, AccelerationStatus.UNSUPPORTED, emptyList(), activeBinary)
         }
         val active = activeBinary?.let { isAcceleratorBinary(it) } == true

@@ -823,6 +823,7 @@ class AiToolServerService : Service() {
                                 loraPath = body.optNullableString("loraPath"),
                                 loraStrength = body.optDouble("loraStrength", 1.0).toFloat(),
                                 loraApplyMode = parseEnumOrNull<SdLoraApplyMode>(body.optString("loraApplyMode")),
+                                textualInversionPath = body.optNullableString("textualInversionPath"),
                                 photoMakerPath = body.optNullableString("photoMakerPath"),
                                 flowShift = body.optDoubleOrNull("flowShift")?.toFloat(),
                                 diffusionFa = body.optBoolean("diffusionFa", false),
@@ -3887,6 +3888,7 @@ class AiToolServerService : Service() {
                 .put("llmVision", modelsJson(ModelType.VISION, ModelType.MMPROJ, ModelType.VISION_PROJECTOR))
                 .put("controlNet", modelsJson(ModelType.SD_CONTROLNET))
                 .put("lora", modelsJson(ModelType.SD_LORA))
+                .put("textualInversion", modelsJson(ModelType.SD_TEXTUAL_INVERSION))
                 .put("photoMaker", modelsJson(ModelType.SD_PHOTOMAKER))
                 .put("onnxImage", modelsJson(ModelType.ONNX_IMAGE_GEN))
                 .put("onnxBgr", modelsJson(ModelType.ONNX_BACKGROUND_REMOVAL))
@@ -4061,6 +4063,7 @@ class AiToolServerService : Service() {
             modelField("loraPath", "lora", "LoRA", "LoRA", section = "Components"),
             fieldJson("loraStrength", "number", "LoRA strength", "Fuerza LoRA", defaultValue = 1.0, min = -4.0, max = 4.0, step = 0.05, section = "Components"),
             fieldJson("loraApplyMode", "select", "LoRA apply mode", "Modo LoRA", options = enumOptions<SdLoraApplyMode>(), section = "Components"),
+            modelField("textualInversionPath", "textualInversion", "Textual inversion", "Inversion textual", section = "Components"),
             modelField("photoMakerPath", "photoMaker", "PhotoMaker", "PhotoMaker", section = "Components")
         )
 

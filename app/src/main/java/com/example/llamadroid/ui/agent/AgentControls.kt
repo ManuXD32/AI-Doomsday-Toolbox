@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.agent
 
+import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -8,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -17,6 +19,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -27,23 +33,86 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
+import com.example.llamadroid.data.db.AgentProjectEventEntity
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.PromptContextSnapshot
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
+
+internal fun remainingAgentImeBottomPx(
+    fullWindowHeightPx: Int,
+    composerBottomInWindowPx: Int,
+    imeBottomPx: Int
+): Int {
+    if (composerBottomInWindowPx <= 0) return 0
+    val alreadyReservedBottomPx = (fullWindowHeightPx - composerBottomInWindowPx).coerceAtLeast(0)
+    return (imeBottomPx - alreadyReservedBottomPx).coerceAtLeast(0)
+}
+
+/**
+ * One keyboard-inset owner for both Agent composers.
+ *
+ * Some edge-to-edge devices resize the Compose root for the IME and some leave the
+ * full inset for Compose to consume. Measuring the window space already reserved
+ * lets this host add only the remainder, avoiding both the hidden composer and the
+ * former double-height black band.
+ */
+@Composable
+fun AgentComposerHost(
+    modifier: Modifier = Modifier,
+    verticalArrangement: Arrangement.Vertical = Arrangement.Top,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val view = LocalView.current
+    val density = LocalDensity.current
+    var composerBottomInWindowPx by remember { mutableIntStateOf(0) }
+    val fullWindowHeightPx = maxOf(
+        view.rootView.height,
+        view.resources.displayMetrics.heightPixels
+    )
+    val remainingImePadding = with(density) {
+        remainingAgentImeBottomPx(
+            fullWindowHeightPx = fullWindowHeightPx,
+            composerBottomInWindowPx = composerBottomInWindowPx,
+            imeBottomPx = WindowInsets.ime.getBottom(this)
+        ).toDp()
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        modifier = modifier
+            .fillMaxWidth()
+            .onGloballyPositioned { coordinates ->
+                composerBottomInWindowPx = (
+                    coordinates.positionInWindow().y + coordinates.size.height
+                ).roundToInt()
+            }
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = verticalArrangement
+        ) {
+            content()
+            Spacer(modifier = Modifier.height(remainingImePadding + 4.dp))
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentTopBar(
-    onShowConversations: () -> Unit,
+    onShowDashboard: () -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowSettings: () -> Unit,
     onShowSetupInfo: () -> Unit,
     onShowProjectManagement: () -> Unit,
     onShowCustomTools: () -> Unit,
     onShowCustomAgents: () -> Unit,
+    onShowSkills: () -> Unit,
+    onShowCommands: () -> Unit,
     showAllOutput: Boolean,
     onToggleAllOutput: () -> Unit,
     showDebugPanel: Boolean,
@@ -66,8 +135,8 @@ fun AgentTopBar(
             )
         },
         navigationIcon = {
-            IconButton(onClick = onShowConversations) {
-                Icon(Icons.Default.Menu, stringResource(R.string.agent_conversations_title))
+            IconButton(onClick = onShowDashboard) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.agent_dashboard_return))
             }
         },
         actions = {
@@ -104,6 +173,16 @@ fun AgentTopBar(
                         text = { Text(stringResource(R.string.agent_custom_agents_title)) },
                         onClick = { showMenu = false; onShowCustomAgents() },
                         leadingIcon = { Icon(Icons.Default.SmartToy, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_skills_title)) },
+                        onClick = { showMenu = false; onShowSkills() },
+                        leadingIcon = { Icon(Icons.Default.Extension, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_commands_title)) },
+                        onClick = { showMenu = false; onShowCommands() },
+                        leadingIcon = { Icon(Icons.Default.Terminal, null) }
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.agent_project_mgmt_title)) },
@@ -154,13 +233,16 @@ fun AgentWorkspaceConsoleHeader(
     statusText: String,
     contextSnapshot: PromptContextSnapshot?,
     lastSavedAt: Long?,
-    onShowConversations: () -> Unit,
+    planningModeEnabled: Boolean,
+    onShowDashboard: () -> Unit,
     onNavigateToWorkspace: () -> Unit,
     onStopAll: () -> Unit,
+    onPlanningModeChanged: (Boolean) -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowKnowledgeBases: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val hasProject = !projectPath.isNullOrBlank()
     var expanded by rememberSaveable { mutableStateOf(false) }
     val horizontalScroll = rememberScrollState()
     val detailScrollState = rememberScrollState()
@@ -226,13 +308,15 @@ fun AgentWorkspaceConsoleHeader(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = resolvedPath,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (hasProject) {
+                        Text(
+                            text = resolvedPath,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     Text(
                         text = runtimeLabel,
                         style = MaterialTheme.typography.labelSmall,
@@ -245,11 +329,47 @@ fun AgentWorkspaceConsoleHeader(
                     horizontalArrangement = Arrangement.spacedBy(0.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onShowConversations) {
-                        Icon(Icons.Default.FolderOpen, stringResource(R.string.agent_console_switch_project))
+                    Surface(
+                        onClick = { onPlanningModeChanged(!planningModeEnabled) },
+                        shape = RoundedCornerShape(50),
+                        color = if (planningModeEnabled) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.primaryContainer
+                        },
+                        contentColor = if (planningModeEnabled) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onPrimaryContainer
+                        }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (planningModeEnabled) Icons.Default.Lock else Icons.Default.LockOpen,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = stringResource(
+                                    if (planningModeEnabled) R.string.agent_mode_plan else R.string.agent_mode_build
+                                ),
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
-                    IconButton(onClick = onNavigateToWorkspace) {
-                        Icon(Icons.Default.Folder, stringResource(R.string.agent_workspace_title))
+                    IconButton(onClick = onShowDashboard) {
+                        Icon(Icons.Default.Dashboard, stringResource(R.string.agent_dashboard_return))
+                    }
+                    if (hasProject) {
+                        IconButton(onClick = onNavigateToWorkspace) {
+                            Icon(Icons.Default.Folder, stringResource(R.string.agent_workspace_title))
+                        }
                     }
                     if (isRunning) {
                         IconButton(onClick = onStopAll) {
@@ -260,16 +380,19 @@ fun AgentWorkspaceConsoleHeader(
                             )
                         }
                     }
-                    ContextUsageCircle(
-                        percentUsed = displayedPercentUsed,
-                        progress = contextProgress,
-                        color = contextTone,
-                        onClick = { expanded = !expanded }
-                    )
+                    if (hasProject) {
+                        ContextUsageCircle(
+                            percentUsed = displayedPercentUsed,
+                            progress = contextProgress,
+                            color = contextTone,
+                            isWorking = isRunning,
+                            onClick = { expanded = !expanded }
+                        )
+                    }
                 }
             }
 
-            if (expanded) {
+            if (expanded && hasProject) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -302,6 +425,26 @@ fun AgentWorkspaceConsoleHeader(
                     AgentConsoleChip(
                         label = stringResource(R.string.agent_console_last_saved),
                         value = savedLabel
+                    )
+                    FilterChip(
+                        selected = planningModeEnabled,
+                        onClick = { onPlanningModeChanged(true) },
+                        label = { Text(stringResource(R.string.agent_mode_plan), maxLines = 1) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.Lock,
+                                null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    )
+                    FilterChip(
+                        selected = !planningModeEnabled,
+                        onClick = { onPlanningModeChanged(false) },
+                        label = { Text(stringResource(R.string.agent_mode_build), maxLines = 1) },
+                        leadingIcon = {
+                            Icon(Icons.Default.LockOpen, null, modifier = Modifier.size(18.dp))
+                        }
                     )
                     AssistChip(
                         onClick = onShowAgentSettings,
@@ -341,6 +484,7 @@ private fun ContextUsageCircle(
     percentUsed: Int?,
     progress: Float?,
     color: Color,
+    isWorking: Boolean,
     onClick: () -> Unit
 ) {
     Box(
@@ -349,15 +493,24 @@ private fun ContextUsageCircle(
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        CircularProgressIndicator(
-            progress = { progress ?: 0f },
-            modifier = Modifier.fillMaxSize(),
-            strokeWidth = 4.dp,
-            color = color,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+        if (progress == null && isWorking) {
+            CircularProgressIndicator(
+                modifier = Modifier.fillMaxSize(),
+                strokeWidth = 4.dp,
+                color = color,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        } else {
+            CircularProgressIndicator(
+                progress = { progress ?: 0f },
+                modifier = Modifier.fillMaxSize(),
+                strokeWidth = 4.dp,
+                color = color,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        }
         Text(
-            text = percentUsed?.let { "$it%" } ?: "--",
+            text = percentUsed?.let { "$it%" } ?: if (isWorking) "…" else "--",
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
@@ -528,7 +681,9 @@ fun ConnectionStatusBar(
             backendHasIssue -> backendOfflineMessage
             agentConnectionStatus == AgentService.Companion.ConnectionStatus.RECONNECTING -> retryMessage ?: stringResource(R.string.agent_reconnecting)
             agentConnectionStatus == AgentService.Companion.ConnectionStatus.CONNECTING -> stringResource(R.string.agent_connecting)
-            else -> stringResource(R.string.agent_disconnected)
+            agentConnectionStatus == AgentService.Companion.ConnectionStatus.DISCONNECTED ->
+                retryMessage ?: stringResource(R.string.agent_disconnected)
+            else -> retryMessage ?: stringResource(R.string.agent_disconnected)
         }
 
         Surface(
@@ -648,10 +803,37 @@ fun SshConnectionWarningCard(
 
 @Composable
 fun DebugPanel(
-    debugLog: List<String>,
+    events: List<AgentProjectEventEntity>,
     onClear: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val clipboardManager = LocalClipboardManager.current
+    var selectedFilter by rememberSaveable { mutableStateOf("ALL") }
+    val filters = listOf(
+        "ALL" to stringResource(R.string.agent_journal_filter_all),
+        "LLM" to stringResource(R.string.agent_journal_filter_llm),
+        "TOOLS" to stringResource(R.string.agent_journal_filter_tools),
+        "CONNECTION" to stringResource(R.string.agent_journal_filter_connection),
+        "UI" to stringResource(R.string.agent_journal_filter_ui),
+        "ERRORS" to stringResource(R.string.agent_journal_filter_errors)
+    )
+    val filteredEvents = remember(events, selectedFilter) {
+        when (selectedFilter) {
+            "ALL" -> events
+            "ERRORS" -> events.filter { it.category == "ERROR" || it.status == "ERROR" }
+            else -> events.filter { it.category == selectedFilter }
+        }
+    }
+    val exportText = remember(filteredEvents) {
+        buildString {
+            appendLine("AI Agent project debug journal")
+            appendLine("Content redaction: message text, prompts, tool output, file contents, and private arguments are not stored.")
+            appendLine("Events exported: ${filteredEvents.size}")
+            filteredEvents.asReversed().forEach { event ->
+                appendLine(formatAgentProjectEvent(event))
+            }
+        }
+    }
     Card(
         modifier = Modifier.fillMaxWidth().padding(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
@@ -662,28 +844,90 @@ fun DebugPanel(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(stringResource(R.string.agent_debug_console), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.agent_debug_journal_title), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(
+                        stringResource(R.string.agent_debug_journal_retention, 10000),
+                        fontSize = 9.sp,
+                        color = Color.Gray,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 Row {
-                    TextButton(onClick = { clipboardManager.setText(AnnotatedString(debugLog.joinToString("\n"))) }) {
+                    TextButton(onClick = { clipboardManager.setText(AnnotatedString(exportText)) }) {
                         Text(stringResource(R.string.action_copy), fontSize = 10.sp)
+                    }
+                    TextButton(onClick = {
+                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TEXT, exportText)
+                        }
+                        context.startActivity(Intent.createChooser(sendIntent, context.getString(R.string.agent_debug_journal_export)))
+                    }) {
+                        Text(stringResource(R.string.action_share), fontSize = 10.sp)
                     }
                     TextButton(onClick = onClear) {
                         Text(stringResource(R.string.action_clear), fontSize = 10.sp)
                     }
                 }
             }
-            if (debugLog.isEmpty()) {
-                Text(stringResource(R.string.agent_no_logs), fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                filters.forEach { (key, label) ->
+                    FilterChip(
+                        selected = selectedFilter == key,
+                        onClick = { selectedFilter = key },
+                        label = { Text(label, fontSize = 10.sp, maxLines = 1) }
+                    )
+                }
+            }
+            if (filteredEvents.isEmpty()) {
+                Text(stringResource(R.string.agent_no_journal_events), fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(8.dp))
             } else {
                 Box(modifier = Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                    Column {
-                        debugLog.forEach { entry ->
-                            Text(entry, fontSize = 10.sp, color = Color(0xFF4CAF50), fontFamily = FontFamily.Monospace)
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        filteredEvents.forEach { event ->
+                            Text(
+                                formatAgentProjectEvent(event),
+                                fontSize = 10.sp,
+                                color = if (event.category == "ERROR" || event.status == "ERROR") Color(0xFFFF8A80) else Color(0xFF8BE28B),
+                                fontFamily = FontFamily.Monospace
+                            )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+private fun formatAgentProjectEvent(event: AgentProjectEventEntity): String {
+    val timestamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(event.timestamp))
+    val counts = buildList {
+        event.contentChars?.let { add("contentChars=$it") }
+        event.contentLines?.let { add("contentLines=$it") }
+        event.toolOutputChars?.let { add("toolOutputChars=$it") }
+        event.toolOutputLines?.let { add("toolOutputLines=$it") }
+        event.contextPercent?.let { add("ctx=$it%") }
+        event.activeJobCount?.let { add("jobs=$it") }
+    }.joinToString(" ")
+    return buildString {
+        append("[$timestamp] ")
+        append(event.category)
+        append(" ")
+        append(event.eventType)
+        event.toolName?.takeIf { it.isNotBlank() }?.let { append(" tool=").append(it) }
+        event.toolCallId?.takeIf { it.isNotBlank() }?.let { append(" id=").append(it.take(12)) }
+        event.status?.takeIf { it.isNotBlank() }?.let { append(" status=").append(it) }
+        event.phase?.takeIf { it.isNotBlank() }?.let { append(" phase=").append(it) }
+        if (counts.isNotBlank()) append(" ").append(counts)
+        event.errorClass?.takeIf { it.isNotBlank() }?.let { append(" error=").append(it) }
+        event.errorMessage?.takeIf { it.isNotBlank() }?.let { append(": ").append(it) }
+        event.summary.takeIf { it.isNotBlank() }?.let { append(" — ").append(it) }
     }
 }
 
@@ -927,7 +1171,6 @@ fun AgentInputBar(
         shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
             .padding(bottom = keyboardPadding)
     ) {
         Row(
@@ -985,18 +1228,42 @@ fun AgentInputBar(
 
             Spacer(modifier = Modifier.width(12.dp))
 
-            FilledIconButton(
-                onClick = { if (isLoading) onStop() else onSend() },
-                modifier = Modifier.size(48.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = if (isLoading) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                    contentColor = Color.White
-                ),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                if (isLoading) {
+            if (isLoading) {
+                FilledIconButton(
+                    onClick = onSend,
+                    modifier = Modifier.size(48.dp),
+                    enabled = inputText.isNotBlank() && canSend,
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.agent_send_guidance), modifier = Modifier.size(22.dp))
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                FilledIconButton(
+                    onClick = onStop,
+                    modifier = Modifier.size(48.dp),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
                     Icon(Icons.Default.Stop, stringResource(R.string.action_stop), modifier = Modifier.size(24.dp))
-                } else {
+                }
+            } else {
+                FilledIconButton(
+                    onClick = onSend,
+                    modifier = Modifier.size(48.dp),
+                    enabled = canSend && inputText.isNotBlank(),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
                     Icon(Icons.AutoMirrored.Filled.Send, stringResource(R.string.action_send), modifier = Modifier.size(22.dp))
                 }
             }

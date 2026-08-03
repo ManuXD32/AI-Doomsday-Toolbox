@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature
+        android:name="android.hardware.type.watch"
+        android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/wear_app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.WearCompanion">
+
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="false" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity android:name=".OpenHomeTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenChatsTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenPinnedChatOneTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenPinnedChatTwoTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenCalendarTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenPetTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenTasksTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".StartServerTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".StopServerTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".QuickChatTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".CancelTaskTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".PauseTaskTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".ResumeTaskTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".RefreshTasksTileActionActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+        <activity android:name=".OpenPinnedNoteChooserTileActivity" android:exported="true" android:excludeFromRecents="true" android:noHistory="true" />
+
+        <service
+            android:name=".WearTileStateListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/adt/v1" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".AdtControlTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/tile_control_title"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".AdtChatTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/tile_chat_title"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".AdtCalendarTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/wear_calendar"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".AdtPetTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/wear_tama_title"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".AdtActiveTaskTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/tile_tasks_title"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".AdtPinnedNoteTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="@string/tile_note_title"
+            android:permission="com.google.android.wearable.permission.BIND_TILE_PROVIDER">
+            <intent-filter>
+                <action android:name="androidx.wear.tiles.action.BIND_TILE_PROVIDER" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

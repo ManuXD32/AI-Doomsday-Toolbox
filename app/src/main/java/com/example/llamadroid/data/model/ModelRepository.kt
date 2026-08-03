@@ -98,7 +98,7 @@ class ModelRepository(
     }
 
     fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.QUADTRIX)
+        listOf(ModelType.LLM, ModelType.LORA, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.QUADTRIX)
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
@@ -190,7 +190,7 @@ class ModelRepository(
         
         // Get subfolder based on type
         val subfolder = when (type) {
-            ModelType.LLM, ModelType.EMBEDDING, ModelType.VISION -> "llm"
+            ModelType.LLM, ModelType.LORA, ModelType.EMBEDDING, ModelType.VISION -> "llm"
             ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> "mmproj"
             ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
@@ -201,6 +201,7 @@ class ModelRepository(
             ModelType.SD_TAE -> "sd/tae"
             ModelType.SD_VAE -> "sd/vae"
             ModelType.SD_LORA -> "sd/lora"
+            ModelType.SD_TEXTUAL_INVERSION -> "sd/embeddings"
             ModelType.SD_CONTROLNET -> "sd/controlnet"
             ModelType.SD_PHOTOMAKER -> "sd/photomaker"
             ModelType.ONNX_IMAGE_GEN,
@@ -539,6 +540,10 @@ class ModelRepository(
         modelDao.insertModel(model)
     }
 
+    suspend fun updateVisionSupport(filename: String, isVision: Boolean) {
+        modelDao.updateVisionSupport(filename, isVision)
+    }
+
     fun huggingFaceToken(): String =
         context.applicationContext
             .getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
@@ -764,6 +769,7 @@ class ModelRepository(
 
             val relevantTypes = listOf(
                 ModelType.LLM,
+                ModelType.LORA,
                 ModelType.EMBEDDING,
                 ModelType.VISION,
                 ModelType.VISION_PROJECTOR,

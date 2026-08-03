@@ -29,8 +29,11 @@ object DynamicFeatureManager {
     
     // Feature Upscaler (Shared)
     const val MODULE_UPSCALER = "feature_upscaler"
+    const val MODULE_LLM_I8MM = "feature_llm_i8mm"
     const val MODULE_LLM_SNAPDRAGON_OPENCL = "feature_llm_snapdragon_opencl"
     const val MODULE_MEDIA_SNAPDRAGON_VULKAN = "feature_media_snapdragon_vulkan"
+    const val MODULE_MEDIA_I8MM = "feature_media_i8mm"
+    const val MODULE_MEDIA_SNAPDRAGON_OPENCL = "feature_media_snapdragon_opencl"
 
     private val _optionalModuleStates = MutableStateFlow<Map<String, AcceleratorModuleState>>(emptyMap())
     val optionalModuleStates = _optionalModuleStates.asStateFlow()
@@ -57,15 +60,24 @@ object DynamicFeatureManager {
             "baseline"
         }
 
-        return listOf(
-            "${MODULE_LLM_PREFIX}$tier",
-            "${MODULE_KIWIX_PREFIX}$tier",
-            "${MODULE_MEDIA_PREFIX}$tier",
-            MODULE_UPSCALER
-        )
+        return buildList {
+            add("${MODULE_LLM_PREFIX}$tier")
+            add("${MODULE_KIWIX_PREFIX}$tier")
+            add("${MODULE_MEDIA_PREFIX}$tier")
+            add(MODULE_UPSCALER)
+        }.distinct()
     }
 
     fun getOptionalAcceleratorModules(): List<String> = DeviceAcceleration.optionalModulesForDevice()
+
+    fun getLlmCpuModuleForTier(tier: String): String? =
+        when (tier) {
+            "baseline",
+            "dotprod",
+            "armv9" -> "${MODULE_LLM_PREFIX}$tier"
+            "i8mm" -> MODULE_LLM_I8MM
+            else -> null
+        }
 
     private fun getTierFallbacks(): List<String> {
         val tier = try {
@@ -125,7 +137,9 @@ object DynamicFeatureManager {
      */
     fun isModuleInstalled(context: Context, moduleName: String): Boolean {
         if (BuildConfig.IS_FAT_APK_BUILD) {
-            return hasBundledNativeLibraries(context)
+            val nativeModule = NativeModuleCatalog.definitions.firstOrNull { it.moduleName == moduleName }
+            return nativeModule?.let { NativeModuleFileValidator.hasCompletePayload(context, it) }
+                ?: hasBundledNativeLibraries(context)
         }
         val manager = SplitInstallManagerFactory.create(context)
         return manager.installedModules.contains(moduleName)
@@ -160,7 +174,8 @@ object DynamicFeatureManager {
      */
     fun monitorModuleInstallation(context: Context, moduleName: String): Flow<Int> = callbackFlow {
         if (BuildConfig.IS_FAT_APK_BUILD) {
-            if (hasBundledNativeLibraries(context)) {
+            val bundled = isModuleInstalled(context, moduleName)
+            if (bundled) {
                 trySend(SplitInstallSessionStatus.INSTALLED)
             } else {
                 trySend(SplitInstallSessionStatus.FAILED)
@@ -211,7 +226,8 @@ object DynamicFeatureManager {
 
     fun installAllFeatures(context: Context) {
         if (BuildConfig.IS_FAT_APK_BUILD) {
-            if (hasBundledNativeLibraries(context)) {
+            val bundled = hasBundledNativeLibraries(context)
+            if (bundled) {
                 Log.i(TAG, "Fat APK build detected; skipping Play Feature Delivery requests.")
             } else {
                 Log.e(TAG, "Fat APK build detected but bundled native libraries are missing.")
@@ -222,9 +238,8 @@ object DynamicFeatureManager {
         val manager = SplitInstallManagerFactory.create(context)
         val modulesToInstall = mutableListOf<String>()
         val expectedModules = getExpectedModules()
-        val optionalAcceleratorModules = getOptionalAcceleratorModules()
         
-        (expectedModules + optionalAcceleratorModules).distinct().forEach { module ->
+        expectedModules.distinct().forEach { module ->
             if (!manager.installedModules.contains(module)) {
                 modulesToInstall.add(module)
             }
@@ -246,7 +261,7 @@ object DynamicFeatureManager {
     }
 
     fun installOptionalAccelerators(context: Context) {
-        if (!DeviceAcceleration.isSnapdragonCompatible()) {
+        if (!DeviceAcceleration.supportsSnapdragonNativeBinaries()) {
             return
         }
         if (BuildConfig.IS_FAT_APK_BUILD) {
@@ -349,7 +364,18 @@ object DynamicFeatureManager {
 
     fun installModule(context: Context, moduleName: String) {
         if (BuildConfig.IS_FAT_APK_BUILD) {
-            if (hasBundledNativeLibraries(context)) {
+            val bundled = hasBundledNativeLibraries(context)
+            updateOptionalStates(
+                mapOf(
+                    moduleName to AcceleratorModuleState(
+                        moduleName = moduleName,
+                        status = if (bundled) AccelerationStatus.CPU_FALLBACK else AccelerationStatus.FAILED,
+                        progress = if (bundled) 100 else null,
+                        errorMessage = if (bundled) null else "Fat APK native libraries are incomplete."
+                    )
+                )
+            )
+            if (bundled) {
                 Log.i(TAG, "Fat APK build detected; module $moduleName is treated as bundled.")
             } else {
                 Log.e(TAG, "Fat APK build detected but bundled native libraries are missing for $moduleName.")
@@ -360,8 +386,49 @@ object DynamicFeatureManager {
         val manager = SplitInstallManagerFactory.create(context)
         if (manager.installedModules.contains(moduleName)) {
             Log.i(TAG, "Module already installed: $moduleName")
+            updateOptionalStates(
+                mapOf(moduleName to AcceleratorModuleState(moduleName, AccelerationStatus.CPU_FALLBACK, progress = 100))
+            )
             return
         }
+
+        updateOptionalStates(
+            mapOf(moduleName to AcceleratorModuleState(moduleName, AccelerationStatus.SUPPORTED_NOT_INSTALLED, progress = 0))
+        )
+        lateinit var listener: SplitInstallStateUpdatedListener
+        listener = SplitInstallStateUpdatedListener { state ->
+            if (moduleName !in state.moduleNames()) return@SplitInstallStateUpdatedListener
+            val progress = if (state.totalBytesToDownload() > 0L) {
+                ((state.bytesDownloaded() * 100L) / state.totalBytesToDownload()).toInt().coerceIn(0, 100)
+            } else {
+                null
+            }
+            val status = when (state.status()) {
+                SplitInstallSessionStatus.DOWNLOADING,
+                SplitInstallSessionStatus.INSTALLING,
+                SplitInstallSessionStatus.PENDING,
+                SplitInstallSessionStatus.REQUIRES_USER_CONFIRMATION -> AccelerationStatus.INSTALLING
+                SplitInstallSessionStatus.INSTALLED -> AccelerationStatus.CPU_FALLBACK
+                SplitInstallSessionStatus.FAILED,
+                SplitInstallSessionStatus.CANCELED,
+                SplitInstallSessionStatus.CANCELING -> AccelerationStatus.FAILED
+                else -> AccelerationStatus.INSTALLING
+            }
+            updateOptionalStates(
+                mapOf(
+                    moduleName to AcceleratorModuleState(
+                        moduleName = moduleName,
+                        status = status,
+                        progress = progress,
+                        errorMessage = if (status == AccelerationStatus.FAILED) "Install status ${state.status()}" else null
+                    )
+                )
+            )
+            if (status == AccelerationStatus.CPU_FALLBACK || status == AccelerationStatus.FAILED) {
+                runCatching { manager.unregisterListener(listener) }
+            }
+        }
+        manager.registerListener(listener)
 
         val request = SplitInstallRequest.newBuilder()
             .addModule(moduleName)
@@ -369,7 +436,24 @@ object DynamicFeatureManager {
 
         Log.i(TAG, "Requesting installation for module: $moduleName")
         manager.startInstall(request)
-            .addOnSuccessListener { session -> Log.i(TAG, "Module install session started for $moduleName: $session") }
-            .addOnFailureListener { e -> Log.e(TAG, "Failed to request module $moduleName", e) }
+            .addOnSuccessListener { session ->
+                Log.i(TAG, "Module install session started for $moduleName: $session")
+                updateOptionalStates(
+                    mapOf(moduleName to AcceleratorModuleState(moduleName, AccelerationStatus.INSTALLING, progress = 0))
+                )
+            }
+            .addOnFailureListener { e ->
+                Log.e(TAG, "Failed to request module $moduleName", e)
+                updateOptionalStates(
+                    mapOf(
+                        moduleName to AcceleratorModuleState(
+                            moduleName = moduleName,
+                            status = AccelerationStatus.FAILED,
+                            errorMessage = e.message
+                        )
+                    )
+                )
+                runCatching { manager.unregisterListener(listener) }
+            }
     }
 }

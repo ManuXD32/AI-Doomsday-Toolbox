@@ -6,6 +6,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NativeChatToolAwarenessTest {
+    private fun List<OllamaService.ChatMessage>.featureGuidance(): List<OllamaService.ChatMessage> =
+        filterNot { it.content.startsWith("You are enclosed in the app runtime.") }
+
     @Test
     fun `note tools add reminder to list and read notes before asking for ids`() {
         val messages = nativeChatToolAwarenessMessages(
@@ -14,7 +17,7 @@ class NativeChatToolAwarenessTest {
                 noteToolsEnabled = true,
                 todoToolsEnabled = true
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertEquals("system", messages.first().role)
@@ -36,7 +39,7 @@ class NativeChatToolAwarenessTest {
                 noteToolsEnabled = true,
                 imageGenerationEnabled = true
             )
-        )
+        ).featureGuidance()
 
         assertEquals(2, messages.size)
         assertTrue(messages.any { it.content.contains("list_notes") })
@@ -51,7 +54,7 @@ class NativeChatToolAwarenessTest {
                 noteToolsEnabled = true,
                 todoToolsEnabled = false
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertTrue(messages.first().content.contains("create_note"))
@@ -66,7 +69,7 @@ class NativeChatToolAwarenessTest {
                 calendarToolsEnabled = true,
                 alarmToolsEnabled = true
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertEquals("system", messages.first().role)
@@ -85,7 +88,7 @@ class NativeChatToolAwarenessTest {
                 webSearchEnabled = true,
                 fetchUrlEnabled = true
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertTrue(messages.first().content.contains("web_search"))
@@ -117,7 +120,7 @@ class NativeChatToolAwarenessTest {
                 webSearchEnabled = false,
                 fetchUrlEnabled = true
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertFalse(messages.first().content.contains("web_search"))
@@ -149,7 +152,7 @@ class NativeChatToolAwarenessTest {
                 knowledgeBaseEnabled = true,
                 chatDocumentKnowledgeBaseId = 7L
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertTrue(messages.first().content.contains("[AL.pdf chunk 9](kb://chunk/123)"))
@@ -196,7 +199,7 @@ class NativeChatToolAwarenessTest {
                 calendarToolsEnabled = true,
                 alarmToolsEnabled = false
             )
-        )
+        ).featureGuidance()
 
         assertEquals(1, messages.size)
         assertTrue(messages.first().content.contains("list_calendar_events"))

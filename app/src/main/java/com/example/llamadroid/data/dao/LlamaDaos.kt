@@ -102,6 +102,9 @@ interface LlamaChatDao {
     @Query("SELECT * FROM llama_chats WHERE id = :id")
     suspend fun getChatById(id: Long): LlamaChatEntity?
 
+    @Query("SELECT * FROM llama_chats WHERE isEphemeral = 1 AND deleteAfterSession = 1 AND expiresAtMillis IS NOT NULL AND expiresAtMillis <= :now")
+    suspend fun getExpiredEphemeralChats(now: Long = System.currentTimeMillis()): List<LlamaChatEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertChat(chat: LlamaChatEntity): Long
 
@@ -140,6 +143,9 @@ interface LlamaChatDao {
         serverId: Long?,
         pinnedAt: Long?
     )
+
+    @Query("DELETE FROM llama_chats WHERE id = :id AND isEphemeral = 1 AND deleteAfterSession = 1")
+    suspend fun deleteEphemeralChatById(id: Long)
 }
 
 @Dao

@@ -22,12 +22,14 @@ dependencyResolutionManagement {
 
 rootProject.name = "LlamaDroid"
 include(":app")
+include(":wear")
+include(":wear-protocol")
 
 // Asset Packs for native binary delivery
 include(":asset_upscaler")
-include(":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9")
+include(":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9", ":feature_llm_i8mm")
 include(":feature_llm_snapdragon_opencl")
 include(":feature_kiwix_baseline", ":feature_kiwix_dotprod", ":feature_kiwix_armv9")
-include(":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9")
-include(":feature_media_snapdragon_vulkan")
+include(":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9", ":feature_media_i8mm")
+include(":feature_media_snapdragon_vulkan", ":feature_media_snapdragon_opencl")
 include(":feature_upscaler")

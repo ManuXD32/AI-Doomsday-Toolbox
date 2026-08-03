@@ -46,6 +46,7 @@ object DatabaseBackupManager {
         "sd_output",
         "video_upscale_output",
         "video_gen_output",
+        "agent_local_workspaces",
         "workflow_media_inputs",
         "workflow_media_translation",
         "workflow_subtitle_translation",

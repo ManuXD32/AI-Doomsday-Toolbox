@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.data.model.LiteRtModelEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -9,6 +10,65 @@ import org.junit.Test
 import org.json.JSONObject
 
 class AgentRuntimeSupportTest {
+    @Test
+    fun `memory rollover stays at the trigger and preserves the heading without recursion`() {
+        val source = listOf("# Timeline") + (1..400).map { "event-$it" }
+
+        val retained = selectMemoryRolloverLines(
+            lines = source,
+            sizeBudgetLines = 240,
+            rolloverTriggerLines = 220,
+            preserveFirstLine = true
+        )
+
+        assertEquals(220, retained.size)
+        assertEquals("# Timeline", retained.first())
+        assertEquals("event-400", retained.last())
+    }
+
+    @Test
+    fun `memory rollover without heading keeps only the newest bounded lines`() {
+        val retained = selectMemoryRolloverLines(
+            lines = (1..400).map(Int::toString),
+            sizeBudgetLines = 320,
+            rolloverTriggerLines = 280,
+            preserveFirstLine = false
+        )
+
+        assertEquals(280, retained.size)
+        assertEquals("121", retained.first())
+        assertEquals("400", retained.last())
+    }
+
+    @Test
+    fun `invocation names remove controls normalize whitespace and use a stable key`() {
+        val normalized = normalizeAgentInvocationName("  Dar\u0000win\n\t  Lovelace  ")
+
+        assertNotNull(normalized)
+        assertEquals("Darwin Lovelace", normalized?.displayName)
+        assertEquals("darwin lovelace", normalized?.key)
+    }
+
+    @Test
+    fun `invocation names are bounded and reject blank control-only values`() {
+        val longName = "a".repeat(50)
+
+        assertEquals(40, normalizeAgentInvocationName(longName)?.displayName?.length)
+        assertNull(normalizeAgentInvocationName(" \n\t\u0000\u001F "))
+    }
+
+    @Test
+    fun `finalized Agent messages and history mutations persist while heartbeats stay metadata only`() {
+        assertTrue(shouldPersistFullAgentSnapshot("Agent message added", force = false))
+        assertTrue(shouldPersistFullAgentSnapshot("Agent message updated", force = false))
+        assertFalse(shouldPersistFullAgentSnapshot("Terminal output updated", force = false))
+        assertTrue(shouldPersistFullAgentSnapshot("Conversation history truncated", force = false))
+        assertTrue(shouldPersistFullAgentSnapshot("Regenerate history truncated", force = false))
+        assertTrue(shouldPersistFullAgentSnapshot("llama-server heartbeat", force = true))
+        assertFalse(shouldPersistFullAgentSnapshot("Agent status update", force = false))
+        assertFalse(shouldPersistFullAgentSnapshot("llama-server heartbeat", force = false))
+    }
+
     @Test
     fun `custom tool parameter specs support legacy and structured json`() {
         val legacy = AgentRuntimeSupport.parseCustomToolParameterSpecs("""{"city":"City name"}""")
@@ -87,6 +147,70 @@ class AgentRuntimeSupportTest {
     fun `chat num ctx override resolves per call`() {
         assertEquals(4096, AgentRuntimeSupport.resolveChatNumCtx(4096))
         assertEquals(2048, AgentRuntimeSupport.resolveChatNumCtx(4096, 2048))
+    }
+
+    @Test
+    fun `friendly backend model label strips local paths`() {
+        assertEquals(
+            "gemma-4-E4B-it-Q4_K_M.gguf",
+            AgentRuntimeSupport.friendlyBackendModelLabel(
+                "/storage/emulated/0/Android/data/com.example/files/models/llm/gemma-4-E4B-it-Q4_K_M.gguf"
+            )
+        )
+        assertEquals("Qwen3.6-14B-A3B", AgentRuntimeSupport.friendlyBackendModelLabel("Qwen3.6-14B-A3B"))
+        assertNull(AgentRuntimeSupport.friendlyBackendModelLabel("   "))
+    }
+
+    @Test
+    fun `agent litert context resolves default and clamps to phone safe cap`() {
+        val model = LiteRtModelEntity(
+            id = 7L,
+            displayName = "Gemma 4 E4B",
+            path = "/models/gemma.task",
+            filename = "gemma-4-E4B-it-Q4.task",
+            maxContextTokens = 32768
+        )
+
+        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(-1, model))
+        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(12000, model))
+        assertEquals(8192, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(59384, model))
+        assertEquals(512, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(128, model))
+    }
+
+    @Test
+    fun `agent litert context falls back when model has no advertised cap`() {
+        assertEquals(4000, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(-1, null))
+        assertEquals(4000, AgentRuntimeSupport.resolveAgentLiteRtContextTokens(8192, null))
+    }
+
+    @Test
+    fun `agent litert max output defaults to long code budget`() {
+        val model = LiteRtModelEntity(
+            id = 7L,
+            displayName = "Gemma 4 E4B",
+            path = "/models/gemma.task",
+            filename = "gemma-4-E4B-it-Q4.task",
+            maxContextTokens = 32768
+        )
+
+        assertEquals(8096, AgentRuntimeSupport.resolveAgentLiteRtMaxOutputTokens(-1, 8192, model))
+        assertEquals(8096, AgentRuntimeSupport.resolveAgentLiteRtMaxOutputTokens(-1, 16200, model))
+        assertEquals(4096, AgentRuntimeSupport.resolveAgentLiteRtMaxOutputTokens(4096, 16200, model))
+    }
+
+    @Test
+    fun `agent litert max output clamps to selected context and model cap`() {
+        val model = LiteRtModelEntity(
+            id = 8L,
+            displayName = "Small LiteRT",
+            path = "/models/small.task",
+            filename = "small.task",
+            maxContextTokens = 4096
+        )
+
+        assertEquals(4096, AgentRuntimeSupport.resolveAgentLiteRtMaxOutputTokens(8096, 12000, model))
+        assertEquals(4000, AgentRuntimeSupport.resolveAgentLiteRtMaxOutputTokens(-1, 4000, null))
+        assertEquals(128, AgentRuntimeSupport.resolveAgentLiteRtMaxOutputTokens(64, 256, model))
     }
 
     @Test
@@ -497,5 +621,187 @@ class AgentRuntimeSupportTest {
         val coder = result as AgentResult.CoderResult
         assertEquals(listOf("app/src/Main.kt"), coder.changedFiles)
         assertEquals("Fix validation", coder.intentPerFile["app/src/Main.kt"])
+    }
+
+    @Test
+    fun `continuation guard allows bounded serial work`() {
+        val decision = AgentRuntimeSupport.evaluateContinuationGuard(
+            continuationCount = 4,
+            queueDepth = 1,
+            maxContinuations = 12,
+            maxQueueDepth = 3,
+            reason = "tool result"
+        )
+
+        assertFalse(decision.shouldPause)
+        assertNull(decision.reason)
+    }
+
+    @Test
+    fun `continuation guard pauses when queue is too deep`() {
+        val decision = AgentRuntimeSupport.evaluateContinuationGuard(
+            continuationCount = 4,
+            queueDepth = 4,
+            maxContinuations = 12,
+            maxQueueDepth = 3,
+            reason = "nested recovery"
+        )
+
+        assertTrue(decision.shouldPause)
+        assertTrue(decision.reason!!.contains("queueDepth=4/3"))
+    }
+
+    @Test
+    fun `continuation guard pauses repeated runaway turns before active jobs can climb`() {
+        val decision = AgentRuntimeSupport.evaluateContinuationGuard(
+            continuationCount = 13,
+            queueDepth = 1,
+            maxContinuations = 12,
+            maxQueueDepth = 3,
+            reason = "finish_task reflection memory recovery loop"
+        )
+
+        assertTrue(decision.shouldPause)
+        assertTrue(decision.reason!!.contains("continuations=13/12"))
+    }
+
+    @Test
+    fun `continuation guard permits long healthy serialized workflows`() {
+        val decision = AgentRuntimeSupport.evaluateContinuationGuard(
+            continuationCount = 24,
+            queueDepth = 1,
+            maxContinuations = 96,
+            maxQueueDepth = 3,
+            reason = "delegation REVIEWER completed",
+            consecutiveNoProgress = 0,
+            maxNoProgress = 4
+        )
+
+        assertFalse(decision.shouldPause)
+    }
+
+    @Test
+    fun `continuation guard pauses repeated no progress recovery`() {
+        val decision = AgentRuntimeSupport.evaluateContinuationGuard(
+            continuationCount = 8,
+            queueDepth = 1,
+            maxContinuations = 96,
+            maxQueueDepth = 3,
+            reason = "supervisor retry",
+            consecutiveNoProgress = 5,
+            maxNoProgress = 4
+        )
+
+        assertTrue(decision.shouldPause)
+        assertTrue(decision.reason!!.contains("noProgress=5/4"))
+    }
+
+    @Test
+    fun `queued user guidance waits for an atomic tool boundary`() {
+        assertFalse(
+            AgentRuntimeSupport.shouldInjectQueuedUserGuidance(
+                pendingCount = 1,
+                toolCallDetected = true,
+                toolResultCommitted = false,
+                modelTurnCompleted = true
+            )
+        )
+        assertTrue(
+            AgentRuntimeSupport.shouldInjectQueuedUserGuidance(
+                pendingCount = 1,
+                toolCallDetected = true,
+                toolResultCommitted = true,
+                modelTurnCompleted = false
+            )
+        )
+    }
+
+    @Test
+    fun `completed no-tool turn is a safe fallback for queued guidance`() {
+        assertTrue(
+            AgentRuntimeSupport.shouldInjectQueuedUserGuidance(
+                pendingCount = 1,
+                toolCallDetected = false,
+                toolResultCommitted = false,
+                modelTurnCompleted = true
+            )
+        )
+        assertFalse(
+            AgentRuntimeSupport.shouldInjectQueuedUserGuidance(
+                pendingCount = 0,
+                toolCallDetected = false,
+                toolResultCommitted = false,
+                modelTurnCompleted = true
+            )
+        )
+    }
+
+    @Test
+    fun `output budget defaults and clamps to remaining context`() {
+        assertEquals(
+            8096,
+            resolveAgentEffectiveMaxOutputTokens(
+                configuredMaxOutputTokens = 0,
+                contextTokens = 65_536,
+                estimatedPromptTokens = 10_000
+            )
+        )
+        assertEquals(
+            744,
+            resolveAgentEffectiveMaxOutputTokens(
+                configuredMaxOutputTokens = 8096,
+                contextTokens = 10_000,
+                estimatedPromptTokens = 9_000
+            )
+        )
+        assertEquals(
+            1,
+            resolveAgentEffectiveMaxOutputTokens(
+                configuredMaxOutputTokens = 8096,
+                contextTokens = 10_000,
+                estimatedPromptTokens = 20_000
+            )
+        )
+    }
+
+    @Test
+    fun `streaming preview remains bounded while preserving head and latest tail`() {
+        val raw = "a".repeat(80) + "LATEST"
+        val preview = boundedStreamingPreview(raw, maxChars = 40, tailChars = 10)
+
+        assertTrue(preview.length <= 40)
+        assertTrue(preview.startsWith("a"))
+        assertTrue(preview.endsWith("LATEST"))
+        assertTrue(preview.contains("…"))
+    }
+
+    @Test
+    fun `unchanged plan approval keeps the plan out of its compact tool result`() {
+        val decision = planApprovalPromptCacheDecision("# Plan\n- Implement cache", "# Plan\n- Implement cache")
+
+        assertEquals("Implement the plan.", decision.summary)
+        assertNull(decision.modifiedPlanForToolResult)
+        assertTrue(decision.retainsRootCacheEpoch)
+    }
+
+    @Test
+    fun `edited plan approval returns only the modified plan`() {
+        val decision = planApprovalPromptCacheDecision("# Plan\n- Old", "# Plan\n- Edited")
+
+        assertEquals("Implement the modified plan.", decision.summary)
+        assertEquals("# Plan\n- Edited", decision.modifiedPlanForToolResult)
+        assertTrue(decision.retainsRootCacheEpoch)
+    }
+
+    @Test
+    fun `tool schema stays stable across plan and build modes while mode control changes`() {
+        val schema = listOf("read_file", "write_file", "propose_plan")
+
+        assertEquals(schema, stableAgentToolSchemaAcrossModes(schema, isPlanMode = true))
+        assertEquals(schema, stableAgentToolSchemaAcrossModes(schema, isPlanMode = false))
+        assertTrue(buildAgentRuntimeModeControl(true, true).contains("PLAN"))
+        assertTrue(buildAgentRuntimeModeControl(true, true).contains("microsteps"))
+        assertTrue(buildAgentRuntimeModeControl(false, true).contains("todo_write"))
+        assertFalse(buildAgentRuntimeModeControl(false, true).contains("microsteps"))
     }
 }

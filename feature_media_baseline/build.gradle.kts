@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "com.example.llamadroid.feature.media.baseline"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26

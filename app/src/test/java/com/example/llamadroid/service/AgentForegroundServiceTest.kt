@@ -25,4 +25,33 @@ class AgentForegroundServiceTest {
         assertTrue(dispatch.recoveryOnly)
         assertEquals("resume_cold", dispatch.startSource)
     }
+
+    @Test
+    fun `cold resume does not start foreground service when no runtime job is recoverable`() {
+        assertFalse(
+            shouldStartAgentRecoveryForeground(
+                isServiceRunning = false,
+                hasRecoverableJobs = false
+            )
+        )
+    }
+
+    @Test
+    fun `cold resume starts foreground service when runtime work is recoverable`() {
+        assertTrue(
+            shouldStartAgentRecoveryForeground(
+                isServiceRunning = false,
+                hasRecoverableJobs = true
+            )
+        )
+    }
+
+    @Test
+    fun `crashed Agent work restores interrupted and requires explicit Continue`() {
+        val decision = interruptedAgentRecoveryDecision()
+
+        assertEquals(AgentService.RESUME_STATE_INTERRUPTED, decision.resumeState)
+        assertEquals(AiRuntimeJobStore.STATUS_CANCELLED, decision.runtimeJobStatus)
+        assertTrue(decision.requiresExplicitContinue)
+    }
 }

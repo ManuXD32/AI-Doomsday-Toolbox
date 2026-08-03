@@ -91,7 +91,20 @@ class Converters {
         DatasetPromptEntity::class,
         // Agent entities
         AgentConversationEntity::class,
+        AgentProjectFolderEntity::class,
         AgentMessageEntity::class,
+        AgentProjectRunEntity::class,
+        AgentProjectEventEntity::class,
+        AgentMessagePartEntity::class,
+        AgentTurnContextEntity::class,
+        AgentSkillEntity::class,
+        AgentSkillAssignmentEntity::class,
+        AgentPendingQuestionEntity::class,
+        AgentPendingPlanEntity::class,
+        AgentTodoEntity::class,
+        AgentCompactionEntity::class,
+        AgentInvocationEntity::class,
+        AgentPendingInputEntity::class,
         // Custom tools/agents
         CustomToolEntity::class,
         CustomAgentEntity::class,
@@ -135,9 +148,11 @@ class Converters {
         SdDistributedTemplateEntity::class,
         SdDistributedPlacementEntity::class,
         SdDistributedRunEntity::class,
-        DownloadTaskEntity::class
+        DownloadTaskEntity::class,
+        SystemStatsSampleEntity::class,
+        SystemStatsEventEntity::class
     ], 
-    version = 96,
+    version = 106,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -153,6 +168,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun benchmarkDao(): BenchmarkDao
     abstract fun datasetDao(): DatasetDao
     abstract fun agentChatDao(): AgentChatDao
+    abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao
     abstract fun ollamaServerDao(): OllamaServerDao
@@ -178,6 +194,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun aiServerDao(): AiServerDao
     abstract fun sdDistributedDao(): SdDistributedDao
     abstract fun downloadTaskDao(): DownloadTaskDao
+    abstract fun systemStatsDao(): SystemStatsDao
 
     companion object {
         @Volatile

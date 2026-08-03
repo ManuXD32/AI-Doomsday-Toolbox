@@ -9,7 +9,14 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 fun List<SdDistributedWorkerEntity>.toSdPlanningWorkers(): List<SdDistributedPlanningWorker> =
-    sortedWith(compareBy<SdDistributedWorkerEntity> { it.sortOrder }.thenBy { it.deviceName })
+    sortedWith(
+        compareByDescending<SdDistributedWorkerEntity> { it.ramMB }
+            .thenByDescending { it.threads }
+            .thenBy { it.sortOrder }
+            .thenBy { it.deviceName.lowercase() }
+            .thenBy { it.host }
+            .thenBy { it.port }
+    )
         .mapIndexed { index, worker ->
             SdDistributedPlanningWorker(
                 id = worker.id,
@@ -52,24 +59,39 @@ fun SdDistributedMasterSettingsEntity.toRuntimeConfig(plan: SdDistributedPlaceme
     val mode = runCatching {
         SdDistributedPlacementMode.valueOf(placementMode)
     }.getOrDefault(SdDistributedPlacementMode.AUTO_RAM)
-    val split = SdDistributedSplitMode.fromCliName(splitMode)
-    val useAutoFit = mode == SdDistributedPlacementMode.AUTO_FIT || autoFit
-    val planBackends = mode == SdDistributedPlacementMode.AUTO_RAM
     val rpcServers = plan.rpcServers
+    val effectiveAutoFit = mode == SdDistributedPlacementMode.AUTO_RAM || mode == SdDistributedPlacementMode.AUTO_FIT
+    val effectiveBackendSpec = when (mode) {
+        SdDistributedPlacementMode.COMPONENTS -> backendSpec.trim()
+        else -> ""
+    }
+    val effectiveParamsBackendSpec = when (mode) {
+        SdDistributedPlacementMode.COMPONENTS -> paramsBackendSpec.trim()
+        else -> ""
+    }
+    val effectiveMaxVramSpec = when (mode) {
+        SdDistributedPlacementMode.AUTO_RAM -> plan.maxVramSpec
+        SdDistributedPlacementMode.AUTO_FIT -> if (maxVramEnabled) maxVramSpec.trim() else ""
+        SdDistributedPlacementMode.COMPONENTS,
+        SdDistributedPlacementMode.MANUAL -> ""
+    }
+    val effectiveCustomFlags = customFlags.trim()
     return SdDistributedRuntimeConfig(
-        enabled = enabled && (rpcServers.isNotBlank() || plan.backendSpec.isNotBlank()),
+        enabled = enabled && (
+            rpcServers.isNotBlank() ||
+                effectiveBackendSpec.isNotBlank() ||
+                effectiveParamsBackendSpec.isNotBlank() ||
+                effectiveMaxVramSpec.isNotBlank() ||
+                effectiveCustomFlags.isNotBlank()
+            ),
         rpcServers = rpcServers,
         placementMode = mode,
-        backendSpec = if (planBackends) plan.backendSpec else backendSpec.trim(),
-        paramsBackendSpec = if (planBackends && paramsBackendSpec.isBlank()) {
-            plan.paramsBackendSpec
-        } else {
-            paramsBackendSpec.trim()
-        },
-        autoFit = useAutoFit,
-        maxVramSpec = if (maxVramEnabled) maxVramSpec.trim() else "",
-        splitMode = split,
-        customFlags = customFlags
+        backendSpec = effectiveBackendSpec,
+        paramsBackendSpec = effectiveParamsBackendSpec,
+        autoFit = effectiveAutoFit,
+        maxVramSpec = effectiveMaxVramSpec,
+        splitMode = SdDistributedSplitMode.LAYER,
+        customFlags = effectiveCustomFlags
     )
 }
 
@@ -112,7 +134,7 @@ fun settingsToJson(settings: SdDistributedMasterSettingsEntity): String =
         .put("autoRamScope", settings.autoRamScope)
         .put("maxVramEnabled", settings.maxVramEnabled)
         .put("maxVramSpec", settings.maxVramSpec)
-        .put("splitMode", settings.splitMode)
+        .put("splitMode", SdDistributedSplitMode.LAYER.cliName)
         .put("customFlags", settings.customFlags)
         .put("prompt", settings.prompt)
         .put("negativePrompt", settings.negativePrompt)
@@ -122,6 +144,26 @@ fun settingsToJson(settings: SdDistributedMasterSettingsEntity): String =
         .put("seed", settings.seed)
         .put("sampler", settings.sampler)
         .put("scheduler", settings.scheduler)
+        .put("imagePrompt", settings.imagePrompt)
+        .put("imageNegativePrompt", settings.imageNegativePrompt)
+        .put("imageWidth", settings.imageWidth)
+        .put("imageHeight", settings.imageHeight)
+        .put("imageSteps", settings.imageSteps)
+        .put("imageCfg", settings.imageCfg)
+        .put("imageSeed", settings.imageSeed)
+        .put("imageSampler", settings.imageSampler)
+        .put("imageScheduler", settings.imageScheduler)
+        .put("imageFlowShift", settings.imageFlowShift)
+        .put("videoPrompt", settings.videoPrompt)
+        .put("videoNegativePrompt", settings.videoNegativePrompt)
+        .put("videoWidth", settings.videoWidth)
+        .put("videoHeight", settings.videoHeight)
+        .put("videoSteps", settings.videoSteps)
+        .put("videoCfg", settings.videoCfg)
+        .put("videoSeed", settings.videoSeed)
+        .put("videoSampler", settings.videoSampler)
+        .put("videoScheduler", settings.videoScheduler)
+        .put("videoFlowShift", settings.videoFlowShift)
         .put("batchCount", settings.batchCount)
         .put("clipSkip", settings.clipSkip)
         .put("strength", settings.strength)
@@ -179,6 +221,17 @@ fun settingsToJson(settings: SdDistributedMasterSettingsEntity): String =
 
 fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdDistributedMasterSettingsEntity()): SdDistributedMasterSettingsEntity {
     val obj = runCatching { JSONObject(json) }.getOrElse { return base }
+    val legacyDimensions = obj.optString("dimensions", base.dimensions)
+    val (legacyWidth, legacyHeight) = parseLegacySdDistributedDimensions(
+        value = legacyDimensions,
+        defaultWidth = base.imageWidth,
+        defaultHeight = base.imageHeight
+    )
+    fun legacyString(key: String, legacyKey: String, baseValue: String): String =
+        if (obj.has(key)) obj.optString(key, baseValue) else obj.optString(legacyKey, baseValue)
+    fun legacyDimension(key: String, legacyValue: String, baseValue: String): String =
+        if (obj.has(key)) obj.optString(key, baseValue) else if (obj.has("dimensions")) legacyValue else baseValue
+
     return base.copy(
         updatedAt = System.currentTimeMillis(),
         enabled = obj.optBoolean("enabled", base.enabled),
@@ -189,7 +242,7 @@ fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdD
         autoRamScope = obj.optString("autoRamScope", base.autoRamScope),
         maxVramEnabled = obj.optBoolean("maxVramEnabled", base.maxVramEnabled),
         maxVramSpec = obj.optString("maxVramSpec", base.maxVramSpec),
-        splitMode = obj.optString("splitMode", base.splitMode),
+        splitMode = SdDistributedSplitMode.LAYER.cliName,
         customFlags = obj.optString("customFlags", base.customFlags),
         prompt = obj.optString("prompt", base.prompt),
         negativePrompt = obj.optString("negativePrompt", base.negativePrompt),
@@ -199,6 +252,26 @@ fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdD
         seed = obj.optString("seed", base.seed),
         sampler = obj.optString("sampler", base.sampler),
         scheduler = obj.optString("scheduler", base.scheduler),
+        imagePrompt = legacyString("imagePrompt", "prompt", base.imagePrompt),
+        imageNegativePrompt = legacyString("imageNegativePrompt", "negativePrompt", base.imageNegativePrompt),
+        imageWidth = legacyDimension("imageWidth", legacyWidth, base.imageWidth),
+        imageHeight = legacyDimension("imageHeight", legacyHeight, base.imageHeight),
+        imageSteps = legacyString("imageSteps", "steps", base.imageSteps),
+        imageCfg = legacyString("imageCfg", "cfg", base.imageCfg),
+        imageSeed = legacyString("imageSeed", "seed", base.imageSeed),
+        imageSampler = legacyString("imageSampler", "sampler", base.imageSampler),
+        imageScheduler = legacyString("imageScheduler", "scheduler", base.imageScheduler),
+        imageFlowShift = legacyString("imageFlowShift", "flowShift", base.imageFlowShift),
+        videoPrompt = legacyString("videoPrompt", "prompt", base.videoPrompt),
+        videoNegativePrompt = legacyString("videoNegativePrompt", "negativePrompt", base.videoNegativePrompt),
+        videoWidth = legacyDimension("videoWidth", legacyWidth, base.videoWidth),
+        videoHeight = legacyDimension("videoHeight", legacyHeight, base.videoHeight),
+        videoSteps = legacyString("videoSteps", "steps", base.videoSteps),
+        videoCfg = legacyString("videoCfg", "cfg", base.videoCfg),
+        videoSeed = legacyString("videoSeed", "seed", base.videoSeed),
+        videoSampler = legacyString("videoSampler", "sampler", base.videoSampler),
+        videoScheduler = legacyString("videoScheduler", "scheduler", base.videoScheduler),
+        videoFlowShift = legacyString("videoFlowShift", "flowShift", base.videoFlowShift),
         batchCount = obj.optString("batchCount", base.batchCount),
         clipSkip = obj.optString("clipSkip", base.clipSkip),
         strength = obj.optString("strength", base.strength),
@@ -253,6 +326,16 @@ fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdD
         videoT5xxlPath = obj.optString("videoT5xxlPath", base.videoT5xxlPath),
         videoCustomFlags = obj.optString("videoCustomFlags", base.videoCustomFlags)
     )
+}
+
+private fun parseLegacySdDistributedDimensions(value: String, defaultWidth: String, defaultHeight: String): Pair<String, String> {
+    val parts = value
+        .lowercase()
+        .replace(" ", "")
+        .split("x")
+    val width = parts.getOrNull(0)?.toIntOrNull()?.takeIf { it >= 64 }?.toString() ?: defaultWidth
+    val height = parts.getOrNull(1)?.toIntOrNull()?.takeIf { it >= 64 }?.toString() ?: defaultHeight
+    return width to height
 }
 
 fun assignmentsByRpc(plan: SdDistributedPlacementPlan): Map<String, List<SdDistributedWorkerAssignment>> {

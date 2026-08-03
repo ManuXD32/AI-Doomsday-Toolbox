@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "com.example.llamadroid.feature.llm.snapdragon.opencl"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26

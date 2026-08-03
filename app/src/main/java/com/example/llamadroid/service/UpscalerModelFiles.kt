@@ -15,6 +15,21 @@ sealed interface UpscalerModelValidationResult {
 }
 
 object UpscalerModelFiles {
+    private val realCuganDenoiseCandidates = listOf(-1, 0, 1, 2, 3)
+
+    fun availableDenoiseLevels(
+        modelsRoot: File,
+        model: UpscalerModelCapability,
+        scale: Int
+    ): List<Int> {
+        if (model.engine != UpscalerEngine.REALCUGAN) return listOf(-1)
+        return realCuganDenoiseCandidates.filter { denoise ->
+            validate(modelsRoot, model, scale, denoise) is UpscalerModelValidationResult.Success
+        }
+    }
+
+    fun defaultDenoise(model: UpscalerModelCapability): Int =
+        if (model.engine == UpscalerEngine.REALCUGAN && model.name == "models-nose") 0 else -1
 
     fun availableScales(
         modelsRoot: File,

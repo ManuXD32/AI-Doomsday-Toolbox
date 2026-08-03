@@ -56,17 +56,15 @@ object GGUFParser {
                 
                 // Read version (4 bytes)
                 raf.readFully(buffer, 0, 4)
-                val version = ByteBuffer.wrap(buffer, 0, 4).order(ByteOrder.LITTLE_ENDIAN).int
-                DebugLog.log("[GGUFParser] GGUF version: $version")
+                ByteBuffer.wrap(buffer, 0, 4).order(ByteOrder.LITTLE_ENDIAN).int
                 
                 // Read tensor count (8 bytes)
                 raf.readFully(buffer, 0, 8)
-                val tensorCount = ByteBuffer.wrap(buffer, 0, 8).order(ByteOrder.LITTLE_ENDIAN).long
+                ByteBuffer.wrap(buffer, 0, 8).order(ByteOrder.LITTLE_ENDIAN).long
                 
                 // Read metadata KV count (8 bytes)
                 raf.readFully(buffer, 0, 8)
                 val kvCount = ByteBuffer.wrap(buffer, 0, 8).order(ByteOrder.LITTLE_ENDIAN).long
-                DebugLog.log("[GGUFParser] Tensor count: $tensorCount, KV pairs: $kvCount")
                 
                 // Parse KV pairs to find layer count
                 var layerCount = 32 // Default
@@ -80,11 +78,6 @@ object GGUFParser {
                     val key = readString(raf) ?: break
                     val valueType = readU32(raf)
                     
-                    // Log first 20 keys for debugging
-                    if (i < 20) {
-                        DebugLog.log("[GGUFParser] Key[$i]: $key, type: $valueType")
-                    }
-                    
                     when {
                         // Match keys like "llama.block_count", "glm4.block_count", "qwen2.block_count", etc.
                         key.endsWith(".block_count") || key.contains("n_layer") || key.contains("num_hidden_layers") -> {
@@ -92,7 +85,6 @@ object GGUFParser {
                                 layerCount = readU32(raf).toInt()
                                 // Add 1 for output layer (llama.cpp counts it separately: "offloaded N/M layers")
                                 layerCount += 1
-                                DebugLog.log("[GGUFParser] Found layer count in key '$key': ${layerCount - 1} blocks + 1 output = $layerCount total")
                             } else {
                                 skipValue(raf, valueType)
                             }

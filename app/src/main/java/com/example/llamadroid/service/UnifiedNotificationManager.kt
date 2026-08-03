@@ -93,6 +93,7 @@ object UnifiedNotificationManager {
         IMAGE_GEN("🎨", "Image Generation"),
         VIDEO_GEN("🎥", "Video Generation"),
         VIDEO_UPSCALE("🎬", "Video Upscaling"),
+        VIDEO_INTERPOLATION("🎞️", "Video Interpolation"),
         TRANSCRIPTION("🎤", "Transcription"),
         LLM_CHAT("💬", "Chat"),
         DOWNLOAD("📥", "Download"),
@@ -590,6 +591,7 @@ object UnifiedNotificationManager {
             TaskType.IMAGE_GEN -> android.R.drawable.ic_menu_gallery
             TaskType.VIDEO_GEN -> android.R.drawable.ic_media_play
             TaskType.VIDEO_UPSCALE -> android.R.drawable.ic_media_play
+            TaskType.VIDEO_INTERPOLATION -> android.R.drawable.ic_media_play
             TaskType.TRANSCRIPTION -> android.R.drawable.ic_btn_speak_now
             TaskType.LLM_CHAT -> android.R.drawable.ic_menu_send
             TaskType.DOWNLOAD -> android.R.drawable.stat_sys_download
@@ -680,6 +682,13 @@ object UnifiedNotificationManager {
                 android.R.drawable.ic_menu_close_clear_cancel,
                 appContext.getString(R.string.action_cancel),
                 createCancelOnnxBgrPendingIntent(task.id)
+            )
+        }
+        if (task.type == TaskType.VIDEO_INTERPOLATION && !task.isComplete && !task.isError) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelVideoInterpolationPendingIntent(task.id)
             )
         }
         
@@ -825,7 +834,23 @@ object UnifiedNotificationManager {
                 createCancelOnnxBgrPendingIntent(taskId)
             )
         }
+        if (task.type == TaskType.VIDEO_INTERPOLATION) {
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                appContext.getString(R.string.action_cancel),
+                createCancelVideoInterpolationPendingIntent(taskId)
+            )
+        }
         return builder.build()
+    }
+
+    private fun createCancelVideoInterpolationPendingIntent(requestCode: Int): PendingIntent {
+        return PendingIntent.getService(
+            appContext,
+            requestCode + 90_000,
+            VideoInterpolationService.createCancelIntent(appContext),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
     }
 
     private fun createHangUpLlamaCallPendingIntent(requestCode: Int): PendingIntent {

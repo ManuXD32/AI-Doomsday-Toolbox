@@ -102,6 +102,9 @@ fun NotesManagerScreen(navController: NavController) {
     var fullScreenNote by remember { mutableStateOf<NoteEntity?>(null) }  // Full screen view
     var selectedImageReference by remember { mutableStateOf<NoteImageReference?>(null) }
     var selectedNoteIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var pinnedNoteId by remember {
+        mutableIntStateOf(com.example.llamadroid.wear.PinnedOrganizerNoteStore.get(context) ?: -1)
+    }
     var notesPendingExport by remember { mutableStateOf<List<NoteEntity>>(emptyList()) }
     var selectedOrganizerTab by remember { mutableIntStateOf(0) }
     var selectedCalendarDate by remember { mutableStateOf(LocalDate.now()) }
@@ -466,6 +469,14 @@ fun NotesManagerScreen(navController: NavController) {
                             onExport = {
                                 notesPendingExport = listOf(note)
                                 notesExportLauncher.launch(notesExportFileName(listOf(note)))
+                            },
+                            isPinned = note.id == pinnedNoteId,
+                            onPin = {
+                                pinnedNoteId = if (pinnedNoteId == note.id) -1 else note.id
+                                com.example.llamadroid.wear.PinnedOrganizerNoteStore.set(
+                                    context,
+                                    pinnedNoteId.takeIf { it > 0 }
+                                )
                             },
                             onDelete = {
                                 noteToDelete = note
@@ -1263,6 +1274,8 @@ private fun NoteCard(
     onEdit: () -> Unit,
     onCopy: () -> Unit,
     onExport: () -> Unit,
+    isPinned: Boolean,
+    onPin: () -> Unit,
     onDelete: () -> Unit
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault()) }
@@ -1350,6 +1363,21 @@ private fun NoteCard(
                             expanded = showActionsMenu,
                             onDismissRequest = { showActionsMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        stringResource(
+                                            if (isPinned) R.string.notes_unpin_from_watch
+                                            else R.string.notes_pin_to_watch
+                                        )
+                                    )
+                                },
+                                leadingIcon = { Icon(Icons.Default.PushPin, null) },
+                                onClick = {
+                                    showActionsMenu = false
+                                    onPin()
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.action_edit)) },
                                 leadingIcon = { Icon(Icons.Default.Edit, null) },

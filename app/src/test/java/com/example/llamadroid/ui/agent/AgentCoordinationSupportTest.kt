@@ -113,6 +113,42 @@ class AgentCoordinationSupportTest {
     }
 
     @Test
+    fun `screen re-entry attaches only to the matching live running conversation`() {
+        assertTrue(
+            shouldAttachToLiveConversationRuntime(
+                targetConversationId = 9L,
+                activeConversationId = 9L,
+                isLoading = true,
+                liveMessagesEmpty = false
+            )
+        )
+        assertFalse(
+            shouldAttachToLiveConversationRuntime(
+                targetConversationId = 9L,
+                activeConversationId = 8L,
+                isLoading = true,
+                liveMessagesEmpty = false
+            )
+        )
+        assertFalse(
+            shouldAttachToLiveConversationRuntime(
+                targetConversationId = 9L,
+                activeConversationId = 9L,
+                isLoading = false,
+                liveMessagesEmpty = false
+            )
+        )
+        assertFalse(
+            shouldAttachToLiveConversationRuntime(
+                targetConversationId = 9L,
+                activeConversationId = 9L,
+                isLoading = true,
+                liveMessagesEmpty = true
+            )
+        )
+    }
+
+    @Test
     fun `selected conversation preview is skipped when runtime conversation already matches`() {
         assertFalse(
             shouldUseSelectedConversationPreview(

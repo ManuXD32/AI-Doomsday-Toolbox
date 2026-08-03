@@ -84,15 +84,16 @@ Java_com_example_llamadroid_util_CpuFeatures_hasArmV9(JNIEnv *env,
 // Check if CPU supports i8mm (int8 matrix multiply, for CPU repack)
 JNIEXPORT jboolean JNICALL Java_com_example_llamadroid_util_CpuFeatures_hasI8mm(
     JNIEnv *env, jclass clazz) {
+#if defined(__aarch64__) && defined(HWCAP2_I8MM)
   unsigned long hwcap2 = getauxval(AT_HWCAP2);
   bool has_i8mm = (hwcap2 & HWCAP2_I8MM) != 0;
 
-  if (!has_i8mm) {
-    has_i8mm = cpuinfo_has_flag("i8mm");
-  }
-
   LOGI("HWCAP2: 0x%lx, I8MM: %d", hwcap2, has_i8mm);
   return has_i8mm ? JNI_TRUE : JNI_FALSE;
+#else
+  LOGI("I8MM unavailable: non-aarch64 build or HWCAP2_I8MM missing");
+  return JNI_FALSE;
+#endif
 }
 
 // Get the best CPU tier for this device: "armv9", "dotprod", or "baseline"

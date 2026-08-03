@@ -5,6 +5,7 @@ sealed class Screen(val route: String) {
     object ModelManager : Screen("models")       // Now goes to Model Hub
     object Chat : Screen("chat")
     object Settings : Screen("settings")
+    object Stats : Screen("settings_stats")
     object Logs : Screen("logs")
     // AI screens
     object AIHub : Screen("ai_hub")              // Landing page for AI features
@@ -18,6 +19,7 @@ sealed class Screen(val route: String) {
     object VideoGen : Screen("video_gen")        // Stable Diffusion video generation
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP
     object VideoUpscaler : Screen("video_upscaler")           // Real-ESRGAN video upscaling
+    object VideoInterpolation : Screen("video_interpolation") // RIFE video frame interpolation
     object NotesManager : Screen("notes_manager")             // Unified notes manager
     object KnowledgeBase : Screen("knowledge_base")           // User-managed retrieval knowledge bases
     object KnowledgeChunkReader : Screen("knowledge_chunk/{chunkId}") {
@@ -80,6 +82,9 @@ sealed class Screen(val route: String) {
     // AI Agent screens
     object Agent : Screen("agent")                             // AI coding agent chat
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
+    object AgentInvocation : Screen("agent_invocation/{invocationId}") {
+        fun createRoute(invocationId: String): String = "agent_invocation/$invocationId"
+    }
     // Tama virtual pet
     object Tama : Screen("tama")                               // Virtual pet companion
     object TamaChat : Screen("tama_chat")                     // AI Chat with pet

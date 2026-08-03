@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -54,7 +55,9 @@ import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
+import com.example.llamadroid.data.PdfOcrProvider
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.SharedFileHolder
 import com.example.llamadroid.onnx.resolveSupertonicVoices
 import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.service.*
@@ -65,6 +68,7 @@ import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.settings.PdfTranslationQualityModeSelector
+import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -74,6 +78,7 @@ import java.text.SimpleDateFormat
 import com.example.llamadroid.util.UpscalerAssetPackSupport
 import java.util.*
 import kotlin.math.pow
+import org.json.JSONObject
 
 /**
  * Workflows Screen - Sequential AI operations
@@ -89,9 +94,14 @@ fun WorkflowsScreen(navController: NavController) {
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val pdfTranslationJobState by PDFTranslationJobService.state.collectAsState()
     
-    // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale, 3 = manga translation, 4 = media dubbing, 5 = subtitle translation
+    // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale, 3 = manga translation,
+    // 4 = media dubbing, 5 = subtitle translation, 6 = video interpolation+upscale
     val scope = rememberCoroutineScope()
     var selectedWorkflow by remember { mutableIntStateOf(0) }
+    val pendingSharedFile by SharedFileHolder.pendingFile.collectAsState()
+    LaunchedEffect(pendingSharedFile) {
+        if (pendingSharedFile?.targetScreen == "interpolate_then_upscale") selectedWorkflow = 6
+    }
     var mangaCbzUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
     var mangaIsRunning by remember { mutableStateOf(false) }
     var mangaStep by remember { mutableStateOf("") }
@@ -101,6 +111,7 @@ fun WorkflowsScreen(navController: NavController) {
     var mangaErrorDetails by remember { mutableStateOf<String?>(null) }
     var mangaExportPdf by remember { mutableStateOf(true) }
     var mangaExportCbz by remember { mutableStateOf(true) }
+    var mangaPreview by remember { mutableStateOf<MangaTranslationPreviewResult?>(null) }
 
     LaunchedEffect(
         pdfTranslationJobState.isRunning,
@@ -108,14 +119,28 @@ fun WorkflowsScreen(navController: NavController) {
         pdfTranslationJobState.cancelled,
         pdfTranslationJobState.progressMessage,
         pdfTranslationJobState.progressFraction,
+        pdfTranslationJobState.currentFileName,
+        pdfTranslationJobState.currentFileIndex,
+        pdfTranslationJobState.totalFiles,
         pdfTranslationJobState.mangaResults,
         pdfTranslationJobState.errorMessage,
         pdfTranslationJobState.errorDetails
     ) {
-        if (pdfTranslationJobState.kind == PdfTranslationJobKind.MANGA_BATCH) {
+        if (
+            pdfTranslationJobState.kind == PdfTranslationJobKind.MANGA_BATCH ||
+            pdfTranslationJobState.kind == PdfTranslationJobKind.MANGA_PREVIEW
+        ) {
             mangaIsRunning = pdfTranslationJobState.isRunning
             if (pdfTranslationJobState.isRunning) {
-                mangaStep = pdfTranslationJobState.progressMessage
+                mangaStep = pdfTranslationJobState.currentFileName?.let { name ->
+                    context.getString(
+                        R.string.workflow_manga_progress_file_stage,
+                        pdfTranslationJobState.currentFileIndex,
+                        pdfTranslationJobState.totalFiles,
+                        name,
+                        pdfTranslationJobState.progressMessage
+                    )
+                } ?: pdfTranslationJobState.progressMessage
                 mangaProgress = pdfTranslationJobState.progressFraction
                 mangaError = null
                 mangaErrorDetails = null
@@ -127,6 +152,12 @@ fun WorkflowsScreen(navController: NavController) {
             } else if (pdfTranslationJobState.mangaResults.isNotEmpty()) {
                 mangaResults = pdfTranslationJobState.mangaResults
                 mangaStep = context.getString(R.string.workflow_complete)
+                mangaProgress = 1f
+                mangaError = null
+                mangaErrorDetails = null
+            } else if (pdfTranslationJobState.mangaPreview != null) {
+                mangaPreview = pdfTranslationJobState.mangaPreview
+                mangaStep = context.getString(R.string.workflow_manga_preview_ready)
                 mangaProgress = 1f
                 mangaError = null
                 mangaErrorDetails = null
@@ -388,7 +419,7 @@ fun WorkflowsScreen(navController: NavController) {
                 } catch (_: Exception) {
                 }
             }
-            mangaCbzUris = uris
+            mangaCbzUris = (mangaCbzUris + uris).distinct()
             selectedWorkflow = 3
         }
     }
@@ -403,7 +434,7 @@ fun WorkflowsScreen(navController: NavController) {
                 } catch (_: Exception) {
                 }
             }
-            mangaCbzUris = uris
+            mangaCbzUris = (mangaCbzUris + uris).distinct()
             selectedWorkflow = 3
         }
     }
@@ -547,6 +578,7 @@ fun WorkflowsScreen(navController: NavController) {
                     3 -> stringResource(R.string.workflow_manga_translation)
                     4 -> stringResource(R.string.workflow_media_translate_title)
                     5 -> stringResource(R.string.workflow_subtitle_translate_title)
+                    6 -> stringResource(R.string.workflow_video_interpolate_upscale)
                     else -> stringResource(R.string.workflow_title)
                 },
                 style = MaterialTheme.typography.headlineSmall.copy(
@@ -559,24 +591,33 @@ fun WorkflowsScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
-                .verticalScroll(rememberScrollState())
+                .then(
+                    if (selectedWorkflow == 3 || selectedWorkflow == 6) {
+                        Modifier
+                    } else {
+                        Modifier.verticalScroll(rememberScrollState())
+                    }
+                )
         ) {
             // Show running workflow indicator (visible on all tabs)
-            if (transcribeIsRunning || txt2imgIsRunning || mediaTranslationState.isRunning) {
+            if (transcribeIsRunning || txt2imgIsRunning || mangaIsRunning || mediaTranslationState.isRunning) {
                 val runningTitle = when {
                     transcribeIsRunning -> stringResource(R.string.workflow_running_transcribe)
                     txt2imgIsRunning -> stringResource(R.string.workflow_running_txt2img)
+                    mangaIsRunning -> stringResource(R.string.workflow_manga_foreground_title)
                     mediaTranslationState.workflowKind == MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE -> stringResource(R.string.workflow_subtitle_translate_running)
                     else -> stringResource(R.string.workflow_media_translate_running)
                 }
                 val runningStep = when {
                     transcribeIsRunning -> transcribeStep
                     txt2imgIsRunning -> txt2imgStep
+                    mangaIsRunning -> mangaStep
                     else -> mediaTranslationState.status
                 }
                 val runningProgress = when {
                     transcribeIsRunning -> transcribeProgress
                     txt2imgIsRunning -> txt2imgProgress
+                    mangaIsRunning -> mangaProgress
                     else -> mediaTranslationState.progress
                 }
                 Card(
@@ -586,6 +627,7 @@ fun WorkflowsScreen(navController: NavController) {
                             // Switch to the running workflow
                             if (transcribeIsRunning) selectedWorkflow = 1
                             else if (txt2imgIsRunning) selectedWorkflow = 2
+                            else if (mangaIsRunning) selectedWorkflow = 3
                             else if (mediaTranslationState.isRunning) {
                                 workflowIndexForMediaTranslationKind(mediaTranslationState.workflowKind)?.let { selectedWorkflow = it }
                             }
@@ -706,6 +748,19 @@ fun WorkflowsScreen(navController: NavController) {
                         ),
                         onClick = { selectedWorkflow = 5 }
                     )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    WorkflowCard(
+                        emoji = "VI",
+                        title = stringResource(R.string.workflow_video_interpolate_upscale),
+                        description = stringResource(R.string.workflow_video_interpolate_upscale_desc),
+                        gradientColors = listOf(
+                            Color(0xFF00BCD4).copy(alpha = 0.14f),
+                            Color(0xFF7E57C2).copy(alpha = 0.28f)
+                        ),
+                        onClick = { selectedWorkflow = 6 }
+                    )
                 }
                 
                 1 -> {
@@ -819,6 +874,9 @@ fun WorkflowsScreen(navController: NavController) {
                         }
                     )
                 }
+                6 -> {
+                    VideoInterpolationScreen(navController = navController, embeddedWorkflow = true)
+                }
                 
                 2 -> {
                     Txt2ImgUpscaleWorkflowContent(
@@ -892,6 +950,7 @@ fun WorkflowsScreen(navController: NavController) {
 
                 3 -> {
                     MangaTranslationWorkflowContent(
+                        modifier = Modifier.weight(1f),
                         db = db,
                         settingsRepo = settingsRepo,
                         selectedUris = mangaCbzUris,
@@ -899,6 +958,7 @@ fun WorkflowsScreen(navController: NavController) {
                         currentStep = mangaStep,
                         progress = mangaProgress,
                         results = mangaResults,
+                        preview = mangaPreview,
                         errorMessage = mangaError,
                         errorDetails = mangaErrorDetails,
                         exportPdf = mangaExportPdf,
@@ -911,33 +971,29 @@ fun WorkflowsScreen(navController: NavController) {
                         onBrowseAllFiles = {
                             mangaAllFilesPicker.launch(MangaTranslationSupport.fallbackPickerMimeTypes)
                         },
-                        onOpenSettings = { navController.navigate("settings_pdf_translation") },
+                        onRemoveFile = { uri -> mangaCbzUris = mangaCbzUris - uri },
+                        onClearFiles = { mangaCbzUris = emptyList() },
+                        onOpenModels = { navController.navigate(Screen.LLMModels.route) },
                         onCancel = { PDFTranslationJobService.cancel() },
-                        onRun = {
-                            if (mangaCbzUris.isEmpty()) {
-                                mangaError = context.getString(R.string.workflow_manga_select_first)
-                                mangaErrorDetails = null
-                            } else if (!mangaExportPdf && !mangaExportCbz) {
-                                mangaError = context.getString(R.string.workflow_manga_select_output_first)
-                                mangaErrorDetails = null
-                            } else {
-                                mangaIsRunning = true
-                                mangaError = null
-                                mangaErrorDetails = null
-                                mangaResults = emptyList()
-                                mangaStep = context.getString(R.string.workflow_step_starting)
-                                mangaProgress = 0f
-                                if (!PDFTranslationJobService.startMangaCbzBatchTranslation(
-                                        context = context,
-                                        cbzUris = mangaCbzUris,
-                                        exportPdf = mangaExportPdf,
-                                        exportCbz = mangaExportCbz
-                                    )
-                                ) {
-                                    mangaIsRunning = false
-                                    mangaError = context.getString(R.string.pdf_translation_already_running)
-                                    mangaStep = ""
-                                }
+                        onPreview = { spec ->
+                            mangaError = null
+                            mangaErrorDetails = null
+                            if (!PDFTranslationJobService.startMangaPreview(context, spec)) {
+                                mangaError = context.getString(R.string.pdf_translation_already_running)
+                            }
+                        },
+                        onRun = { spec ->
+                            mangaIsRunning = true
+                            mangaError = null
+                            mangaErrorDetails = null
+                            mangaResults = emptyList()
+                            mangaStep = context.getString(R.string.workflow_step_starting)
+                            mangaProgress = 0f
+                            if (!PDFTranslationJobService.startMangaTranslation(context, spec)) {
+                                mangaIsRunning = false
+                                mangaError = pdfTranslationJobState.errorMessage
+                                    ?: context.getString(R.string.pdf_translation_already_running)
+                                mangaStep = ""
                             }
                         }
                     )
@@ -1383,8 +1439,10 @@ fun WorkflowsScreen(navController: NavController) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MangaTranslationWorkflowContent(
+    modifier: Modifier = Modifier,
     db: AppDatabase,
     settingsRepo: SettingsRepository,
     selectedUris: List<Uri>,
@@ -1392,6 +1450,7 @@ private fun MangaTranslationWorkflowContent(
     currentStep: String,
     progress: Float,
     results: List<MangaTranslationFileResult>,
+    preview: MangaTranslationPreviewResult?,
     errorMessage: String?,
     errorDetails: String?,
     exportPdf: Boolean,
@@ -1400,54 +1459,586 @@ private fun MangaTranslationWorkflowContent(
     onExportCbzChange: (Boolean) -> Unit,
     onPickFiles: () -> Unit,
     onBrowseAllFiles: () -> Unit,
-    onOpenSettings: () -> Unit,
+    onRemoveFile: (Uri) -> Unit,
+    onClearFiles: () -> Unit,
+    onOpenModels: () -> Unit,
     onCancel: () -> Unit,
-    onRun: () -> Unit
+    onPreview: (MangaTranslationJobSpec) -> Unit,
+    onRun: (MangaTranslationJobSpec) -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val qualityMode by settingsRepo.pdfTranslationQualityMode.collectAsState()
+    val savedConfig = remember { settingsRepo.mangaTranslationRunConfigSnapshot() }
+    val outputFolder by settingsRepo.outputFolderUri.collectAsState()
+    val installedModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
+    val ocrModels = remember(installedModels) { MangaTranslationSupport.installedOcrModels(installedModels) }
+    val projectors = remember(installedModels) { MangaTranslationSupport.installedProjectors(installedModels) }
     val templates by db.workflowTemplateDao()
         .getByType(com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION)
         .collectAsState(initial = emptyList())
+    val sources = remember(selectedUris) {
+        selectedUris.map { uri -> mangaSourceForUri(context, uri) }
+    }
+    var profile by remember { mutableStateOf(savedConfig.profile) }
+    var targetLanguage by remember { mutableStateOf(savedConfig.targetLanguage) }
+    var readingDirection by remember { mutableStateOf(savedConfig.readingDirection) }
+    var behavior by remember { mutableStateOf(savedConfig.behavior) }
+    var translationSettings by remember { mutableStateOf(savedConfig.translationSettings) }
+    var translationOptions by remember { mutableStateOf(savedConfig.translationOptions) }
+    var ocrModelRef by remember { mutableStateOf(savedConfig.ocrModelRef) }
+    var ocrProjectorRef by remember { mutableStateOf(savedConfig.ocrProjectorRef) }
+    var showOcrExpert by remember { mutableStateOf(false) }
+    var templatesExpanded by remember { mutableStateOf(false) }
     var templateName by remember { mutableStateOf("") }
+    var templatePendingDelete by remember {
+        mutableStateOf<com.example.llamadroid.data.db.WorkflowTemplateEntity?>(null)
+    }
+    var templatePendingRename by remember {
+        mutableStateOf<com.example.llamadroid.data.db.WorkflowTemplateEntity?>(null)
+    }
+    var renamedTemplateName by remember { mutableStateOf("") }
+    var resumableJobs by remember {
+        mutableStateOf(PDFTranslationJobService.discoverResumableMangaJobs(context))
+    }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    stringResource(R.string.workflow_manga_translation),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+    fun currentConfig(): MangaTranslationRunConfig = MangaTranslationRunConfig(
+        profile = profile,
+        targetLanguage = targetLanguage,
+        readingDirection = readingDirection,
+        translationSettings = translationSettings,
+        translationOptions = translationOptions,
+        behavior = behavior,
+        pageImageContextAvailable = true,
+        pageImageContextReason = null
+    ).copy(
+        ocrModelRef = ocrModelRef,
+        ocrProjectorRef = ocrProjectorRef
+    )
+    fun currentSpec(): MangaTranslationJobSpec = MangaTranslationJobSpec(
+        sources = sources,
+        exportPdf = exportPdf,
+        exportCbz = exportCbz,
+        config = currentConfig()
+    )
+    fun applyTemplate(template: com.example.llamadroid.data.db.WorkflowTemplateEntity) {
+        runCatching {
+            val json = JSONObject(template.configJson)
+            onExportPdfChange(json.optBoolean("exportPdf", exportPdf))
+            onExportCbzChange(json.optBoolean("exportCbz", exportCbz))
+            if (json.optInt("version", 2) >= 3) {
+                val saved = MangaTranslationSupport.runConfigFromJson(
+                    json.optJSONObject("runConfig") ?: json,
+                    currentConfig()
                 )
+                val resolvedOcrModel = MangaTranslationSupport.resolveTemplateModelRef(
+                    saved.ocrModelRef,
+                    ocrModels
+                )
+                val resolvedProjector = MangaTranslationSupport.resolveTemplateModelRef(
+                    saved.ocrProjectorRef,
+                    projectors
+                )
+                profile = saved.profile
+                targetLanguage = saved.targetLanguage
+                readingDirection = saved.readingDirection
+                behavior = saved.behavior
+                translationSettings = saved.translationSettings
+                translationOptions = saved.translationOptions.copy(
+                    llamaOcr = saved.translationOptions.llamaOcr.copy(
+                        modelPath = resolvedOcrModel?.path
+                            ?: saved.translationOptions.llamaOcr.modelPath,
+                        mmprojPath = resolvedProjector?.path
+                            ?: saved.translationOptions.llamaOcr.mmprojPath
+                    )
+                )
+                ocrModelRef = saved.ocrModelRef
+                    ?: resolvedOcrModel?.let(MangaTranslationSupport::modelRef)
+                ocrProjectorRef = saved.ocrProjectorRef
+                    ?: resolvedProjector?.let(MangaTranslationSupport::modelRef)
+            }
+        }
+    }
+    val runConfig = currentConfig()
+    val preflight = MangaTranslationSupport.preflight(currentSpec())
+    val previewIsStale = preview != null && preview.configFingerprint != runConfig.fingerprint()
+
+    LaunchedEffect(preview?.configFingerprint) {
+        if (preview != null && !previewIsStale) {
+            settingsRepo.saveMangaTranslationRunConfig(currentConfig())
+        }
+    }
+    LaunchedEffect(results) {
+        if (results.any { it.isSuccess }) {
+            settingsRepo.saveMangaTranslationRunConfig(currentConfig())
+        }
+    }
+
+    templatePendingDelete?.let { template ->
+        AlertDialog(
+            onDismissRequest = { templatePendingDelete = null },
+            title = { Text(stringResource(R.string.workflow_manga_delete_preset_title)) },
+            text = { Text(stringResource(R.string.workflow_manga_delete_preset_message, template.name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { db.workflowTemplateDao().delete(template) }
+                    templatePendingDelete = null
+                }) { Text(stringResource(R.string.action_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { templatePendingDelete = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+    templatePendingRename?.let { template ->
+        AlertDialog(
+            onDismissRequest = { templatePendingRename = null },
+            title = { Text(stringResource(R.string.workflow_manga_rename_preset_title)) },
+            text = {
+                OutlinedTextField(
+                    value = renamedTemplateName,
+                    onValueChange = { renamedTemplateName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.workflow_template_name)) },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val updatedName = renamedTemplateName.trim()
+                        if (updatedName.isNotBlank()) {
+                            scope.launch {
+                                db.workflowTemplateDao().insert(template.copy(name = updatedName))
+                            }
+                            templatePendingRename = null
+                        }
+                    },
+                    enabled = renamedTemplateName.isNotBlank()
+                ) {
+                    Text(stringResource(R.string.action_rename))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { templatePendingRename = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(bottom = 40.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (resumableJobs.isNotEmpty()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                    ),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.workflow_manga_resume_title),
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            stringResource(
+                                R.string.workflow_manga_resume_desc,
+                                resumableJobs.first().spec.sources.size
+                            ),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Button(
+                            onClick = {
+                                val manifest = resumableJobs.first()
+                                if (PDFTranslationJobService.resumeMangaTranslation(context, manifest)) {
+                                    resumableJobs = resumableJobs.drop(1)
+                                }
+                            },
+                            enabled = !isRunning,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(stringResource(R.string.workflow_manga_resume_action))
+                        }
+                    }
+                }
+            }
+            MangaStepCard(number = 1, title = stringResource(R.string.workflow_manga_files_title)) {
                 Text(
-                    stringResource(R.string.workflow_manga_translation_help),
+                    stringResource(R.string.workflow_manga_files_help),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Button(onClick = onPickFiles, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
-                    Icon(Icons.Default.FolderOpen, null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.workflow_manga_select_cbz))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onPickFiles,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isRunning
+                    ) {
+                        Icon(Icons.Default.Add, null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.workflow_manga_add_files), maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onBrowseAllFiles,
+                        modifier = Modifier.weight(1f),
+                        enabled = !isRunning
+                    ) {
+                        Icon(Icons.Default.FolderOpen, null)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.workflow_manga_browse), maxLines = 1)
+                    }
                 }
-                OutlinedButton(onClick = onBrowseAllFiles, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
-                    Icon(Icons.Default.Folder, null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.workflow_manga_browse_all_files))
+                if (sources.isEmpty()) {
+                    Text(
+                        stringResource(R.string.workflow_manga_no_files),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            stringResource(R.string.workflow_manga_selected_count, sources.size),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        TextButton(onClick = onClearFiles, enabled = !isRunning) {
+                            Text(stringResource(R.string.action_clear))
+                        }
+                    }
+                    sources.forEachIndexed { index, source ->
+                        val valid = MangaTranslationSupport.isSupportedSource(source.displayName, source.mimeType)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                if (valid) Icons.Default.CheckCircle else Icons.Default.Error,
+                                contentDescription = null,
+                                tint = if (valid) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    source.displayName,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                if (!valid) {
+                                    Text(
+                                        stringResource(R.string.workflow_manga_unsupported_file),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                            IconButton(
+                                onClick = { onRemoveFile(selectedUris[index]) },
+                                enabled = !isRunning
+                            ) {
+                                Icon(Icons.Default.Close, stringResource(R.string.action_remove))
+                            }
+                        }
+                    }
                 }
-                OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth(), enabled = !isRunning) {
-                    Icon(Icons.Default.Settings, null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.pdf_translation_settings_title))
-                }
-                PdfTranslationQualityModeSelector(
-                    value = qualityMode,
-                    onValueChange = settingsRepo::setPdfTranslationQualityMode
+            }
+
+            MangaStepCard(number = 2, title = stringResource(R.string.workflow_manga_translation_card_title)) {
+                OutlinedTextField(
+                    value = targetLanguage,
+                    onValueChange = {
+                        targetLanguage = it
+                        translationSettings = translationSettings.copy(targetLanguage = it)
+                    },
+                    label = { Text(stringResource(R.string.pdf_translation_language_label)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !isRunning,
+                    singleLine = true
+                )
+                RemoteSummaryBackendEditor(
+                    title = stringResource(R.string.workflow_manga_translation_provider),
+                    backend = translationSettings.backend,
+                    onBackendChange = { translationSettings = translationSettings.copy(backend = it) },
+                    ollamaUrl = translationSettings.ollamaUrl,
+                    onOllamaUrlChange = { translationSettings = translationSettings.copy(ollamaUrl = it) },
+                    llamaServerUrl = translationSettings.llamaServerUrl,
+                    onLlamaServerUrlChange = { translationSettings = translationSettings.copy(llamaServerUrl = it) },
+                    llamaSwapUrl = translationSettings.llamaSwapUrl,
+                    onLlamaSwapUrlChange = { translationSettings = translationSettings.copy(llamaSwapUrl = it) },
+                    ollamaModel = translationSettings.ollamaModel,
+                    onOllamaModelSelected = { translationSettings = translationSettings.copy(ollamaModel = it) },
+                    llamaSwapModel = translationSettings.llamaSwapModel,
+                    onLlamaSwapModelSelected = { translationSettings = translationSettings.copy(llamaSwapModel = it) },
+                    llamaServerModelLabel = translationSettings.llamaServerModelLabel,
+                    llamaServerContextLabel = translationSettings.llamaServerContextLabel,
+                    llamaServerContextTokens = translationSettings.llamaServerContextTokens,
+                    requestedContextForWarning = translationSettings.chunkContext,
+                    liteRtModelId = translationSettings.liteRtModelId,
+                    onLiteRtModelSelected = { translationSettings = translationSettings.copy(liteRtModelId = it) },
+                    liteRtBackend = translationSettings.liteRtBackend,
+                    onLiteRtBackendChange = { translationSettings = translationSettings.copy(liteRtBackend = it) },
+                    liteRtMtpEnabled = translationSettings.liteRtMtpEnabled,
+                    onLiteRtMtpEnabledChange = {
+                        translationSettings = translationSettings.copy(liteRtMtpEnabled = it)
+                    },
+                    liteRtThinkingEnabled = translationSettings.thinkingEnabled,
+                    onLiteRtThinkingEnabledChange = {
+                        translationSettings = translationSettings.copy(thinkingEnabled = it)
+                    },
+                    fetchMetadata = {
+                        RemoteSummaryClientFactory.fromSnapshot(context, translationSettings).fetchMetadata()
+                    },
+                    onMetadataLoaded = { metadata ->
+                        translationSettings = translationSettings.copy(
+                            llamaServerModelLabel = metadata.serverModelLabel,
+                            llamaServerContextTokens = metadata.serverContextTokens
+                                ?: translationSettings.llamaServerContextTokens,
+                            llamaServerContextLabel = metadata.serverContextLabel
+                        )
+                    }
                 )
                 Text(
-                    stringResource(R.string.workflow_manga_output_title),
+                    stringResource(R.string.workflow_manga_reading_direction),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                MangaReadingDirection.entries.forEach { direction ->
+                    MangaChoiceRow(
+                        title = mangaReadingDirectionLabel(direction),
+                        selected = readingDirection == direction,
+                        enabled = !isRunning,
+                        onClick = { readingDirection = direction }
+                    )
+                }
+                Text(
+                    stringResource(R.string.workflow_manga_profile_title),
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
+                MangaTranslationProfile.entries.forEach { option ->
+                    MangaProfileCard(
+                        profile = option,
+                        selected = profile == option,
+                        enabled = !isRunning,
+                        onClick = {
+                            profile = option
+                            behavior = MangaTranslationSupport.defaultBehavior(option)
+                        }
+                    )
+                }
+                if (profile == MangaTranslationProfile.CUSTOM) {
+                    HorizontalDivider()
+                    Text(
+                        stringResource(R.string.workflow_manga_custom_capabilities),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_page_understanding),
+                        description = stringResource(R.string.workflow_manga_page_understanding_desc),
+                        checked = behavior.pageUnderstandingEnabled,
+                        enabled = !isRunning,
+                        onCheckedChange = { behavior = behavior.copy(pageUnderstandingEnabled = it) }
+                    )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_continuity),
+                        description = stringResource(R.string.workflow_manga_continuity_desc),
+                        checked = behavior.continuityEnabled,
+                        enabled = !isRunning,
+                        onCheckedChange = { behavior = behavior.copy(continuityEnabled = it) }
+                    )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_correction),
+                        description = stringResource(R.string.workflow_manga_correction_desc),
+                        checked = behavior.correctionEnabled,
+                        enabled = !isRunning,
+                        onCheckedChange = { behavior = behavior.copy(correctionEnabled = it) }
+                    )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_page_image),
+                        description = stringResource(R.string.workflow_manga_page_image_desc),
+                        checked = behavior.pageImageContextEnabled,
+                        enabled = !isRunning,
+                        onCheckedChange = { behavior = behavior.copy(pageImageContextEnabled = it) }
+                    )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_translate_decorative),
+                        description = stringResource(R.string.workflow_manga_translate_decorative_desc),
+                        checked = behavior.translateDecorativeText,
+                        enabled = !isRunning,
+                        onCheckedChange = { behavior = behavior.copy(translateDecorativeText = it) }
+                    )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_exhaustive_llama_ocr),
+                        description = stringResource(R.string.workflow_manga_exhaustive_llama_ocr_desc),
+                        checked = behavior.exhaustiveLlamaOcrRegions,
+                        enabled = !isRunning && translationOptions.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF,
+                        onCheckedChange = { behavior = behavior.copy(exhaustiveLlamaOcrRegions = it) }
+                    )
+                }
+            }
+
+            MangaStepCard(number = 3, title = stringResource(R.string.workflow_manga_recognition_title)) {
+                Text(
+                    stringResource(R.string.workflow_manga_recognition_help),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                PdfOcrProvider.entries.forEach { provider ->
+                    MangaChoiceRow(
+                        title = if (provider == PdfOcrProvider.ML_KIT) {
+                            stringResource(R.string.pdf_ocr_provider_mlkit)
+                        } else {
+                            stringResource(R.string.pdf_ocr_provider_llama_cpp)
+                        },
+                        selected = translationOptions.ocrProvider == provider,
+                        enabled = !isRunning,
+                        onClick = { translationOptions = translationOptions.copy(ocrProvider = provider) }
+                    )
+                }
+                if (translationOptions.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
+                    Text(
+                        stringResource(R.string.workflow_manga_llama_fast_preview_note),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    MangaInstalledModelPicker(
+                        label = stringResource(R.string.workflow_manga_ocr_model),
+                        models = ocrModels,
+                        selectedPath = translationOptions.llamaOcr.modelPath,
+                        onSelected = { model ->
+                            val preset = MangaTranslationSupport.inferOcrPreset(model.filename, model.repoId)
+                            val paired = MangaTranslationSupport.matchProjector(model, projectors)
+                            ocrModelRef = MangaTranslationSupport.modelRef(model)
+                            if (paired != null) {
+                                ocrProjectorRef = MangaTranslationSupport.modelRef(paired)
+                            }
+                            translationOptions = translationOptions.copy(
+                                llamaOcr = translationOptions.llamaOcr.copy(
+                                    modelPath = model.path,
+                                    mmprojPath = paired?.path ?: translationOptions.llamaOcr.mmprojPath,
+                                    promptPreset = preset,
+                                    customFlags = null
+                                )
+                            )
+                        }
+                    )
+                    MangaInstalledModelPicker(
+                        label = stringResource(R.string.workflow_manga_projector_model),
+                        models = projectors,
+                        selectedPath = translationOptions.llamaOcr.mmprojPath,
+                        onSelected = { model ->
+                            ocrProjectorRef = MangaTranslationSupport.modelRef(model)
+                            translationOptions = translationOptions.copy(
+                                llamaOcr = translationOptions.llamaOcr.copy(mmprojPath = model.path)
+                            )
+                        }
+                    )
+                    if (ocrModels.isEmpty() || projectors.isEmpty()) {
+                        Text(
+                            stringResource(R.string.workflow_manga_no_installed_ocr_models),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        OutlinedButton(onClick = onOpenModels, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.ViewInAr, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.workflow_manga_open_models))
+                        }
+                    }
+                    TextButton(
+                        onClick = { showOcrExpert = !showOcrExpert },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(if (showOcrExpert) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.workflow_manga_expert_settings))
+                    }
+                    if (showOcrExpert) {
+                        IntInputField(
+                            value = translationOptions.llamaOcr.contextSize,
+                            onValueChange = {
+                                translationOptions = translationOptions.copy(
+                                    llamaOcr = translationOptions.llamaOcr.copy(contextSize = it)
+                                )
+                            },
+                            label = stringResource(R.string.pdf_context_size_label)
+                        )
+                        IntInputField(
+                            value = translationOptions.llamaOcr.maxTokens,
+                            onValueChange = {
+                                translationOptions = translationOptions.copy(
+                                    llamaOcr = translationOptions.llamaOcr.copy(maxTokens = it)
+                                )
+                            },
+                            label = stringResource(R.string.pdf_max_tokens_label)
+                        )
+                        IntInputField(
+                            value = translationOptions.llamaOcr.port,
+                            onValueChange = {
+                                translationOptions = translationOptions.copy(
+                                    llamaOcr = translationOptions.llamaOcr.copy(port = it)
+                                )
+                            },
+                            label = stringResource(R.string.pdf_ocr_llama_port_label)
+                        )
+                        OutlinedTextField(
+                            value = translationOptions.llamaOcr.customPrompt.orEmpty(),
+                            onValueChange = {
+                                translationOptions = translationOptions.copy(
+                                    llamaOcr = translationOptions.llamaOcr.copy(customPrompt = it.ifBlank { null })
+                                )
+                            },
+                            label = { Text(stringResource(R.string.pdf_ocr_llama_prompt_label)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2
+                        )
+                    }
+                }
+                Text(
+                    stringResource(R.string.workflow_manga_ocr_strategy),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                MangaOcrStrategy.entries
+                    .filter { it != MangaOcrStrategy.BUBBLE_ONLY }
+                    .forEach { strategy ->
+                        FilterChip(
+                            selected = behavior.ocrStrategy == strategy,
+                            onClick = {
+                                if (profile != MangaTranslationProfile.CUSTOM) {
+                                    profile = MangaTranslationProfile.CUSTOM
+                                }
+                                behavior = behavior.copy(ocrStrategy = strategy)
+                            },
+                            label = { Text(mangaOcrStrategyLabel(strategy)) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+            }
+
+            MangaStepCard(number = 4, title = stringResource(R.string.workflow_manga_output_title)) {
                 MangaOutputSwitchRow(
                     title = stringResource(R.string.workflow_manga_output_pdf),
                     description = stringResource(R.string.workflow_manga_output_pdf_desc),
@@ -1462,157 +2053,739 @@ private fun MangaTranslationWorkflowContent(
                     enabled = !isRunning,
                     onCheckedChange = onExportCbzChange
                 )
-                if (!exportPdf && !exportCbz) {
-                    Text(
-                        stringResource(R.string.workflow_manga_select_output_first),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                if (selectedUris.isNotEmpty()) {
-                    Text(
-                        stringResource(R.string.workflow_manga_selected_count, selectedUris.size),
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                    selectedUris.take(6).forEach { uri ->
-                        Text(
-                            uri.lastPathSegment?.substringAfterLast('/') ?: uri.toString(),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
-                    }
-                }
-            }
-        }
-
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                HorizontalDivider()
                 Text(
-                    stringResource(R.string.workflow_manga_presets_title),
-                    style = MaterialTheme.typography.titleSmall,
+                    stringResource(R.string.workflow_manga_readiness_title),
+                    style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
                 )
-                if (templates.isEmpty()) {
-                    Text(
-                        stringResource(R.string.workflow_no_templates),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    templates.take(4).forEach { template ->
-                        AssistChip(
-                            onClick = { },
-                            label = { Text(template.name, maxLines = 1) }
+                MangaReadinessRow(
+                    ready = preflight.blockers.none {
+                        it.code in setOf(
+                            MangaPreflightCode.BACKEND_URL_MISSING,
+                            MangaPreflightCode.BACKEND_MODEL_MISSING,
+                            MangaPreflightCode.LITERT_MODEL_MISSING
                         )
-                    }
-                }
-                OutlinedTextField(
-                    value = templateName,
-                    onValueChange = { templateName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.workflow_template_name)) },
-                    singleLine = true
-                )
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            db.workflowTemplateDao().insert(
-                                com.example.llamadroid.data.db.WorkflowTemplateEntity(
-                                    name = templateName.ifBlank { "Manga Translation" },
-                                    type = com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION,
-                                    configJson = """{"workflow":"manga_translation","version":2,"exportPdf":$exportPdf,"exportCbz":$exportCbz}"""
-                                )
-                            )
-                            templateName = ""
-                        }
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = templateName.isNotBlank()
-                ) {
-                    Text(stringResource(R.string.workflow_save_template))
-                }
-            }
-        }
-
-        if (isRunning) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
-                    Text(currentStep, style = MaterialTheme.typography.bodyMedium)
-                    OutlinedButton(
-                        onClick = onCancel,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.action_cancel), maxLines = 1)
+                    label = stringResource(R.string.workflow_manga_ready_translation),
+                    detail = mangaBackendSummary(translationSettings)
+                )
+                MangaReadinessRow(
+                    ready = preflight.blockers.none {
+                        it.code == MangaPreflightCode.OCR_MODEL_MISSING ||
+                            it.code == MangaPreflightCode.OCR_MMPROJ_MISSING
+                    },
+                    label = stringResource(R.string.workflow_manga_ready_ocr),
+                    detail = mangaOcrProviderSummary(translationOptions)
+                )
+                MangaReadinessRow(
+                    ready = true,
+                    label = stringResource(R.string.workflow_manga_ready_vision),
+                    detail = if (!behavior.pageImageContextEnabled) {
+                        stringResource(R.string.workflow_manga_disabled)
+                    } else {
+                        stringResource(R.string.workflow_manga_vision_checked_at_start)
                     }
+                )
+                MangaReadinessRow(
+                    ready = true,
+                    label = stringResource(R.string.workflow_manga_ready_output),
+                    detail = outputFolder?.let { stringResource(R.string.workflow_manga_selected_folder) }
+                        ?: stringResource(R.string.workflow_manga_app_storage)
+                )
+                if (preflight.blockers.isNotEmpty()) {
+                    Text(
+                        stringResource(R.string.workflow_manga_blockers_count, preflight.blockers.size),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
-        }
 
-        errorMessage?.let {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        it,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    if (!errorDetails.isNullOrBlank()) {
-                        Text(
-                            errorDetails,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer
+            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isRunning) {
+                                templatesExpanded = !templatesExpanded
+                            },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.workflow_manga_presets_title),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                stringResource(R.string.workflow_templates_count, templates.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Icon(
+                            if (templatesExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = stringResource(
+                                if (templatesExpanded) R.string.action_collapse else R.string.action_expand
+                            )
                         )
                     }
+                    if (templatesExpanded) {
+                        if (templates.isEmpty()) {
+                            Text(
+                                stringResource(R.string.workflow_no_templates),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 240.dp)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                templates.forEach { template ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        AssistChip(
+                                            onClick = { applyTemplate(template) },
+                                            label = {
+                                                Text(
+                                                    template.name,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        IconButton(
+                                            onClick = {
+                                                renamedTemplateName = template.name
+                                                templatePendingRename = template
+                                            },
+                                            enabled = !isRunning
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Edit,
+                                                stringResource(R.string.action_rename)
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { templatePendingDelete = template },
+                                            enabled = !isRunning
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                stringResource(R.string.action_delete)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalDivider()
+                        OutlinedTextField(
+                            value = templateName,
+                            onValueChange = { templateName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.workflow_template_name)) },
+                            singleLine = true
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                scope.launch {
+                                    val json = JSONObject()
+                                        .put("workflow", "manga_translation")
+                                        .put("version", MangaTranslationSupport.TEMPLATE_VERSION)
+                                        .put("exportPdf", exportPdf)
+                                        .put("exportCbz", exportCbz)
+                                        .put("runConfig", MangaTranslationSupport.runConfigToJson(currentConfig()))
+                                    db.workflowTemplateDao().insert(
+                                        com.example.llamadroid.data.db.WorkflowTemplateEntity(
+                                            name = templateName.trim(),
+                                            type = com.example.llamadroid.data.db.WorkflowType.MANGA_TRANSLATION,
+                                            configJson = json.toString()
+                                        )
+                                    )
+                                    templateName = ""
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = templateName.isNotBlank() && !isRunning
+                        ) {
+                            Text(stringResource(R.string.workflow_save_template))
+                        }
+                    }
                 }
             }
-        }
 
-        if (results.isNotEmpty()) {
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            errorMessage?.let {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(it, color = MaterialTheme.colorScheme.onErrorContainer)
+                        if (!errorDetails.isNullOrBlank()) {
+                            Text(
+                                errorDetails,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+            }
+
+            preview?.let {
+                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            stringResource(R.string.workflow_manga_preview_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        if (previewIsStale) {
+                            Text(
+                                stringResource(R.string.workflow_manga_preview_stale),
+                                color = MaterialTheme.colorScheme.tertiary,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        MangaPreviewImage(
+                            title = stringResource(R.string.workflow_manga_preview_original),
+                            uri = it.originalPageUri
+                        )
+                        MangaPreviewImage(
+                            title = stringResource(R.string.workflow_manga_preview_translated),
+                            uri = it.translatedPageUri
+                        )
+                        MangaQualityReportSummary(it.qualityReport)
+                    }
+                }
+            }
+
+            if (results.isNotEmpty()) {
+                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         stringResource(R.string.workflow_manga_results_title),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold
                     )
                     results.forEach { result ->
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(
-                                if (result.isSuccess) {
+                                if (result.isSuccess && result.qualityReport.warningCount > 0) {
+                                    stringResource(
+                                        R.string.workflow_manga_result_warning,
+                                        result.sourceName
+                                    )
+                                } else if (result.isSuccess) {
                                     stringResource(R.string.workflow_manga_result_success, result.sourceName)
                                 } else {
-                                    stringResource(R.string.workflow_manga_result_failed, result.sourceName, result.errorMessage.orEmpty())
+                                    stringResource(
+                                        R.string.workflow_manga_result_failed,
+                                        result.sourceName,
+                                        result.errorMessage.orEmpty()
+                                    )
                                 },
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
                             )
-                            if (!result.isSuccess && !result.errorDetails.isNullOrBlank()) {
+                            if (result.isSuccess) {
+                                MangaResultActions(result)
+                                MangaQualityReportSummary(result.qualityReport)
+                            } else if (!result.errorDetails.isNullOrBlank()) {
                                 Text(
                                     result.errorDetails.orEmpty(),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                            HorizontalDivider()
                         }
                     }
                 }
             }
         }
+        }
 
-        Button(
-            onClick = onRun,
-            enabled = !isRunning && selectedUris.isNotEmpty() && (exportPdf || exportCbz),
-            modifier = Modifier.fillMaxWidth()
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+            shape = RoundedCornerShape(16.dp)
         ) {
-            Text(if (isRunning) stringResource(R.string.workflow_running_btn) else stringResource(R.string.workflow_manga_run_batch))
+            if (isRunning) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(currentStep, style = MaterialTheme.typography.bodyMedium, maxLines = 2)
+                    OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_cancel), maxLines = 1)
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedButton(
+                        onClick = { onPreview(currentSpec()) },
+                        enabled = preflight.canRun,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Preview, null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.workflow_manga_preview_action), maxLines = 2)
+                    }
+                    Button(
+                        onClick = { onRun(currentSpec()) },
+                        enabled = preflight.canRun,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(
+                            stringResource(R.string.workflow_manga_translate_files, sources.size),
+                            maxLines = 2
+                        )
+                    }
+                }
+            }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MangaInstalledModelPicker(
+    label: String,
+    models: List<ModelEntity>,
+    selectedPath: String?,
+    onSelected: (ModelEntity) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = models.firstOrNull { it.path == selectedPath }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selected?.filename
+                ?: selectedPath?.let { stringResource(R.string.workflow_manga_legacy_model_unavailable) }
+                ?: stringResource(R.string.workflow_manga_choose_installed_model),
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+            supportingText = selected?.let { model ->
+                {
+                    Text(
+                        "${FormatUtils.Display.formatBytes(LocalContext.current, model.sizeBytes)} • ${model.repoId}",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            models.forEach { model ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "${FormatUtils.Display.formatBytes(LocalContext.current, model.sizeBytes)} • ${model.repoId}",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelected(model)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MangaStepCard(
+    number: Int,
+    title: String,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            number.toString(),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun MangaChoiceRow(
+    title: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        },
+        border = if (selected) {
+            androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+internal fun MangaProfileCard(
+    profile: MangaTranslationProfile,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val title = when (profile) {
+        MangaTranslationProfile.BEST_READING -> stringResource(R.string.workflow_manga_profile_best)
+        MangaTranslationProfile.BALANCED -> stringResource(R.string.workflow_manga_profile_balanced)
+        MangaTranslationProfile.FAST -> stringResource(R.string.workflow_manga_profile_fast)
+        MangaTranslationProfile.CUSTOM -> stringResource(R.string.workflow_manga_profile_custom)
+    }
+    val description = when (profile) {
+        MangaTranslationProfile.BEST_READING -> stringResource(R.string.workflow_manga_profile_best_desc)
+        MangaTranslationProfile.BALANCED -> stringResource(R.string.workflow_manga_profile_balanced_desc)
+        MangaTranslationProfile.FAST -> stringResource(R.string.workflow_manga_profile_fast_desc)
+        MangaTranslationProfile.CUSTOM -> stringResource(R.string.workflow_manga_profile_custom_desc)
+    }
+    val speed = when (profile) {
+        MangaTranslationProfile.BEST_READING -> stringResource(R.string.workflow_manga_speed_slowest)
+        MangaTranslationProfile.BALANCED -> stringResource(R.string.workflow_manga_speed_medium)
+        MangaTranslationProfile.FAST -> stringResource(R.string.workflow_manga_speed_fast)
+        MangaTranslationProfile.CUSTOM -> stringResource(R.string.workflow_manga_speed_varies)
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = enabled, onClick = onClick),
+        shape = RoundedCornerShape(14.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        border = if (selected) {
+            androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+        } else null
+    ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+            RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(title, fontWeight = FontWeight.Bold)
+                    Text(
+                        speed,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun MangaReadinessRow(ready: Boolean, label: String, detail: String) {
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val icon: @Composable () -> Unit = {
+            Icon(
+                if (ready) Icons.Default.CheckCircle else Icons.Default.Warning,
+                contentDescription = null,
+                tint = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+        if (maxWidth < 360.dp) {
+            Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                icon()
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(label, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                    Text(
+                        detail,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                icon()
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    label,
+                    modifier = Modifier.weight(0.9f),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    detail,
+                    modifier = Modifier.weight(1.1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun mangaReadingDirectionLabel(direction: MangaReadingDirection): String =
+    when (direction) {
+        MangaReadingDirection.AUTO -> stringResource(R.string.workflow_manga_direction_auto)
+        MangaReadingDirection.RIGHT_TO_LEFT -> stringResource(R.string.workflow_manga_direction_rtl)
+        MangaReadingDirection.LEFT_TO_RIGHT -> stringResource(R.string.workflow_manga_direction_ltr)
+    }
+
+@Composable
+private fun mangaOcrStrategyLabel(strategy: MangaOcrStrategy): String =
+    when (strategy) {
+        MangaOcrStrategy.HYBRID -> stringResource(R.string.workflow_manga_ocr_hybrid)
+        MangaOcrStrategy.ADAPTIVE -> stringResource(R.string.workflow_manga_ocr_adaptive)
+        MangaOcrStrategy.FULL_PAGE -> stringResource(R.string.workflow_manga_ocr_full_page)
+        MangaOcrStrategy.BUBBLE_ONLY -> stringResource(R.string.workflow_manga_ocr_bubbles)
+    }
+
+@Composable
+private fun mangaBackendSummary(snapshot: RemoteSummarySettingsSnapshot): String =
+    when (SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)) {
+        SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
+            snapshot.llamaServerModelLabel ?: stringResource(R.string.pdf_backend_llama_server)
+        SettingsRepository.PDF_BACKEND_LLAMA_SWAP ->
+            snapshot.llamaSwapModel ?: stringResource(R.string.pdf_backend_llama_swap)
+        SettingsRepository.PDF_BACKEND_LITERT ->
+            stringResource(R.string.pdf_backend_litert)
+        else -> snapshot.ollamaModel ?: stringResource(R.string.pdf_backend_ollama)
+    }
+
+@Composable
+private fun mangaOcrProviderSummary(options: com.example.llamadroid.data.PdfTranslationOptionsSnapshot): String =
+    when (options.ocrProvider) {
+        com.example.llamadroid.data.PdfOcrProvider.ML_KIT ->
+            stringResource(R.string.workflow_manga_ocr_mlkit)
+        com.example.llamadroid.data.PdfOcrProvider.LLAMA_CPP_GGUF ->
+            stringResource(R.string.workflow_manga_ocr_gguf)
+    }
+
+@Composable
+private fun MangaPreviewImage(title: String, uri: Uri) {
+    val context = LocalContext.current
+    val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, uri) {
+        value = withContext(Dispatchers.IO) {
+            if (uri.scheme == "file") {
+                BitmapFactory.decodeFile(uri.path)
+            } else {
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            }
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.labelMedium)
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = title,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun MangaQualityReportSummary(report: MangaTranslationQualityReport) {
+    Text(
+        stringResource(
+            R.string.workflow_manga_quality_summary,
+            report.totalPages,
+            report.emptyOcrPages,
+            report.weakTranslationsRetried,
+            report.visionFallbacks,
+            report.jsonRepairs,
+            report.plainTextFallbacks,
+            report.untranslatedUnits,
+            report.ungroundedOcrResponses,
+            report.regionalOcrFallbacks,
+            report.promptLeakRejections,
+            report.skippedLlamaCropRequests,
+            report.decorativeTextPreserved,
+            report.skippedOverlayUnits,
+            report.liteRtRuntimeFallbacks,
+            report.llamaOcrRequests,
+            formatWorkflowDuration(report.llamaOcrElapsedMs),
+            report.reconciledOcrAlternatives,
+            report.coalescedBubbleFragments,
+            report.incompleteTranslationRetries,
+            report.wholeBubblesPreserved
+        ),
+        style = MaterialTheme.typography.bodySmall,
+        color = if (report.warningCount > 0) {
+            MaterialTheme.colorScheme.tertiary
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    )
+}
+
+@Composable
+private fun MangaResultActions(result: MangaTranslationFileResult) {
+    val context = LocalContext.current
+    val outputs = buildList {
+        result.pdfUri?.let { add(it to "application/pdf") }
+        result.cbzUri?.let { add(it to "application/vnd.comicbook+zip") }
+    }
+    outputs.forEach { (uri, mimeType) ->
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW).apply {
+                                setDataAndType(uri, mimeType)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                        )
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.OpenInNew, null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.action_open))
+            }
+            OutlinedButton(
+                onClick = {
+                    val share = Intent(Intent.ACTION_SEND).apply {
+                        type = mimeType
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(
+                        Intent.createChooser(share, context.getString(R.string.action_share))
+                    )
+                },
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(stringResource(R.string.action_share))
+            }
+        }
+    }
+}
+
+private fun mangaSourceForUri(context: Context, uri: Uri): MangaTranslationSource {
+    var displayName: String? = null
+    runCatching {
+        context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                displayName = cursor.getString(0)
+            }
+        }
+    }
+    return MangaTranslationSource(
+        uri = uri,
+        displayName = displayName
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+            ?: uri.toString(),
+        mimeType = context.contentResolver.getType(uri)
+    )
 }
 
 @Composable
@@ -4295,13 +5468,21 @@ private fun WorkflowCard(
                 .padding(20.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(emoji, fontSize = 36.sp)
-                Spacer(modifier = Modifier.width(16.dp))
-                Column {
-                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                    Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(
+                    modifier = Modifier.size(48.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(emoji, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
                 }
-                Spacer(modifier = Modifier.weight(1f))
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(description, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.primary)
             }
         }

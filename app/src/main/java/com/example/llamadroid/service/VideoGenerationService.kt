@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Binder
 import android.os.IBinder
@@ -26,8 +27,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.roundToInt
 
 /**
@@ -42,6 +47,8 @@ class VideoGenerationService : Service() {
     private val modeProcesses = mutableMapOf<VideoWorkLane, Process>()
     private val modeDiagnostics = mutableMapOf<VideoGenerationMode, ActivityDiagnostics>()
     private val modeSessionIds = mutableMapOf<VideoWorkLane, String>()
+    private val foregroundTimeoutGate = ForegroundTimeoutGate()
+    private val timedOutLanes = mutableSetOf<VideoWorkLane>()
 
     private var notificationTaskId: Int? = null
     private lateinit var ffmpegLibDir: File
@@ -127,20 +134,33 @@ class VideoGenerationService : Service() {
                 finishModeSession(config.mode, useDistributedStateHolder, "complete", metadata.diffusionModelName)
                 completeForegroundTask(getString(R.string.video_gen_notification_complete))
             } catch (cancelled: CancellationException) {
-                markActivity(config.mode, "cancelled")
-                holder.reset()
-                finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
-                DebugLog.log("[VIDEO-GEN] ${config.mode} cancelled")
+                if (isTimedOutLane(lane)) {
+                    val message = timeoutMessage(cancelled)
+                    publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
+                    DebugLog.log("[VIDEO-GEN] ${config.mode} stopped after foreground timeout")
+                } else {
+                    markActivity(config.mode, "cancelled")
+                    holder.reset()
+                    finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
+                    DebugLog.log("[VIDEO-GEN] ${config.mode} cancelled")
+                }
             } catch (e: Exception) {
-                val message = e.message ?: getString(R.string.error_generic)
-                markActivity(config.mode, "failed")
-                DebugLog.log("[VIDEO-GEN] Failed: $message")
-                holder.updateState(VideoGenerationState.Error(message))
-                finishModeSession(config.mode, useDistributedStateHolder, "failed", message)
-                failForegroundTask(message)
+                if (isTimedOutLane(lane)) {
+                    val message = getString(R.string.video_gen_error_media_processing_timeout)
+                    publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
+                    DebugLog.log("[VIDEO-GEN] ${config.mode} native process exited during foreground timeout: ${e.message}")
+                } else {
+                    val message = e.message ?: getString(R.string.error_generic)
+                    markActivity(config.mode, "failed")
+                    DebugLog.log("[VIDEO-GEN] Failed: $message")
+                    holder.updateState(VideoGenerationState.Error(message))
+                    finishModeSession(config.mode, useDistributedStateHolder, "failed", message)
+                    failForegroundTask(message)
+                }
             } finally {
                 modeProcesses.remove(lane)
                 modeJobs.remove(lane)
+                clearTimedOutLane(lane)
                 clearDiagnostics(config.mode)
                 cleanupAfterWork()
             }
@@ -169,6 +189,8 @@ class VideoGenerationService : Service() {
         holder: VideoGenerationStateHolder,
         useDistributedStateHolder: Boolean
     ): Pair<GeneratedVideoMetadata, String?> = withContext(Dispatchers.IO) {
+        val startedAtMs = SystemClock.elapsedRealtime()
+        var stageTimings = SdStageTimings()
         val binaryRepo = BinaryRepository(applicationContext)
         var sdBinary = binaryRepo.getSdBinary()
             ?: throw IllegalStateException(getString(R.string.video_gen_error_sd_binary_missing))
@@ -220,6 +242,16 @@ class VideoGenerationService : Service() {
             candidateCapabilities: SdBinaryCapabilities?
         ): File {
             if (outputAvi.exists()) outputAvi.delete()
+            val requiredFlags = mutableSetOf<String>()
+
+            fun requireFlag(flag: String) {
+                if (candidateCapabilities != null &&
+                    candidateCapabilities != SdBinaryCapabilities.ALLOW_ALL &&
+                    !candidateCapabilities.supports(flag)
+                ) {
+                    requiredFlags += flag
+                }
+            }
 
             val args = mutableListOf(
                 candidateBinary.absolutePath,
@@ -245,7 +277,12 @@ class VideoGenerationService : Service() {
                     "-v"
                 )
             )
+            config.scheduler?.let { scheduler ->
+                requireFlag("--scheduler")
+                args.addAll(listOf("--scheduler", scheduler.cliName))
+            }
             config.flowShift?.let { flowShift ->
+                requireFlag("--flow-shift")
                 args.addAll(listOf("--flow-shift", flowShift.toString()))
             }
             config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
@@ -276,6 +313,8 @@ class VideoGenerationService : Service() {
             if (config.diffusionFa) {
                 args.add("--diffusion-fa")
             }
+            if (config.diffusionConvDirect) args.add("--diffusion-conv-direct")
+            if (config.vaeConvDirect) args.add("--vae-conv-direct")
             if (config.mmap) {
                 args.add("--mmap")
             }
@@ -283,7 +322,7 @@ class VideoGenerationService : Service() {
                 appendLocalSdBackendArgs(
                     args = args,
                     paramsBackendMode = config.sdParamsBackendMode,
-                    runtimeBackendMode = config.sdRuntimeBackendMode,
+                    runtimeBackendMode = effectiveSdRuntimeBackendModeForBinary(candidateBinary, config.sdRuntimeBackendMode),
                     maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(candidateBinary, config.maxVramCpuGiB),
                     flagSupported = { flag ->
                         candidateCapabilities == null ||
@@ -292,8 +331,15 @@ class VideoGenerationService : Service() {
                     }
                 )
             }
-            appendSdDistributedArgs(args, config.distributedRuntime, candidateCapabilities)
-            appendSdCustomFlags(args, config.customFlags)
+            try {
+                appendSdDistributedArgs(args, config.distributedRuntime, candidateCapabilities)
+                appendSdCustomFlags(args, config.customFlags)
+            } catch (error: SdDisallowedDistributedFlagException) {
+                throw IllegalStateException(getString(R.string.sd_dist_error_row_split_not_supported))
+            }
+            if (requiredFlags.isNotEmpty()) {
+                throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
+            }
 
             DebugLog.log("[VIDEO-GEN] Running command: ${args.joinToString(" ")}")
 
@@ -302,69 +348,120 @@ class VideoGenerationService : Service() {
 
             val processBuilder = ProcessBuilder(args)
                 .directory(candidateBinary.parentFile)
-                .redirectErrorStream(true)
             processBuilder.environment()["LD_LIBRARY_PATH"] = sdProcessLibraryPath(binaryRepo, candidateBinary, libDir)
 
             val lane = laneFor(config.mode, useDistributedStateHolder)
             modeProcesses[lane] = processBuilder.start()
             val sdProcess = modeProcesses[lane]!!
+            val processLogFile = File(
+                outputAvi.parentFile,
+                "${outputAvi.nameWithoutExtension}.stable-diffusion.log"
+            ).apply {
+                parentFile?.mkdirs()
+                if (exists()) delete()
+            }
             val progressTracker = SdProgressTracker(
                 totalStepsHint = config.steps.coerceAtLeast(1),
                 startedAtMs = SystemClock.elapsedRealtime()
             )
+            val progressPublishMutex = Mutex()
+            var pendingSamplingSnapshot: SdProgressSnapshot? = null
+            var lastSamplingProgressPublishMs = 0L
+            var lastPublishedSamplingStep = -1
+
+            fun publishSamplingSnapshot(snapshot: SdProgressSnapshot) {
+                val weighted = snapshot.progress * 0.72f
+                val stageLabels = listOfNotNull(
+                    stageTimings.conditioningMs?.let { getString(R.string.sd_stage_conditioning, formatStageDuration(it)) },
+                    stageTimings.samplingMs?.let { getString(R.string.sd_stage_sampling, formatStageDuration(it)) },
+                    stageTimings.decodingMs?.let { getString(R.string.sd_stage_decoding, formatStageDuration(it)) }
+                )
+                val status = buildVideoSamplingStatus(snapshot).let { base ->
+                    if (stageLabels.isEmpty()) base else "$base • ${stageLabels.joinToString(" • ")}"
+                }
+                holder.updateState(
+                    VideoGenerationState.Generating(
+                        progress = weighted,
+                        status = status,
+                        currentStep = snapshot.currentStep,
+                        totalSteps = snapshot.totalSteps,
+                        etaSeconds = snapshot.etaSeconds
+                    )
+                )
+                updateNotification(status, weighted)
+            }
+
+            suspend fun publishPendingSamplingSnapshot(force: Boolean = false) {
+                progressPublishMutex.withLock {
+                    val snapshot = pendingSamplingSnapshot ?: return@withLock
+                    val now = SystemClock.elapsedRealtime()
+                    val stepChanged = snapshot.currentStep != lastPublishedSamplingStep
+                    if (!force &&
+                        !stepChanged &&
+                        now - lastSamplingProgressPublishMs < VIDEO_PROGRESS_PUBLISH_INTERVAL_MS
+                    ) {
+                        return@withLock
+                    }
+                    lastSamplingProgressPublishMs = now
+                    lastPublishedSamplingStep = snapshot.currentStep
+                    pendingSamplingSnapshot = null
+                    publishSamplingSnapshot(snapshot)
+                }
+            }
+
+            suspend fun handleSamplingOutput(text: String, appendToLog: Boolean) {
+                markActivity(config.mode, "generating")
+                stageTimings = stageTimings.withLine(text)
+                if (appendToLog) {
+                    DebugLog.log("[VIDEO-GEN] $text")
+                }
+                progressTracker.update(text, SystemClock.elapsedRealtime())?.let { snapshot ->
+                    progressPublishMutex.withLock {
+                        pendingSamplingSnapshot = snapshot
+                    }
+                    publishPendingSamplingSnapshot()
+                }
+            }
             val etaTickerJob = launch {
                 while (isActive) {
                     delay(1000)
                     progressTracker.tick(SystemClock.elapsedRealtime())?.let { snapshot ->
-                        val weighted = snapshot.progress * 0.72f
-                        val status = buildVideoSamplingStatus(snapshot)
-                        holder.updateState(
-                            VideoGenerationState.Generating(
-                                progress = weighted,
-                                status = status,
-                                currentStep = snapshot.currentStep,
-                                totalSteps = snapshot.totalSteps,
-                                etaSeconds = snapshot.etaSeconds
-                            )
-                        )
-                        updateNotification(status, weighted)
+                        publishSamplingSnapshot(snapshot)
                     }
                 }
             }
 
             try {
-                sdProcess.inputStream.bufferedReader().use { reader ->
-                    var line = reader.readLine()
-                    while (line != null) {
-                        markActivity(config.mode, "generating")
-                        DebugLog.log("[VIDEO-GEN] $line")
-                        progressTracker.update(line, SystemClock.elapsedRealtime())?.let { snapshot ->
-                            val weighted = snapshot.progress * 0.72f
-                            val status = buildVideoSamplingStatus(snapshot)
-                            holder.updateState(
-                                VideoGenerationState.Generating(
-                                    progress = weighted,
-                                    status = status,
-                                    currentStep = snapshot.currentStep,
-                                    totalSteps = snapshot.totalSteps,
-                                    etaSeconds = snapshot.etaSeconds
-                                )
-                            )
-                            updateNotification(status, weighted)
-                        }
-                        line = reader.readLine()
+                BufferedOutputStream(FileOutputStream(processLogFile, false)).use { processLog ->
+                    val stdoutJob = launch(Dispatchers.IO) {
+                        consumeBoundedProcessOutput(
+                            input = sdProcess.inputStream,
+                            rawLogOutput = processLog,
+                            onLogLine = { line -> handleSamplingOutput(line, appendToLog = true) },
+                            onProgress = { progress -> handleSamplingOutput(progress, appendToLog = false) }
+                        )
+                    }
+                    val stderrJob = launch(Dispatchers.IO) {
+                        consumeBoundedProcessOutput(
+                            input = sdProcess.errorStream,
+                            rawLogOutput = processLog,
+                            onLogLine = { line -> handleSamplingOutput(line, appendToLog = true) },
+                            onProgress = { progress -> handleSamplingOutput(progress, appendToLog = false) }
+                        )
+                    }
+                    val sdExitCode = sdProcess.waitFor()
+                    stdoutJob.join()
+                    stderrJob.join()
+                    publishPendingSamplingSnapshot(force = true)
+                    modeProcesses.remove(lane)
+                    if (sdExitCode != 0) {
+                        throw IllegalStateException(
+                            getString(R.string.video_gen_error_generation_failed, sdExitCode)
+                        )
                     }
                 }
             } finally {
                 etaTickerJob.cancel()
-            }
-
-            val sdExitCode = sdProcess.waitFor()
-            modeProcesses.remove(lane)
-            if (sdExitCode != 0) {
-                throw IllegalStateException(
-                    getString(R.string.video_gen_error_generation_failed, sdExitCode)
-                )
             }
 
             return resolveGeneratedAvi(outputAvi)
@@ -421,6 +518,7 @@ class VideoGenerationService : Service() {
             cfgScale = config.cfgScale,
             flowShift = config.flowShift,
             samplingMethod = config.samplingMethod,
+            scheduler = config.scheduler,
             cacheMode = config.cacheMode,
             cacheOption = config.cacheOption,
             scmMask = config.scmMask,
@@ -429,6 +527,8 @@ class VideoGenerationService : Service() {
             vaeTiling = config.vaeTiling,
             vaeTileSize = config.vaeTileSize.takeIf { config.vaeTiling && it.isNotBlank() },
             diffusionFa = config.diffusionFa,
+            diffusionConvDirect = config.diffusionConvDirect,
+            vaeConvDirect = config.vaeConvDirect,
             mmap = config.mmap,
             sdParamsBackendMode = config.sdParamsBackendMode,
             sdRuntimeBackendMode = config.sdRuntimeBackendMode,
@@ -437,7 +537,10 @@ class VideoGenerationService : Service() {
             createdAt = System.currentTimeMillis(),
             aviPath = generatedAvi.absolutePath,
             mp4Path = outputMp4.absolutePath,
-            metadataPath = metadataFile.absolutePath
+            metadataPath = metadataFile.absolutePath,
+            conditioningDurationMs = stageTimings.conditioningMs,
+            samplingDurationMs = stageTimings.samplingMs,
+            decodingDurationMs = stageTimings.decodingMs
         )
         metadata.writeToFile(metadataFile)
 
@@ -448,6 +551,7 @@ class VideoGenerationService : Service() {
         val exportResult = exportArtifacts(metadata, metadataFile)
         markActivity(config.mode, "exported")
         metadata = exportResult.first
+            .copy(generationDurationMs = SystemClock.elapsedRealtime() - startedAtMs)
         metadata.writeToFile(metadataFile)
 
         val warning = exportResult.second
@@ -472,7 +576,11 @@ class VideoGenerationService : Service() {
             getString(R.string.gen_status_calculating_eta)
         } else {
             getString(
-                R.string.video_gen_status_generating_eta,
+                if (snapshot.phase == SdProgressPhase.VAE) {
+                    R.string.video_gen_status_vae_eta
+                } else {
+                    R.string.video_gen_status_diffusion_eta
+                },
                 SdProgressTracker.progressPercent(snapshot),
                 formatEtaShort(snapshot.etaSeconds)
             )
@@ -495,6 +603,8 @@ class VideoGenerationService : Service() {
             )
         }
     }
+
+    private fun formatStageDuration(durationMs: Long): String = "${durationMs / 1_000.0}s"
 
     private suspend fun convertAviToMp4(
         inputAvi: File,
@@ -519,30 +629,59 @@ class VideoGenerationService : Service() {
 
         val processBuilder = ProcessBuilder(args)
             .directory(ffmpegBinary.parentFile)
-            .redirectErrorStream(true)
         processBuilder.environment()["LD_LIBRARY_PATH"] =
             "${ffmpegLibDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
         val lane = laneFor(mode, useDistributedStateHolder)
         modeProcesses[lane] = processBuilder.start()
         val ffmpegProcess = modeProcesses[lane]!!
+        val processLogFile = File(
+            outputMp4.parentFile,
+            "${outputMp4.nameWithoutExtension}.ffmpeg.log"
+        ).apply {
+            parentFile?.mkdirs()
+            if (exists()) delete()
+        }
+        val conversionMutex = Mutex()
         var tick = 0
-        ffmpegProcess.inputStream.bufferedReader().use { reader ->
-            var line = reader.readLine()
-            while (line != null) {
+
+        suspend fun handleConversionOutput(text: String, appendToLog: Boolean) {
+            conversionMutex.withLock {
                 markActivity(mode, "converting")
-                DebugLog.log("[VIDEO-GEN][FFMPEG] $line")
+                if (appendToLog) {
+                    DebugLog.log("[VIDEO-GEN][FFMPEG] $text")
+                }
                 tick += 1
                 val progress = (0.80f + (tick.coerceAtMost(12) * 0.01f)).coerceAtMost(0.92f)
                 holder.updateState(
                     VideoGenerationState.Converting(progress, getString(R.string.video_gen_status_converting))
                 )
                 updateNotification(getString(R.string.video_gen_status_converting), progress)
-                line = reader.readLine()
             }
         }
 
-        val exitCode = ffmpegProcess.waitFor()
+        val exitCode = BufferedOutputStream(FileOutputStream(processLogFile, false)).use { processLog ->
+            val stdoutJob = launch(Dispatchers.IO) {
+                consumeBoundedProcessOutput(
+                    input = ffmpegProcess.inputStream,
+                    rawLogOutput = processLog,
+                    onLogLine = { line -> handleConversionOutput(line, appendToLog = true) },
+                    onProgress = { progress -> handleConversionOutput(progress, appendToLog = false) }
+                )
+            }
+            val stderrJob = launch(Dispatchers.IO) {
+                consumeBoundedProcessOutput(
+                    input = ffmpegProcess.errorStream,
+                    rawLogOutput = processLog,
+                    onLogLine = { line -> handleConversionOutput(line, appendToLog = true) },
+                    onProgress = { progress -> handleConversionOutput(progress, appendToLog = false) }
+                )
+            }
+            val processExitCode = ffmpegProcess.waitFor()
+            stdoutJob.join()
+            stderrJob.join()
+            processExitCode
+        }
         modeProcesses.remove(lane)
         if (exitCode != 0 || !outputMp4.exists()) {
             throw IllegalStateException(getString(R.string.video_gen_error_conversion_failed, exitCode))
@@ -633,7 +772,7 @@ class VideoGenerationService : Service() {
     private fun completeForegroundTask(message: String) {
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.completeTask(taskId, message)
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundSafely("complete")
             notificationTaskId = null
             recordServiceBreadcrumb("foreground_completed", message)
         }
@@ -642,7 +781,7 @@ class VideoGenerationService : Service() {
     private fun failForegroundTask(message: String) {
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.failTask(taskId, message)
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundSafely("fail")
             notificationTaskId = null
             recordServiceBreadcrumb("foreground_failed", message)
         }
@@ -651,10 +790,17 @@ class VideoGenerationService : Service() {
     private fun dismissForegroundTask() {
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.dismissTask(taskId)
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundSafely("dismiss")
             notificationTaskId = null
             recordServiceBreadcrumb("foreground_dismissed", "taskId=$taskId")
         }
+    }
+
+    private fun stopForegroundSafely(reason: String) {
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            .onFailure { error ->
+                DebugLog.log("[VIDEO-GEN] stopForeground failed during $reason: ${error.message}")
+            }
     }
 
     private fun ensureWakeLockHeld() {
@@ -857,6 +1003,128 @@ class VideoGenerationService : Service() {
         }
     }
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        if (!isMediaProcessingForegroundTimeout(
+                fgsType,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+            )
+        ) {
+            super.onTimeout(startId, fgsType)
+            return
+        }
+        handleMediaProcessingForegroundTimeout(startId, fgsType)
+    }
+
+    private fun handleMediaProcessingForegroundTimeout(startId: Int, fgsType: Int) {
+        if (!foregroundTimeoutGate.tryEnter()) {
+            recordServiceBreadcrumb(
+                "foreground_timeout_duplicate",
+                "startId=$startId fgsType=$fgsType"
+            )
+            stopSelf()
+            return
+        }
+
+        val message = getString(R.string.video_gen_error_media_processing_timeout)
+        DebugLog.log("[VIDEO-GEN] Foreground media-processing timeout: startId=$startId fgsType=$fgsType")
+        recordServiceBreadcrumb("foreground_timeout", "startId=$startId fgsType=$fgsType")
+
+        val activeLanes = (
+            modeJobs.keys +
+                modeProcesses.keys +
+                modeSessionIds.keys
+            ).distinct()
+        markTimedOut(activeLanes)
+
+        activeLanes.forEach { lane ->
+            publishTimeoutForLane(lane, message, event = "foreground_timeout")
+        }
+
+        val jobs = modeJobs.values.toList()
+        val processes = modeProcesses.values.toList()
+        modeJobs.clear()
+        modeProcesses.clear()
+        jobs.forEach { job ->
+            job.cancel(MediaProcessingForegroundTimeoutCancellation(message))
+        }
+        forceStopProcesses(processes, "foreground_timeout")
+
+        stallMonitorJob?.cancel()
+        stallMonitorJob = null
+        modeDiagnostics.clear()
+        failForegroundTask(message)
+        releaseWakeLocksForTimeout()
+        stopSelf()
+    }
+
+    private fun publishTimeoutForLane(
+        lane: VideoWorkLane,
+        message: String,
+        event: String
+    ) {
+        markActivity(lane.mode, "timeout")
+        recordModeBreadcrumb(
+            mode = lane.mode,
+            event = event,
+            phase = "timeout",
+            details = message
+        )
+        VideoGenerationStateHolder.getForMode(
+            lane.mode,
+            lane.useDistributedStateHolder
+        ).updateState(VideoGenerationState.Error(message))
+        finishModeSession(
+            mode = lane.mode,
+            useDistributedStateHolder = lane.useDistributedStateHolder,
+            outcome = "timeout",
+            details = message
+        )
+    }
+
+    private fun forceStopProcesses(processes: Iterable<Process>, reason: String) {
+        processes.forEach { process ->
+            runCatching {
+                if (process.isAlive) {
+                    DebugLog.log("[VIDEO-GEN] Force-stopping native process for $reason")
+                    process.destroyForcibly()
+                }
+            }.onFailure { error ->
+                DebugLog.log("[VIDEO-GEN] Failed to force-stop native process: ${error.message}")
+            }
+        }
+    }
+
+    private fun releaseWakeLocksForTimeout() {
+        if (wakeLock?.isHeld == true) {
+            runCatching { wakeLock?.release() }
+                .onSuccess {
+                    DebugLog.log("[VIDEO-GEN] WakeLock released after foreground timeout")
+                    recordServiceBreadcrumb("wake_lock_released", "foreground_timeout")
+                }
+        }
+        WakeLockManager.releaseWifiLock("VideoGenerationService")
+    }
+
+    private fun markTimedOut(lanes: List<VideoWorkLane>) {
+        synchronized(timedOutLanes) {
+            timedOutLanes.addAll(lanes)
+        }
+    }
+
+    private fun isTimedOutLane(lane: VideoWorkLane): Boolean = synchronized(timedOutLanes) {
+        lane in timedOutLanes
+    }
+
+    private fun clearTimedOutLane(lane: VideoWorkLane) {
+        synchronized(timedOutLanes) {
+            timedOutLanes.remove(lane)
+        }
+    }
+
+    private fun timeoutMessage(cancelled: CancellationException): String =
+        (cancelled as? MediaProcessingForegroundTimeoutCancellation)?.userMessage
+            ?: getString(R.string.video_gen_error_media_processing_timeout)
+
     override fun onDestroy() {
         recordServiceBreadcrumb("service_destroyed")
         modeProcesses.values.forEach { it.destroy() }
@@ -965,6 +1233,7 @@ class VideoGenerationService : Service() {
         private const val STALL_THRESHOLD_MS_1 = 60_000L
         private const val STALL_THRESHOLD_MS_2 = 120_000L
         private const val STALL_THRESHOLD_MS_3 = 300_000L
+        private const val VIDEO_PROGRESS_PUBLISH_INTERVAL_MS = 1_000L
 
         private const val ACTION_START_GENERATION = "com.example.llamadroid.action.START_VIDEO_GENERATION"
         private const val ACTION_CANCEL_MODE = "com.example.llamadroid.action.CANCEL_VIDEO_GENERATION"

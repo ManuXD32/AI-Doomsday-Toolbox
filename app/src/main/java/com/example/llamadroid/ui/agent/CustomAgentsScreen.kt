@@ -359,7 +359,7 @@ private fun CustomAgentEditorDialog(
                         value = exampleUsage,
                         onValueChange = { exampleUsage = it },
                         label = { Text(stringResource(R.string.agent_agent_example_label)) },
-                        placeholder = { Text("call_agent(agent=\"$name\", task=\"Debug the crash\")") },
+                        placeholder = { Text("call_agent(agent=\"$name\", name=\"Darwin\", task=\"Debug the crash\")") },
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 2,
                         supportingText = { Text(stringResource(R.string.agent_agent_example_desc)) }

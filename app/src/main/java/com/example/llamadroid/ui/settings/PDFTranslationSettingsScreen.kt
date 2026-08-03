@@ -27,6 +27,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.data.LlamaOcrPromptPreset
+import com.example.llamadroid.data.PdfOcrProvider
 import com.example.llamadroid.data.PdfTranslationQualityMode
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.PDFTranslationLogic
@@ -87,6 +89,21 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
     val screenshotQuality by settingsRepo.pdfTranslationScreenshotJpegQuality.collectAsState()
     val textFallback by settingsRepo.pdfTranslationTextFallback.collectAsState()
     val qualityMode by settingsRepo.pdfTranslationQualityMode.collectAsState()
+    val ocrProvider by settingsRepo.pdfOcrProvider.collectAsState()
+    val bubbleGuidedOcr by settingsRepo.pdfOcrBubbleGuided.collectAsState()
+    val llamaOcrModelPath by settingsRepo.pdfOcrLlamaModelPath.collectAsState()
+    val llamaOcrMmprojPath by settingsRepo.pdfOcrLlamaMmprojPath.collectAsState()
+    val llamaOcrPromptPreset by settingsRepo.pdfOcrLlamaPromptPreset.collectAsState()
+    val llamaOcrCustomPrompt by settingsRepo.pdfOcrLlamaCustomPrompt.collectAsState()
+    val llamaOcrContextSize by settingsRepo.pdfOcrLlamaContextSize.collectAsState()
+    val llamaOcrMaxTokens by settingsRepo.pdfOcrLlamaMaxTokens.collectAsState()
+    val llamaOcrPort by settingsRepo.pdfOcrLlamaPort.collectAsState()
+    val llamaOcrFlashAttention by settingsRepo.pdfOcrLlamaFlashAttention.collectAsState()
+    val llamaOcrCacheRam by settingsRepo.pdfOcrLlamaCacheRam.collectAsState()
+    val llamaOcrParallel by settingsRepo.pdfOcrLlamaParallel.collectAsState()
+    val llamaOcrCustomFlags by settingsRepo.pdfOcrLlamaCustomFlags.collectAsState()
+    val llamaOcrCommandTemplate by settingsRepo.pdfOcrLlamaCommandTemplate.collectAsState()
+    val llamaOcrReplaceServer by settingsRepo.pdfOcrLlamaReplaceRunningServer.collectAsState()
 
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
         if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
@@ -168,6 +185,131 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                 }
 
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.pdf_ocr_provider_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    PdfOcrProvider.entries.forEach { provider ->
+                        FilterChip(
+                            modifier = Modifier.fillMaxWidth(),
+                            selected = ocrProvider == provider,
+                            onClick = { settingsRepo.setPdfOcrProvider(provider) },
+                            label = {
+                                Text(
+                                    when (provider) {
+                                        PdfOcrProvider.ML_KIT -> stringResource(R.string.pdf_ocr_provider_mlkit)
+                                        PdfOcrProvider.LLAMA_CPP_GGUF -> stringResource(R.string.pdf_ocr_provider_llama_cpp)
+                                    },
+                                    maxLines = 1
+                                )
+                            }
+                        )
+                    }
+                }
+                TranslationSwitchRow(
+                    title = stringResource(R.string.pdf_ocr_bubble_guided_title),
+                    description = stringResource(R.string.pdf_ocr_bubble_guided_desc),
+                    checked = bubbleGuidedOcr,
+                    onCheckedChange = settingsRepo::setPdfOcrBubbleGuided
+                )
+                if (ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
+                    OutlinedTextField(
+                        value = llamaOcrModelPath.orEmpty(),
+                        onValueChange = settingsRepo::setPdfOcrLlamaModelPath,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.pdf_ocr_llama_model_path_label)) },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = llamaOcrMmprojPath.orEmpty(),
+                        onValueChange = settingsRepo::setPdfOcrLlamaMmprojPath,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.pdf_ocr_llama_mmproj_path_label)) },
+                        singleLine = true,
+                        supportingText = { Text(stringResource(R.string.pdf_ocr_llama_mmproj_path_desc)) }
+                    )
+                    Text(
+                        stringResource(R.string.pdf_ocr_llama_prompt_preset_title),
+                        fontWeight = FontWeight.Bold
+                    )
+                    LlamaOcrPromptPreset.entries.forEach { preset ->
+                        FilterChip(
+                            modifier = Modifier.fillMaxWidth(),
+                            selected = llamaOcrPromptPreset == preset,
+                            onClick = {
+                                settingsRepo.setPdfOcrLlamaPromptPreset(preset)
+                                settingsRepo.setPdfOcrLlamaCustomFlags(preset.recommendedFlags)
+                            },
+                            label = { Text(llamaOcrPromptPresetLabel(preset), maxLines = 1) }
+                        )
+                    }
+                    OutlinedTextField(
+                        value = llamaOcrCustomPrompt ?: llamaOcrPromptPreset.prompt,
+                        onValueChange = settingsRepo::setPdfOcrLlamaCustomPrompt,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.pdf_ocr_llama_prompt_label)) },
+                        minLines = 2
+                    )
+                    IntInputField(
+                        value = llamaOcrContextSize,
+                        onValueChange = settingsRepo::setPdfOcrLlamaContextSize,
+                        label = stringResource(R.string.pdf_ocr_llama_context_label)
+                    )
+                    IntInputField(
+                        value = llamaOcrMaxTokens,
+                        onValueChange = settingsRepo::setPdfOcrLlamaMaxTokens,
+                        label = stringResource(R.string.pdf_ocr_llama_max_tokens_label)
+                    )
+                    IntInputField(
+                        value = llamaOcrPort,
+                        onValueChange = settingsRepo::setPdfOcrLlamaPort,
+                        label = stringResource(R.string.pdf_ocr_llama_port_label)
+                    )
+                    IntInputField(
+                        value = llamaOcrCacheRam,
+                        onValueChange = settingsRepo::setPdfOcrLlamaCacheRam,
+                        label = stringResource(R.string.pdf_ocr_llama_cache_ram_label)
+                    )
+                    IntSliderWithInput(
+                        value = llamaOcrParallel,
+                        onValueChange = settingsRepo::setPdfOcrLlamaParallel,
+                        valueRange = 1..8,
+                        label = stringResource(R.string.pdf_ocr_llama_parallel_label)
+                    )
+                    TranslationSwitchRow(
+                        title = stringResource(R.string.pdf_ocr_llama_flash_attention_title),
+                        description = stringResource(R.string.pdf_ocr_llama_flash_attention_desc),
+                        checked = llamaOcrFlashAttention,
+                        onCheckedChange = settingsRepo::setPdfOcrLlamaFlashAttention
+                    )
+                    TranslationSwitchRow(
+                        title = stringResource(R.string.pdf_ocr_llama_replace_server_title),
+                        description = stringResource(R.string.pdf_ocr_llama_replace_server_desc),
+                        checked = llamaOcrReplaceServer,
+                        onCheckedChange = settingsRepo::setPdfOcrLlamaReplaceRunningServer
+                    )
+                    OutlinedTextField(
+                        value = llamaOcrCustomFlags.orEmpty(),
+                        onValueChange = settingsRepo::setPdfOcrLlamaCustomFlags,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.pdf_ocr_llama_custom_flags_label)) },
+                        minLines = 2
+                    )
+                    OutlinedTextField(
+                        value = llamaOcrCommandTemplate.orEmpty(),
+                        onValueChange = settingsRepo::setPdfOcrLlamaCommandTemplate,
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.pdf_ocr_llama_command_template_label)) },
+                        minLines = 2
+                    )
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         PdfTranslationQualityModeSelector(
                             value = qualityMode,
@@ -216,6 +358,20 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                 }
     }
 }
+
+@Composable
+private fun llamaOcrPromptPresetLabel(preset: LlamaOcrPromptPreset): String =
+    when (preset) {
+        LlamaOcrPromptPreset.UNLIMITED_OCR -> stringResource(R.string.pdf_ocr_llama_preset_unlimited)
+        LlamaOcrPromptPreset.GLM_OCR -> stringResource(R.string.pdf_ocr_llama_preset_glm)
+        LlamaOcrPromptPreset.DEEPSEEK_OCR -> stringResource(R.string.pdf_ocr_llama_preset_deepseek)
+        LlamaOcrPromptPreset.HUNYUAN_OCR -> stringResource(R.string.pdf_ocr_llama_preset_hunyuan)
+        LlamaOcrPromptPreset.PADDLEOCR_VL -> stringResource(R.string.pdf_ocr_llama_preset_paddleocr_vl)
+        LlamaOcrPromptPreset.DOTS_OCR -> stringResource(R.string.pdf_ocr_llama_preset_dots)
+        LlamaOcrPromptPreset.LIGHTON_OCR -> stringResource(R.string.pdf_ocr_llama_preset_lighton)
+        LlamaOcrPromptPreset.QIANFAN_OCR -> stringResource(R.string.pdf_ocr_llama_preset_qianfan)
+        LlamaOcrPromptPreset.GENERIC_OCR -> stringResource(R.string.pdf_ocr_llama_preset_generic)
+    }
 
 @Composable
 fun PdfTranslationQualityModeSelector(

@@ -80,6 +80,34 @@ class SdCliSupportTest {
     }
 
     @Test
+    fun `scheduler emits only when selected`() {
+        val defaultArgs = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                modelVariant = "sd1",
+                prompt = "a clear lake",
+                outputPath = "/tmp/out.png"
+            )
+        )
+        val scheduledArgs = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                modelVariant = "sd1",
+                prompt = "a clear lake",
+                outputPath = "/tmp/out.png",
+                scheduler = SdScheduler.KARRAS
+            )
+        )
+
+        assertFalse(defaultArgs.contains("--scheduler"))
+        assertOption(scheduledArgs, "--scheduler", "karras")
+    }
+
+    @Test
     fun `sd tool components resolve by family and selected component id`() {
         val model = sdModel(
             filename = "flux1.gguf",
@@ -246,6 +274,32 @@ class SdCliSupportTest {
 
         assertTrue(args.contains("--lora-apply-mode"))
         assertTrue(args.contains(SdLoraApplyMode.AT_RUNTIME.cliName))
+        assertFalse(args.contains("--lora"))
+        assertTrue(args.contains("--lora-model-dir"))
+        val promptIndex = args.indexOf("-p")
+        assertTrue(promptIndex >= 0)
+        assertTrue(args[promptIndex + 1].contains("<lora:style:0.8>"))
+    }
+
+    @Test
+    fun `textual inversion uses embedding directory and prompt token`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/base.safetensors",
+                modelFamily = "checkpoint",
+                prompt = "portrait",
+                outputPath = "/tmp/out.png",
+                textualInversionPath = "/models/embeddings/charcoal.pt"
+            )
+        )
+
+        val directoryIndex = args.indexOf("--embd-dir")
+        assertTrue(directoryIndex >= 0)
+        assertEquals("/models/embeddings", args[directoryIndex + 1])
+        val promptIndex = args.indexOf("-p")
+        assertTrue(promptIndex >= 0)
+        assertEquals("charcoal portrait", args[promptIndex + 1])
     }
 
     @Test
@@ -472,6 +526,7 @@ class SdCliSupportTest {
             cfgScale = 6.0f,
             flowShift = null,
             samplingMethod = SamplingMethod.EULER,
+            scheduler = SdScheduler.EXPONENTIAL,
             cacheMode = null,
             cacheOption = "",
             scmMask = "",
@@ -496,6 +551,7 @@ class SdCliSupportTest {
         assertEquals("disk", restored.sdParamsBackendMode)
         assertEquals("cpu", restored.sdRuntimeBackendMode)
         assertEquals("6", restored.maxVramCpuGiB)
+        assertEquals(SdScheduler.EXPONENTIAL, restored.scheduler)
     }
 
     private fun assertOption(args: List<String>, flag: String, value: String) {

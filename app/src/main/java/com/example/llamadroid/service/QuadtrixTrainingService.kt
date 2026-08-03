@@ -12,6 +12,7 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.QUADTRIX_LORA_REPO_PREFIX
 import com.example.llamadroid.data.db.QuadtrixMetricEntity
 import com.example.llamadroid.data.db.QuadtrixProfileEntity
 import com.example.llamadroid.data.db.QuadtrixRunEntity
@@ -43,6 +44,7 @@ import java.net.InetSocketAddress
 import java.util.ArrayDeque
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.text.Charsets
 
 data class QuadtrixRuntimeState(
     val status: String = "stopped",
@@ -79,6 +81,7 @@ class QuadtrixTrainingService : Service() {
     private var mode: String = ""
     private var notificationTaskId: Int? = null
     private var telemetryJob: Job? = null
+    private val registeredWorkspaceAdapters = mutableSetOf<String>()
     private var progressServerJob: Job? = null
     private var progressServerSocket: ServerSocket? = null
     private var activeProfileId: Long? = null
@@ -583,6 +586,7 @@ class QuadtrixTrainingService : Service() {
                     else -> _state.value.status
                 }
                 _state.value = _state.value.copy(status = correctedStatus, processAlive = alive, system = readSystemSnapshot())
+                registerWorkspaceLoraAdapters()
                 if (alive) updateQuadtrixNotification()
                 delay(5000)
             }
@@ -659,6 +663,62 @@ class QuadtrixTrainingService : Service() {
             )
         )
     }
+
+    private suspend fun registerWorkspaceLoraAdapters() = withContext(Dispatchers.IO) {
+        val modelsRoot = File(quadtrixRoot(), QuadtrixPaths.MODELS)
+        if (!modelsRoot.isDirectory) return@withContext
+        val db = AppDatabase.getDatabase(applicationContext)
+        modelsRoot.walkTopDown()
+            .maxDepth(3)
+            .filter { file ->
+                file.isFile &&
+                    file.extension.equals("gguf", ignoreCase = true) &&
+                    file.absolutePath !in registeredWorkspaceAdapters
+            }
+            .take(256)
+            .forEach { file ->
+                if (!isLoraAdapterGguf(file)) return@forEach
+                val existing = db.modelDao().getModelByFilename(file.name)
+                if (existing == null || existing.path == file.absolutePath) {
+                    db.modelDao().insertModel(
+                        ModelEntity(
+                            filename = file.name,
+                            path = file.absolutePath,
+                            sizeBytes = file.length(),
+                            type = ModelType.LORA,
+                            repoId = "$QUADTRIX_LORA_REPO_PREFIX${file.parentFile?.name.orEmpty()}",
+                            isDownloaded = false
+                        )
+                    )
+                    appendLog("[APP] Registered LoRA adapter / Adaptador LoRA registrado: ${file.name}\n")
+                } else {
+                    appendLog("[APP] LoRA adapter filename already exists / El nombre del adaptador LoRA ya existe: ${file.name}\n")
+                }
+                registeredWorkspaceAdapters += file.absolutePath
+            }
+    }
+
+    private fun isLoraAdapterGguf(file: File): Boolean = runCatching {
+        val probeSize = minOf(file.length(), 2L * 1024L * 1024L).toInt()
+        if (probeSize < 24) return@runCatching false
+        val bytes = ByteArray(probeSize)
+        file.inputStream().buffered().use { input ->
+            var offset = 0
+            while (offset < bytes.size) {
+                val read = input.read(bytes, offset, bytes.size - offset)
+                if (read <= 0) break
+                offset += read
+            }
+            if (offset < 4 ||
+                bytes[0] != 'G'.code.toByte() ||
+                bytes[1] != 'G'.code.toByte() ||
+                bytes[2] != 'U'.code.toByte() ||
+                bytes[3] != 'F'.code.toByte()
+            ) return@runCatching false
+            val header = bytes.copyOf(offset).toString(Charsets.ISO_8859_1)
+            header.contains("adapter.type") && header.contains("lora")
+        }
+    }.getOrDefault(false)
 
     private fun startProgressServer(profile: QuadtrixProfileEntity) {
         progressServerJob?.cancel()

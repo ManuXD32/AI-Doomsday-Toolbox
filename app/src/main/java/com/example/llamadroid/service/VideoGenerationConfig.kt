@@ -33,6 +33,7 @@ data class VideoGenerationConfig(
     val cfgScale: Float = 6.0f,
     val flowShift: Float? = null,
     val samplingMethod: SamplingMethod = SamplingMethod.EULER,
+    val scheduler: SdScheduler? = null,
     val cacheMode: SdCacheMode? = null,
     val cacheOption: String = "",
     val scmMask: String = "",
@@ -40,6 +41,8 @@ data class VideoGenerationConfig(
     val vaeTiling: Boolean = false,
     val vaeTileSize: String = "24x24",
     val diffusionFa: Boolean = true,
+    val diffusionConvDirect: Boolean = false,
+    val vaeConvDirect: Boolean = false,
     val mmap: Boolean = true,
     val threads: Int = -1,
     val sdParamsBackendMode: String = "auto",
@@ -93,6 +96,7 @@ data class GeneratedVideoMetadata(
     val cfgScale: Float,
     val flowShift: Float?,
     val samplingMethod: SamplingMethod,
+    val scheduler: SdScheduler?,
     val cacheMode: SdCacheMode?,
     val cacheOption: String,
     val scmMask: String,
@@ -101,6 +105,8 @@ data class GeneratedVideoMetadata(
     val vaeTiling: Boolean,
     val vaeTileSize: String?,
     val diffusionFa: Boolean,
+    val diffusionConvDirect: Boolean = false,
+    val vaeConvDirect: Boolean = false,
     val mmap: Boolean,
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
@@ -110,6 +116,10 @@ data class GeneratedVideoMetadata(
     val aviPath: String,
     val mp4Path: String,
     val metadataPath: String,
+    val generationDurationMs: Long? = null,
+    val conditioningDurationMs: Long? = null,
+    val samplingDurationMs: Long? = null,
+    val decodingDurationMs: Long? = null,
     val exportedAviUri: String? = null,
     val exportedMp4Uri: String? = null,
     val exportedMetadataUri: String? = null
@@ -141,6 +151,7 @@ data class GeneratedVideoMetadata(
         put("cfgScale", cfgScale.toDouble())
         put("flowShift", flowShift?.toDouble())
         put("samplingMethod", samplingMethod.name)
+        put("scheduler", scheduler?.name)
         put("cacheMode", cacheMode?.name)
         put("cacheOption", cacheOption)
         put("scmMask", scmMask)
@@ -149,6 +160,8 @@ data class GeneratedVideoMetadata(
         put("vaeTiling", vaeTiling)
         put("vaeTileSize", vaeTileSize)
         put("diffusionFa", diffusionFa)
+        put("diffusionConvDirect", diffusionConvDirect)
+        put("vaeConvDirect", vaeConvDirect)
         put("mmap", mmap)
         put("sdParamsBackendMode", sdParamsBackendMode)
         put("sdRuntimeBackendMode", sdRuntimeBackendMode)
@@ -166,6 +179,10 @@ data class GeneratedVideoMetadata(
         put("aviPath", aviPath)
         put("mp4Path", mp4Path)
         put("metadataPath", metadataPath)
+        put("generationDurationMs", generationDurationMs)
+        put("conditioningDurationMs", conditioningDurationMs)
+        put("samplingDurationMs", samplingDurationMs)
+        put("decodingDurationMs", decodingDurationMs)
         put("exportedAviUri", exportedAviUri)
         put("exportedMp4Uri", exportedMp4Uri)
         put("exportedMetadataUri", exportedMetadataUri)
@@ -209,6 +226,7 @@ data class GeneratedVideoMetadata(
                 cfgScale = json.optDouble("cfgScale", 6.0).toFloat(),
                 flowShift = parseOptionalFloat(json, "flowShift"),
                 samplingMethod = parseSamplingMethod(json.optString("samplingMethod")),
+                scheduler = SdScheduler.fromCliName(json.optString("scheduler")),
                 cacheMode = SdCacheMode.fromStoredValue(json.optString("cacheMode").ifBlank { null }),
                 cacheOption = json.optString("cacheOption"),
                 scmMask = json.optString("scmMask"),
@@ -217,6 +235,8 @@ data class GeneratedVideoMetadata(
                 vaeTiling = json.optBoolean("vaeTiling", false),
                 vaeTileSize = json.optString("vaeTileSize").ifBlank { null },
                 diffusionFa = json.optBoolean("diffusionFa", true),
+                diffusionConvDirect = json.optBoolean("diffusionConvDirect", false),
+                vaeConvDirect = json.optBoolean("vaeConvDirect", false),
                 mmap = json.optBoolean("mmap", true),
                 sdParamsBackendMode = json.optString("sdParamsBackendMode", "auto"),
                 sdRuntimeBackendMode = json.optString("sdRuntimeBackendMode", "auto"),
@@ -240,6 +260,10 @@ data class GeneratedVideoMetadata(
                 aviPath = json.optString("aviPath"),
                 mp4Path = json.optString("mp4Path"),
                 metadataPath = json.optString("metadataPath", filePathFallback(json)),
+                generationDurationMs = json.optLong("generationDurationMs", -1L).takeIf { it >= 0L },
+                conditioningDurationMs = json.optLong("conditioningDurationMs", -1L).takeIf { it >= 0L },
+                samplingDurationMs = json.optLong("samplingDurationMs", -1L).takeIf { it >= 0L },
+                decodingDurationMs = json.optLong("decodingDurationMs", -1L).takeIf { it >= 0L },
                 exportedAviUri = json.optString("exportedAviUri").ifBlank { null },
                 exportedMp4Uri = json.optString("exportedMp4Uri").ifBlank { null },
                 exportedMetadataUri = json.optString("exportedMetadataUri").ifBlank { null }

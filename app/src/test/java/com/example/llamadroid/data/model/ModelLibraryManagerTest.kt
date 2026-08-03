@@ -9,6 +9,7 @@ class ModelLibraryManagerTest {
     @Test
     fun relativeDirFor_maps_model_families_to_play_safe_library_folders() {
         assertEquals("llm", ModelLibraryManager.relativeDirFor(ModelType.LLM))
+        assertEquals("llm", ModelLibraryManager.relativeDirFor(ModelType.LORA))
         assertEquals("llm", ModelLibraryManager.relativeDirFor(ModelType.EMBEDDING))
         assertEquals("mmproj", ModelLibraryManager.relativeDirFor(ModelType.VISION_PROJECTOR))
         assertEquals("mmproj", ModelLibraryManager.relativeDirFor(ModelType.MMPROJ))
@@ -26,6 +27,11 @@ class ModelLibraryManagerTest {
         assertEquals("onnx", ModelLibraryManager.relativeDirFor(ModelType.ONNX_TTS))
         assertEquals("whisper", ModelLibraryManager.relativeDirFor(ModelType.WHISPER))
         assertEquals("quadtrix", ModelLibraryManager.relativeDirFor(ModelType.QUADTRIX))
+    }
+
+    @Test
+    fun relativePathFor_maps_lora_to_managed_llm_library_path() {
+        assertEquals("llm/adapter.gguf", ModelLibraryManager.relativePathFor(ModelType.LORA, "adapter.gguf"))
     }
 
     @Test

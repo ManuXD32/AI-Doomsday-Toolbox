@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.IBinder
 import android.net.wifi.WifiManager
 import android.os.PowerManager
+import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.repository.OllamaRepository
@@ -15,6 +16,7 @@ import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Foreground service for AI Agent operations.
@@ -36,17 +38,24 @@ class AgentForegroundService : Service() {
         const val EXTRA_RECOVERY_ONLY = "recovery_only"
         
         const val EXTRA_STATUS = "status"
+        const val EXTRA_STATUS_DETAILS = "status_details"
         const val EXTRA_FOREGROUND_TASK_ID = "foreground_task_id"
         const val EXTRA_START_SOURCE = "start_source"
         private const val IMMEDIATE_FOREGROUND_ID = 96
+        private const val DIRECT_START_IDLE_COOLDOWN_MS = 750L
         
         @Volatile
         private var isRunning = false
         @Volatile
         private var instance: AgentForegroundService? = null
 
+        private val startInFlight = AtomicBoolean(false)
+        private val delayedDirectStartInFlight = AtomicBoolean(false)
+        private val recoveryCheckInFlight = AtomicBoolean(false)
         private val runtimeRetainCount = AtomicInteger(0)
         private val resumeTriggered = AtomicBoolean(false)
+        private val serviceInstanceIds = AtomicInteger(0)
+        private val lastIdleReconciledAtMs = AtomicLong(0L)
         private var runtimeAgentService: AgentService? = null
         private var runtimeOllamaService: OllamaService? = null
         private var runtimeSettingsRepository: SettingsRepository? = null
@@ -108,8 +117,33 @@ class AgentForegroundService : Service() {
             recordBreadcrumb(
                 event = "start_requested",
                 phase = ACTION_START_AGENT,
-                details = "source=$startSource recoveryOnly=$recoveryOnly running=$isRunning liveInstance=${instance != null}"
+                details = "source=$startSource recoveryOnly=$recoveryOnly running=$isRunning liveInstance=${instance != null} " +
+                    "retain=${runtimeRetainCount.get()} loading=${AgentService.isLoading.value} pid=${android.os.Process.myPid()}"
             )
+            val sinceIdle = System.currentTimeMillis() - lastIdleReconciledAtMs.get()
+            if (!recoveryOnly && startSource == "direct" && sinceIdle in 0 until DIRECT_START_IDLE_COOLDOWN_MS) {
+                if (delayedDirectStartInFlight.compareAndSet(false, true)) {
+                    val appContext = context.applicationContext
+                    val delayMs = DIRECT_START_IDLE_COOLDOWN_MS - sinceIdle
+                    recordBreadcrumb(
+                        event = "start_delayed_after_idle_reconcile",
+                        phase = ACTION_START_AGENT,
+                        details = "source=$startSource delayMs=$delayMs"
+                    )
+                    AgentService.agentScope.launch {
+                        delay(delayMs)
+                        delayedDirectStartInFlight.set(false)
+                        start(appContext, status, foregroundTaskId, recoveryOnly, startSource)
+                    }
+                } else {
+                    recordBreadcrumb(
+                        event = "start_debounced_after_idle_reconcile",
+                        phase = ACTION_START_AGENT,
+                        details = "source=$startSource"
+                    )
+                }
+                return
+            }
             if (isRunning && instance == null) {
                 DebugLog.log("[$TAG] Resetting stale running state before foreground service start")
                 recordBreadcrumb(
@@ -124,6 +158,14 @@ class AgentForegroundService : Service() {
                 if (recoveryOnly) {
                     requestResume(context)
                 }
+                return
+            }
+            if (!startInFlight.compareAndSet(false, true)) {
+                recordBreadcrumb(
+                    event = "start_debounced",
+                    phase = ACTION_START_AGENT,
+                    details = "source=$startSource recoveryOnly=$recoveryOnly"
+                )
                 return
             }
             
@@ -142,6 +184,7 @@ class AgentForegroundService : Service() {
                     context.startService(intent)
                 }
             } catch (e: Exception) {
+                startInFlight.set(false)
                 DebugLog.log("[$TAG] Failed to start foreground service: ${e.message}")
                 recordBreadcrumb(
                     event = "start_request_failed",
@@ -200,12 +243,7 @@ class AgentForegroundService : Service() {
                 details = "running=$isRunning mode=${dispatch.startSource}"
             )
             if (dispatch.useForegroundStart) {
-                start(
-                    context = context,
-                    status = context.getString(com.example.llamadroid.R.string.agent_runtime_recovering_jobs),
-                    recoveryOnly = dispatch.recoveryOnly,
-                    startSource = dispatch.startSource
-                )
+                requestRecoveryStartIfNeeded(context, dispatch)
                 return
             }
 
@@ -219,16 +257,68 @@ class AgentForegroundService : Service() {
                 details = "running=$isRunning mode=${dispatch.startSource}"
             )
         }
+
+        /**
+         * Avoid promoting a foreground service merely to discover that there is no work to recover.
+         * AgentScreen calls this on both ON_START and ON_RESUME, so this check must be coalesced.
+         */
+        private fun requestRecoveryStartIfNeeded(context: Context, dispatch: AgentResumeDispatch) {
+            if (!recoveryCheckInFlight.compareAndSet(false, true)) {
+                recordBreadcrumb(
+                    event = "resume_recovery_check_debounced",
+                    phase = dispatch.action,
+                    details = "source=${dispatch.startSource}"
+                )
+                return
+            }
+            val appContext = context.applicationContext
+            AgentService.agentScope.launch {
+                try {
+                    val recoverableJobs = AiRuntimeJobStore.getRecoverableJobs(appContext)
+                    if (!shouldStartAgentRecoveryForeground(
+                            isServiceRunning = isRunning,
+                            hasRecoverableJobs = recoverableJobs.isNotEmpty()
+                        )
+                    ) {
+                        DebugLog.log("[$TAG] Skipping recovery foreground start; no recoverable runtime jobs")
+                        recordBreadcrumb(
+                            event = "resume_recovery_skipped",
+                            phase = dispatch.action,
+                            details = "source=${dispatch.startSource} recoverable=0"
+                        )
+                        return@launch
+                    }
+                    start(
+                        context = appContext,
+                        status = appContext.getString(com.example.llamadroid.R.string.agent_runtime_recovering_jobs),
+                        recoveryOnly = dispatch.recoveryOnly,
+                        startSource = dispatch.startSource
+                    )
+                } catch (error: Exception) {
+                    DebugLog.log("[$TAG] Failed to inspect recoverable runtime jobs: ${error.message}")
+                    recordBreadcrumb(
+                        event = "resume_recovery_check_failed",
+                        phase = dispatch.action,
+                        details = "source=${dispatch.startSource} error=${error.message}"
+                    )
+                } finally {
+                    recoveryCheckInFlight.set(false)
+                }
+            }
+        }
         
         /**
          * Update the notification status text.
          */
-        fun updateStatus(context: Context, status: String) {
+        fun updateStatus(context: Context, status: String, details: List<String> = emptyList()) {
             if (!isRunning || instance == null) return
             
             val intent = Intent(context, AgentForegroundService::class.java).apply {
                 action = ACTION_UPDATE_STATUS
                 putExtra(EXTRA_STATUS, status)
+                if (details.isNotEmpty()) {
+                    putStringArrayListExtra(EXTRA_STATUS_DETAILS, java.util.ArrayList(details))
+                }
             }
             context.startService(intent)
         }
@@ -239,6 +329,35 @@ class AgentForegroundService : Service() {
         fun isServiceRunning(): Boolean = isRunning
 
         fun activeRuntimeCount(): Int = runtimeRetainCount.get()
+
+        /**
+         * Clears notification/retain state that survived a completed or crashed
+         * runtime. This is safe to call whenever the project dashboard changes.
+         */
+        fun reconcileIdleState(context: Context) {
+            val appContext = context.applicationContext
+            AgentService.agentScope.launch {
+                val activeJobs = runCatching {
+                    AiRuntimeJobStore.getRecoverableJobs(appContext)
+                        .filter { !AiRuntimeJobStore.isJobStale(it) }
+                }.getOrDefault(emptyList())
+                if (!AgentService.isLoading.value && activeJobs.isEmpty()) {
+                    runtimeRetainCount.set(0)
+                    lastIdleReconciledAtMs.set(System.currentTimeMillis())
+                    recordBreadcrumb(
+                        event = "idle_state_reconciled",
+                        details = "serviceRunning=$isRunning activeJobs=0 pid=${android.os.Process.myPid()}"
+                    )
+                    if (isRunning) {
+                        appContext.startService(
+                            Intent(appContext, AgentForegroundService::class.java).apply {
+                                action = ACTION_STOP_AGENT
+                            }
+                        )
+                    }
+                }
+            }
+        }
 
         private fun recordBreadcrumb(
             event: String,
@@ -272,7 +391,12 @@ class AgentForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        val instanceId = serviceInstanceIds.incrementAndGet()
         DebugLog.log("[$TAG] Service created")
+        recordBreadcrumb(
+            event = "service_created",
+            details = "instanceId=$instanceId pid=${android.os.Process.myPid()}"
+        )
     }
     
     override fun onBind(intent: Intent?): IBinder = binder
@@ -298,15 +422,18 @@ class AgentForegroundService : Service() {
                     startSource = startSource,
                     requestedAction = ACTION_START_AGENT
                 )
+                startInFlight.set(false)
                 ensureRuntime(applicationContext)
                 if (recoveryOnly) {
-                    scheduleResumeIfNeeded(force = true)
+                    scheduleResumeIfNeeded()
                 }
             }
             ACTION_STOP_AGENT -> {
+                startInFlight.set(false)
                 stopAgentForeground()
             }
             ACTION_STOP_ALL_RUNTIME -> {
+                startInFlight.set(false)
                 runtimeOllamaManager?.cancelAll()
                 AgentService.stopAllJobs()
                 runtimeRetainCount.set(0)
@@ -314,7 +441,8 @@ class AgentForegroundService : Service() {
             }
             ACTION_UPDATE_STATUS -> {
                 val status = intent.getStringExtra(EXTRA_STATUS) ?: "Working..."
-                updateNotificationStatus(status)
+                val details = intent.getStringArrayListExtra(EXTRA_STATUS_DETAILS).orEmpty()
+                updateNotificationStatus(status, details)
             }
             ACTION_RESUME_RUNTIME -> {
                 ensureRuntime(applicationContext)
@@ -323,14 +451,22 @@ class AgentForegroundService : Service() {
                     phase = ACTION_RESUME_RUNTIME,
                     details = "running=$isRunning"
                 )
-                scheduleResumeIfNeeded(force = true)
+                scheduleResumeIfNeeded()
             }
         }
-        return START_STICKY  // Restart service if killed
+        // Runtime recovery is explicit when the app is reopened. A sticky service can
+        // resurrect an old continuation after the user has closed the app.
+        return START_NOT_STICKY
     }
 
-    private fun scheduleResumeIfNeeded(force: Boolean = false) {
-        if (!force && !resumeTriggered.compareAndSet(false, true)) return
+    private fun scheduleResumeIfNeeded() {
+        if (!resumeTriggered.compareAndSet(false, true)) {
+            recordBreadcrumb(
+                event = "runtime_recovery_debounced",
+                details = "reason=already_scheduled"
+            )
+            return
+        }
         serviceScope.launch {
             runCatching {
                 resumePersistedJobs()
@@ -362,7 +498,30 @@ class AgentForegroundService : Service() {
             return
         }
 
-        activeJobs.forEach { job ->
+        val agentJobs = activeJobs.filter { it.type == AiRuntimeJobStore.TYPE_AGENT_CHAT }
+        val interruptedDecision = interruptedAgentRecoveryDecision()
+        agentJobs.forEach { job ->
+            job.conversationId?.let { conversationId ->
+                AppDatabase.getDatabase(applicationContext)
+                    .agentChatDao()
+                    .updateResumeState(
+                        conversationId,
+                        interruptedDecision.resumeState,
+                        getString(R.string.agent_recovery_interrupted_reason)
+                    )
+            }
+            AiRuntimeJobStore.markState(
+                applicationContext,
+                jobId = job.jobId,
+                status = interruptedDecision.runtimeJobStatus,
+                checkpointJson = job.checkpointJson,
+                progressText = job.progressText,
+                errorMessage = getString(R.string.agent_recovery_waiting_continue)
+            )
+        }
+
+        val resumableJobs = activeJobs.filterNot { it.type == AiRuntimeJobStore.TYPE_AGENT_CHAT }
+        resumableJobs.forEach { job ->
             AiRuntimeJobStore.markState(
                 applicationContext,
                 jobId = job.jobId,
@@ -374,24 +533,8 @@ class AgentForegroundService : Service() {
 
         runtimeOllamaManager?.resumePersistedJobs()
 
-        val agentJob = activeJobs.firstOrNull { it.type == AiRuntimeJobStore.TYPE_AGENT_CHAT }
-        val agentService = runtimeAgentService ?: return
-        val ollamaService = runtimeOllamaService ?: return
-        val settingsRepo = runtimeSettingsRepository ?: return
-
-        if (agentJob != null && !AgentService.isLoading.value) {
-            retainRuntime(applicationContext, agentJob.progressText ?: "Recovering agent job…")
-            agentService.restorePersistentState(agentJob.payloadJson)
-            AgentService.addDebugLog("♻️ Recovering persisted agent job ${agentJob.jobId.take(8)}")
-            AgentService.sendMessage(
-                applicationContext,
-                ollamaService,
-                settingsRepo,
-                agentService,
-                recoveryInstruction = "Recovered after service restart. Continue from the restored conversation state.",
-                recoveryMode = true,
-                queueBehindActiveJob = false
-            )
+        if (agentJobs.isNotEmpty()) {
+            AgentService.addDebugLog("⏸️ Agent job recovery is waiting for explicit Continue (${agentJobs.size}).")
         }
 
         if (recoveryOnlyStart && runtimeRetainCount.get() == 0 && !AgentService.isLoading.value) {
@@ -462,11 +605,13 @@ class AgentForegroundService : Service() {
             recordBreadcrumb(
                 event = "foreground_started",
                 phase = requestedAction,
-                details = "source=$startSource taskId=$taskId recoveryOnly=$recoveryOnlyStart"
+                details = "source=$startSource taskId=$taskId recoveryOnly=$recoveryOnlyStart " +
+                    "retain=${runtimeRetainCount.get()} pid=${android.os.Process.myPid()}"
             )
         } catch (e: Exception) {
             DebugLog.log("[$TAG] Failed to start foreground: ${e.message}")
             isRunning = false
+            startInFlight.set(false)
             recordBreadcrumb(
                 event = "foreground_start_failed",
                 phase = requestedAction,
@@ -503,6 +648,7 @@ class AgentForegroundService : Service() {
         DebugLog.log("[$TAG] Stopping foreground service")
         
         isRunning = false
+        startInFlight.set(false)
         resumeTriggered.set(false)
         recoveryOnlyStart = false
         immediateForegroundActive = false
@@ -521,9 +667,9 @@ class AgentForegroundService : Service() {
         stopSelf()
     }
     
-    private fun updateNotificationStatus(status: String) {
+    private fun updateNotificationStatus(status: String, details: List<String> = emptyList()) {
         notificationTaskId?.let { taskId ->
-            UnifiedNotificationManager.updateProgress(taskId, 0.5f, status)
+            UnifiedNotificationManager.updateProgressWithDetails(taskId, 0.5f, status, details)
         }
     }
     
@@ -587,6 +733,18 @@ class AgentForegroundService : Service() {
         serviceScope.cancel()
         DebugLog.log("[$TAG] Service destroyed")
     }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        recordBreadcrumb(
+            event = "app_task_removed",
+            details = "loading=${AgentService.isLoading.value} retain=${runtimeRetainCount.get()}"
+        )
+        runtimeOllamaManager?.cancelAll()
+        AgentService.stopAllJobs()
+        runtimeRetainCount.set(0)
+        stopAgentForeground()
+        super.onTaskRemoved(rootIntent)
+    }
 }
 
 internal data class AgentResumeDispatch(
@@ -613,3 +771,21 @@ internal fun resolveAgentResumeDispatch(isServiceRunning: Boolean): AgentResumeD
         )
     }
 }
+
+internal fun shouldStartAgentRecoveryForeground(
+    isServiceRunning: Boolean,
+    hasRecoverableJobs: Boolean
+): Boolean = !isServiceRunning && hasRecoverableJobs
+
+internal data class InterruptedAgentRecoveryDecision(
+    val resumeState: String,
+    val runtimeJobStatus: String,
+    val requiresExplicitContinue: Boolean
+)
+
+internal fun interruptedAgentRecoveryDecision(): InterruptedAgentRecoveryDecision =
+    InterruptedAgentRecoveryDecision(
+        resumeState = AgentService.RESUME_STATE_INTERRUPTED,
+        runtimeJobStatus = AiRuntimeJobStore.STATUS_CANCELLED,
+        requiresExplicitContinue = true
+    )

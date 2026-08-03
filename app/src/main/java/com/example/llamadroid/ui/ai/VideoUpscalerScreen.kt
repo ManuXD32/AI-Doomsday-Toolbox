@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import androidx.core.content.ContextCompat
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.*
 import androidx.compose.ui.res.stringResource
@@ -93,7 +94,6 @@ fun VideoUpscalerScreen(navController: NavController) {
             }
         }
         val intent = Intent(context, VideoUpscalerService::class.java)
-        context.startForegroundService(intent)
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
         
         onDispose {
@@ -101,10 +101,24 @@ fun VideoUpscalerScreen(navController: NavController) {
         }
     }
     
-    // State
-    val upscalerState by upscalerService?.state?.collectAsState() ?: remember { mutableStateOf(VideoUpscalerState.Idle) }
-    val progress by upscalerService?.progress?.collectAsState() ?: remember { mutableStateOf(0f) }
+    // State. The job itself is service-owned; the screen only observes it.
+    val boundUpscalerState by upscalerService?.state?.collectAsState() ?: remember { mutableStateOf(VideoUpscalerState.Idle) }
+    val boundProgress by upscalerService?.progress?.collectAsState() ?: remember { mutableStateOf(0f) }
     val eta by upscalerService?.eta?.collectAsState() ?: remember { mutableStateOf("") }
+    val holderProcessing by VideoUpscalerStateHolder.isProcessing.collectAsState()
+    val holderProgress by VideoUpscalerStateHolder.progress.collectAsState()
+    val holderCurrentFrame by VideoUpscalerStateHolder.currentFrame.collectAsState()
+    val holderTotalFrames by VideoUpscalerStateHolder.totalFrames.collectAsState()
+    val holderResultPath by VideoUpscalerStateHolder.resultPath.collectAsState()
+    val holderError by VideoUpscalerStateHolder.error.collectAsState()
+    val upscalerState = when {
+        holderError != null -> VideoUpscalerState.Error(holderError ?: "")
+        holderProcessing && holderTotalFrames > 0 -> VideoUpscalerState.Upscaling(holderCurrentFrame, holderTotalFrames)
+        holderProcessing -> boundUpscalerState.takeUnless { it is VideoUpscalerState.Idle || it is VideoUpscalerState.Completed } ?: VideoUpscalerState.Analyzing
+        holderResultPath != null -> VideoUpscalerState.Completed
+        else -> boundUpscalerState
+    }
+    val progress = if (holderProcessing || holderResultPath != null || holderError != null) holderProgress else boundProgress
     
     var selectedVideoPath by remember { mutableStateOf<String?>(null) }
     var videoInfo by remember { mutableStateOf<VideoInfo?>(null) }
@@ -113,6 +127,7 @@ fun VideoUpscalerScreen(navController: NavController) {
     var selectedScale by remember { mutableIntStateOf(2) }
     var selectedDenoise by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var exportedResultPath by remember { mutableStateOf<String?>(null) }
     
     // Check for shared file (from share intent)
     var pendingSharedVideoPath by remember { mutableStateOf<String?>(null) }
@@ -140,7 +155,7 @@ fun VideoUpscalerScreen(navController: NavController) {
         val service = upscalerService
         val pendingPath = pendingSharedVideoPath
         if (service != null && pendingPath != null) {
-            videoInfo = service.getVideoInfo(pendingPath)?.getOrNull()
+            videoInfo = service.getVideoInfo(pendingPath).getOrNull()
             pendingSharedVideoPath = null  // Clear after processing
         }
     }
@@ -184,6 +199,7 @@ fun VideoUpscalerScreen(navController: NavController) {
     // Update model when engine changes
     LaunchedEffect(selectedEngine) {
         selectedModel = UpscalerModels.getForEngine(selectedEngine).firstOrNull()
+        selectedModel?.let { selectedDenoise = UpscalerModelFiles.defaultDenoise(it) }
     }
     
     // Update scale when model changes
@@ -196,7 +212,7 @@ fun VideoUpscalerScreen(navController: NavController) {
             UpscalerModelFiles.availableScales(
                 modelsRoot = modelsRoot,
                 model = model,
-                denoise = if (model.supportsDenoise) selectedDenoise else -1
+                denoise = if (model.engine == UpscalerEngine.REALCUGAN) selectedDenoise else -1
             )
         }
     }
@@ -207,6 +223,42 @@ fun VideoUpscalerScreen(navController: NavController) {
                 selectedScale = availableScales.firstOrNull() ?: model.scales.firstOrNull() ?: 2
             }
         }
+    }
+
+    LaunchedEffect(upscalerState, holderResultPath, outputFolder) {
+        val path = holderResultPath ?: return@LaunchedEffect
+        if (upscalerState !is VideoUpscalerState.Completed || exportedResultPath == path) return@LaunchedEffect
+        val fileName = File(path).name
+        if (outputFolder.isNullOrEmpty()) {
+            errorMessage = context.getString(R.string.upscaler_error_no_folder, fileName)
+            exportedResultPath = path
+            return@LaunchedEffect
+        }
+        runCatching {
+            val sourceFile = File(path)
+            require(sourceFile.exists()) { context.getString(R.string.upscaler_error_not_found) }
+            val treeUri = android.net.Uri.parse(outputFolder)
+            val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
+                ?: error(context.getString(R.string.upscaler_error_save_folder))
+            val videosDoc = rootDoc.findFile("videos") ?: rootDoc.createDirectory("videos")
+                ?: error(context.getString(R.string.upscaler_error_save_folder))
+            val newFile = videosDoc.createFile("video/mp4", fileName)
+                ?: error(context.getString(R.string.upscaler_error_save_folder))
+            context.contentResolver.openOutputStream(newFile.uri)?.use { output ->
+                sourceFile.inputStream().use { input -> input.copyTo(output) }
+            } ?: error(context.getString(R.string.upscaler_error_save_folder))
+            "videos/$fileName"
+        }.fold(
+            onSuccess = { savedPath ->
+                exportedResultPath = path
+                errorMessage = null
+                Toast.makeText(context, context.getString(R.string.upscaler_success_toast, savedPath), Toast.LENGTH_LONG).show()
+            },
+            onFailure = {
+                exportedResultPath = path
+                errorMessage = context.getString(R.string.upscaler_error_save_generic, it.message)
+            }
+        )
     }
     
     Scaffold(
@@ -360,7 +412,10 @@ fun VideoUpscalerScreen(navController: NavController) {
                         }
                         
                         // Denoise (only for RealCUGAN with denoise support)
-                        if (model.supportsDenoise) {
+                        val availableDenoiseLevels = upscalerModelsRoot?.let {
+                            UpscalerModelFiles.availableDenoiseLevels(it, model, selectedScale)
+                        }.orEmpty()
+                        if (availableDenoiseLevels.size > 1) {
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(stringResource(R.string.upscaler_denoise_label), style = MaterialTheme.typography.titleMedium)
                             Spacer(modifier = Modifier.height(8.dp))
@@ -369,7 +424,7 @@ fun VideoUpscalerScreen(navController: NavController) {
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                listOf(-1, 0, 1, 2, 3).forEach { level ->
+                                availableDenoiseLevels.forEach { level ->
                                     FilterChip(
                                         selected = selectedDenoise == level,
                                         onClick = { selectedDenoise = level },
@@ -438,80 +493,27 @@ fun VideoUpscalerScreen(navController: NavController) {
                         return@Button
                     }
                     
-                    // Always save to cache first (native binaries can't use SAF URIs)
+                    errorMessage = null
+
+                    // Save to app-owned storage so the foreground service can finish even if this screen leaves composition.
                     val fileName = "upscaled_${System.currentTimeMillis()}.mp4"
-                    val cachePath = File(context.cacheDir, fileName).absolutePath
+                    val outputPath = File(File(context.filesDir, "video_upscale_output").apply { mkdirs() }, fileName).absolutePath
                     
                     val config = VideoUpscalerConfig(
                         inputPath = selectedVideoPath!!,
-                        outputPath = cachePath,
+                        outputPath = outputPath,
                         engine = selectedEngine,
                         model = selectedModel!!.name,
                         scale = selectedScale,
-                        denoise = if (selectedModel!!.supportsDenoise) selectedDenoise else -1,
+                        denoise = if (selectedModel!!.engine == UpscalerEngine.REALCUGAN) selectedDenoise else -1,
                         loadThreads = loadThreads,
                         procThreads = procThreads,
                         saveThreads = saveThreads
                     )
-                    
-                    scope.launch {
-                        upscalerService?.upscale(config)?.fold(
-                            onSuccess = { path ->
-                                var savedSuccessfully = false
-                                var savedPath = path
-                                
-                                // Copy from cache to output folder if set
-                                if (!outputFolder.isNullOrEmpty()) {
-                                    try {
-                                        val sourceFile = File(path)
-                                        if (!sourceFile.exists()) {
-                                            errorMessage = context.getString(R.string.upscaler_error_not_found)
-                                        } else {
-                                            val treeUri = android.net.Uri.parse(outputFolder)
-                                            val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
-                                            
-                                            if (rootDoc != null) {
-                                                // Create/get videos/ subfolder
-                                                var videosDoc = rootDoc.findFile("videos")
-                                                if (videosDoc == null) {
-                                                    videosDoc = rootDoc.createDirectory("videos")
-                                                }
-                                                
-                                                if (videosDoc != null) {
-                                                    val newFile = videosDoc.createFile("video/mp4", fileName)
-                                                    newFile?.uri?.let { destUri ->
-                                                        context.contentResolver.openOutputStream(destUri)?.use { output ->
-                                                            sourceFile.inputStream().use { input ->
-                                                                input.copyTo(output)
-                                                            }
-                                                        }
-                                                        sourceFile.delete()
-                                                        savedSuccessfully = true
-                                                        savedPath = "videos/$fileName"
-                                                    }
-                                                }
-                                            }
-                                            
-                                            if (!savedSuccessfully) {
-                                                errorMessage = context.getString(R.string.upscaler_error_save_folder)
-                                            }
-                                        }
-                                    } catch (e: Exception) {
-                                        errorMessage = context.getString(R.string.upscaler_error_save_generic, e.message)
-                                    }
-                                } else {
-                                    // No output folder set - inform user
-                                    savedSuccessfully = true
-                                    errorMessage = context.getString(R.string.upscaler_error_no_folder, fileName)
-                                }
-                                
-                                if (savedSuccessfully && errorMessage == null) {
-                                    Toast.makeText(context, context.getString(R.string.upscaler_success_toast, savedPath), Toast.LENGTH_LONG).show()
-                                }
-                            },
-                            onFailure = { errorMessage = it.message }
-                        )
-                    }
+                    ContextCompat.startForegroundService(
+                        context,
+                        VideoUpscalerService.createStartIntent(context, config)
+                    )
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = upscalerState == VideoUpscalerState.Idle || 
@@ -529,7 +531,7 @@ fun VideoUpscalerScreen(navController: NavController) {
                 upscalerState !is VideoUpscalerState.Error) {
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedButton(
-                    onClick = { upscalerService?.cancel() },
+                    onClick = { context.startService(VideoUpscalerService.createCancelIntent(context)) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.action_cancel))
@@ -537,7 +539,7 @@ fun VideoUpscalerScreen(navController: NavController) {
             }
             
             // Error
-            errorMessage?.let {
+            (errorMessage ?: holderError)?.let {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(it, color = MaterialTheme.colorScheme.error)
             }

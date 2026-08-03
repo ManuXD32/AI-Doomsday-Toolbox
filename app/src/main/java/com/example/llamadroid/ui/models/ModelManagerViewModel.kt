@@ -20,8 +20,9 @@ class ModelManagerViewModel(
     private val repository: ModelRepository
 ) : ViewModel() {
 
-    // Installed text-model family rows shown by this manager. Quadtrix is displayed
-    // here, but runtime llama.cpp pickers still use repository.getLLMModels().
+    // Installed text-model family rows shown by this manager. Quadtrix checkpoints
+    // and llama.cpp LoRA adapters are displayed here, but runtime base-model
+    // pickers still use repository.getLLMModels().
     val installedModels: StateFlow<List<ModelEntity>> = repository.getModelManagerModels()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
@@ -179,6 +180,12 @@ class ModelManagerViewModel(
             repository.deleteModel(model)
         }
     }
+
+    fun updateVisionSupport(model: ModelEntity, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateVisionSupport(model.filename, enabled)
+        }
+    }
     
     /**
      * Import a local model file with user-specified type and badges
@@ -198,9 +205,10 @@ class ModelManagerViewModel(
                 val sizeBytes = if (file.exists()) file.length() else 0L
                 
                 // Determine effective type based on badges
-                val effectiveType = when {
-                    hasEmbedding -> ModelType.EMBEDDING
-                    else -> modelType
+                val effectiveType = if (modelType == ModelType.LLM && hasEmbedding) {
+                    ModelType.EMBEDDING
+                } else {
+                    modelType
                 }
                 
                 val modelEntity = ModelEntity(
@@ -209,7 +217,7 @@ class ModelManagerViewModel(
                     path = path,
                     sizeBytes = sizeBytes,
                     type = effectiveType,
-                    isVision = hasVision,
+                    isVision = effectiveType == ModelType.LLM && hasVision,
                     sdCapabilities = sdCapabilities,
                     layerCount = layerCount
                 )

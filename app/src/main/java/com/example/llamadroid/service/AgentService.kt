@@ -4,9 +4,13 @@ import android.content.Context
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import androidx.room.withTransaction
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.AgentProjectEventEntity
+import com.example.llamadroid.data.db.AgentProjectRunEntity
+import com.example.llamadroid.data.db.AgentPendingPlanEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
@@ -38,6 +42,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -219,6 +224,53 @@ private data class WorkspaceTerminalSession(
  * - search_code: Search with ripgrep
  */
 class AgentService(private val context: Context, private val isRuntimeOwner: Boolean = false) {
+    private val runtimePersistenceMutex = Mutex()
+    private val runtimePersistenceScheduleLock = Any()
+    private var scheduledVisiblePersistenceJob: Job? = null
+    private val persistedMessageHashes = mutableMapOf<String, Int>()
+
+    private val localProjectRunner by lazy { AgentLocalProjectRunner(context.applicationContext) }
+    val localProjectRunStates: StateFlow<Map<Long, AgentLocalRunState>>
+        get() = localProjectRunner.states
+
+    private fun isLocalWorkspaceBackend(): Boolean {
+        return currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX
+    }
+
+    private fun currentLocalProjectFolder(): String {
+        return AgentLocalWorkspaceSupport.sanitizeProjectFolder(
+            _currentProjectFolder.value.ifBlank { "default_project" }
+        )
+    }
+
+    private fun resolveLocalWorkspaceFile(path: String): File {
+        return AgentLocalWorkspaceSupport.resolvePath(
+            context = context.applicationContext,
+            projectFolder = currentLocalProjectFolder(),
+            requestedPath = path
+        )
+    }
+
+    private fun localProjectRootFile(): File {
+        return AgentLocalWorkspaceSupport.rootForProject(
+            context = context.applicationContext,
+            projectFolder = currentLocalProjectFolder()
+        )
+    }
+
+    private fun localDisplayPath(file: File): String {
+        return AgentLocalWorkspaceSupport.toDisplayPath(
+            context = context.applicationContext,
+            projectFolder = currentLocalProjectFolder(),
+            file = file
+        )
+    }
+
+    private fun formatNumberedContent(content: String): String {
+        return content.lines().mapIndexed { idx, line ->
+            String.format("%6d  %s", idx + 1, line)
+        }.joinToString("\n")
+    }
 
     init {
         if (isRuntimeOwner || activeInstance == null) {
@@ -236,6 +288,9 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         toolCallId: String? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         val requestedLines = clampCommandLines(lines)
+        if (isLocalWorkspaceBackend()) {
+            return@withContext Result.failure(IllegalStateException("Shell commands are unavailable in LOCAL_SANDBOX projects."))
+        }
         val projectFolder = _currentProjectFolder.value.ifBlank { "default_project" }
         val projectPath = "$WORKSPACE_PATH/$projectFolder"
         val commandSession = createBackgroundCommand(messageId, command, projectPath, requestedLines, toolCallId)
@@ -333,6 +388,9 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
     suspend fun runCommand(command: String, workingDir: String = WORKSPACE_PATH): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                return@withContext Result.failure(IllegalStateException("Shell commands are unavailable in LOCAL_SANDBOX projects."))
+            }
             val safeDir = sanitizePath(workingDir)
             val fullCommand = "cd '$safeDir' && $command 2>&1"
             addDebugLog("🖥️ SSH: $fullCommand")
@@ -355,6 +413,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             put("currentAgent", _currentAgent.value.name)
             put("currentTask", _currentTask.value)
             put("projectFolder", _currentProjectFolder.value)
+            put("workspaceBackend", _currentWorkspaceBackend.value.name)
+            put("runtimeCapabilitiesJson", _currentRuntimeCapabilities.value.toJson())
             put("currentSessionId", _currentSessionId.value)
             put("activeConversationId", _activeConversationId.value)
             put("timestamp", System.currentTimeMillis())
@@ -370,119 +430,238 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         val jobKey = "agent|${conversationId ?: "global"}|${_currentProjectFolder.value}"
 
         agentScope.launch(Dispatchers.IO) {
-            runCatching {
-                AiRuntimeJobStore.upsert(
-                    appContext,
-                    com.example.llamadroid.data.db.AiRuntimeJobEntity(
-                        jobId = jobId,
-                        jobKey = jobKey,
-                        type = AiRuntimeJobStore.TYPE_AGENT_CHAT,
-                        status = AiRuntimeJobStore.STATUS_RUNNING,
-                        conversationId = conversationId,
-                        sessionId = sessionId,
-                        projectFolder = _currentProjectFolder.value,
-                        backendIdentifier = SettingsRepository.normalizeOllamaOrLlamaBackend(
-                            runCatching {
-                                AgentForegroundService.getSettingsRepository(appContext).agentBackend.value
-                            }.getOrNull()
-                        ),
-                        modelName = _selectedModel.value,
-                        payloadJson = snapshotPersistentState(),
-                        checkpointJson = buildCheckpointJson(),
-                        progressText = status,
-                        createdAt = now,
-                        updatedAt = now
-                    )
-                )
-            }.onFailure {
-                addDebugLog("⚠️ Failed to persist agent runtime state: ${it.message}")
+            runtimePersistenceMutex.withLock {
+                runCatching {
+                    val existing = AiRuntimeJobStore.getByJobKey(appContext, jobKey)
+                    if (existing != null) {
+                        AiRuntimeJobStore.markState(
+                            appContext,
+                            jobId = existing.jobId,
+                            status = AiRuntimeJobStore.STATUS_RUNNING,
+                            checkpointJson = buildCheckpointJson(),
+                            progressText = status
+                        )
+                    } else {
+                        AiRuntimeJobStore.upsert(
+                            appContext,
+                            com.example.llamadroid.data.db.AiRuntimeJobEntity(
+                                jobId = jobId,
+                                jobKey = jobKey,
+                                type = AiRuntimeJobStore.TYPE_AGENT_CHAT,
+                                status = AiRuntimeJobStore.STATUS_RUNNING,
+                                conversationId = conversationId,
+                                sessionId = sessionId,
+                                projectFolder = _currentProjectFolder.value,
+                                backendIdentifier = SettingsRepository.normalizeOllamaOrLlamaBackend(
+                                    runCatching {
+                                        AgentForegroundService.getSettingsRepository(appContext).agentBackend.value
+                                    }.getOrNull()
+                                ),
+                                modelName = _selectedModel.value,
+                                payloadJson = snapshotPersistentState(),
+                                checkpointJson = buildCheckpointJson(),
+                                progressText = status,
+                                createdAt = now,
+                                updatedAt = now
+                            )
+                        )
+                    }
+                }.onFailure {
+                    addDebugLog("⚠️ Failed to persist agent runtime state: ${it.message}")
+                }
             }
         }
     }
 
     private fun completeAgentRuntimeState(finalStatus: String) {
         val appContext = context.applicationContext
+        if (finalStatus == AiRuntimeJobStore.STATUS_COMPLETED || finalStatus == AiRuntimeJobStore.STATUS_CANCELLED) {
+            closeRemoteWorkerRootSession(appContext, finalStatus)
+        }
         val jobId = "agent-runtime-${_activeConversationId.value ?: "global"}"
         agentScope.launch(Dispatchers.IO) {
-            runCatching {
-                AiRuntimeJobStore.markState(
-                    appContext,
-                    jobId = jobId,
-                    status = finalStatus,
-                    checkpointJson = buildCheckpointJson(),
-                    progressText = finalStatus.lowercase()
-                )
-            }.onFailure {
-                addDebugLog("⚠️ Failed to update persisted agent runtime state: ${it.message}")
+            runtimePersistenceMutex.withLock {
+                runCatching {
+                    AiRuntimeJobStore.markState(
+                        appContext,
+                        jobId = jobId,
+                        status = finalStatus,
+                        checkpointJson = buildCheckpointJson(),
+                        progressText = finalStatus.lowercase()
+                    )
+                    if (finalStatus == AiRuntimeJobStore.STATUS_COMPLETED) {
+                        _activeConversationId.value?.let { conversationId ->
+                            AppDatabase.getDatabase(appContext)
+                                .agentChatDao()
+                                .updateResumeState(conversationId, RESUME_STATE_IDLE, null)
+                        }
+                    }
+                }.onFailure {
+                    addDebugLog("⚠️ Failed to update persisted agent runtime state: ${it.message}")
+                }
             }
         }
     }
 
-    suspend fun persistVisibleRuntimeStateNow(reason: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val appContext = context.applicationContext
-            val conversationId = _activeConversationId.value ?: return@withContext Result.success(Unit)
-            val db = AppDatabase.getDatabase(appContext)
-            val conversation = db.agentChatDao().getConversation(conversationId)
-            val snapshot = _messages.value.filterNot(::isTransientCompactionStatusMessage)
+    suspend fun persistVisibleRuntimeStateNow(
+        reason: String? = null,
+        pruneMissingMessages: Boolean = false
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        runtimePersistenceMutex.withLock {
+            try {
+                val appContext = context.applicationContext
+                val conversationId = _activeConversationId.value ?: return@withLock Result.success(Unit)
+                val db = AppDatabase.getDatabase(appContext)
+                val snapshot = _messages.value.filterNot(::isTransientCompactionStatusMessage)
+                val snapshotPayload = snapshotPersistentState()
+                val snapshotEntities = snapshot.map { message ->
+                    chatMessageToEntity(message, conversationId)
+                }
+                val changedEntities = if (pruneMissingMessages) {
+                    snapshotEntities
+                } else {
+                    snapshotEntities.filter { entity ->
+                        persistedMessageHashes["$conversationId:${entity.originalId}"] != entity.hashCode()
+                    }
+                }
+                GenerationDiagnosticsStore.recordBreadcrumb(
+                    source = "agent_persistence",
+                    event = if (pruneMissingMessages) "exact_snapshot_started" else "incremental_checkpoint_started",
+                    details = "conversationId=$conversationId messages=${snapshot.size} changed=${changedEntities.size} " +
+                        "payloadChars=${snapshotPayload.length}"
+                )
+                db.withTransaction {
+                    db.agentChatDao().getConversation(conversationId)?.let {
+                        db.agentChatDao().updateConversationState(
+                            conversationId,
+                            _currentAgent.value.name,
+                            _currentTask.value
+                        )
+                        if (pruneMissingMessages) {
+                            db.agentChatDao().deleteAllMessagesInConversation(conversationId)
+                            db.agentWorkflowDao().deleteMessagePartsForConversation(conversationId)
+                        }
+                        if (changedEntities.isNotEmpty()) {
+                            db.agentChatDao().insertMessages(changedEntities)
+                            val changedIds = changedEntities.mapTo(hashSetOf()) { it.originalId }
+                            snapshot.asSequence()
+                                .filter { it.id in changedIds }
+                                .forEach { message ->
+                                    db.agentWorkflowDao().deleteMessageParts(message.id)
+                                    db.agentWorkflowDao().upsertMessageParts(
+                                        projectAgentMessageParts(conversationId, message)
+                                    )
+                                }
+                            }
+                    }
 
-            conversation?.let {
-                db.agentChatDao().updateConversationState(
-                    conversationId,
-                    _currentAgent.value.name,
-                    _currentTask.value
+                    val now = System.currentTimeMillis()
+                    val jobId = "agent-runtime-$conversationId"
+                    val jobKey = "agent|$conversationId|${_currentProjectFolder.value}"
+                    val existing = db.aiRuntimeJobDao().getByJobKey(jobKey)
+                    val status = if (
+                        _isLoading.value ||
+                        snapshot.any { it.needsApproval || (it.isPlan && it.isPlanApproved != true) }
+                    ) {
+                        AiRuntimeJobStore.STATUS_RUNNING
+                    } else {
+                        AiRuntimeJobStore.STATUS_RECOVERING
+                    }
+                    db.aiRuntimeJobDao().upsert(
+                        com.example.llamadroid.data.db.AiRuntimeJobEntity(
+                            jobId = jobId,
+                            jobKey = jobKey,
+                            type = AiRuntimeJobStore.TYPE_AGENT_CHAT,
+                            status = status,
+                            conversationId = conversationId,
+                            sessionId = _currentSessionId.value,
+                            projectFolder = _currentProjectFolder.value,
+                            backendIdentifier = SettingsRepository.normalizeOllamaOrLlamaBackend(
+                                runCatching {
+                                    AgentForegroundService.getSettingsRepository(appContext).agentBackend.value
+                                }.getOrNull()
+                            ),
+                            modelName = _selectedModel.value,
+                            payloadJson = snapshotPayload,
+                            checkpointJson = buildCheckpointJson(),
+                            progressText = _statusText.value.ifBlank {
+                                if (status == AiRuntimeJobStore.STATUS_RUNNING) "working" else "recovering"
+                            },
+                            errorMessage = null,
+                            resumable = true,
+                            createdAt = existing?.createdAt ?: now,
+                            updatedAt = now
+                        )
+                    )
+                }
+
+                if (pruneMissingMessages) {
+                    persistedMessageHashes.clear()
+                }
+                snapshotEntities.forEach { entity ->
+                    persistedMessageHashes["$conversationId:${entity.originalId}"] = entity.hashCode()
+                }
+                if (pruneMissingMessages) {
+                    val retainedIds = snapshotEntities.mapTo(hashSetOf()) {
+                        "$conversationId:${it.originalId}"
+                    }
+                    persistedMessageHashes.keys.retainAll(retainedIds)
+                }
+
+                GenerationDiagnosticsStore.recordBreadcrumb(
+                    source = "agent_persistence",
+                    event = if (pruneMissingMessages) "exact_snapshot_finished" else "incremental_checkpoint_finished",
+                    details = "conversationId=$conversationId messages=${snapshot.size} changed=${changedEntities.size} " +
+                        "payloadChars=${snapshotPayload.length}"
                 )
-                db.agentChatDao().deleteAllMessagesInConversation(conversationId)
-                db.agentChatDao().insertMessages(
-                    snapshot.map { message -> chatMessageToEntity(message, conversationId) }
+                reason?.takeIf { it.isNotBlank() }?.let {
+                    addDebugLog("💾 Persisted visible runtime state: $it")
+                }
+                Result.success(Unit)
+            } catch (e: Exception) {
+                GenerationDiagnosticsStore.recordBreadcrumb(
+                    source = "agent_persistence",
+                    event = "full_snapshot_failed",
+                    details = "error=${e.javaClass.simpleName}:${e.message.orEmpty().take(160)}"
                 )
+                addDebugLog("⚠️ Failed to persist visible runtime state: ${e.message}")
+                Result.failure(e)
             }
+        }
+    }
 
-            val now = System.currentTimeMillis()
-            val jobId = "agent-runtime-${conversationId}"
+    private suspend fun persistRuntimeHeartbeat(status: String) = withContext(Dispatchers.IO) {
+        runtimePersistenceMutex.withLock {
+            val conversationId = _activeConversationId.value ?: return@withLock
+            val appContext = context.applicationContext
             val jobKey = "agent|$conversationId|${_currentProjectFolder.value}"
             val existing = AiRuntimeJobStore.getByJobKey(appContext, jobKey)
-            val status = if (_isLoading.value || snapshot.any { it.needsApproval || (it.isPlan && it.isPlanApproved != true) }) {
-                AiRuntimeJobStore.STATUS_RUNNING
-            } else {
-                AiRuntimeJobStore.STATUS_RECOVERING
+            if (existing == null) {
+                persistAgentRuntimeState(status)
+                return@withLock
             }
-
-            AiRuntimeJobStore.upsert(
+            AiRuntimeJobStore.markState(
                 appContext,
-                com.example.llamadroid.data.db.AiRuntimeJobEntity(
-                    jobId = jobId,
-                    jobKey = jobKey,
-                    type = AiRuntimeJobStore.TYPE_AGENT_CHAT,
-                    status = status,
-                    conversationId = conversationId,
-                    sessionId = _currentSessionId.value,
-                    projectFolder = _currentProjectFolder.value,
-                    backendIdentifier = SettingsRepository.normalizeOllamaOrLlamaBackend(
-                        runCatching {
-                            AgentForegroundService.getSettingsRepository(appContext).agentBackend.value
-                        }.getOrNull()
-                    ),
-                    modelName = _selectedModel.value,
-                    payloadJson = snapshotPersistentState(),
-                    checkpointJson = buildCheckpointJson(),
-                    progressText = _statusText.value.ifBlank {
-                        if (status == AiRuntimeJobStore.STATUS_RUNNING) "working" else "recovering"
-                    },
-                    errorMessage = null,
-                    resumable = true,
-                    createdAt = existing?.createdAt ?: now,
-                    updatedAt = now
-                )
+                jobId = existing.jobId,
+                status = AiRuntimeJobStore.STATUS_RUNNING,
+                checkpointJson = buildCheckpointJson(),
+                progressText = status
             )
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "agent_persistence",
+                event = "heartbeat_metadata_only",
+                details = "conversationId=$conversationId messages=${_messages.value.size}"
+            )
+        }
+    }
 
-            reason?.takeIf { it.isNotBlank() }?.let {
-                addDebugLog("💾 Persisted visible runtime state: $it")
+    private fun scheduleVisibleRuntimePersistence(reason: String) {
+        synchronized(runtimePersistenceScheduleLock) {
+            scheduledVisiblePersistenceJob?.cancel()
+            scheduledVisiblePersistenceJob = agentScope.launch(Dispatchers.IO) {
+                delay(VISIBLE_RUNTIME_PERSIST_DEBOUNCE_MS)
+                persistVisibleRuntimeStateNow(reason)
             }
-            Result.success(Unit)
-        } catch (e: Exception) {
-            addDebugLog("⚠️ Failed to persist visible runtime state: ${e.message}")
-            Result.failure(e)
         }
     }
 
@@ -493,6 +672,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                     put("name", it.name)
                     put("id", it.id)
                     put("arguments", JSONObject(it.arguments))
+                    put("rawArgumentsJson", it.rawArgumentsJson)
                 }
             }
         }
@@ -519,6 +699,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 put("isDelegation", message.isDelegation)
                 put("agentRole", message.agentRole)
                 put("customAgentName", message.customAgentName)
+                put("invocationId", message.invocationId)
                 put("isSuspicious", message.isSuspicious)
                 put("pendingToolCall", serializeToolCall(message.pendingToolCall))
                 put("isOutputExpanded", message.isOutputExpanded)
@@ -591,7 +772,12 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                         put(
                             serializeSession(
                                 session.copy(
-                                    messages = session.messages.filterNot(::isTransientCompactionStatusMessage).toMutableList()
+                                    // The canonical conversation is already persisted above and in
+                                    // agent_messages. Duplicating every delegated session history in
+                                    // each runtime checkpoint caused payload growth and repeated native
+                                    // SQLite pressure. Crash recovery is deliberately interrupted and
+                                    // resumes as a new root turn, so session metadata is sufficient.
+                                    messages = mutableListOf()
                                 )
                             )
                         )
@@ -613,7 +799,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             return com.example.llamadroid.service.OllamaService.ToolCall(
                 name = json.optString("name"),
                 arguments = args,
-                id = json.optString("id").takeIf { it.isNotBlank() }
+                id = json.optString("id").takeIf { it.isNotBlank() },
+                rawArgumentsJson = json.optString("rawArgumentsJson").takeIf { it.isNotBlank() }
             )
         }
 
@@ -645,6 +832,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 isDelegation = json.optBoolean("isDelegation", false),
                 agentRole = json.optString("agentRole").takeIf { it.isNotBlank() },
                 customAgentName = json.optString("customAgentName").takeIf { it.isNotBlank() },
+                invocationId = json.optString("invocationId").takeIf { it.isNotBlank() },
                 isSuspicious = json.optBoolean("isSuspicious", false),
                 pendingToolCall = deserializeToolCall(json.optJSONObject("pendingToolCall")),
                 isOutputExpanded = json.optBoolean("isOutputExpanded", false),
@@ -655,6 +843,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
         val payload = JSONObject(payloadJson)
         _currentProjectFolder.value = payload.optString("projectFolder", _currentProjectFolder.value)
+        _currentWorkspaceBackend.value = AgentWorkspaceBackendType.fromStored(payload.optString("workspaceBackend"))
+        _currentRuntimeCapabilities.value = AgentLocalRuntimeCapabilities.fromJson(payload.optString("runtimeCapabilitiesJson"))
         _currentAgent.value = runCatching { AgentRole.valueOf(payload.optString("currentAgent", AgentRole.ORCHESTRATOR.name)) }
             .getOrDefault(AgentRole.ORCHESTRATOR)
         _currentTask.value = payload.optString("currentTask").takeIf { it.isNotBlank() }
@@ -720,6 +910,56 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             restoredSessions[session.id] = session
         }
         _sessions.value = restoredSessions
+        if (_currentSessionId.value != null || restoredSessions.isNotEmpty()) {
+            val interruptedConversationId = _activeConversationId.value
+            _sessions.value = emptyMap()
+            _currentSessionId.value = null
+            _currentAgent.value = AgentRole.ORCHESTRATOR
+            _activeCustomAgent.value = null
+            activeInvocationId = null
+            if (interruptedConversationId != null) {
+                agentScope.launch(Dispatchers.IO) {
+                    val database = AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                    val runningInvocations = database.agentWorkflowDao().getInvocations(interruptedConversationId)
+                        .filter { it.status == "RUNNING" }
+                    database.agentWorkflowDao().interruptRunningInvocations(
+                        conversationId = interruptedConversationId,
+                        reason = "Process recreation interrupted delegated work. Continue explicitly."
+                    )
+                    runningInvocations.forEach { invocation ->
+                        database.agentWorkflowDao().cancelInvocationPendingInputs(invocation.id)
+                        val alreadyReturned = _messages.value.any { message ->
+                            message.role == "tool" && message.toolCallId == invocation.parentToolCallId
+                        }
+                        if (!alreadyReturned) {
+                            val interruptedSummary = com.example.llamadroid.LlamaApplication.instance.getString(
+                                R.string.agent_invocation_interrupted_result,
+                                "${invocation.agentClass} - ${invocation.resolvedName}"
+                            )
+                            addMessage(
+                                ChatMessage(
+                                    role = "tool",
+                                    content = buildToolResultEnvelope(
+                                        toolName = "call_agent",
+                                        status = "error",
+                                        summary = interruptedSummary,
+                                        nextHint = "Wait for the user to choose Continue. Inspect committed state before starting new mutating work."
+                                    ),
+                                    toolName = "call_agent",
+                                    toolCallId = invocation.parentToolCallId,
+                                    toolOutput = interruptedSummary
+                                )
+                            )
+                        }
+                    }
+                    database.agentChatDao().updateResumeState(
+                        interruptedConversationId,
+                        RESUME_STATE_INTERRUPTED,
+                        "Process recreation interrupted delegated work."
+                    )
+                }
+            }
+        }
     }
 
     suspend fun refreshLlamaServerRuntimeState(
@@ -852,6 +1092,27 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
     suspend fun listDirectory(path: String): Result<List<FileInfo>> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val dir = resolveLocalWorkspaceFile(path)
+                if (!dir.exists() || !dir.isDirectory) {
+                    return@withContext Result.failure(Exception(context.getString(R.string.agent_workspace_error_unavailable, localDisplayPath(dir))))
+                }
+                val files = dir.listFiles()
+                    .orEmpty()
+                    .filter { it.name != "." && it.name != ".." }
+                    .sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
+                    .map { file ->
+                        FileInfo(
+                            name = file.name,
+                            path = localDisplayPath(file),
+                            isDirectory = file.isDirectory,
+                            size = file.length(),
+                            permissions = "app-private"
+                        )
+                    }
+                return@withContext Result.success(files)
+            }
+
             val safePath = sanitizePath(path)
             val listingCommand = """
                 if [ ! -d '$safePath' ]; then
@@ -913,6 +1174,14 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
     suspend fun createFolder(path: String): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val dir = resolveLocalWorkspaceFile(path)
+                if (!dir.exists() && !dir.mkdirs()) {
+                    return@withContext Result.failure(Exception("Failed to create folder: ${localDisplayPath(dir)}"))
+                }
+                return@withContext Result.success("Created folder: ${localDisplayPath(dir)}")
+            }
+
             val safePath = sanitizePath(path)
             executeCommand("mkdir -p '$safePath'").getOrThrow()
             Result.success("Created folder: ${toProjectRelativePath(safePath)}")
@@ -927,6 +1196,23 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         trackChange: Boolean = true
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val target = resolveLocalWorkspaceFile(path)
+                val root = localProjectRootFile().canonicalFile
+                if (target.canonicalFile == root) {
+                    return@withContext Result.failure(Exception("Refusing to delete the local project root."))
+                }
+                val deleted = if (target.isDirectory && recursive) target.deleteRecursively() else target.delete()
+                if (!deleted && target.exists()) {
+                    return@withContext Result.failure(Exception("Failed to delete: ${localDisplayPath(target)}"))
+                }
+                if (trackChange) {
+                    appendChangedFilesLog(listOf(path), "delete_path")
+                        .onFailure { addDebugLog("⚠️ Failed to track deleted path $path: ${it.message}") }
+                }
+                return@withContext Result.success("Deleted: ${localDisplayPath(target)}")
+            }
+
             val safePath = sanitizePath(path)
             val command = if (recursive) {
                 "rm -rf -- '$safePath'"
@@ -946,6 +1232,20 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
     suspend fun clearDirectoryContents(path: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val dir = resolveLocalWorkspaceFile(path)
+                if (!dir.exists() && !dir.mkdirs()) {
+                    return@withContext Result.failure(Exception("Failed to create folder: ${localDisplayPath(dir)}"))
+                }
+                if (!dir.isDirectory) {
+                    return@withContext Result.failure(Exception("Not a directory: ${localDisplayPath(dir)}"))
+                }
+                dir.listFiles().orEmpty().forEach { child ->
+                    if (child.isDirectory) child.deleteRecursively() else child.delete()
+                }
+                return@withContext Result.success(Unit)
+            }
+
             val safePath = sanitizePath(path)
             executeCommand("mkdir -p '$safePath'").getOrThrow()
             executeCommand("find '$safePath' -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +").getOrThrow()
@@ -2053,6 +2353,25 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
     suspend fun searchCode(query: String): Result<List<SearchResult>> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val root = localProjectRootFile()
+                if (!root.exists()) return@withContext Result.success(emptyList())
+                val matcher = runCatching { Regex(query) }.getOrNull()
+                val results = mutableListOf<SearchResult>()
+                root.walkTopDown()
+                    .filter { it.isFile && it.length() <= 1_000_000L }
+                    .forEach { file ->
+                        val relativePath = localDisplayPath(file)
+                        runCatching { file.readLines(Charsets.UTF_8) }.getOrNull()?.forEachIndexed { index, line ->
+                            val matches = matcher?.containsMatchIn(line) ?: line.contains(query, ignoreCase = true)
+                            if (matches) {
+                                results.add(SearchResult(path = relativePath, lineNumber = index + 1, content = line.trim()))
+                            }
+                        }
+                    }
+                return@withContext Result.success(results.take(200))
+            }
+
             val folder = _currentProjectFolder.value
             val output = executeRawCommand("cd $WORKSPACE_PATH/$folder && rg --vimgrep --no-heading \"$query\" .").getOrThrow()
             val results = mutableListOf<SearchResult>()
@@ -2067,6 +2386,94 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun runLocalProject(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            if (!isLocalWorkspaceBackend()) {
+                return@withContext Result.failure(IllegalStateException("run_project is only available for LOCAL_SANDBOX projects."))
+            }
+            val conversationId = _activeConversationId.value
+                ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
+            val state = localProjectRunner.runProject(
+                conversationId = conversationId,
+                projectFolder = currentLocalProjectFolder(),
+                capabilities = _currentRuntimeCapabilities.value
+            ).getOrThrow()
+            Result.success(formatLocalRunState(state))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun runApprovedSkillScript(
+        scriptFile: File,
+        args: List<String>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        if (!isLocalWorkspaceBackend()) {
+            return@withContext Result.failure(
+                IllegalStateException("Skill scripts are restricted to LOCAL_SANDBOX projects on mobile.")
+            )
+        }
+        localProjectRunner.runApprovedSkillScript(
+            projectFolder = currentLocalProjectFolder(),
+            scriptFile = scriptFile,
+            args = args,
+            capabilities = _currentRuntimeCapabilities.value
+        )
+    }
+
+    suspend fun checkLocalProjectRun(): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val conversationId = _activeConversationId.value
+                ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
+            val state = localProjectRunner.checkProject(conversationId).getOrThrow()
+            Result.success(formatLocalRunState(state))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun stopLocalProjectRun(force: Boolean): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val conversationId = _activeConversationId.value
+                ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
+            val state = localProjectRunner.stopProject(conversationId, force).getOrThrow()
+            Result.success(formatLocalRunState(state))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun installLocalPythonDependency(packageName: String, wheelPath: String?): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            if (!isLocalWorkspaceBackend()) {
+                return@withContext Result.failure(IllegalStateException("install_python_dependency is only available for LOCAL_SANDBOX projects."))
+            }
+            _activeConversationId.value
+                ?: return@withContext Result.failure(IllegalStateException("No active project conversation is selected."))
+            localProjectRunner.installPythonDependency(
+                projectFolder = currentLocalProjectFolder(),
+                packageName = packageName,
+                wheelPath = wheelPath,
+                capabilities = _currentRuntimeCapabilities.value
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private fun formatLocalRunState(state: AgentLocalRunState): String {
+        return buildString {
+            appendLine("status: ${state.status}")
+            appendLine("runtime: ${state.runtime}")
+            appendLine("entrypoint: ${state.entrypoint}")
+            appendLine("ui: ${state.uiMode}")
+            state.previewUrl?.let { appendLine("preview_url: $it") }
+            state.exitCode?.let { appendLine("exit_code: $it") }
+            appendLine("logs:")
+            append(state.logs.ifBlank { "[No logs yet]" })
+        }.trim()
     }
 
 
@@ -2086,12 +2493,41 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         private const val BACKGROUND_COMMAND_CHANNEL_CONNECT_TIMEOUT_MS = 10_000
         private const val BACKGROUND_COMMAND_WATCHDOG_INTERVAL_MS = 15_000L
         private const val RUNTIME_CHECKPOINT_INTERVAL_MS = 30_000L
+        private const val VISIBLE_RUNTIME_PERSIST_DEBOUNCE_MS = 1_000L
+        private const val BACKEND_HEARTBEAT_UI_INTERVAL_MS = 15_000L
+        private const val BACKEND_HEARTBEAT_RECORD_INTERVAL_MS = 60_000L
+        private const val BACKEND_HEALTH_CHECK_INTERVAL_MS = 60_000L
+        private const val AGENT_IDLE_RELEASE_DELAY_MS = 2_000L
+        private const val STREAMING_RESPONSE_PREVIEW_CHARS = 24_000
+        private const val STREAMING_REASONING_PREVIEW_CHARS = 24_000
         private const val TOOL_READ_FILE_DEFAULT_LINES = 160
         private const val TOOL_READ_FILE_MAX_LINES = 400
         private const val REFLECTION_MAX_CALLS = 2
         private const val REFLECTION_TURN_WINDOW = 6
         private const val LEGACY_COMPACTION_STATUS_TOOL = "context_compaction_status"
         private const val HARD_COMPACTION_TIMEOUT_MS = 30L * 60L * 1000L
+        const val RESUME_STATE_IDLE = "IDLE"
+        const val RESUME_STATE_STOPPED_BY_USER = "STOPPED_BY_USER"
+        const val RESUME_STATE_INTERRUPTED = "INTERRUPTED"
+        const val RESUME_STATE_NEEDS_DIRECTION = "NEEDS_DIRECTION"
+        const val RESUME_STATE_WAITING_FOR_USER = "WAITING_FOR_USER"
+        private const val LOOP_WAKEUP_RECOVERY_TURNS = 2
+        private const val MAX_RECOVERY_TURNS_PER_REQUEST = 3
+        private const val LOOP_WAKEUP_SUPERVISOR_RETRIES = 3
+        private const val MAX_SUPERVISOR_RETRIES_PER_REQUEST = 3
+        private const val LOOP_WAKEUP_HANDOFFS = 4
+        private const val MAX_HANDOFFS_PER_REQUEST = 8
+        private const val LOOP_WAKEUP_TOOL_FAILURES = 2
+        private const val MAX_TOOL_FAILURES_PER_SIGNATURE = 3
+        private const val LOOP_WAKEUP_REPEATED_PLANS = 2
+        private const val MAX_REPEATED_PLANS = 6
+        private const val MAX_CONTINUATION_QUEUE_DEPTH = 3
+        // Healthy coding workflows commonly exceed a dozen serialized tool and
+        // delegation turns. This is only a last-resort safety ceiling; repeated
+        // no-progress recovery is guarded separately.
+        private const val MAX_CONTINUATIONS_PER_EPOCH = 96
+        private const val MAX_NO_PROGRESS_CONTINUATIONS = 4
+        private const val MAX_NORMAL_LOADING_LEASES = 2
 
         // Instance-specific loading state (now in companion for static tool access)
         private val _isLoading = MutableStateFlow(false)
@@ -2099,10 +2535,13 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
         // Reference counter for loading state to prevent premature service stopping
         private val loadingRefCount = java.util.concurrent.atomic.AtomicInteger(0)
+        @Volatile
+        private var delayedIdleReleaseJob: Job? = null
 
         // Instance-specific status text for UI (now in companion)
         private val _statusText = MutableStateFlow("")
         val statusText: StateFlow<String> = _statusText.asStateFlow()
+        @Volatile private var lastStatusSideEffectAt = 0L
 
         private val _memoryDirty = MutableStateFlow(false)
         val memoryDirty: StateFlow<Boolean> = _memoryDirty.asStateFlow()
@@ -2118,11 +2557,51 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         val llamaServerRuntimeState: StateFlow<AgentLlamaServerRuntimeState> = _llamaServerRuntimeState.asStateFlow()
         private val _selectedKnowledgeBaseIds = MutableStateFlow<List<Long>>(emptyList())
         val selectedKnowledgeBaseIds: StateFlow<List<Long>> = _selectedKnowledgeBaseIds.asStateFlow()
+        private val _currentPlanningModeEnabled = MutableStateFlow(false)
+        val currentPlanningModeEnabled: StateFlow<Boolean> = _currentPlanningModeEnabled.asStateFlow()
+        private val _planningImplementationUnlocked = MutableStateFlow(false)
+        val planningImplementationUnlocked: StateFlow<Boolean> = _planningImplementationUnlocked.asStateFlow()
+        private val recoveryTurnsByEpoch = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+        private val supervisorRetriesByEpoch = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+        private val handoffsByEpoch = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+        private val toolFailureCounts = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val continuationsByEpoch = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+        private val pendingContinuations = java.util.concurrent.ConcurrentLinkedQueue<PendingAgentContinuation>()
+        private val continuationDrainActive = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val pendingUrgentUserGuidance = java.util.concurrent.ConcurrentLinkedQueue<ChatMessage>()
+        private val pendingInputSequence = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis() * 1_000L)
+        private val pendingInputPersistenceJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+        private val _pendingUrgentUserGuidanceCount = MutableStateFlow(0)
+        val pendingUrgentUserGuidanceCount: StateFlow<Int> = _pendingUrgentUserGuidanceCount.asStateFlow()
+        private val pendingDelegations = java.util.concurrent.ConcurrentHashMap<String, PendingAgentDelegation>()
+        @Volatile private var activeInvocationId: String? = null
+        private val noProgressContinuationsByEpoch = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
+        private val logicalTurnCounter = java.util.concurrent.atomic.AtomicLong(0L)
+        private val activeRootTurnId = java.util.concurrent.atomic.AtomicLong(0L)
+        @Volatile private var activeRootTurnStorageId: String = java.util.UUID.randomUUID().toString()
+        @Volatile private var remoteWorkerRootSessionId: String? = null
+        private val frozenToolsByTurnBranch = java.util.concurrent.ConcurrentHashMap<String, List<AgentTool>>()
+        private val frozenSystemPromptByTurnBranch = java.util.concurrent.ConcurrentHashMap<String, String>()
+        private val frozenOptionalPromptByTurnBranch = java.util.concurrent.ConcurrentHashMap<String, List<ChatMessage>>()
+        private val loadedSkillIdsByTurnBranch = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+        private val toolsReferenceMutex = Mutex()
+        private val toolsReferenceFingerprintByProject = java.util.concurrent.ConcurrentHashMap<String, String>()
+        private val _pendingQuestionCount = MutableStateFlow(0)
+        val pendingQuestionCount: StateFlow<Int> = _pendingQuestionCount.asStateFlow()
+        private val _pendingPlanApprovalId = MutableStateFlow<String?>(null)
+        val pendingPlanApprovalId: StateFlow<String?> = _pendingPlanApprovalId.asStateFlow()
+        private val workflowTransitionMutex = Mutex()
+        private val consecutiveCompletedTools = java.util.concurrent.atomic.AtomicInteger(0)
+        private val progressUpdateLock = Any()
+        @Volatile private var lastAutomaticProgressAt = 0L
+        @Volatile private var lastProgressSignature = ""
         private val recentCompactionEvents = ArrayDeque<PromptCompactionEvent>(4)
         private val promptTokenCalibrationByBackendModel = java.util.concurrent.ConcurrentHashMap<String, Double>()
         private val llamaServerMetadataMutex = Mutex()
         @Volatile
         private var activePromptBackend: String = "ollama"
+        @Volatile
+        private var lastNotificationToolName: String? = null
         @Volatile
         private var pendingVisionAttachment: PendingVisionAttachment? = null
         @Volatile
@@ -2138,11 +2617,65 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         private var modelTurnCounter: Int = 0
 
         private fun idleStatusText(appContext: Context): String {
-            return if (_memoryDirty.value) {
+            return if (hasPendingPlanApproval()) {
+                appContext.getString(R.string.agent_status_awaiting_approval)
+            } else if (_pendingQuestionCount.value > 0) {
+                appContext.getString(R.string.agent_status_waiting_for_answer)
+            } else if (_memoryDirty.value) {
                 appContext.getString(R.string.agent_status_memory_update_required)
             } else {
                 appContext.getString(R.string.agent_status_idle)
             }
+        }
+
+        /** Room is authoritative; the message scan keeps pre-104 histories recoverable. */
+        fun hasPendingPlanApproval(): Boolean = _pendingPlanApprovalId.value != null || _messages.value.any {
+            it.isPlan && it.isPlanApproved != true
+        }
+
+        private fun buildAgentNotificationDetails(appContext: Context, status: String): List<String> {
+            val activeCustom = _activeCustomAgent.value
+            val agentName = activeCustom?.name?.takeIf { it.isNotBlank() } ?: when (_currentAgent.value) {
+                AgentRole.ORCHESTRATOR -> appContext.getString(R.string.agent_role_orchestrator)
+                AgentRole.CODER -> appContext.getString(R.string.agent_role_coder)
+                AgentRole.REVIEWER -> appContext.getString(R.string.agent_role_reviewer)
+                AgentRole.EXECUTOR -> appContext.getString(R.string.agent_role_executor)
+                AgentRole.SUMMARIZER -> appContext.getString(R.string.agent_role_summarizer)
+                AgentRole.VISUAL_TESTER -> appContext.getString(R.string.agent_role_visual_tester)
+            }
+            val projectName = _currentProjectFolder.value
+                .ifBlank { "default_project" }
+                .substringAfterLast('/')
+                .take(48)
+            val backendName = when (SettingsRepository.normalizeOllamaOrLlamaBackend(activePromptBackend)) {
+                SettingsRepository.PDF_BACKEND_LITERT -> appContext.getString(R.string.pdf_backend_litert)
+                SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> appContext.getString(R.string.pdf_backend_llama_server)
+                SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> appContext.getString(R.string.pdf_backend_llama_swap)
+                else -> appContext.getString(R.string.pdf_backend_ollama)
+            }
+            val modelName = friendlyBackendModelLabel(_selectedModel.value)?.take(72)
+                ?: _selectedModel.value.take(72)
+            val contextPercent = _promptContextSnapshot.value?.actualPercentUsed
+                ?: _promptContextSnapshot.value?.percentUsed
+            val logicalJobs = loadingRefCount.get().coerceAtLeast(0)
+            val queueDepth = pendingContinuations.size
+            val lastTool = lastNotificationToolName?.take(48)
+
+            return buildList {
+                add(appContext.getString(R.string.agent_notification_detail_project_agent, projectName, agentName))
+                add(appContext.getString(R.string.agent_notification_detail_backend_model, backendName, modelName))
+                add(appContext.getString(R.string.agent_notification_detail_phase, status.take(80)))
+                contextPercent?.let {
+                    add(appContext.getString(R.string.agent_notification_detail_context, it))
+                }
+                add(
+                    if (lastTool != null) {
+                        appContext.getString(R.string.agent_notification_detail_queue_tool, queueDepth, logicalJobs, lastTool)
+                    } else {
+                        appContext.getString(R.string.agent_notification_detail_queue, queueDepth, logicalJobs)
+                    }
+                )
+            }.take(5)
         }
 
         fun setSelectedKnowledgeBaseIds(ids: List<Long>) {
@@ -2155,6 +2688,12 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
         fun setIsLoading(loading: Boolean, status: String? = null) {
             val appContext = com.example.llamadroid.LlamaApplication.instance
+            val pendingIdleRelease = if (loading) delayedIdleReleaseJob else null
+            if (pendingIdleRelease != null) {
+                pendingIdleRelease.cancel()
+                delayedIdleReleaseJob = null
+            }
+            val wasLoading = loadingRefCount.get() > 0 || (loading && pendingIdleRelease != null)
 
             // Update reference counter
             val count = if (loading) {
@@ -2173,6 +2712,25 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             val isActuallyLoading = count > 0
             _isLoading.value = isActuallyLoading
 
+            if (loading && count > MAX_NORMAL_LOADING_LEASES) {
+                val runEpoch = currentRunEpoch()
+                val reason = appContext.getString(
+                    R.string.agent_runaway_loading_reason,
+                    count,
+                    pendingContinuations.size,
+                    continuationsByEpoch[runEpoch]?.get() ?: 0
+                )
+                recordRunawayContinuationSuspected(
+                    context = appContext,
+                    reason = reason,
+                    runEpoch = runEpoch,
+                    rootTurnId = currentRootTurnId(),
+                    loadingLeases = count
+                )
+                blockAutomaticContinuations()
+                updateActiveConversationResumeState(RESUME_STATE_NEEDS_DIRECTION, reason)
+            }
+
             val newStatus = status ?: if (isActuallyLoading) {
                 appContext.getString(R.string.agent_status_working)
             } else {
@@ -2183,17 +2741,46 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             // Manage foreground service for background reliability
             try {
                 if (isActuallyLoading) {
-                    // Start or update foreground service
-                    AgentForegroundService.start(appContext, newStatus)
+                    delayedIdleReleaseJob?.cancel()
+                    delayedIdleReleaseJob = null
+                    if (wasLoading) {
+                        AgentForegroundService.updateStatus(
+                            appContext,
+                            newStatus,
+                            buildAgentNotificationDetails(appContext, newStatus)
+                        )
+                    } else {
+                        AgentForegroundService.start(appContext, newStatus)
+                        AgentForegroundService.updateStatus(
+                            appContext,
+                            newStatus,
+                            buildAgentNotificationDetails(appContext, newStatus)
+                        )
+                    }
                     activeInstance?.persistAgentRuntimeState(newStatus)
                     acquireWakeLock()
                     addDebugLog("🔄 Agent active (refCount: $count): $newStatus")
                 } else {
-                    // Only stop if refCount is 0
-                    activeInstance?.completeAgentRuntimeState(AiRuntimeJobStore.STATUS_COMPLETED)
-                    releaseWakeLock()
-                    AgentForegroundService.stop(appContext)
-                    addDebugLog("⏹️ Agent idle (refCount: 0)")
+                    if (wasLoading) {
+                        delayedIdleReleaseJob?.cancel()
+                        lateinit var idleReleaseJob: Job
+                        idleReleaseJob = agentScope.launch {
+                            try {
+                                delay(AGENT_IDLE_RELEASE_DELAY_MS)
+                                if (loadingRefCount.get() == 0) {
+                                    activeInstance?.completeAgentRuntimeState(AiRuntimeJobStore.STATUS_COMPLETED)
+                                    releaseWakeLock()
+                                    AgentForegroundService.stop(appContext)
+                                    addDebugLog("⏹️ Agent idle (refCount: 0)")
+                                }
+                            } finally {
+                                if (delayedIdleReleaseJob === idleReleaseJob) {
+                                    delayedIdleReleaseJob = null
+                                }
+                            }
+                        }
+                        delayedIdleReleaseJob = idleReleaseJob
+                    }
                 }
             } catch (e: Exception) {
                 addDebugLog("⚠️ Foreground service error: ${e.message}")
@@ -2201,11 +2788,19 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         }
 
         fun setStatusText(status: String) {
+            if (_statusText.value == status) return
             _statusText.value = status
             // Also update notification if service is running
             if (loadingRefCount.get() > 0) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastStatusSideEffectAt < 1_000L) return
+                lastStatusSideEffectAt = now
                 val appContext = com.example.llamadroid.LlamaApplication.instance
-                AgentForegroundService.updateStatus(appContext, status)
+                AgentForegroundService.updateStatus(
+                    appContext,
+                    status,
+                    buildAgentNotificationDetails(appContext, status)
+                )
                 checkpointRuntimeState(status = status, reason = "Agent status update")
             }
         }
@@ -2281,6 +2876,9 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             val isDelegation: Boolean = false,  // Collapsible delegation message
             val agentRole: String? = null,  // Which agent produced this message
             val customAgentName: String? = null,  // Name of custom agent (if applicable)
+            val invocationId: String? = null, // Null belongs to the main orchestrator timeline.
+            /** UI-only delivery state for durable guidance; not part of model serialization. */
+            val guidanceDeliveryState: String? = null,
             val isSuspicious: Boolean = false, // Command triggers security pattern
             val pendingToolCall: com.example.llamadroid.service.OllamaService.ToolCall? = null,
             val isOutputExpanded: Boolean = false, // Individual toggle for tool output
@@ -2303,6 +2901,44 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             }
         }
 
+        internal fun chatMessageToLiteRtConversationMessage(
+            message: ChatMessage,
+            correlatedToolName: String? = null
+        ): LiteRtConversationMessage = LiteRtConversationMessage(
+            role = message.role,
+            content = message.content,
+            imagePath = message.imagePath,
+            toolCalls = message.pendingToolCall?.let { call ->
+                listOf(
+                    LiteRtToolCallSpec(
+                        name = call.name,
+                        arguments = call.arguments.mapValues { it.value }
+                    )
+                )
+            }.orEmpty(),
+            toolName = message.toolName ?: correlatedToolName
+        )
+
+        private const val QUEUED_GUIDANCE_ENVELOPE = "[[AGENT_RUNTIME_QUEUED_GUIDANCE]]"
+        private const val QUEUED_GUIDANCE_CONTENT = "[[USER_GUIDANCE_CONTENT]]"
+
+        internal fun wrapQueuedGuidanceForModel(context: Context, content: String): String = buildString {
+            appendLine(QUEUED_GUIDANCE_ENVELOPE)
+            appendLine(context.getString(R.string.agent_queued_guidance_model_instruction))
+            appendLine(QUEUED_GUIDANCE_CONTENT)
+            append(content)
+        }
+
+        internal fun isQueuedGuidanceEnvelope(content: String): Boolean =
+            content.startsWith(QUEUED_GUIDANCE_ENVELOPE)
+
+        internal fun visibleQueuedGuidanceContent(content: String): String =
+            if (isQueuedGuidanceEnvelope(content)) {
+                content.substringAfter(QUEUED_GUIDANCE_CONTENT, content).trimStart()
+            } else {
+                content
+            }
+
         fun serializeToolArgs(toolArgs: Map<String, String>?): String? =
             toolArgs?.let { JSONObject(it).toString() }
 
@@ -2324,6 +2960,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 put("name", toolCall.name)
                 put("id", toolCall.id)
                 put("arguments", JSONObject(toolCall.arguments))
+                put("rawArgumentsJson", toolCall.rawArgumentsJson)
             }.toString()
         }
 
@@ -2337,7 +2974,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 com.example.llamadroid.service.OllamaService.ToolCall(
                     name = json.optString("name"),
                     arguments = args,
-                    id = json.optString("id").takeIf { it.isNotBlank() }
+                    id = json.optString("id").takeIf { it.isNotBlank() },
+                    rawArgumentsJson = json.optString("rawArgumentsJson").takeIf { it.isNotBlank() }
                 )
             } catch (_: Exception) {
                 null
@@ -2366,6 +3004,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 put("isDelegation", message.isDelegation)
                 put("agentRole", message.agentRole)
                 put("customAgentName", message.customAgentName)
+                put("invocationId", message.invocationId)
                 put("isSuspicious", message.isSuspicious)
                 put("pendingToolCall", serializeToolCall(message.pendingToolCall)?.let { JSONObject(it) })
                 put("isOutputExpanded", message.isOutputExpanded)
@@ -2402,6 +3041,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 isDelegation = json.optBoolean("isDelegation", false),
                 agentRole = json.optString("agentRole").takeIf { it.isNotBlank() },
                 customAgentName = json.optString("customAgentName").takeIf { it.isNotBlank() },
+                invocationId = json.optString("invocationId").takeIf { it.isNotBlank() },
                 isSuspicious = json.optBoolean("isSuspicious", false),
                 pendingToolCall = deserializeToolCall(json.optJSONObject("pendingToolCall")?.toString()),
                 isOutputExpanded = json.optBoolean("isOutputExpanded", false),
@@ -2437,6 +3077,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 agentRole = message.agentRole,
                 isDelegation = message.isDelegation,
                 customAgentName = message.customAgentName,
+                invocationId = message.invocationId,
                 isSuspicious = message.isSuspicious,
                 pendingToolCall = serializeToolCall(message.pendingToolCall),
                 isOutputExpanded = message.isOutputExpanded,
@@ -2467,6 +3108,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 isDelegation = entity.isDelegation,
                 agentRole = entity.agentRole,
                 customAgentName = entity.customAgentName,
+                invocationId = entity.invocationId,
+                guidanceDeliveryState = if (isQueuedGuidanceEnvelope(entity.content)) "DELIVERED" else null,
                 isSuspicious = entity.isSuspicious,
                 pendingToolCall = deserializeToolCall(entity.pendingToolCall),
                 isOutputExpanded = entity.isOutputExpanded,
@@ -2474,6 +3117,19 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 sequenceNumber = entity.sequenceNumber
             )
         }
+
+        internal fun queuedInputAsChatMessage(
+            input: com.example.llamadroid.data.db.AgentPendingInputEntity
+        ): ChatMessage = ChatMessage(
+            id = input.id,
+            role = "user",
+            content = input.content,
+            imagePath = input.imagePath,
+            invocationId = input.targetInvocationId,
+            guidanceDeliveryState = "QUEUED",
+            timestamp = input.createdAt,
+            sequenceNumber = Int.MAX_VALUE
+        )
 
         private const val PROMPT_CONTEXT_RATIO = 0.65
         private const val MIN_PROMPT_CONTEXT_TOKENS = 1024
@@ -2588,6 +3244,10 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         // Disabled built-in agents (user can toggle these)
         private val _disabledBuiltInAgents = MutableStateFlow<Set<String>>(emptySet())
         val disabledBuiltInAgents = _disabledBuiltInAgents.asStateFlow()
+        private val _disabledStandardAgentTools = MutableStateFlow<Set<String>>(emptySet())
+        val disabledStandardAgentTools = _disabledStandardAgentTools.asStateFlow()
+        private val _autoReflectionEnabled = MutableStateFlow(true)
+        val autoReflectionEnabled = _autoReflectionEnabled.asStateFlow()
 
         fun setBuiltInAgentEnabled(agentName: String, enabled: Boolean) {
             val current = _disabledBuiltInAgents.value.toMutableSet()
@@ -2601,10 +3261,28 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         fun loadDisabledAgents() {
             val prefs = com.example.llamadroid.LlamaApplication.instance.getSharedPreferences("settings", 0)
             _disabledBuiltInAgents.value = prefs.getStringSet("disabled_built_in_agents", emptySet()) ?: emptySet()
+            _disabledStandardAgentTools.value = prefs.getStringSet("disabled_standard_agent_tools", emptySet()) ?: emptySet()
+            _autoReflectionEnabled.value = prefs.getBoolean("agent_auto_reflection_enabled", true)
         }
 
         fun isBuiltInAgentEnabled(agentName: String): Boolean {
             return agentName.uppercase() !in _disabledBuiltInAgents.value
+        }
+
+        fun setStandardAgentToolEnabled(toolName: String, enabled: Boolean) {
+            val normalized = toolName.trim()
+            if (normalized.isBlank()) return
+            val current = _disabledStandardAgentTools.value.toMutableSet()
+            if (enabled) current.remove(normalized) else current.add(normalized)
+            _disabledStandardAgentTools.value = current
+            val prefs = com.example.llamadroid.LlamaApplication.instance.getSharedPreferences("settings", 0)
+            prefs.edit().putStringSet("disabled_standard_agent_tools", _disabledStandardAgentTools.value).apply()
+        }
+
+        fun setAutoReflectionEnabled(enabled: Boolean) {
+            _autoReflectionEnabled.value = enabled
+            val prefs = com.example.llamadroid.LlamaApplication.instance.getSharedPreferences("settings", 0)
+            prefs.edit().putBoolean("agent_auto_reflection_enabled", enabled).apply()
         }
 
         enum class AgentRole(val displayName: String, val emoji: String, val systemPrompt: String) {
@@ -2618,26 +3296,35 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 2. Call list_directory to understand the project structure.
 3. Call search_code or read_file_lines to gather context about what needs to change.
 4. Break the task into steps. Use propose_plan tool and WAIT for approval.
-5. Once approved, delegate to agents: CODER, REVIEWER, EXECUTOR, SUMMARIZER.
-6. **AFTER EVERY sub-task completes, ALWAYS call SUMMARIZER to write updated memory.**
-7. For long commands, expect background status notices and use wait_command/check_command/command_list instead of rerunning the command.
-8. Before declaring success, ensure REVIEWER and EXECUTOR have verified the relevant files or commands.
+5. Once approved, delegate to agents: CODER, REVIEWER, EXECUTOR, VISUAL_TESTER when a WebUI preview must be checked, and SUMMARIZER.
+6. Use SUMMARIZER only at bounded checkpoints: after plan approval, after meaningful file changes, and before finalization.
+7. Use report_progress at meaningful checkpoints: after planning, before and after specialist delegation, and after three consecutive tool calls. Each update must be one short sentence naming the current project phase and what happens next.
+8. For long commands, expect background status notices and use wait_command/check_command/command_list instead of rerunning the command.
+9. Before declaring success, ensure REVIEWER and EXECUTOR have verified the relevant files or commands.
+10. If repeated tool failures, unclear direction, or continuation budget exhaustion block progress, pause with a concise needs-direction state instead of cycling.
+
+## LOOP WAKE-UPS
+- A LOOP WAKE-UP is evidence, not an instruction to stop the project. Read its repeated action and error, inspect the current state, then use a materially different action or finish the current phase.
+- Do not repeat unchanged tool arguments, the same delegation, or the same plan after a wake-up.
+- Ask the user for direction only when the evidence shows a genuine external decision or dependency is required.
 
 ## DELEGATION IS MANDATORY:
+- Each call_agent invocation owns exactly ONE atomic todo-sized task. Never give one agent the whole implementation plan or multiple todos; create another invocation for the next todo.
 - **CODER**: For ALL code changes. Do NOT write code yourself. ALWAYS delegate to CODER.
 - **REVIEWER**: After CODER finishes, ALWAYS call REVIEWER to check the code.
 - **EXECUTOR**: After REVIEWER approves, call EXECUTOR to build/test. Analyze its output.
-- **SUMMARIZER**: Reads/writes project brain. Call VERY frequently (before AND after work).
+- **VISUAL_TESTER**: For local sandbox WebUI previews. It observes/interacts with the preview and reports findings; it does not edit files.
+- **SUMMARIZER**: Reads/writes project brain at bounded checkpoints, not after every small action.
 
 ## TYPICAL WORKFLOW:
-call_agent("SUMMARIZER", "Read project summary") → explore files → propose_plan →
-call_agent("CODER", "Implement: <specific changes>") →
-call_agent("REVIEWER", "Review changes in: <files>") →
-call_agent("EXECUTOR", "Build and test: <command>") →
-call_agent("SUMMARIZER", "Update summary: <what was done>")
+call_agent(agent="SUMMARIZER", name="Ada", task="Read project summary") → explore files → propose_plan →
+call_agent(agent="CODER", name="Darwin", task="Implement: <specific changes>") →
+call_agent(agent="REVIEWER", name="Curie", task="Review changes in: <files>") →
+call_agent(agent="EXECUTOR", name="Turing", task="Build and test: <command>") →
+call_agent(agent="SUMMARIZER", name="Ada", task="Update summary: <what was done>")
 
 ## RULES:
-- When user approves your plan via UI button, you get a tool result. Do NOT ask again. PROCEED.
+- When user approves your plan via UI button, you get a tool result. Do NOT ask again. PROCEED. First call todo_write to create or update the durable todo list, and keep it current throughout implementation and verification.
 - Use tools yourself (list_directory, read_file, search_code) before delegating.
 - Keep the structured brain files usable: summary.md for state, current_task.md for the active goal, todo.md for pending work, decisions.md for architectural choices, changed_files.md for touched files.
 - Do NOT invent tool names that don't exist.
@@ -2709,6 +3396,25 @@ call_agent("SUMMARIZER", "Update summary: <what was done>")
 - Prefer focused verification commands that prove the change worked instead of broad noisy commands when possible.
 - When done, ALWAYS call finish_task with a summary of results.
 - Do NOT invent tool names. Your tools: run_command, wait_command, check_command, command_list, cancel_command, send_command_input, read_file, read_file_lines, list_directory."""
+            ),
+            VISUAL_TESTER(
+                "Visual Tester",
+                "👁️",
+                """You are the Visual Tester agent. You validate local sandbox WebUI previews by observing the screen and interacting with the interface.
+
+## YOUR WORKFLOW:
+1. Call observe_preview to inspect the active WebUI preview and screenshot metadata.
+2. Use interact_preview one action at a time for taps, text entry, key presses, scrolling, waiting, or reloads.
+3. Observe again after interactions and compare the result to the expected behavior.
+4. Report findings as JSON through finish_task.
+
+## RULES:
+- You are read-only. You cannot edit files, memory, or run shell commands.
+- Test only the active local WebUI preview. Native graphical desktop testing is future work.
+- Keep interactions small and reversible. Do not spam clicks or type large text blocks.
+- If the preview is missing, not loaded, or the model cannot use vision, finish with a blocked report.
+- When done, ALWAYS call finish_task with JSON: {"status":"SUCCESS|FAILED|BLOCKED","tested_url":"...","actions":[...],"findings":[...],"screens_observed":0,"recommendations":[...] }.
+- Do NOT invent tool names. Your tools: observe_preview, interact_preview, finish_task."""
             ),
             SUMMARIZER(
                 "Summarizer",
@@ -2854,12 +3560,766 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             }
         }
 
+        private fun turnBranchKey(
+            rootTurnId: Long = activeRootTurnId.get(),
+            role: AgentRole = _currentAgent.value,
+            customAgent: com.example.llamadroid.data.db.CustomAgentEntity? = _activeCustomAgent.value
+        ): String = "$rootTurnId:${customAgent?.name ?: role.name}"
+
+        private fun startNewRootTurn(): Long {
+            closeRemoteWorkerRootSession(
+                com.example.llamadroid.LlamaApplication.instance,
+                "root_turn_replaced"
+            )
+            val id = logicalTurnCounter.incrementAndGet()
+            activeRootTurnId.set(id)
+            activeRootTurnStorageId = java.util.UUID.randomUUID().toString()
+            remoteWorkerRootSessionId = AgentRemoteChatClient.newSessionId()
+            noProgressContinuationsByEpoch.clear()
+            frozenToolsByTurnBranch.clear()
+            frozenSystemPromptByTurnBranch.clear()
+            frozenOptionalPromptByTurnBranch.clear()
+            loadedSkillIdsByTurnBranch.clear()
+            return id
+        }
+
+        private fun rootWorkerSessionId(): String {
+            return remoteWorkerRootSessionId ?: synchronized(this) {
+                remoteWorkerRootSessionId ?: AgentRemoteChatClient.newSessionId().also {
+                    remoteWorkerRootSessionId = it
+                }
+            }
+        }
+
+        private fun closeRemoteWorkerRootSession(context: Context, reason: String) {
+            val sessionId = synchronized(this) {
+                remoteWorkerRootSessionId.also { remoteWorkerRootSessionId = null }
+            } ?: return
+            agentScope.launch(Dispatchers.IO) {
+                AgentRemoteChatClient(context.applicationContext).closeSession(sessionId)
+                GenerationDiagnosticsStore.recordBreadcrumb(
+                    source = "agent_root_turn",
+                    event = "worker_session_released",
+                    details = "session=${sessionId.take(8)} reason=${reason.take(80)}"
+                )
+            }
+        }
+
+        private fun currentRootTurnId(): Long {
+            val current = activeRootTurnId.get()
+            return if (current > 0L) current else startNewRootTurn()
+        }
+
+        private fun currentRootTurnStorageId(agentKey: String): String =
+            "$activeRootTurnStorageId:$agentKey"
+
+        private suspend fun persistFrozenTurnContext(
+            context: Context,
+            agentKey: String,
+            backend: String,
+            modelLabel: String,
+            endpointGeneration: String,
+            contextTokens: Int,
+            configuredOutputTokens: Int,
+            effectiveOutputTokens: Int,
+            stableSystemPrompt: String,
+            tools: List<AgentTool>,
+            messages: List<CanonicalInferenceMessage>,
+            thinkingEnabled: Boolean,
+            parametersJson: String
+        ) {
+            val conversationId = _activeConversationId.value ?: return
+            val dao = AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+            val previous = dao.getLatestTurnContext(conversationId, agentKey)
+            val turnContext = AgentTurnContext(
+                rootTurnId = currentRootTurnStorageId(agentKey),
+                conversationId = conversationId,
+                agentKey = agentKey,
+                backend = backend,
+                modelLabel = modelLabel,
+                endpointGeneration = endpointGeneration,
+                contextTokens = contextTokens,
+                configuredOutputTokens = configuredOutputTokens,
+                effectiveOutputTokens = effectiveOutputTokens,
+                stableSystemPrompt = stableSystemPrompt,
+                tools = tools,
+                skillIds = loadedSkillIdsByTurnBranch[turnBranchKey()]?.toList().orEmpty().sorted(),
+                thinkingEnabled = thinkingEnabled,
+                parametersJson = parametersJson
+            )
+            val messagesHash = canonicalInferenceMessagesHash(messages)
+            val prefixCompatible = previous?.let { earlier ->
+                earlier.systemPromptHash == turnContext.systemPromptHash &&
+                    earlier.toolDefinitionsHash == turnContext.toolDefinitionsHash &&
+                    earlier.parametersHash == turnContext.parametersHash &&
+                    earlier.endpointGeneration == endpointGeneration &&
+                    earlier.modelLabel == modelLabel &&
+                    messages.size >= earlier.messageCount &&
+                    canonicalInferenceMessagePrefixHash(messages, earlier.messageCount) == earlier.messagesHash
+            }
+            val missComponents = buildList {
+                previous?.let { earlier ->
+                    if (earlier.systemPromptHash != turnContext.systemPromptHash) add("system_prompt")
+                    if (earlier.toolDefinitionsHash != turnContext.toolDefinitionsHash) add("tools")
+                    if (earlier.parametersHash != turnContext.parametersHash) add("chat_parameters")
+                    if (earlier.endpointGeneration != endpointGeneration) add("server_generation")
+                    if (earlier.modelLabel != modelLabel) add("model")
+                    if (
+                        messages.size < earlier.messageCount ||
+                        canonicalInferenceMessagePrefixHash(messages, earlier.messageCount) != earlier.messagesHash
+                    ) add("earlier_messages")
+                }
+            }
+            dao.upsertTurnContext(
+                com.example.llamadroid.data.db.AgentTurnContextEntity(
+                    rootTurnId = turnContext.rootTurnId,
+                    conversationId = conversationId,
+                    agentKey = agentKey,
+                    backend = backend,
+                    modelLabel = modelLabel,
+                    endpointGeneration = endpointGeneration,
+                    contextTokens = contextTokens,
+                    configuredOutputTokens = configuredOutputTokens,
+                    effectiveOutputTokens = effectiveOutputTokens,
+                    systemPromptHash = turnContext.systemPromptHash,
+                    toolDefinitionsHash = turnContext.toolDefinitionsHash,
+                    stablePrefixHash = turnContext.stablePrefixHash,
+                    parametersHash = turnContext.parametersHash,
+                    messageCount = messages.size,
+                    messagesHash = messagesHash,
+                    previousPrefixCompatible = prefixCompatible,
+                    cacheMissReason = missComponents.takeIf { it.isNotEmpty() }?.joinToString(","),
+                    skillIdsJson = stableJson(turnContext.skillIds),
+                    cacheMode = "AUTOMATIC",
+                    messageStartSequence = _messages.value.minOfOrNull { it.sequenceNumber } ?: 0,
+                    invocationId = activeInvocationId
+                )
+            )
+            activeInvocationId?.let { invocationId ->
+                val snapshot = _promptContextSnapshot.value
+                val serverState = _llamaServerRuntimeState.value
+                dao.updateInvocationMetrics(
+                    id = invocationId,
+                    backend = backend,
+                    modelLabel = modelLabel,
+                    serverPhase = when {
+                        serverState.isRefreshing -> "PROCESSING"
+                        serverState.isConnected -> "RUNNING"
+                        serverState.hasChecked -> "DISCONNECTED"
+                        else -> "UNKNOWN"
+                    },
+                    contextSize = contextTokens,
+                    rawEstimatedTokens = snapshot?.rawEstimatedTokens,
+                    packedEstimatedTokens = snapshot?.packedEstimatedTokens,
+                    actualPromptTokens = snapshot?.actualPromptTokens,
+                    actualCompletionTokens = snapshot?.actualCompletionTokens,
+                    contextPercent = snapshot?.actualPercentUsed ?: snapshot?.percentUsed
+                )
+            }
+            recordAgentEvent(
+                kind = "prompt_cache_state",
+                summary = if (prefixCompatible == false) {
+                    "Prompt prefix changed"
+                } else {
+                    "Prompt prefix metadata recorded"
+                },
+                details = "backend=$backend agent=$agentKey messages=${messages.size} tools=${tools.size} " +
+                    "compatible=${prefixCompatible ?: "unknown"} changed=${missComponents.joinToString(",").ifBlank { "none" }} " +
+                    "systemHash=${turnContext.systemPromptHash.take(16)} toolsHash=${turnContext.toolDefinitionsHash.take(16)} " +
+                    "messagesHash=${messagesHash.take(16)} prefixHash=${turnContext.stablePrefixHash.take(16)}"
+            )
+        }
+
+        private fun recordFrozenTurnContextForRequest(
+            context: Context,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            ollamaService: OllamaService,
+            agentKey: String,
+            backend: String,
+            model: String,
+            useLiteRtBackend: Boolean,
+            useLlamaSwap: Boolean,
+            useOpenAiBackend: Boolean,
+            liteRtModelFilename: String?,
+            contextTokens: Int,
+            configuredOutputTokens: Int,
+            effectiveOutputTokens: Int,
+            stableSystemPrompt: String,
+            tools: List<AgentTool>,
+            packedMessages: List<ChatMessage>,
+            thinkingEnabled: Boolean
+        ) {
+            agentScope.launch(Dispatchers.IO) {
+                val endpointGeneration = when {
+                    useLiteRtBackend -> "litert|${liteRtModelFilename.orEmpty()}|$contextTokens"
+                    useLlamaSwap -> "${settingsRepo.agentLlamaSwapUrl.value}|$model|$contextTokens"
+                    useOpenAiBackend -> "${settingsRepo.llamaServerUrl.value}|$model|" +
+                        "${settingsRepo.serverParallel.value}|$contextTokens|${settingsRepo.speculativeMode.value}"
+                    else -> "${ollamaService.baseUrl.value}|$model|$contextTokens"
+                }
+                val parametersJson = stableJson(
+                    linkedMapOf(
+                        "backend" to backend,
+                        "model" to model,
+                        "context_tokens" to contextTokens,
+                        "output_tokens" to effectiveOutputTokens,
+                        "thinking" to thinkingEnabled,
+                        "mtp" to settingsRepo.agentLiteRtMtpEnabled.value,
+                        "cache_prompt" to settingsRepo.serverCachePrompt.value,
+                        "slot_affinity" to settingsRepo.agentLlamaSlotAffinityMode.value
+                    )
+                )
+                persistFrozenTurnContext(
+                    context = context,
+                    agentKey = agentKey,
+                    backend = backend,
+                    modelLabel = friendlyBackendModelLabel(model) ?: model,
+                    endpointGeneration = endpointGeneration,
+                    contextTokens = contextTokens,
+                    configuredOutputTokens = configuredOutputTokens,
+                    effectiveOutputTokens = effectiveOutputTokens,
+                    stableSystemPrompt = stableSystemPrompt,
+                    tools = tools,
+                    messages = packedMessages.map {
+                        it.toOllamaMessage(includeThinking = false).toCanonicalInferenceMessage()
+                    },
+                    thinkingEnabled = thinkingEnabled,
+                    parametersJson = parametersJson
+                )
+            }
+        }
+
+        private suspend fun prepareSkillMetadataForTurn(
+            context: Context,
+            userInitiated: Boolean,
+            activeAgentRole: AgentRole,
+            activeCustomAgent: com.example.llamadroid.data.db.CustomAgentEntity?
+        ): String {
+            val skillRepository = AgentSkillRepository(context.applicationContext)
+            if (
+                userInitiated &&
+                _currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX
+            ) {
+                runCatching {
+                    skillRepository.discoverProjectSkills(
+                        AgentLocalWorkspaceSupport.rootForProject(
+                            context.applicationContext,
+                            _currentProjectFolder.value
+                        )
+                    )
+                }.onFailure {
+                    addDebugLog("⚠️ Project skill discovery failed: ${it.message}")
+                }
+            }
+            return runCatching {
+                skillRepository.metadataCatalogForPrompt(
+                    _activeConversationId.value,
+                    activeCustomAgent?.name ?: activeAgentRole.name
+                )
+            }.getOrDefault("")
+        }
+
+        private fun consumePendingVisionMessage(
+            currentAgent: AgentRole,
+            activeCustomAgent: com.example.llamadroid.data.db.CustomAgentEntity?
+        ): ChatMessage? {
+            return synchronized(AgentService::class.java) {
+                val pending = pendingVisionAttachment
+                if (
+                    pending != null &&
+                    File(pending.imagePath).exists() &&
+                    pending.roleName == currentAgent.name &&
+                    pending.customAgentName == activeCustomAgent?.name &&
+                    pending.sessionId == _currentSessionId.value
+                ) {
+                    pendingVisionAttachment = null
+                    ChatMessage(
+                        role = "user",
+                        content = "Inspect the attached workspace image at `${pending.workspacePath}` and use it in your next step.",
+                        imagePath = pending.imagePath
+                    )
+                } else {
+                    null
+                }
+            }
+        }
+
+        private suspend fun persistPendingQuestion(
+            context: Context,
+            toolCall: OllamaService.ToolCall,
+            specification: QuestionSpec
+        ): com.example.llamadroid.data.db.AgentPendingQuestionEntity {
+            val conversationId = _activeConversationId.value
+                ?: throw IllegalStateException("No active project conversation is selected")
+            val toolCallId = toolCall.id
+                ?: throw IllegalArgumentException("question requires a stable tool-call ID")
+            val entity = com.example.llamadroid.data.db.AgentPendingQuestionEntity(
+                id = java.util.UUID.randomUUID().toString(),
+                conversationId = conversationId,
+                rootTurnId = currentRootTurnId().toString(),
+                agentSessionId = _currentSessionId.value ?: "root",
+                toolCallId = toolCallId,
+                specificationJson = specification.toJson()
+            )
+            AppDatabase.getDatabase(context.applicationContext)
+                .agentWorkflowDao()
+                .upsertPendingQuestion(entity)
+            _pendingQuestionCount.value += 1
+            setStatusText(context.getString(R.string.agent_status_waiting_for_answer))
+            activeInstance?.notifyAgentAttention(
+                UnifiedNotificationManager.AgentAttentionReason.USER_INPUT_REQUIRED,
+                context.getString(R.string.agent_questions_title),
+                context.getString(R.string.agent_status_waiting_for_answer)
+            )
+            updateActiveConversationResumeState(
+                RESUME_STATE_WAITING_FOR_USER,
+                context.getString(R.string.agent_resume_reason_waiting_for_answer)
+            )
+            checkpointRuntimeState(
+                status = context.getString(R.string.agent_status_waiting_for_answer),
+                reason = "Structured question is waiting for an answer.",
+                force = true
+            )
+            return entity
+        }
+
+        private fun authoritativeQuestionToolResult(answerJson: String): String =
+            buildToolResultEnvelope(
+                toolName = "question",
+                status = "ok",
+                summary = "The user answered the structured question with authoritative requirements.",
+                importantOutput = answerJson,
+                nextHint = "Treat this answer as critical user requirements. Follow it unless the user later explicitly changes it; do not ask the same question again."
+            )
+
+        fun savePendingQuestionDraft(
+            context: Context,
+            questionId: String,
+            draftAnswerJson: String,
+            currentPage: Int,
+            isCollapsed: Boolean
+        ): Job = agentScope.launch(Dispatchers.IO) {
+            AppDatabase.getDatabase(context.applicationContext)
+                .agentWorkflowDao()
+                .updateQuestionDraft(
+                    id = questionId,
+                    draftAnswerJson = draftAnswerJson.take(20_000),
+                    currentPage = currentPage.coerceAtLeast(0),
+                    isCollapsed = isCollapsed
+                )
+        }
+
+        fun answerPendingQuestion(
+            context: Context,
+            ollamaService: OllamaService,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            agentService: AgentService,
+            questionId: String,
+            answerJson: String
+        ): Job {
+            rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
+            val refs = lastRuntimeRefs ?: return agentScope.launch { }
+            return agentScope.launch(Dispatchers.IO) {
+                val dao = AppDatabase.getDatabase(refs.context).agentWorkflowDao()
+                val pendingQuestion = dao.getPendingQuestion(questionId) ?: return@launch
+                val authoritativeAnswer = runCatching {
+                    authoritativeQuestionAnswerJson(pendingQuestion.specificationJson, answerJson)
+                }.getOrElse { error ->
+                    addDebugLog("Question answer validation failed: ${error.message}")
+                    return@launch
+                }
+                val updated = dao.answerQuestionExactlyOnce(questionId, authoritativeAnswer)
+                if (updated != 1) return@launch
+                val question = dao.getPendingQuestion(questionId) ?: return@launch
+                addMessage(
+                    ChatMessage(
+                        role = "tool",
+                        content = authoritativeQuestionToolResult(authoritativeAnswer),
+                        toolName = "question",
+                        toolCallId = question.toolCallId
+                    )
+                )
+                _pendingQuestionCount.value = (_pendingQuestionCount.value - 1).coerceAtLeast(0)
+                if (_pendingQuestionCount.value == 0 && !hasPendingPlanApproval()) {
+                    UnifiedNotificationManager.dismissAgentAttention()
+                }
+                updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
+                allowAutomaticContinuations()
+                if (dao.markQuestionContinuationEnqueued(questionId) == 1) {
+                    enqueueAgentContinuation(
+                        context = refs.context,
+                        ollamaService = refs.ollamaService,
+                        settingsRepo = refs.settingsRepo,
+                        agentService = refs.agentService,
+                        reason = "structured question answered",
+                        runEpoch = currentRunEpoch()
+                    )
+                }
+            }
+        }
+
+        fun restoreQuestionWorkflow(
+            context: Context,
+            ollamaService: OllamaService,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            agentService: AgentService,
+            conversationId: Long
+        ): Job {
+            rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
+            return agentScope.launch(Dispatchers.IO) {
+                val dao = AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                val pending = dao.getPendingQuestions(conversationId)
+                _pendingQuestionCount.value = pending.size
+                var pendingPlan = dao.getPendingPlan(conversationId)
+                if (pendingPlan?.state == "APPROVING" && pendingPlan.approvalOperationId != null) {
+                    val interruptedOperationId = pendingPlan.approvalOperationId ?: return@launch
+                    // The external plan-file write is idempotent. Return an
+                    // interrupted half-resolution to the visible approval state
+                    // so the user can retry safely after process death.
+                    dao.failPlanResolution(
+                        id = pendingPlan.id,
+                        operationId = interruptedOperationId,
+                        errorMessage = "Plan approval was interrupted and can be retried."
+                    )
+                    pendingPlan = dao.getPendingPlan(conversationId)
+                }
+                _pendingPlanApprovalId.value = pendingPlan?.id
+                pendingPlan?.let { plan ->
+                    if (_messages.value.none { it.id == plan.planMessageId }) {
+                        addMessage(
+                            ChatMessage(
+                                id = plan.planMessageId,
+                                role = "assistant",
+                                content = "### Propose Plan: ${plan.summary}\n\n${plan.originalPlan}",
+                                isPlan = true,
+                                isPlanApproved = false,
+                                planModifiedContent = plan.editedPlan,
+                                toolCallId = plan.toolCallId,
+                                toolName = "propose_plan"
+                            )
+                        )
+                    }
+                }
+                if (
+                    pendingPlan != null &&
+                    pendingPlan.state in setOf("APPROVED", "STARTING_BUILD") &&
+                    !pendingPlan.continuationEnqueued
+                ) {
+                    // Resume the durable approval transaction at its last
+                    // checkpoint. approvePendingPlan is idempotent: it keeps
+                    // the original proposal/tool ID, skips an already-written
+                    // plan file, and queues the Build turn exactly once.
+                    approvePendingPlan(
+                        context = context,
+                        agentService = agentService,
+                        id = pendingPlan.planMessageId,
+                        editedPlan = pendingPlan.editedPlan
+                    )
+                    return@launch
+                }
+                if (pendingPlan != null || hasPendingPlanApproval()) {
+                    blockAutomaticContinuations()
+                    updateActiveConversationResumeState(
+                        RESUME_STATE_WAITING_FOR_USER,
+                        context.getString(R.string.agent_status_awaiting_approval)
+                    )
+                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                    agentService.notifyAgentAttention(
+                        UnifiedNotificationManager.AgentAttentionReason.PLAN_APPROVAL_REQUIRED,
+                        context.getString(R.string.agent_plan_title),
+                        context.getString(R.string.agent_status_awaiting_approval)
+                    )
+                } else if (pending.isNotEmpty()) {
+                    updateActiveConversationResumeState(
+                        RESUME_STATE_WAITING_FOR_USER,
+                        context.getString(R.string.agent_resume_reason_waiting_for_answer)
+                    )
+                    agentService.notifyAgentAttention(
+                        UnifiedNotificationManager.AgentAttentionReason.USER_INPUT_REQUIRED,
+                        context.getString(R.string.agent_questions_title),
+                        context.getString(R.string.agent_status_waiting_for_answer)
+                    )
+                }
+                dao.getAnsweredQuestionsAwaitingContinuation(conversationId).forEach { answered ->
+                    val answerJson = answered.answerJson ?: return@forEach
+                    if (_messages.value.none {
+                            it.role == "tool" &&
+                                it.toolCallId == answered.toolCallId &&
+                                it.toolName == "question"
+                        }
+                    ) {
+                        addMessage(
+                            ChatMessage(
+                                role = "tool",
+                                content = authoritativeQuestionToolResult(answerJson),
+                                toolName = "question",
+                                toolCallId = answered.toolCallId
+                            )
+                        )
+                    }
+                    if (dao.markQuestionContinuationEnqueued(answered.id) == 1) {
+                        allowAutomaticContinuations()
+                        enqueueAgentContinuation(
+                            context = context.applicationContext,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            reason = "restored structured question answer",
+                            runEpoch = currentRunEpoch()
+                        )
+                    }
+                }
+            }
+        }
+
         private fun currentAssistantIdentity(): Pair<String?, String?> {
             val activeCustom = _activeCustomAgent.value
             return if (activeCustom != null) {
                 null to (activeCustom.displayName.takeIf { it.isNotBlank() } ?: activeCustom.name)
             } else {
                 _currentAgent.value.name to null
+            }
+        }
+
+        private data class PendingAgentContinuation(
+            val context: Context,
+            val ollamaService: OllamaService,
+            val settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            val agentService: AgentService,
+            val isRedo: Boolean = false,
+            val recoveryInstruction: String? = null,
+            val recoveryMode: Boolean = false,
+            val userInitiated: Boolean = false,
+            val runEpoch: Long,
+            val rootTurnId: Long,
+            val reason: String
+        )
+
+        private data class PendingAgentDelegation(
+            val toolCall: OllamaService.ToolCall,
+            val parentSessionId: String?,
+            val parentAgent: AgentRole,
+            val parentTask: String?,
+            val parentCustomAgent: com.example.llamadroid.data.db.CustomAgentEntity?,
+            val agentLabel: String,
+            val invocationId: String,
+            val resolvedDisplayName: String
+        )
+
+        private fun restoreDelegationParentContext(pending: PendingAgentDelegation) {
+            activeInvocationId = null
+            _currentSessionId.value = pending.parentSessionId
+            _activeCustomAgent.value = pending.parentCustomAgent
+            setCurrentAgent(pending.parentAgent)
+            setCurrentTask(pending.parentTask)
+        }
+
+        private fun updateDelegationDisplayName(toolCallId: String?, resolvedName: String) {
+            if (toolCallId.isNullOrBlank()) return
+            _messages.update { current ->
+                current.map { message ->
+                    if (message.role == "assistant" && message.toolCallId == toolCallId) {
+                        message.copy(
+                            toolArgs = message.toolArgs.orEmpty() + mapOf(
+                                "requested_name" to message.toolArgs?.get("name").orEmpty(),
+                                "name" to resolvedName
+                            )
+                        )
+                    } else {
+                        message
+                    }
+                }
+            }
+        }
+
+        private fun recordRunawayContinuationSuspected(
+            context: Context,
+            reason: String,
+            runEpoch: Long,
+            rootTurnId: Long,
+            queueDepth: Int = pendingContinuations.size,
+            continuationCount: Int = continuationsByEpoch[runEpoch]?.get() ?: 0,
+            noProgressCount: Int = noProgressContinuationsByEpoch[runEpoch]?.get() ?: 0,
+            loadingLeases: Int = loadingRefCount.get().coerceAtLeast(0)
+        ) {
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "agent_turn_runner",
+                event = "runaway_continuation_suspected",
+                details = "reason=${reason.take(120)} epoch=$runEpoch rootTurn=$rootTurnId queueDepth=$queueDepth " +
+                    "continuations=$continuationCount noProgress=$noProgressCount loadingLeases=$loadingLeases agent=${_currentAgent.value.name}"
+            )
+            recordProjectJournalEvent(
+                category = "ERROR",
+                eventType = "runaway_continuation_suspected",
+                phase = _statusText.value,
+                agentRole = _currentAgent.value.name,
+                customAgentName = _activeCustomAgent.value?.name,
+                status = "ERROR",
+                summary = "Continuation guard paused automatic agent work: $reason"
+            )
+        }
+
+        private fun enqueueAgentContinuation(
+            context: Context,
+            ollamaService: OllamaService,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            agentService: AgentService,
+            reason: String,
+            isRedo: Boolean = false,
+            recoveryInstruction: String? = null,
+            recoveryMode: Boolean = false,
+            userInitiated: Boolean = false,
+            runEpoch: Long = currentRunEpoch()
+        ): Job {
+            if (hasPendingPlanApproval()) {
+                addDebugLog("🧱 Ignoring continuation while plan approval is pending.")
+                return agentScope.launch { }
+            }
+            if (!userInitiated && areAutomaticContinuationsBlocked()) {
+                addDebugLog("🧱 Ignoring queued continuation because the user pressed Stop.")
+                refreshIdleStatusIfNeeded()
+                return agentScope.launch { }
+            }
+            val rootTurnId = currentRootTurnId()
+            val continuationCount = continuationsByEpoch
+                .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
+                .incrementAndGet()
+            val isNoProgressRecovery = recoveryMode || reason.contains("recovery", ignoreCase = true) ||
+                reason.contains("queued behind active", ignoreCase = true)
+            val noProgressCount = noProgressContinuationsByEpoch
+                .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
+                .let { counter -> if (isNoProgressRecovery) counter.incrementAndGet() else counter.apply { set(0) }.get() }
+            val queueDepth = pendingContinuations.size + 1
+            val guardDecision = AgentRuntimeSupport.evaluateContinuationGuard(
+                continuationCount = continuationCount,
+                queueDepth = queueDepth,
+                maxContinuations = MAX_CONTINUATIONS_PER_EPOCH,
+                maxQueueDepth = MAX_CONTINUATION_QUEUE_DEPTH,
+                reason = reason,
+                consecutiveNoProgress = noProgressCount,
+                maxNoProgress = MAX_NO_PROGRESS_CONTINUATIONS
+            )
+            if (guardDecision.shouldPause) {
+                val guardReason = context.getString(
+                    R.string.agent_runaway_continuation_reason,
+                    reason,
+                    continuationCount,
+                    queueDepth
+                )
+                recordRunawayContinuationSuspected(context, guardReason, runEpoch, rootTurnId, queueDepth, continuationCount, noProgressCount)
+                pauseForNeedsDirection(context, guardReason)
+                return agentScope.launch { }
+            }
+            pendingContinuations.add(
+                PendingAgentContinuation(
+                    context = context.applicationContext,
+                    ollamaService = ollamaService,
+                    settingsRepo = settingsRepo,
+                    agentService = agentService,
+                    isRedo = isRedo,
+                    recoveryInstruction = recoveryInstruction,
+                    recoveryMode = recoveryMode,
+                    userInitiated = userInitiated,
+                    runEpoch = runEpoch,
+                    rootTurnId = rootTurnId,
+                    reason = reason
+                )
+            )
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "agent_turn_runner",
+                event = "continuation_enqueued",
+                details = "reason=${reason.take(120)} epoch=$runEpoch rootTurn=$rootTurnId queueDepth=$queueDepth " +
+                    "continuations=$continuationCount noProgress=$noProgressCount progress=${!isNoProgressRecovery} loadingLeases=${loadingRefCount.get().coerceAtLeast(0)}"
+            )
+            drainAgentContinuationQueue()
+            return agentScope.launch { }
+        }
+
+        private fun drainAgentContinuationQueue() {
+            if (!continuationDrainActive.compareAndSet(false, true)) return
+            agentScope.launch {
+                try {
+                    while (isActive) {
+                        val existingJob = synchronized(currentChatJobLock) { currentChatJob }
+                        if (existingJob?.isActive == true) break
+                        val next = pendingContinuations.poll() ?: break
+                        if (!isAgentRunActive(next.runEpoch)) continue
+                        GenerationDiagnosticsStore.recordBreadcrumb(
+                            source = "agent_turn_runner",
+                            event = "continuation_dequeued",
+                            details = "reason=${next.reason.take(120)} epoch=${next.runEpoch} rootTurn=${next.rootTurnId} " +
+                                "queueDepth=${pendingContinuations.size} loadingLeases=${loadingRefCount.get().coerceAtLeast(0)}"
+                        )
+                        val turnJob = sendMessage(
+                            next.context,
+                            next.ollamaService,
+                            next.settingsRepo,
+                            next.agentService,
+                            isRedo = next.isRedo,
+                            recoveryInstruction = next.recoveryInstruction,
+                            recoveryMode = next.recoveryMode,
+                            queueBehindActiveJob = false,
+                            userInitiated = next.userInitiated
+                        )
+                        turnJob.join()
+                    }
+                } finally {
+                    continuationDrainActive.set(false)
+                    if (pendingContinuations.isNotEmpty()) {
+                        val existingJob = synchronized(currentChatJobLock) { currentChatJob }
+                        if (existingJob?.isActive != true) drainAgentContinuationQueue()
+                    }
+                }
+            }
+        }
+
+        private fun postOrchestratorProgressUpdate(context: Context, phase: String, summary: String) {
+            val cleanPhase = phase.trim().take(80).ifBlank {
+                context.getString(R.string.agent_progress_phase_implementation)
+            }
+            val cleanSummary = summary
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(220)
+                .ifBlank { context.getString(R.string.agent_progress_default_summary) }
+            val signature = "$cleanPhase|$cleanSummary"
+            synchronized(progressUpdateLock) {
+                if (signature == lastProgressSignature) return
+                lastProgressSignature = signature
+                lastAutomaticProgressAt = System.currentTimeMillis()
+                consecutiveCompletedTools.set(0)
+            }
+            addMessage(
+                ChatMessage(
+                    role = "assistant",
+                    content = context.getString(R.string.agent_progress_update, cleanPhase, cleanSummary),
+                    agentRole = AgentRole.ORCHESTRATOR.name
+                )
+            )
+        }
+
+        private fun maybePostAutomaticToolProgress(context: Context, toolName: String) {
+            if (_currentAgent.value != AgentRole.ORCHESTRATOR || toolName == "report_progress") return
+            val count = consecutiveCompletedTools.incrementAndGet()
+            if (count < 3) return
+            val now = System.currentTimeMillis()
+            if (now - lastAutomaticProgressAt < RUNTIME_CHECKPOINT_INTERVAL_MS) return
+            postOrchestratorProgressUpdate(
+                context,
+                context.getString(R.string.agent_progress_phase_implementation),
+                context.getString(R.string.agent_progress_tools_checkpoint, count)
+            )
+        }
+
+        private fun progressPhaseForAgent(agentName: String): String {
+            val resources = com.example.llamadroid.LlamaApplication.instance.resources
+            return when (agentName.uppercase()) {
+                AgentRole.CODER.name -> resources.getString(R.string.agent_progress_phase_implementation)
+                AgentRole.REVIEWER.name -> resources.getString(R.string.agent_progress_phase_review)
+                AgentRole.EXECUTOR.name -> resources.getString(R.string.agent_progress_phase_validation)
+                AgentRole.VISUAL_TESTER.name -> resources.getString(R.string.agent_progress_phase_visual_testing)
+                AgentRole.SUMMARIZER.name -> resources.getString(R.string.agent_progress_phase_memory)
+                else -> resources.getString(R.string.agent_progress_phase_implementation)
             }
         }
 
@@ -2886,7 +4346,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         private fun buildMemoryGateSystemPrompt(): String? {
-            if (!_memoryDirty.value || _currentAgent.value == AgentRole.SUMMARIZER) return null
+            if (!_memoryDirty.value || _currentAgent.value == AgentRole.SUMMARIZER || _currentAgent.value == AgentRole.VISUAL_TESTER) return null
             val reason = _memoryDirtyReason.value ?: "Recent work changed project state."
             return buildString {
                 appendLine("MEMORY UPDATE REQUIRED:")
@@ -2929,7 +4389,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         private fun shouldGateCompletionForMemory(content: String): Boolean {
-            if (!_memoryDirty.value || _currentAgent.value == AgentRole.SUMMARIZER) return false
+            if (!_memoryDirty.value || _currentAgent.value == AgentRole.SUMMARIZER || _currentAgent.value == AgentRole.VISUAL_TESTER) return false
             if (_currentSessionId.value != null && _currentAgent.value != AgentRole.ORCHESTRATOR) return true
 
             val completionRegex = Regex(
@@ -2990,9 +4450,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
          * End current session and return to parent
          * @param summary Summary of what was accomplished to pass to parent
          */
-        fun endSession(summary: String) {
-            val currentId = _currentSessionId.value ?: return
-            val currentSession = _sessions.value[currentId] ?: return
+        fun endSession(summary: String): CompletedAgentSession? {
+            val currentId = _currentSessionId.value ?: return null
+            val currentSession = _sessions.value[currentId] ?: return null
             val parentId = currentSession.parentSessionId
             val parsedResult = runCatching {
                 AgentRuntimeSupport.parseAgentResult(currentSession.agentType, summary)
@@ -3018,12 +4478,6 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             rememberCompletedSession(completed)
 
             if (parentId != null) {
-                // Add completion message to parent session
-                addMessage(ChatMessage(
-                    role = "user",
-                    content = "✅ **${currentSession.agentType} Agent Finished:**\n\n${completed.result.toParentFacingSummary(currentSession.agentType, completed.evidence)}\n\nPlease continue with the next step or task."
-                ))
-
                 addDebugLog("📂 Returned to parent session ${parentId.take(8)}")
             }
             when {
@@ -3035,6 +4489,79 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 }
             }
             recordAgentEvent("agent_session_end", "Finished ${currentSession.agentType} session", summary)
+            return completed
+        }
+
+        private fun completePendingDelegation(
+            context: Context,
+            ollamaService: OllamaService,
+            settingsRepo: com.example.llamadroid.data.SettingsRepository,
+            agentService: AgentService,
+            completed: CompletedAgentSession?,
+            runEpoch: Long
+        ): Boolean {
+            if (completed == null) return false
+            val pending = pendingDelegations.remove(completed.sessionId) ?: return false
+            restoreDelegationParentContext(pending)
+            val parentSummary = completed.result.toParentFacingSummary(pending.agentLabel, completed.evidence)
+            val output = buildToolResultEnvelope(
+                toolName = "call_agent",
+                status = if (completed.result.status.equals("FAILED", ignoreCase = true)) "error" else "ok",
+                summary = parentSummary,
+                nextHint = context.getString(R.string.agent_delegation_todo_next_hint)
+            )
+            addMessage(
+                ChatMessage(
+                    role = "tool",
+                    content = output,
+                    toolName = pending.toolCall.name,
+                    toolCallId = pending.toolCall.id,
+                    toolOutput = parentSummary
+                )
+            )
+            agentScope.launch(Dispatchers.IO) {
+                val status = if (completed.result.status.equals("FAILED", ignoreCase = true)) "FAILED" else "COMPLETED"
+                AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                    .finishInvocationExactlyOnce(
+                        id = pending.invocationId,
+                        status = status,
+                        resultSummary = parentSummary.take(4_000)
+                    )
+            }
+            postOrchestratorProgressUpdate(
+                context = context,
+                phase = progressPhaseForAgent(pending.agentLabel),
+                summary = context.getString(R.string.agent_progress_agent_finished, pending.agentLabel)
+            )
+            // The child has returned and parent ownership is restored. This is the
+            // first valid boundary for guidance queued from the main chat while the
+            // child was running; drain it before continuing the orchestrator.
+            agentScope.launch {
+                val deliveredGuidance = drainPendingUrgentUserGuidance(
+                    context,
+                    "delegation ${pending.agentLabel} return"
+                )
+                val checkpoint = agentService.persistVisibleRuntimeStateNow(
+                    reason = "Committed delegation return: ${pending.agentLabel}"
+                )
+                if (checkpoint.isFailure) {
+                    pauseForNeedsDirection(context, context.getString(R.string.agent_checkpoint_failed_continue))
+                    return@launch
+                }
+                enqueueAgentContinuation(
+                    context = context,
+                    ollamaService = ollamaService,
+                    settingsRepo = settingsRepo,
+                    agentService = agentService,
+                    reason = if (deliveredGuidance > 0) {
+                        "delegation ${pending.agentLabel} completed with user guidance"
+                    } else {
+                        "delegation ${pending.agentLabel} completed"
+                    },
+                    runEpoch = runEpoch
+                )
+            }
+            return true
         }
 
         /**
@@ -3113,8 +4640,117 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             _activeCustomAgent.value = agent
         }
 
+        private val _currentWorkspaceBackend = MutableStateFlow(AgentWorkspaceBackendType.REMOTE_SSH)
+        val currentWorkspaceBackend: StateFlow<AgentWorkspaceBackendType> = _currentWorkspaceBackend.asStateFlow()
+
+        private val _currentRuntimeCapabilities = MutableStateFlow(AgentLocalRuntimeCapabilities())
+        val currentRuntimeCapabilities: StateFlow<AgentLocalRuntimeCapabilities> = _currentRuntimeCapabilities.asStateFlow()
+
+        fun setCurrentWorkspaceBackend(backend: AgentWorkspaceBackendType) {
+            _currentWorkspaceBackend.value = backend
+            if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                stopHeartbeat()
+                retryJob?.cancel()
+                retryJob = null
+                _retryMessage.value = null
+                runCatching { session?.disconnect() }
+                session = null
+                _isConnected.value = false
+                _connectionStatus.value = ConnectionStatus.UNKNOWN
+            }
+        }
+
+        fun setCurrentRuntimeCapabilities(capabilities: AgentLocalRuntimeCapabilities) {
+            _currentRuntimeCapabilities.value = capabilities
+        }
+
+        fun setCurrentPlanningModeEnabled(enabled: Boolean) {
+            _currentPlanningModeEnabled.value = enabled
+            if (!enabled) {
+                _planningImplementationUnlocked.value = false
+            }
+        }
+
+        fun requestManualCompaction(focus: String? = null) {
+            pendingHardCompaction = true
+            recordAgentEvent(
+                kind = "manual_compaction_requested",
+                summary = "Manual context compaction requested",
+                details = "focusPresent=${!focus.isNullOrBlank()} rootTurn=${currentRootTurnId()}"
+            )
+        }
+
+        fun unlockPlanningImplementation() {
+            // A plan approval is not permission to build while the project is
+            // still explicitly in Plan mode. The UI offers an intentional
+            // switch to Build mode after approval; retain this method only for
+            // older callers that used to grant an in-place implementation
+            // exception.
+            _planningImplementationUnlocked.value = false
+        }
+
+        fun clearPlanningImplementationUnlock() {
+            _planningImplementationUnlocked.value = false
+        }
+
+        fun updateActiveConversationResumeState(resumeState: String, reason: String? = null) {
+            val conversationId = _activeConversationId.value ?: _preferredConversationId.value ?: return
+            val appContext = com.example.llamadroid.LlamaApplication.instance
+            agentScope.launch(Dispatchers.IO) {
+                runCatching {
+                    AppDatabase.getDatabase(appContext)
+                        .agentChatDao()
+                        .updateResumeState(conversationId, resumeState, reason)
+                }.onFailure {
+                    addDebugLog("⚠️ Failed to persist agent resume state: ${it.message}")
+                }
+            }
+        }
+
+        private fun pauseForNeedsDirection(context: Context, reason: String) {
+            blockAutomaticContinuations()
+            _currentAgent.value = AgentRole.ORCHESTRATOR
+            _currentTask.value = null
+            setIsLoading(false, context.getString(R.string.agent_status_needs_direction))
+            addDebugLog("🧭 Pausing agent workflow: $reason")
+            addMessage(
+                ChatMessage(
+                    role = "system",
+                    content = context.getString(R.string.agent_needs_direction_message, reason)
+                )
+            )
+            updateActiveConversationResumeState(RESUME_STATE_NEEDS_DIRECTION, reason)
+        }
+
+        private fun postLoopWakeup(
+            context: Context,
+            signal: String,
+            occurrenceCount: Int,
+            evidence: String
+        ) {
+            val compactEvidence = evidence
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(280)
+            val message = context.getString(
+                R.string.agent_loop_wakeup_message,
+                signal,
+                occurrenceCount,
+                compactEvidence
+            )
+            addDebugLog("⚠️ $message")
+            recordAgentEvent("loop_wakeup", signal, compactEvidence)
+            addMessage(ChatMessage(role = "system", content = message))
+        }
+
         // Helper to get brain path for current project
-        fun getBrainPath(): String = "$WORKSPACE_PATH/${_currentProjectFolder.value}/brain"
+        fun getBrainPath(): String {
+            return if (_currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                "${AgentLocalWorkspaceSupport.displayRoot(_currentProjectFolder.value.ifBlank { "default_project" })}/brain"
+            } else {
+                "$WORKSPACE_PATH/${_currentProjectFolder.value}/brain"
+            }
+        }
 
         private fun shouldTrackMessageAsCurrentTask(message: ChatMessage): Boolean {
             if (message.role != "user") return false
@@ -3156,6 +4792,15 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 eventTimelineDeque.addLast(event)
                 _eventTimeline.value = eventTimelineDeque.toList()
             }
+            recordProjectJournalEvent(
+                category = journalCategoryForEvent(kind),
+                eventType = kind,
+                phase = _statusText.value,
+                status = if (kind.contains("error", ignoreCase = true) || kind.contains("invalid", ignoreCase = true)) "ERROR" else "OK",
+                summary = event.summary,
+                contentChars = details?.length,
+                contentLines = details?.lineSequence()?.count()
+            )
             if (!persist) return
 
             val svc = activeInstance ?: return
@@ -3181,6 +4826,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "CODER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"changed_files\":[...],\"intent_per_file\":{\"path\":\"why\"},\"verification_reads\":[...],\"remaining_risks\":[...]}. Write memory before finishing."
                 "REVIEWER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"findings\":[{\"file\":\"...\",\"line\":12,\"severity\":\"HIGH|MEDIUM|LOW\",\"description\":\"...\",\"recommendation\":\"...\"}],\"remaining_risks\":[...]}. Write memory before finishing."
                 "EXECUTOR" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"commands_run\":[...],\"command_ids\":[...],\"final_status\":\"...\",\"key_outputs\":[...],\"next_recommendation\":\"...\"}. Write memory before finishing."
+                "VISUAL_TESTER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"tested_url\":\"...\",\"actions\":[...],\"findings\":[...],\"screens_observed\":0,\"recommendations\":[...] }."
                 "SUMMARIZER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"memory_files_updated\":[...],\"reason_per_file\":{\"file\":\"why\"},\"carry_forward_notes\":[...] }."
                 else -> "Return via finish_task with a JSON object that includes status plus a concise summary, the evidence collected, and the next recommended step."
             }
@@ -3195,6 +4841,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 AgentRole.CODER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"changed_files\":[\"path\"],\"intent_per_file\":{\"path\":\"what changed and why\"},\"verification_reads\":[\"file:line\"],\"remaining_risks\":[\"risk\"]}"
                 AgentRole.REVIEWER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"findings\":[{\"file\":\"path\",\"line\":123,\"severity\":\"HIGH|MEDIUM|LOW\",\"description\":\"issue\",\"recommendation\":\"fix\"}],\"remaining_risks\":[\"risk\"]}"
                 AgentRole.EXECUTOR -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"commands_run\":[\"./gradlew test\"],\"command_ids\":[\"cmd_123\"],\"final_status\":\"passed|failed|blocked\",\"key_outputs\":[\"important output\"],\"next_recommendation\":\"next action\"}"
+                AgentRole.VISUAL_TESTER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"tested_url\":\"url\",\"actions\":[\"observe\",\"tap\"],\"findings\":[\"finding\"],\"screens_observed\":1,\"recommendations\":[\"next action\"]}"
                 AgentRole.SUMMARIZER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"memory_files_updated\":[\"summary.md\"],\"reason_per_file\":{\"summary.md\":\"why\"},\"carry_forward_notes\":[\"note\"]}"
                 AgentRole.ORCHESTRATOR -> if (activeCustom != null) {
                     "FINISH TASK JSON SCHEMA: return a JSON object with status, summary, evidence, and next step."
@@ -3370,7 +5017,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         @Volatile private var lastRuntimeCheckpointAt = 0L
 
         private fun trackCurrentChatJob(job: Job) {
+            tryTrackCurrentChatJob(job, requireIdle = false)
+        }
+
+        /**
+         * Registers a lazy model turn without constructing its suspend lambda while holding the
+         * monitor. Besides avoiding a Kotlin coroutine-transformer pathological case, the final
+         * in-lock check preserves the one-active-turn invariant when callers race.
+         */
+        private fun tryTrackCurrentChatJob(job: Job, requireIdle: Boolean): Boolean {
             synchronized(currentChatJobLock) {
+                if (requireIdle && currentChatJob?.isActive == true) {
+                    return false
+                }
                 currentChatJob = job
             }
             job.invokeOnCompletion {
@@ -3380,7 +5039,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
                 }
             }
+            return true
         }
+
+        private fun peekCurrentChatJob(): Job? =
+            synchronized(currentChatJobLock) { currentChatJob }
 
         private fun trackActiveAgentWorkJob(job: Job) {
             synchronized(activeAgentWorkJobsLock) {
@@ -3403,7 +5066,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         private fun currentRunEpoch(): Long = activeRunEpoch.get()
 
-        private fun invalidateRunEpoch(): Long = activeRunEpoch.incrementAndGet()
+        private fun invalidateRunEpoch(): Long {
+            val next = activeRunEpoch.incrementAndGet()
+            recoveryTurnsByEpoch.clear()
+            supervisorRetriesByEpoch.clear()
+            handoffsByEpoch.clear()
+            toolFailureCounts.clear()
+            continuationsByEpoch.clear()
+            pendingContinuations.clear()
+            pendingDelegations.clear()
+            return next
+        }
 
         private fun isAgentRunActive(runEpoch: Long): Boolean = activeRunEpoch.get() == runEpoch
 
@@ -3449,13 +5122,14 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         ) {
             val instance = activeInstance ?: return
             if (_activeConversationId.value == null) return
+            val persistFullSnapshot = shouldPersistFullAgentSnapshot(reason, force)
             val now = System.currentTimeMillis()
             synchronized(runtimeCheckpointLock) {
                 if (!shouldWriteRuntimeCheckpoint(
                         nowMs = now,
                         lastCheckpointMs = lastRuntimeCheckpointAt,
                         intervalMs = RUNTIME_CHECKPOINT_INTERVAL_MS,
-                        force = force
+                        force = persistFullSnapshot
                     )
                 ) return
                 lastRuntimeCheckpointAt = now
@@ -3463,9 +5137,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val checkpointStatus = status ?: _statusText.value.ifBlank {
                 idleStatusText(com.example.llamadroid.LlamaApplication.instance)
             }
-            instance.persistAgentRuntimeState(checkpointStatus)
-            agentScope.launch(Dispatchers.IO) {
-                instance.persistVisibleRuntimeStateNow(reason ?: checkpointStatus)
+            if (persistFullSnapshot) {
+                instance.scheduleVisibleRuntimePersistence(reason ?: checkpointStatus)
+            } else {
+                agentScope.launch(Dispatchers.IO) {
+                    instance.persistRuntimeHeartbeat(checkpointStatus)
+                }
             }
         }
 
@@ -3502,12 +5179,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 reason = "Background command $commandId completed.",
                 force = true
             )
-            sendMessage(
-                refs.context,
-                refs.ollamaService,
-                refs.settingsRepo,
-                refs.agentService,
-                queueBehindActiveJob = false
+            enqueueAgentContinuation(
+                context = refs.context,
+                ollamaService = refs.ollamaService,
+                settingsRepo = refs.settingsRepo,
+                agentService = refs.agentService,
+                reason = "background command $commandId completed"
             )
         }
 
@@ -3566,6 +5243,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         private val retryIntervals = listOf(1L, 5L, 10L, 30L, 60L, 300L) // in seconds
 
         fun startScalingRetry(agentService: AgentService) {
+            if (_currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+                _connectionStatus.value = ConnectionStatus.UNKNOWN
+                _retryMessage.value = null
+                return
+            }
             if (retryJob?.isActive == true) return
 
             retryJob = agentScope.launch {
@@ -3641,8 +5323,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         fun stopAllJobs() {
+            val cancelledInvocationId = activeInvocationId
+            activeInvocationId = null
             invalidateRunEpoch()
             blockAutomaticContinuations()
+            clearPendingUrgentUserGuidance()
+            clearPlanningImplementationUnlock()
             llamaServerChatService.stopGeneration()
             OllamaService.stop()
             retryJob?.cancel()
@@ -3658,9 +5344,22 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             // Ensure WakeLock is released (defensive call before setIsLoading)
             releaseWakeLock()
             val appContext = com.example.llamadroid.LlamaApplication.instance
+            cancelledInvocationId?.let { invocationId ->
+                agentScope.launch(Dispatchers.IO) {
+                    val dao = AppDatabase.getDatabase(appContext).agentWorkflowDao()
+                    dao.finishInvocationExactlyOnce(
+                        id = invocationId,
+                        status = "CANCELLED",
+                        resultSummary = null,
+                        errorMessage = "Stopped by user."
+                    )
+                    dao.cancelInvocationPendingInputs(invocationId)
+                }
+            }
             setIsLoading(false, appContext.getString(R.string.agent_status_interrupted))
             addDebugLog("🛑 All jobs stopped by user. Reset to Orchestrator.")
             recordAgentEvent("agent_stop", "Stopped all running agent work", "User interrupted the active workflow.")
+            updateActiveConversationResumeState(RESUME_STATE_STOPPED_BY_USER, "Stopped by user.")
             // Find the last streaming message and mark it as finished
             _messages.value.findLast { it.isStreaming }?.let { lastMsg ->
                 updateMessage(lastMsg.id) { it.copy(content = it.content + " [" + appContext.getString(R.string.agent_status_interrupted) + "]", isStreaming = false) }
@@ -3681,28 +5380,221 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
 
         fun addMessage(message: ChatMessage) {
-            _messages.value = _messages.value + message
-            checkpointRuntimeState(reason = "Agent message added", force = message.needsApproval || (message.isPlan && message.isPlanApproved != true))
-            // AUTOMATICALLY add to current session history if one is active
-            getCurrentSession()?.addMessage(message)
-            if (message.role == "user" && !isTransientCompactionStatusMessage(message)) {
-                captureInitialOrderIfNeeded(message.content)
-            }
-            if (shouldTrackMessageAsCurrentTask(message)) {
-                setCurrentTask(message.content)
-                recordAgentEvent("user_request", "Updated current task from user message", message.content)
-            } else if (message.role == "tool" && message.toolName != null) {
-                recordAgentEvent("tool_result", "${message.toolName} returned a result", message.content, persist = false)
+            try {
+                val identityStampedMessage = if (
+                    (message.role == "assistant" || message.role == "tool") &&
+                    message.agentRole.isNullOrBlank() &&
+                    message.customAgentName.isNullOrBlank()
+                ) {
+                    val (agentRole, customAgentName) = currentAssistantIdentity()
+                    message.copy(agentRole = agentRole, customAgentName = customAgentName)
+                } else {
+                    message
+                }
+                val stampedMessage = if (identityStampedMessage.invocationId == null && activeInvocationId != null) {
+                    identityStampedMessage.copy(invocationId = activeInvocationId)
+                } else {
+                    identityStampedMessage
+                }
+                recordMessageJournalEvent(stampedMessage)
+                _messages.update { current -> current + stampedMessage }
+                checkpointRuntimeState(reason = "Agent message added", force = stampedMessage.needsApproval || (stampedMessage.isPlan && stampedMessage.isPlanApproved != true))
+                // AUTOMATICALLY add to current session history if one is active
+                getCurrentSession()?.addMessage(stampedMessage)
+                if (stampedMessage.role == "user" && !isTransientCompactionStatusMessage(stampedMessage)) {
+                    captureInitialOrderIfNeeded(stampedMessage.content)
+                }
+                if (shouldTrackMessageAsCurrentTask(stampedMessage)) {
+                    setCurrentTask(stampedMessage.content)
+                    recordAgentEvent("user_request", "Updated current task from user message", stampedMessage.content)
+                } else if (stampedMessage.role == "tool" && stampedMessage.toolName != null) {
+                    recordAgentEvent("tool_result", "${stampedMessage.toolName} returned a result", stampedMessage.content, persist = false)
+                }
+            } catch (throwable: Throwable) {
+                recordProjectJournalEvent(
+                    category = "ERROR",
+                    eventType = "message_insert_failed",
+                    phase = _statusText.value,
+                    status = "ERROR",
+                    error = throwable,
+                    summary = "Message insertion failed and was converted into an interrupted state"
+                )
+                updateActiveConversationResumeState(RESUME_STATE_NEEDS_DIRECTION, "Message insertion failed: ${throwable.javaClass.simpleName}")
+                _isLoading.value = false
+                _statusText.value = idleStatusText(com.example.llamadroid.LlamaApplication.instance)
             }
         }
 
+        /**
+         * Holds guidance outside canonical inference history until the current tool result has
+         * been committed. This preserves the assistant-tool/tool-result adjacency required by
+         * OpenAI-compatible chat templates and llama.cpp exact-prefix prompt caching.
+         */
+        fun queueUrgentUserGuidance(message: ChatMessage) {
+            require(message.role == "user") { "Queued guidance must be a user message." }
+            pendingUrgentUserGuidance.add(message)
+            _pendingUrgentUserGuidanceCount.value = pendingUrgentUserGuidance.size
+            val conversationId = _activeConversationId.value
+            if (conversationId != null) {
+                val job = agentScope.launch(Dispatchers.IO) {
+                    AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                        .agentWorkflowDao()
+                        .insertPendingInput(
+                            com.example.llamadroid.data.db.AgentPendingInputEntity(
+                                id = message.id,
+                                conversationId = conversationId,
+                                targetInvocationId = message.invocationId,
+                                content = message.content,
+                                imagePath = message.imagePath,
+                                sequenceNumber = pendingInputSequence.incrementAndGet()
+                            )
+                        )
+                }
+                pendingInputPersistenceJobs[message.id] = job
+                job.invokeOnCompletion { pendingInputPersistenceJobs.remove(message.id) }
+            }
+            recordProjectJournalEvent(
+                category = "UI",
+                eventType = "user_guidance_queued",
+                phase = _statusText.value,
+                status = "OK",
+                contentChars = message.content.length,
+                contentLines = message.content.lineSequence().count(),
+                summary = "User guidance queued for the next atomic tool boundary"
+            )
+            checkpointRuntimeState(
+                status = _statusText.value,
+                reason = "Urgent user guidance queued.",
+                force = true
+            )
+        }
+
+        fun queueWorkflowControl(command: String, guidance: String = "") {
+            val conversationId = _activeConversationId.value ?: return
+            val kind = when (command.lowercase()) {
+                "/plan" -> "MODE_PLAN"
+                "/build" -> "MODE_BUILD"
+                "/compact" -> "COMPACT"
+                else -> return
+            }
+            val id = java.util.UUID.randomUUID().toString()
+            val job = agentScope.launch(Dispatchers.IO) {
+                AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                    .agentWorkflowDao()
+                    .insertPendingInput(
+                        com.example.llamadroid.data.db.AgentPendingInputEntity(
+                            id = id,
+                            conversationId = conversationId,
+                            kind = kind,
+                            content = guidance,
+                            sequenceNumber = pendingInputSequence.incrementAndGet()
+                        )
+                    )
+            }
+            pendingInputPersistenceJobs[id] = job
+            job.invokeOnCompletion { pendingInputPersistenceJobs.remove(id) }
+            _pendingUrgentUserGuidanceCount.value += 1
+            recordProjectJournalEvent(
+                category = "UI",
+                eventType = "workflow_control_queued",
+                status = "OK",
+                summary = "$kind queued for the next semantic boundary"
+            )
+        }
+
+        private suspend fun drainPendingUrgentUserGuidance(context: Context, boundary: String): Int {
+            pendingInputPersistenceJobs.values.toList().forEach { it.join() }
+            val targetInvocationId = activeInvocationId
+            val conversationId = _activeConversationId.value
+            val durableInputs = if (conversationId != null) {
+                AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                    .getQueuedInputs(conversationId, targetInvocationId)
+            } else {
+                emptyList()
+            }
+            val pendingById = linkedMapOf<String, ChatMessage>()
+            durableInputs.forEach { persisted ->
+                when (persisted.kind) {
+                    "MODE_PLAN" -> {
+                        setCurrentPlanningModeEnabled(true)
+                        AppDatabase.getDatabase(context.applicationContext).agentChatDao()
+                            .updatePlanningMode(persisted.conversationId, true)
+                    }
+                    "MODE_BUILD" -> {
+                        setCurrentPlanningModeEnabled(false)
+                        AppDatabase.getDatabase(context.applicationContext).agentChatDao()
+                            .updatePlanningMode(persisted.conversationId, false)
+                    }
+                    "COMPACT" -> requestManualCompaction(persisted.content.takeIf { it.isNotBlank() })
+                }
+                if (persisted.kind == "USER_MESSAGE" ||
+                    (persisted.kind in setOf("MODE_PLAN", "MODE_BUILD") && persisted.content.isNotBlank())
+                ) {
+                    pendingById[persisted.id] = ChatMessage(
+                            id = persisted.id,
+                            role = "user",
+                            content = persisted.content,
+                            imagePath = persisted.imagePath,
+                            invocationId = persisted.targetInvocationId,
+                            timestamp = persisted.createdAt
+                    )
+                }
+            }
+            pendingUrgentUserGuidance
+                .filter { it.invocationId == targetInvocationId }
+                .forEach { pendingById.putIfAbsent(it.id, it) }
+            var drained = 0
+            pendingById.values.forEach { pending ->
+                pendingUrgentUserGuidance.remove(pending)
+                addMessage(
+                    pending.copy(
+                        content = wrapQueuedGuidanceForModel(context, pending.content),
+                        guidanceDeliveryState = "DELIVERED"
+                    )
+                )
+                drained += 1
+            }
+            if (durableInputs.isNotEmpty()) {
+                AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                    .markPendingInputsDelivered(
+                        ids = durableInputs.map { it.id },
+                        boundaryToolCallId = boundary
+                    )
+            }
+            _pendingUrgentUserGuidanceCount.value = if (conversationId == null) {
+                pendingUrgentUserGuidance.size
+            } else {
+                AppDatabase.getDatabase(context.applicationContext)
+                    .agentWorkflowDao().getQueuedInputCount(conversationId)
+            }
+            if (drained > 0) {
+                recordProjectJournalEvent(
+                    category = "UI",
+                    eventType = "user_guidance_injected",
+                    phase = _statusText.value,
+                    status = "OK",
+                    contentChars = 0,
+                    contentLines = 0,
+                    summary = "Queued user guidance injected at $boundary; count=$drained"
+                )
+            }
+            return drained
+        }
+
+        private fun clearPendingUrgentUserGuidance() {
+            pendingUrgentUserGuidance.clear()
+            _pendingUrgentUserGuidanceCount.value = 0
+        }
+
         fun setMessages(messages: List<ChatMessage>) {
-            _messages.value = messages
+            _messages.update { messages }
             hydrateConversationDerivedState(messages)
         }
 
         fun clearMessages() {
-            _messages.value = emptyList()
+            _messages.update { emptyList() }
+            _pendingPlanApprovalId.value = null
+            clearPendingUrgentUserGuidance()
             _promptContextSnapshot.value = null
             _lastOrchestratorPromptSnapshot.value = null
             synchronized(recentCompactionEvents) {
@@ -3724,11 +5616,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             _streamingThinking.value = ""
             _streamingMessageId.value = null
             _currentAgent.value = AgentRole.ORCHESTRATOR
+            activeInvocationId = null
             _currentTask.value = null
             _memoryDirty.value = false
             _memoryDirtyReason.value = null
             _activeCustomAgent.value = null
             pendingVisionAttachment = null
+            pendingContinuations.clear()
+            clearPendingUrgentUserGuidance()
+            pendingDelegations.clear()
+            continuationsByEpoch.clear()
             synchronized(recentCompactionEvents) {
                 recentCompactionEvents.clear()
             }
@@ -3736,6 +5633,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             _lastOrchestratorPromptSnapshot.value = null
             _currentSessionId.value = null
             _activeConversationId.value = null
+            _pendingPlanApprovalId.value = null
             initialOrderContent = null
             pendingHardCompaction = false
             hardCompactionState = null
@@ -3751,7 +5649,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         fun updateMessage(id: String, update: (ChatMessage) -> ChatMessage) {
-            _messages.value = _messages.value.map { if (it.id == id) update(it) else it }
+            _messages.update { current -> current.map { if (it.id == id) update(it) else it } }
             checkpointRuntimeState(reason = "Agent message updated")
             // ALSO update in session list if it exists there - use safe replacement
             getCurrentSession()?.let { session ->
@@ -3769,24 +5667,216 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             updateMessage(id) { it.copy(isOutputExpanded = !it.isOutputExpanded) }
         }
 
-        fun handlePlanModified(context: Context, ollamaService: OllamaService, settingsRepo: com.example.llamadroid.data.SettingsRepository, agentService: AgentService, id: String, newContent: String) {
-            updateMessage(id) {
-                it.copy(
-                    content = newContent,
-                    planModifiedContent = newContent,
-                    isPlanApproved = true
-                )
-            }
+        data class PlanApprovalResult(
+            val approved: Boolean,
+            val message: String
+        )
 
-            // Send feedback to agent
-            agentScope.launch {
-                addMessage(ChatMessage(
-                    role = "user",
-                    content = "I have modified the implementation plan. Please proceed with this updated version:\n\n$newContent"
-                ))
-                markMemoryDirty("The implementation plan was modified. Record the chosen direction in project memory before finishing.")
-                sendMessage(context, ollamaService, settingsRepo, agentService, userInitiated = true)
+        suspend fun approvePendingPlan(
+            context: Context,
+            agentService: AgentService,
+            id: String,
+            editedPlan: String? = null
+        ): PlanApprovalResult {
+            return workflowTransitionMutex.withLock {
+                val database = AppDatabase.getDatabase(context.applicationContext)
+                val workflowDao = database.agentWorkflowDao()
+                val pendingMessage = _messages.value.firstOrNull {
+                    it.id == id && it.isPlan
+                } ?: run {
+                    return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_missing))
+                }
+                val existingDurablePlan = workflowDao.getPendingPlanByMessageId(id)
+                if (existingDurablePlan == null && pendingMessage.isPlanApproved == true) {
+                    _pendingPlanApprovalId.value = null
+                    return@withLock PlanApprovalResult(
+                        true,
+                        context.getString(R.string.agent_plan_approved_msg)
+                    )
+                }
+                var durablePlan = existingDurablePlan ?: run {
+                    val conversationId = _activeConversationId.value
+                        ?: return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_missing))
+                    val created = AgentPendingPlanEntity(
+                        id = java.util.UUID.randomUUID().toString(),
+                        conversationId = conversationId,
+                        rootTurnId = activeRootTurnStorageId,
+                        agentSessionId = _currentSessionId.value.orEmpty(),
+                        planMessageId = pendingMessage.id,
+                        toolCallId = pendingMessage.toolCallId.orEmpty(),
+                        originalPlan = pendingMessage.content.substringAfter("\n\n", pendingMessage.content),
+                        editedPlan = pendingMessage.planModifiedContent,
+                        summary = pendingMessage.content.lineSequence().firstOrNull().orEmpty()
+                    )
+                    workflowDao.upsertPendingPlan(created)
+                    created
+                }
+                if (durablePlan.state == "BUILDING" || durablePlan.continuationEnqueued) {
+                    _pendingPlanApprovalId.value = null
+                    updateMessage(id) { it.copy(isPlanApproved = true) }
+                    return@withLock PlanApprovalResult(true, context.getString(R.string.agent_plan_approved_msg))
+                }
+                val approvedPlan = (editedPlan ?: durablePlan.editedPlan ?: durablePlan.originalPlan).trim()
+                val approvalCacheDecision = planApprovalPromptCacheDecision(durablePlan.originalPlan, approvedPlan)
+                if (approvedPlan.isBlank()) {
+                    return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_blank))
+                }
+                val operationId = durablePlan.approvalOperationId ?: java.util.UUID.randomUUID().toString()
+                if (durablePlan.state == "AWAITING_APPROVAL") {
+                    if (workflowDao.beginPlanResolution(durablePlan.id, operationId, editedPlan) != 1) {
+                        return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_in_progress))
+                    }
+                    durablePlan = workflowDao.getPendingPlanById(durablePlan.id) ?: durablePlan
+                } else if (durablePlan.state == "APPROVING") {
+                    return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_in_progress))
+                }
+
+                try {
+                    if (!durablePlan.planFileWritten) {
+                        agentService.rewriteMemory(
+                            "plan.md",
+                            approvedPlan,
+                            countsAsMemoryUpdate = false
+                        ).getOrThrow()
+                    }
+                    workflowDao.checkpointPlanResolution(
+                        id = durablePlan.id,
+                        operationId = operationId,
+                        state = "APPROVING",
+                        planFileWritten = true,
+                        buildModeActivated = false,
+                        continuationEnqueued = false
+                    )
+                    database.agentChatDao().updatePlanningMode(durablePlan.conversationId, false)
+                    workflowDao.checkpointPlanResolution(
+                        id = durablePlan.id,
+                        operationId = operationId,
+                        state = "APPROVED",
+                        planFileWritten = true,
+                        buildModeActivated = true,
+                        continuationEnqueued = false,
+                        approvedAt = System.currentTimeMillis()
+                    )
+
+                    updateMessage(id) {
+                        it.copy(
+                            // The original endpoint proposal remains immutable;
+                            // edited text is an application-owned projection.
+                            planModifiedContent = approvedPlan,
+                            isPlanApproved = true
+                        )
+                    }
+                    // The proposal itself is an assistant message. Any prior tool
+                    // envelope for this call is stale until the user resolves it.
+                    // Replace it so the next prompt has one authoritative approval
+                    // result instead of silently retaining an awaiting-approval one.
+                    val approvalResult = ChatMessage(
+                        role = "tool",
+                        toolName = "propose_plan",
+                        toolCallId = durablePlan.toolCallId,
+                        content = buildToolResultEnvelope(
+                            toolName = "propose_plan",
+                            status = "ok",
+                            summary = approvalCacheDecision.summary,
+                            // The proposal already remains in prompt history. Repeating an
+                            // unchanged plan here destroys the stable cache prefix.
+                            importantOutput = approvalCacheDecision.modifiedPlanForToolResult,
+                            nextHint = "The user explicitly approved this plan. Begin implementation now: first call todo_write to create or update the durable todo list, then keep it updated after each meaningful implementation and verification step."
+                        )
+                    )
+                    _messages.update { current -> current.filterNot {
+                        it.role == "tool" && it.toolName == "propose_plan" &&
+                            it.toolCallId == durablePlan.toolCallId
+                    } }
+                    getCurrentSession()?.let { session ->
+                        synchronized(session.messages) {
+                            session.messages.removeAll {
+                                it.role == "tool" && it.toolName == "propose_plan" &&
+                                    it.toolCallId == durablePlan.toolCallId
+                            }
+                        }
+                    }
+                    addMessage(approvalResult)
+                    _currentPlanningModeEnabled.value = false
+                    updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
+                    markMemoryDirty("An implementation plan was approved. Record the chosen direction in project memory before finishing.")
+                    addDebugLog(context.getString(R.string.agent_plan_approved))
+                    recordAgentEvent(
+                        kind = "plan_approved",
+                        summary = "Implementation plan approved",
+                        details = "plan=${durablePlan.id.take(12)} message=${id.take(12)} toolCall=${durablePlan.toolCallId.take(12)}"
+                    )
+                    agentService.persistVisibleRuntimeStateNow("Plan approved and switched to Build.")
+                        .onFailure { error ->
+                            recordAgentEvent(
+                                kind = "plan_approval_snapshot_deferred",
+                                summary = "Approved plan snapshot will be retried",
+                                details = "error=${error.javaClass.simpleName}"
+                            )
+                        }
+                    workflowDao.checkpointPlanResolution(
+                        id = durablePlan.id,
+                        operationId = operationId,
+                        state = "STARTING_BUILD",
+                        planFileWritten = true,
+                        buildModeActivated = true,
+                        continuationEnqueued = false,
+                        approvedAt = System.currentTimeMillis()
+                    )
+                    _pendingPlanApprovalId.value = null
+                    allowAutomaticContinuations()
+                    recordAgentEvent(
+                        kind = "plan_build_cache_epoch",
+                        summary = "Plan approval retained Build cache epoch",
+                        details = "reason=plan_to_build retainedRoot=${activeRootTurnId.get()} " +
+                            "proposal=${durablePlan.planMessageId.take(12)} toolCall=${durablePlan.toolCallId.take(12)}"
+                    )
+                    lastRuntimeRefs?.let { refs ->
+                        enqueueAgentContinuation(
+                            context = refs.context,
+                            ollamaService = refs.ollamaService,
+                            settingsRepo = refs.settingsRepo,
+                            agentService = refs.agentService,
+                            reason = "approved plan build turn",
+                            runEpoch = currentRunEpoch()
+                        )
+                    }
+                    workflowDao.checkpointPlanResolution(
+                        id = durablePlan.id,
+                        operationId = operationId,
+                        state = "BUILDING",
+                        planFileWritten = true,
+                        buildModeActivated = true,
+                        continuationEnqueued = true,
+                        approvedAt = System.currentTimeMillis()
+                    )
+                    UnifiedNotificationManager.dismissAgentAttention()
+                    PlanApprovalResult(true, context.getString(R.string.agent_plan_approved_msg))
+                } catch (error: Throwable) {
+                    database.agentChatDao().updatePlanningMode(durablePlan.conversationId, true)
+                    _currentPlanningModeEnabled.value = true
+                    workflowDao.failPlanResolution(
+                        id = durablePlan.id,
+                        operationId = operationId,
+                        errorMessage = error.message ?: error.javaClass.simpleName
+                    )
+                    _pendingPlanApprovalId.value = durablePlan.id
+                    blockAutomaticContinuations()
+                    PlanApprovalResult(
+                        false,
+                        error.message ?: context.getString(R.string.agent_plan_resolution_failed)
+                    )
+                }
             }
+        }
+
+        suspend fun handlePlanModified(
+            context: Context,
+            agentService: AgentService,
+            id: String,
+            newContent: String
+        ): PlanApprovalResult {
+            return approvePendingPlan(context, agentService, id, editedPlan = newContent)
         }
 
         private var persistentShell: com.jcraft.jsch.ChannelShell? = null
@@ -3915,11 +6005,155 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         fun deleteMessage(id: String) {
-            _messages.value = _messages.value.filter { it.id != id }
+            _messages.update { current -> current.filter { it.id != id } }
             // ALSO remove from session
             getCurrentSession()?.let { session ->
                 session.messages.removeAll { it.id == id }
             }
+        }
+
+        // ========== DURABLE PROJECT EVENT JOURNAL ==========
+        private const val AGENT_PROJECT_EVENT_RETENTION = 10_000
+        private const val JOURNAL_SUMMARY_MAX_CHARS = 240
+        private const val JOURNAL_ERROR_MAX_CHARS = 180
+
+        private fun journalCategoryForEvent(kind: String): String {
+            val lower = kind.lowercase()
+            return when {
+                lower.contains("tool") || lower.contains("command") -> "TOOLS"
+                lower.contains("connect") || lower.contains("ssh") || lower.contains("backend") || lower.contains("stream") -> "CONNECTION"
+                lower.contains("error") || lower.contains("invalid") || lower.contains("crash") || lower.contains("fail") -> "ERROR"
+                lower.contains("session") || lower.contains("agent") || lower.contains("prompt") || lower.contains("reflection") -> "LLM"
+                else -> "UI"
+            }
+        }
+
+        private fun journalCategoryForMessage(message: ChatMessage): String =
+            when {
+                message.role == "tool" || message.toolName != null -> "TOOLS"
+                message.role == "assistant" || message.role == "user" -> "LLM"
+                else -> "UI"
+            }
+
+        private fun recordMessageJournalEvent(message: ChatMessage) {
+            recordProjectJournalEvent(
+                category = journalCategoryForMessage(message),
+                eventType = when {
+                    message.role == "tool" -> "tool_transport_message"
+                    message.toolName != null -> "tool_call_message"
+                    else -> "chat_message_${message.role}"
+                },
+                phase = _statusText.value,
+                agentRole = message.agentRole,
+                customAgentName = message.customAgentName,
+                toolName = message.toolName,
+                toolCallId = message.toolCallId,
+                status = if (message.isStreaming) "RUNNING" else "OK",
+                contentChars = message.content.length,
+                contentLines = message.content.lineSequence().count(),
+                toolOutputChars = message.toolOutput?.length,
+                toolOutputLines = message.toolOutput?.lineSequence()?.count(),
+                summary = when {
+                    message.role == "tool" -> "Tool result transport message recorded"
+                    message.toolName != null -> "Tool call message recorded: ${message.toolName}"
+                    else -> "${message.role.replaceFirstChar { it.uppercase() }} message recorded"
+                }
+            )
+        }
+
+        fun recordProjectJournalEvent(
+            category: String,
+            eventType: String,
+            phase: String? = null,
+            agentRole: String? = null,
+            customAgentName: String? = null,
+            toolName: String? = null,
+            toolCallId: String? = null,
+            status: String? = null,
+            durationMs: Long? = null,
+            contentChars: Int? = null,
+            contentLines: Int? = null,
+            toolOutputChars: Int? = null,
+            toolOutputLines: Int? = null,
+            error: Throwable? = null,
+            summary: String = eventType
+        ) {
+            val conversationId = _activeConversationId.value ?: _preferredConversationId.value ?: return
+            val projectFolder = _currentProjectFolder.value.ifBlank { "default_project" }
+            val event = AgentProjectEventEntity(
+                conversationId = conversationId,
+                projectFolder = projectFolder,
+                sequenceNumber = _eventCounter.incrementAndGet(),
+                category = category.uppercase().ifBlank { "UI" },
+                eventType = sanitizeJournalToken(eventType),
+                phase = phase?.let { sanitizeJournalText(it, 80) },
+                agentRole = agentRole?.let { sanitizeJournalToken(it) },
+                customAgentName = customAgentName?.let { sanitizeJournalToken(it) },
+                toolName = toolName?.let { sanitizeJournalToken(it) },
+                toolCallId = toolCallId?.let { sanitizeJournalToken(it) },
+                status = status?.let { sanitizeJournalToken(it) },
+                durationMs = durationMs,
+                contentChars = contentChars,
+                contentLines = contentLines,
+                toolOutputChars = toolOutputChars,
+                toolOutputLines = toolOutputLines,
+                contextPercent = _promptContextSnapshot.value?.actualPercentUsed
+                    ?: _promptContextSnapshot.value?.percentUsed,
+                activeJobCount = loadingRefCount.get().coerceAtLeast(0),
+                foregroundState = if (_isLoading.value) "WORKING" else "IDLE",
+                protectionState = "conversation=$conversationId",
+                connectionState = if (_isConnected.value) "CONNECTED" else "DISCONNECTED",
+                errorClass = error?.javaClass?.simpleName?.let { sanitizeJournalToken(it) },
+                errorMessage = error?.message?.let { sanitizeJournalText(it, JOURNAL_ERROR_MAX_CHARS) },
+                summary = sanitizeJournalText(summary, JOURNAL_SUMMARY_MAX_CHARS),
+                invocationId = activeInvocationId
+            )
+
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "agent_journal",
+                mode = event.category,
+                event = event.eventType,
+                phase = event.phase,
+                details = buildString {
+                    append("conversationId=").append(conversationId)
+                    event.toolName?.let { append(" tool=").append(it) }
+                    event.toolCallId?.let { append(" toolId=").append(it.take(12)) }
+                    event.status?.let { append(" status=").append(it) }
+                    event.contentChars?.let { append(" contentChars=").append(it) }
+                    event.toolOutputChars?.let { append(" toolOutputChars=").append(it) }
+                    event.activeJobCount?.let { append(" activeJobs=").append(it) }
+                }
+            )
+
+            agentScope.launch(Dispatchers.IO) {
+                val appContext = com.example.llamadroid.LlamaApplication.instance
+                runCatching {
+                    val dao = AppDatabase.getDatabase(appContext).agentChatDao()
+                    dao.insertProjectEvent(event)
+                    dao.pruneProjectEvents(conversationId, AGENT_PROJECT_EVENT_RETENTION)
+                }.onFailure {
+                    DebugLog.log("[AgentJournal] Failed to persist event ${event.eventType}: ${it.javaClass.simpleName}")
+                }
+            }
+        }
+
+        private fun sanitizeJournalToken(raw: String): String =
+            raw
+                .replace(Regex("[^A-Za-z0-9_.:-]"), "_")
+                .take(96)
+                .ifBlank { "event" }
+
+        private fun sanitizeJournalText(raw: String, maxChars: Int): String {
+            if (raw.isBlank()) return ""
+            return raw
+                .replace(Regex("```[\\s\\S]*?```"), "[redacted_block]")
+                .replace(Regex("(?i)(content|prompt|command|args?|output|file)\\s*[:=]\\s*[^\\n|]+"), "$1=[redacted]")
+                .replace(Regex("(/[^\\s|]+)+"), "[path]")
+                .replace(Regex("[A-Za-z]:\\\\[^\\s|]+"), "[path]")
+                .replace(Regex("\"[^\"]{32,}\""), "\"[redacted]\"")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+                .take(maxChars)
         }
 
         // ========== DEBUG LOG (for tracking agent/tool calls) ==========
@@ -3934,6 +6168,13 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 debugLogDeque.addLast("[$timestamp] $entry")
                 _debugLog.value = debugLogDeque.toList()
             }
+            recordProjectJournalEvent(
+                category = journalCategoryForEvent(entry),
+                eventType = "debug_log",
+                phase = _statusText.value,
+                status = if (entry.contains("failed", ignoreCase = true) || entry.contains("error", ignoreCase = true)) "ERROR" else "OK",
+                summary = entry
+            )
         }
 
         fun clearDebugLog() {
@@ -3946,8 +6187,59 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         fun truncateHistoryAt(id: String, inclusive: Boolean = true) {
             val index = _messages.value.indexOfFirst { it.id == id }
             if (index != -1) {
-                _messages.value = _messages.value.take(if (inclusive) index else index + 1)
+                _messages.update { current -> current.take(if (inclusive) index else index + 1) }
+                activeInstance?.let { instance ->
+                    agentScope.launch(Dispatchers.IO) {
+                        instance.persistVisibleRuntimeStateNow(
+                            reason = "Conversation history truncated",
+                            pruneMissingMessages = true
+                        )
+                    }
+                }
             }
+        }
+
+        /**
+         * Atomically turns Regenerate into a new root turn. This intentionally remains available
+         * for failed, interrupted, restored, and currently-running projects.
+         */
+        fun prepareRegenerateAt(id: String): Boolean {
+            val index = _messages.value.indexOfFirst { it.id == id }
+            if (index < 0) return false
+            activeInvocationId = null
+            invalidateRunEpoch()
+            blockAutomaticContinuations()
+            llamaServerChatService.stopGeneration()
+            OllamaService.stop()
+            retryJob?.cancel()
+            cancelCurrentChatJob()
+            cancelActiveAgentWorkJobs()
+            loadingRefCount.set(0)
+            releaseWakeLock()
+            _streamingContent.value = ""
+            _streamingThinking.value = ""
+            _streamingMessageId.value = null
+            _messages.update { current ->
+                current.take(index).filterNot { it.isStreaming }
+            }
+            _currentAgent.value = AgentRole.ORCHESTRATOR
+            updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
+            allowAutomaticContinuations()
+            setIsLoading(false, com.example.llamadroid.LlamaApplication.instance.getString(R.string.agent_status_idle))
+            recordAgentEvent(
+                kind = "regenerate_root_turn",
+                summary = "Regenerate prepared a new root turn",
+                details = "truncatedIndex=$index queueDepth=${pendingContinuations.size} logicalJobs=${loadingRefCount.get()}"
+            )
+            activeInstance?.let { instance ->
+                agentScope.launch(Dispatchers.IO) {
+                    instance.persistVisibleRuntimeStateNow(
+                        reason = "Regenerate history truncated",
+                        pruneMissingMessages = true
+                    )
+                }
+            }
+            return true
         }
 
         // ========== CUSTOM TOOLS (loaded from database) ==========
@@ -3957,7 +6249,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         fun setLoadedCustomTools(tools: List<com.example.llamadroid.data.db.CustomToolEntity>) {
             _loadedCustomTools.value = tools
             addDebugLog("📦 Loaded ${tools.size} custom tools")
-            // Regenerate tools_reference.md when custom tools change
+            // Regenerate tools_reference.md when custom tools change. Prompt construction
+            // also awaits the same writer, so a model is never told the file exists early.
             writeToolsReference()
         }
 
@@ -4052,6 +6345,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "fetch_url" -> "{\"name\": \"fetch_url\", \"arguments\": {\"url\": \"https://docs.python.org/3/\"}}"
                 "view_image" -> "{\"name\": \"view_image\", \"arguments\": {\"path\": \"art/concepts/forest.png\"}}"
                 "generate_image" -> "{\"name\": \"generate_image\", \"arguments\": {\"prompt\": \"lush forest concept art, soft morning light\", \"negative_prompt\": \"blurry, low quality\", \"output_path\": \"art/concepts/forest.png\"}}"
+                "call_agent" -> "{\"name\": \"call_agent\", \"arguments\": {\"agent\": \"CODER\", \"name\": \"Darwin\", \"task\": \"Complete one todo: implement the keyboard-safe composer host\", \"context\": \"Relevant files and constraints\"}}"
                 "reflection" -> "{\"name\": \"reflection\", \"arguments\": {\"scope\": \"Review the finished implementation against plan.md\", \"candidate_summary\": \"Implemented X, verified Y\"}}"
                 "get_datetime" -> "{\"name\": \"get_datetime\", \"arguments\": {}}"
                 "file_line_count" -> "{\"name\": \"file_line_count\", \"arguments\": {\"path\": \"src/main.py\"}}"
@@ -4090,20 +6384,40 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             }.trim()
         }
 
-        fun writeToolsReference(tools: List<AgentTool>? = null) {
-            val svc = activeInstance ?: return // No instance available yet
-            val content = buildToolsReferenceContent(tools ?: getAgentTools())
-
-            // Write asynchronously via SSH (overwrites each time)
-            agentScope.launch(Dispatchers.IO) {
-                try {
-                    val brainPath = getBrainPath()
-                    val escaped = content.replace("'", "'\\''")
-                    svc.executeRawCommand("mkdir -p '$brainPath' && echo '$escaped' > '$brainPath/tools_reference.md'")
-                    addDebugLog("📄 tools_reference.md written to brain folder")
-                } catch (e: Exception) {
-                    addDebugLog("⚠️ Failed to write tools_reference.md: ${e.message}")
+        private suspend fun ensureToolsReference(
+            tools: List<AgentTool> = getAgentTools()
+        ): Result<Unit> = toolsReferenceMutex.withLock {
+            val svc = activeInstance
+                ?: return@withLock Result.failure(IllegalStateException("Agent workspace is unavailable"))
+            val content = buildToolsReferenceContent(tools)
+            val projectKey = "${_currentWorkspaceBackend.value.name}:${_currentProjectFolder.value}"
+            val fingerprint = sha256Hex(content)
+            if (toolsReferenceFingerprintByProject[projectKey] == fingerprint) {
+                return@withLock Result.success(Unit)
+            }
+            svc.writeFile("brain/tools_reference.md", content, trackChange = false)
+                .onSuccess {
+                    toolsReferenceFingerprintByProject[projectKey] = fingerprint
+                    addDebugLog("📄 tools_reference.md is ready in the project brain folder")
+                    recordAgentEvent(
+                        kind = "tools_reference_ready",
+                        summary = "Tool reference synchronized",
+                        details = "tools=${tools.size} fingerprint=${fingerprint.take(16)}"
+                    )
                 }
+                .onFailure { error ->
+                    addDebugLog("⚠️ Failed to write tools_reference.md: ${error.message}")
+                    recordAgentEvent(
+                        kind = "tools_reference_failed",
+                        summary = "Tool reference synchronization failed",
+                        details = "error=${error.javaClass.simpleName} tools=${tools.size}"
+                    )
+                }
+        }
+
+        fun writeToolsReference(tools: List<AgentTool>? = null) {
+            agentScope.launch(Dispatchers.IO) {
+                ensureToolsReference(tools ?: getAgentTools())
             }
         }
 
@@ -4132,8 +6446,31 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             userInitiated: Boolean = false
         ): Job {
             rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
+            if (hasPendingPlanApproval()) {
+                setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                updateActiveConversationResumeState(
+                    RESUME_STATE_WAITING_FOR_USER,
+                    context.getString(R.string.agent_resume_reason_waiting_for_answer)
+                )
+                addDebugLog("🧱 Waiting for plan approval before another agent turn.")
+                return agentScope.launch { }
+            }
             if (userInitiated) {
+                startNewRootTurn()
                 allowAutomaticContinuations()
+                recoveryTurnsByEpoch.clear()
+                supervisorRetriesByEpoch.clear()
+                handoffsByEpoch.clear()
+                toolFailureCounts.clear()
+                continuationsByEpoch.clear()
+                noProgressContinuationsByEpoch.clear()
+                pendingContinuations.clear()
+                pendingDelegations.clear()
+                GenerationDiagnosticsStore.recordBreadcrumb(
+                    source = "agent_turn_runner",
+                    event = "user_turn_recovery_reset",
+                    details = "epoch=${currentRunEpoch()} clearedContinuations=true clearedDelegations=true loadingLeases=${loadingRefCount.get().coerceAtLeast(0)}"
+                )
             } else if (areAutomaticContinuationsBlocked()) {
                 addDebugLog("🧱 Ignoring automatic continuation because the user pressed Stop.")
                 refreshIdleStatusIfNeeded()
@@ -4142,41 +6479,55 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val currentAgent = _currentAgent.value
             val activeCustom = _activeCustomAgent.value
             val runEpoch = currentRunEpoch()
+            if (recoveryMode) {
+                val recoveryCount = recoveryTurnsByEpoch
+                    .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
+                    .incrementAndGet()
+                if (recoveryCount >= LOOP_WAKEUP_RECOVERY_TURNS) {
+                    postLoopWakeup(
+                        context = context,
+                        signal = context.getString(R.string.agent_loop_signal_recovery),
+                        occurrenceCount = recoveryCount,
+                        evidence = recoveryInstruction.orEmpty()
+                    )
+                }
+                if (recoveryCount > MAX_RECOVERY_TURNS_PER_REQUEST) {
+                    pauseForNeedsDirection(context, context.getString(R.string.agent_loop_recovery_budget_reason))
+                    return agentScope.launch { }
+                }
+            }
             val configuredModel = activeCustom?.model?.takeIf { it.isNotBlank() } ?: if (currentAgent == AgentRole.ORCHESTRATOR) {
                 settingsRepo.getAgentModelForRole("ORCHESTRATOR")
             } else {
                 settingsRepo.getAgentModelForRole(currentAgent.name)
             }
+            val preflightBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+            val requiresPerRoleModel = !SettingsRepository.isLiteRtBackend(preflightBackend) &&
+                !SettingsRepository.usesOpenAiChatBackend(preflightBackend)
 
-            if (configuredModel.isBlank()) {
+            if (requiresPerRoleModel && configuredModel.isBlank()) {
                 addDebugLog("⚠️ No model selected for role ${currentAgent.name}")
                 return agentScope.launch { }
             }
 
-            val job = synchronized(currentChatJobLock) {
-                val existingJob = currentChatJob
-                if (queueBehindActiveJob && existingJob?.isActive == true) {
-                    val queuedJob = agentScope.launch(start = CoroutineStart.LAZY) {
-                        existingJob.join()
-                        if (!isAgentRunActive(runEpoch)) return@launch
-                        sendMessage(
-                            context,
-                            ollamaService,
-                            settingsRepo,
-                            agentService,
-                            isRedo,
-                            recoveryInstruction,
-                            recoveryMode,
-                            queueBehindActiveJob = false
-                        ).join()
-                    }
-                    trackActiveAgentWorkJob(queuedJob)
-                    trackCurrentChatJob(queuedJob)
-                    queuedJob.start()
-                    queuedJob
-                } else {
-                    val newJob = agentScope.launch(start = CoroutineStart.LAZY) {
-                        try {
+            val existingJob = peekCurrentChatJob()
+            if (queueBehindActiveJob && existingJob?.isActive == true) {
+                return enqueueAgentContinuation(
+                    context = context,
+                    ollamaService = ollamaService,
+                    settingsRepo = settingsRepo,
+                    agentService = agentService,
+                    reason = recoveryInstruction?.take(80) ?: "queued behind active turn",
+                    isRedo = isRedo,
+                    recoveryInstruction = recoveryInstruction,
+                    recoveryMode = recoveryMode,
+                    userInitiated = userInitiated,
+                    runEpoch = runEpoch
+                )
+            }
+
+            val newJob = agentScope.launch(start = CoroutineStart.LAZY) {
+                try {
                     ensureAgentRunActive(runEpoch)
                     val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
                     val useLlamaServer = SettingsRepository.isLlamaServerBackend(backend)
@@ -4185,11 +6536,31 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     val useLiteRtBackend = SettingsRepository.isLiteRtBackend(backend)
                     val liteRtModel = if (useLiteRtBackend) {
                         val selectedId = settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
-                            ?: return@launch addDebugLog("❌ LLM Error: Select a LiteRT model before running the agent.")
+                            ?: run {
+                                val message = context.getString(R.string.agent_litert_model_required_error)
+                                addDebugLog("❌ LLM Error: $message")
+                                recordAgentEvent(
+                                    kind = "backend_startup_failure",
+                                    summary = message,
+                                    details = "backend=$backend role=${currentAgent.name}"
+                                )
+                                pauseForNeedsDirection(context, message)
+                                return@launch
+                            }
                         AppDatabase.getDatabase(context.applicationContext)
                             .liteRtModelDao()
                             .getById(selectedId)
-                            ?: return@launch addDebugLog("❌ LLM Error: Selected LiteRT model was not found.")
+                            ?: run {
+                                val message = context.getString(R.string.agent_litert_model_missing_error)
+                                addDebugLog("❌ LLM Error: $message")
+                                recordAgentEvent(
+                                    kind = "backend_startup_failure",
+                                    summary = message,
+                                    details = "backend=$backend role=${currentAgent.name} modelId=$selectedId"
+                                )
+                                pauseForNeedsDirection(context, message)
+                                return@launch
+                            }
                     } else {
                         null
                     }
@@ -4202,21 +6573,52 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     } else {
                         configuredModel
                     }.ifBlank { configuredModel }
-                    _selectedModel.value = model
+                    if (model.isBlank()) {
+                        val message = context.getString(R.string.agent_backend_model_missing_error)
+                        addDebugLog("❌ LLM Error: $message")
+                        recordAgentEvent(
+                            kind = "backend_startup_failure",
+                            summary = message,
+                            details = "backend=$backend role=${currentAgent.name}"
+                        )
+                        pauseForNeedsDirection(context, message)
+                        return@launch
+                    }
+                    _selectedModel.value = friendlyBackendModelLabel(model) ?: model
                     activePromptBackend = backend
 
                     // Set context size for this agent
-                    val contextSize = settingsRepo.getAgentContextForRole(currentAgent.name)
+                    val contextSize = if (useLiteRtBackend) {
+                        resolveAgentLiteRtContextTokens(settingsRepo.agentLiteRtContextTokens.value, liteRtModel)
+                    } else {
+                        settingsRepo.getAgentContextForRole(currentAgent.name)
+                    }
                     val promptProfile = resolvePromptPackingProfile(model, currentAgent, contextSize)
                     ollamaService.setNumCtx(contextSize)
-                    setIsLoading(true, context.getString(R.string.agent_status_thinking))
+                    setIsLoading(true, context.getString(R.string.agent_status_preparing_prompt))
 
                     val activeAgentRole = _currentAgent.value
                     val activeCustomAgent = _activeCustomAgent.value
-                    val availableTools = getAgentTools(activeAgentRole, activeCustomAgent, settingsRepo)
+                    val activeTurnBranchKey = turnBranchKey(
+                        role = activeAgentRole,
+                        customAgent = activeCustomAgent
+                    )
+                    val skillMetadataCatalog = prepareSkillMetadataForTurn(
+                        context = context,
+                        userInitiated = userInitiated,
+                        activeAgentRole = activeAgentRole,
+                        activeCustomAgent = activeCustomAgent
+                    )
+                    val availableTools = frozenToolsByTurnBranch.getOrPut(activeTurnBranchKey) {
+                        getAgentTools(activeAgentRole, activeCustomAgent, settingsRepo)
+                            .distinctBy { it.name }
+                            .sortedBy { it.name }
+                    }
 
-                    runHardCompactionIfNeeded(context, contextSize)
-                        .onFailure { addDebugLog("⚠️ Hard compaction failed: ${it.message}") }
+                    if (userInitiated) {
+                        runHardCompactionIfNeeded(context, contextSize)
+                            .onFailure { addDebugLog("⚠️ Hard compaction failed: ${it.message}") }
+                    }
                     agentService.ensureStructuredBrainFiles()
                         .onFailure { addDebugLog("⚠️ Failed to ensure structured brain files: ${it.message}") }
                     agentService.syncCurrentTaskMemory(_currentTask.value)
@@ -4254,8 +6656,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         agentService.buildMemoryInterruptPrompt().getOrNull()
                     }
 
-                    // Ensure tools_reference.md matches the exact enabled tools for this turn.
-                    writeToolsReference(availableTools)
+                    // Ensure tools_reference.md matches the exact frozen tools for this turn.
+                    // This is deliberately awaited: the previous fire-and-forget SSH write could
+                    // race the first read_file call and used the wrong transport for local projects.
+                    ensureToolsReference(availableTools).onFailure { error ->
+                        pauseForNeedsDirection(
+                            context,
+                            context.getString(
+                                R.string.agent_tools_reference_unavailable,
+                                error.message ?: error.javaClass.simpleName
+                            )
+                        )
+                        return@launch
+                    }
                     val canReadToolsReference = availableTools.any { it.name == "read_file" }
                     val recoveryToolRefresh = if (recoveryMode && canReadToolsReference) buildRecoveryToolRefreshPrompt() else null
 
@@ -4267,34 +6680,74 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         .filter { it.name in _loadedCustomTools.value.map { ct -> ct.name } }
                         .joinToString(", ") { it.name }
                         .ifBlank { "none" }
+                    val localBackend = _currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX
+                    val projectDisplayRoot = if (localBackend) {
+                        AgentLocalWorkspaceSupport.displayRoot(_currentProjectFolder.value)
+                    } else {
+                        "/workspace/${_currentProjectFolder.value}"
+                    }
 
                     val baseSystemPrompt = activeCustom?.systemPrompt ?: currentAgent.systemPrompt
-                    val fullSystemPrompt = buildString {
+                    val computedSystemPrompt = buildString {
                         append(baseSystemPrompt)
                         append("\n\n**CONTEXT:**\n")
-                        append("Your project path is: /workspace/${_currentProjectFolder.value}\n")
+                        append("Your project path is: $projectDisplayRoot\n")
                         append("Your brain path is: ${getBrainPath()}\n")
                         append("Structured brain files: brain/initial_order.md, brain/plan.md, brain/context_compaction.md, brain/summary.md, brain/current_task.md, brain/todo.md, brain/decisions.md, brain/changed_files.md, brain/timeline.md\n")
                         append("Available standard tools: $standardToolNames\n")
                         append("Available custom tools: $customToolNames\n")
+                        if (skillMetadataCatalog.isNotBlank()) {
+                            append("Installed skill metadata (call skill(name) to load instructions):\n")
+                            append(skillMetadataCatalog)
+                            append('\n')
+                        }
+                        append("You are enclosed in the app runtime. The tool lists above are the complete available environment for this turn; do not assume terminals, files, network, Android APIs, servers, or system capabilities unless an explicit listed tool provides them.\n")
+                        if (localBackend) {
+                            append("Workspace backend: LOCAL_SANDBOX. All file tools are constrained to the app-private project folder. Do not use or request Termux, shell commands, Android settings, phone storage, app-private files outside this project, or absolute paths.\n")
+                            append("LOCAL RUN MANIFEST: in Plan mode, describe the .adt/run.json the implementation will need without creating it. In Build mode, create or update .adt/run.json before finish_task so the app can run and test this project. It must include version, runtime ('python' or 'web'), entrypoint, ui ('console' or 'web'), optional args, background, description, and optional dependency metadata.\n")
+                            append("Use run_project to run .adt/run.json, check_project_run for status/logs, stop_project_run for graceful stop, and force_stop_project_run only when stop does not work.\n")
+                            append("JavaScript is browser-style HTML/CSS/JS served through a local WebView; Node APIs are unavailable. Python runs through embedded Python without arbitrary shell access.\n")
+                            append("Python dependency installs only exist when the project toggle is enabled and each install is approved; pure-Python wheels must already be inside the project and native packages must be bundled or remote-run.\n")
+                        }
                         if (canReadToolsReference) {
                             append("Your complete tools reference with examples is at: brain/tools_reference.md (use read_file to refresh exact tool syntax)\n")
                         } else {
                             append("The available tool list above is authoritative. Do not call tools outside that list.\n")
                         }
-                        append("Command tools default to the last 10 lines. Increase the optional lines argument only when you need more context.\n")
+                        if (!localBackend) {
+                            append("Command tools default to the last 10 lines. Increase the optional lines argument only when you need more context.\n")
+                        }
+                        append("This runtime has Plan and Build modes. The current mode is supplied as a compact suffix control message. In Plan mode, mutation tools remain visible for schema stability but the runtime rejects them; propose_plan is the approval boundary. In Build mode, implement only after explicit approval and keep the durable todo list current.\n")
                         append("When you need a tool, emit a real tool call. Do NOT place tool JSON inside <think>, markdown fences, or plain assistant text.\n")
                         append("Before writing or editing a file, read the current file state first. After you change a file, reread it or check brain/changed_files.md before editing it again.\n")
                         if (currentAgent == AgentRole.ORCHESTRATOR) {
                             append("As ORCHESTRATOR, decide the strategy and delegate specialist work through call_agent. Read or inspect context if needed, but do not directly do coder, reviewer, executor, or summarizer work yourself. Use CODER for code changes, REVIEWER for findings, EXECUTOR for command-heavy execution, and SUMMARIZER for memory consolidation.\n")
+                            append("Assign exactly one atomic todo-sized task to each call_agent invocation. Never delegate the whole implementation plan or multiple todo items to one agent; create a separate sequential invocation for each todo.\n")
+                            if (isBuiltInAgentEnabled("REVIEWER")) {
+                                append("Code integrity and quality review belongs to REVIEWER. Never claim review or code-quality signoff yourself; call_agent REVIEWER and use its findings before final completion.\n")
+                            } else {
+                                append("REVIEWER is disabled by the user, so state that quality review is disabled before final completion.\n")
+                            }
                         }
                         append("Verify edits with targeted reads, review, and focused build/test commands before claiming completion.\n")
                         append("Older history may be compacted into digests and action rationale notes to stay within the model context window. After a turn crosses 70% usage, the next turn may hard-compact the retained context to the initial order, approved plan, compaction summary, and a token-budgeted recent tail of the conversation.\n")
-                        append("Use reflection near completion or after a major milestone to compare the work against plan.md before finalizing.\n")
+                        if (_autoReflectionEnabled.value) {
+                            append("Use reflection near completion or after a major milestone to compare the work against plan.md before finalizing.\n")
+                        } else {
+                            append("Automatic reflection before finalization is disabled by the user. Do not rely on reflection unless the reflection tool is explicitly available and manually useful.\n")
+                        }
                         buildFinishTaskSchemaPrompt(currentAgent, activeCustom)?.let {
                             append(it)
                             append('\n')
                         }
+                        if (currentAgent != AgentRole.ORCHESTRATOR) {
+                            append("Your current invocation is one assigned todo-sized task. Stay within that assignment. Before finish_task, use reflection to verify this assigned task itself is complete; do not judge or attempt the orchestrator's entire plan.\n")
+                        }
+                    }
+                    val fullSystemPrompt = frozenSystemPromptByTurnBranch.getOrPut(
+                        activeTurnBranchKey
+                    ) {
+                        computedSystemPrompt
                     }
 
                     val promptHistoryMessages = buildPromptHistoryMessages(getCurrentSessionMessages(), currentAgent)
@@ -4311,8 +6764,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             if (currentAgent == AgentRole.ORCHESTRATOR) {
                                 append("Delegate specialist follow-up with call_agent instead of doing it yourself. ")
                             }
-                            append("Current project: /workspace/${_currentProjectFolder.value}. ")
-                            append("Commands are tail-limited by default; request more lines only when needed.")
+                            append("Current project: $projectDisplayRoot. ")
+                            if (localBackend) {
+                                append("Use run_project/check_project_run for execution; shell commands are unavailable.")
+                            } else {
+                                append("Commands are tail-limited by default; request more lines only when needed.")
+                            }
                         }
                         val reminder = ChatMessage(role = "system", content = reminderContent)
                         val result = mutableListOf<ChatMessage>()
@@ -4333,26 +6790,30 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         }
                     }
 
-                    val hiddenVisionMessage = synchronized(AgentService::class.java) {
-                        val pending = pendingVisionAttachment
-                        if (pending != null &&
-                            File(pending.imagePath).exists() &&
-                            pending.roleName == currentAgent.name &&
-                            pending.customAgentName == activeCustomAgent?.name &&
-                            pending.sessionId == _currentSessionId.value
-                        ) {
-                            pendingVisionAttachment = null
-                            ChatMessage(
-                                role = "user",
-                                content = "Inspect the attached workspace image at `${pending.workspacePath}` and use it in your next step.",
-                                imagePath = pending.imagePath
-                            )
-                        } else {
-                            null
-                        }
-                    }
+                    val hiddenVisionMessage = consumePendingVisionMessage(
+                        currentAgent = currentAgent,
+                        activeCustomAgent = activeCustomAgent
+                    )
 
                     val hardCompaction = hardCompactionState
+                    val lateTurnMessages = buildList {
+                        hiddenVisionMessage?.let(::add)
+                        recoveryInstruction?.takeIf { it.isNotBlank() }?.let {
+                            add(ChatMessage(role = "system", content = "RECOVERY MODE: $it"))
+                        }
+                        recoveryToolRefresh?.takeIf { it.isNotBlank() }?.let {
+                            add(ChatMessage(role = "system", content = it))
+                        }
+                        add(
+                            ChatMessage(
+                                role = "system",
+                                content = buildAgentRuntimeModeControl(
+                                    isPlanMode = _currentPlanningModeEnabled.value,
+                                    isOrchestrator = currentAgent == AgentRole.ORCHESTRATOR
+                                )
+                            )
+                        )
+                    }
                     val promptAssembly = if (hardCompactionMode && hardCompaction != null) {
                         val compactBasis = buildCompactPromptBasisSections(
                             systemPrompt = fullSystemPrompt,
@@ -4364,30 +6825,36 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         PromptAssembly(
                             requiredPrimacyMessages = compactBasis.requiredSections.map { ChatMessage(role = "system", content = it) },
                             optionalPrimacyMessages = compactBasis.optionalSections.map { ChatMessage(role = "system", content = it) },
-                            historyMessages = messagesWithReminders + listOfNotNull(hiddenVisionMessage),
+                            historyMessages = messagesWithReminders + lateTurnMessages,
                             compactMode = true
                         )
                     } else {
-                        PromptAssembly(
-                            requiredPrimacyMessages = listOf(ChatMessage(role = "system", content = fullSystemPrompt)),
-                            optionalPrimacyMessages = buildList {
+                        val frozenOptionalMessages = frozenOptionalPromptByTurnBranch.getOrPut(
+                            activeTurnBranchKey
+                        ) {
+                            buildList {
                                 structuredResumeState?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
                                 relevantLessons?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
                                 retrievedWorkingSet?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
                                 buildMemoryGateSystemPrompt()?.let { add(ChatMessage(role = "system", content = it)) }
                                 memoryInterruptPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
-                                recoveryInstruction?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = "RECOVERY MODE: $it")) }
-                                recoveryToolRefresh?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
-                            },
-                            historyMessages = messagesWithReminders + listOfNotNull(hiddenVisionMessage),
+                            }
+                        }
+                        PromptAssembly(
+                            requiredPrimacyMessages = listOf(ChatMessage(role = "system", content = fullSystemPrompt)),
+                            optionalPrimacyMessages = frozenOptionalMessages,
+                            historyMessages = messagesWithReminders + lateTurnMessages,
                             compactMode = false
                         )
                     }
                     val rawEstimatedTokens = estimatePromptTokens(promptAssembly.allMessages())
+                    val isAtomicToolContinuation =
+                        promptHistoryMessages.lastOrNull()?.role == "tool"
                     val packedContext = packMessagesForContext(
                         promptAssembly,
                         contextSize,
-                        if (recoveryMode) promptProfile.forRecovery() else promptProfile
+                        if (recoveryMode) promptProfile.forRecovery() else promptProfile,
+                        allowCompaction = !isAtomicToolContinuation
                     )
                     val exposePromptSnapshot = _currentSessionId.value == null || currentAgent == AgentRole.ORCHESTRATOR
                     updatePromptContextSnapshot(
@@ -4432,16 +6899,101 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     _streamingMessageId.value = assistantMsgId
                     var fullContent = ""
                     var fullThinking = ""
-                    val thinkingEnabled = settingsRepo.getAgentThinkingEnabledForRole(activeCustomAgent?.name ?: activeAgentRole.name)
+                    var lastStreamingUiPublishAt = 0L
+                    fun publishStreamingUi(force: Boolean = false) {
+                        val now = android.os.SystemClock.elapsedRealtime()
+                        if (!force && now - lastStreamingUiPublishAt < 250L) return
+                        lastStreamingUiPublishAt = now
+                        _streamingContent.value = boundedStreamingPreview(fullContent, STREAMING_RESPONSE_PREVIEW_CHARS)
+                        _streamingThinking.value = boundedStreamingPreview(fullThinking, STREAMING_REASONING_PREVIEW_CHARS)
+                    }
+                    fun appendStreamingPreview(current: String, delta: String, maxChars: Int): String {
+                        if (current.length >= maxChars || delta.isEmpty()) return current
+                        return current + delta.take(maxChars - current.length)
+                    }
+                    val thinkingEnabled = if (useLiteRtBackend) {
+                        settingsRepo.agentLiteRtThinkingEnabled.value
+                    } else {
+                        settingsRepo.getAgentThinkingEnabledForRole(activeCustomAgent?.name ?: activeAgentRole.name)
+                    }
+                    val configuredMaxOutputTokens = if (useLiteRtBackend) {
+                        settingsRepo.agentLiteRtMaxOutputTokens.value
+                    } else {
+                        settingsRepo.getAgentMaxOutputTokensForRole(activeCustomAgent?.name ?: activeAgentRole.name)
+                    }
+                    val modelClampedOutputTokens = if (useLiteRtBackend && liteRtModel != null) {
+                        resolveAgentLiteRtMaxOutputTokens(
+                            savedMaxOutputTokens = configuredMaxOutputTokens,
+                            resolvedContextTokens = contextSize,
+                            model = liteRtModel
+                        )
+                    } else {
+                        configuredMaxOutputTokens
+                    }
+                    val effectiveMaxOutputTokens = resolveAgentEffectiveMaxOutputTokens(
+                        configuredMaxOutputTokens = modelClampedOutputTokens,
+                        contextTokens = contextSize,
+                        estimatedPromptTokens = packedContext.estimatedTokens
+                    )
+                    recordAgentEvent(
+                        kind = "output_budget",
+                        summary = "Agent output budget resolved",
+                        details = "backend=$backend role=${activeCustomAgent?.name ?: activeAgentRole.name} " +
+                            "configured=$configuredMaxOutputTokens effective=$effectiveMaxOutputTokens " +
+                            "context=$contextSize promptEstimate=${packedContext.estimatedTokens}"
+                    )
+                    recordFrozenTurnContextForRequest(
+                        context = context,
+                        settingsRepo = settingsRepo,
+                        ollamaService = ollamaService,
+                        agentKey = activeCustomAgent?.name ?: activeAgentRole.name,
+                        backend = backend,
+                        model = model,
+                        useLiteRtBackend = useLiteRtBackend,
+                        useLlamaSwap = useLlamaSwap,
+                        useOpenAiBackend = useOpenAiBackend,
+                        liteRtModelFilename = liteRtModel?.filename,
+                        contextTokens = contextSize,
+                        configuredOutputTokens = configuredMaxOutputTokens,
+                        effectiveOutputTokens = effectiveMaxOutputTokens,
+                        stableSystemPrompt = fullSystemPrompt,
+                        tools = availableTools,
+                        packedMessages = packedContext.messages,
+                        thinkingEnabled = thinkingEnabled
+                    )
+                    if (useOpenAiBackend && settingsRepo.agentPromptCacheDiagnostics.value) {
+                        val cacheDiagnostics = buildLlamaPromptCacheDiagnostics(
+                            messages = packedContext.messages.map { it.toOllamaMessage(includeThinking = false) },
+                            tools = availableTools,
+                            thinkingEnabled = thinkingEnabled
+                        )
+                        recordAgentEvent(
+                            kind = "prompt_cache_request",
+                            summary = "Prompt-cache request metadata",
+                            details = "backend=$backend messages=${cacheDiagnostics.messageCount} tools=${cacheDiagnostics.toolCount} " +
+                                "systemHash=${cacheDiagnostics.systemPromptHash.take(16)} " +
+                                "toolsHash=${cacheDiagnostics.toolDefinitionsHash.take(16)} " +
+                                "prefixHash=${cacheDiagnostics.stablePrefixHash.take(16)} " +
+                                "cachePrompt=${settingsRepo.serverCachePrompt.value} mtp=${settingsRepo.agentLiteRtMtpEnabled.value} " +
+                                "slotMode=${settingsRepo.agentLlamaSlotAffinityMode.value}"
+                        )
+                    }
 
                     _streamingContent.value = ""
                     _streamingThinking.value = ""
+                    setStatusText(context.getString(R.string.agent_status_thinking))
 
                     val response = if (useLiteRtBackend && liteRtModel != null) {
+                        val toolNamesByCallId = packedContext.messages
+                            .asSequence()
+                            .filter { it.role == "assistant" && it.toolCallId != null }
+                            .associate { it.toolCallId.orEmpty() to (it.toolName ?: it.pendingToolCall?.name).orEmpty() }
                         val visibleMessages = packedContext.messages.map { message ->
-                            LiteRtConversationMessage(
-                                role = message.role,
-                                content = message.content
+                            chatMessageToLiteRtConversationMessage(
+                                message = message,
+                                correlatedToolName = message.toolCallId
+                                    ?.let(toolNamesByCallId::get)
+                                    ?.takeIf { it.isNotBlank() }
                             )
                         }
                         val lastUserIndex = visibleMessages.indexOfLast { it.role == "user" }
@@ -4455,39 +7007,119 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         } else {
                             visibleMessages.lastOrNull()?.content.orEmpty()
                         }
-                        LiteRtTextGenerationClient(context).generate(
-                            model = liteRtModel,
-                            title = "Agent ${activeAgentRole.name}",
-                            systemPrompt = fullSystemPrompt,
-                            messages = initialLiteRtMessages,
-                            userPrompt = liteRtUserPrompt,
-                            contextSize = contextSize,
-                            maxTokens = null,
-                            temperature = 0.7f,
-                            thinkingEnabled = thinkingEnabled,
-                            backendMode = settingsRepo.agentLiteRtBackend.value,
-                            mtpEnabled = settingsRepo.agentLiteRtMtpEnabled.value,
-                            onChunk = { chunk ->
-                                if (isAgentRunActive(runEpoch)) {
-                                    fullContent += chunk
-                                    _streamingContent.value = fullContent
-                                    checkpointRuntimeState(reason = "Agent streaming content")
+                        val liteRtMaxOutputTokens = effectiveMaxOutputTokens
+                        val liteRtBackendMode = settingsRepo.agentLiteRtBackend.value
+                        val liteRtModelDisplay = friendlyBackendModelLabel(liteRtModel.displayName)
+                            ?: friendlyBackendModelLabel(liteRtModel.filename)
+                            ?: liteRtModel.displayName
+                        var lastLiteRtActivityAt = android.os.SystemClock.elapsedRealtime()
+                        var lastLiteRtHeartbeatRecordAt = 0L
+                        var lastLiteRtHeartbeatPhase: String? = null
+                        val liteRtHeartbeatJob = agentScope.launch {
+                            delay(BACKEND_HEARTBEAT_UI_INTERVAL_MS)
+                            while (isActive && isAgentRunActive(runEpoch)) {
+                                val now = android.os.SystemClock.elapsedRealtime()
+                                val quietMs = (now - lastLiteRtActivityAt).coerceAtLeast(0L)
+                                val streamPhase = if (fullContent.isBlank() && fullThinking.isBlank()) {
+                                    "prefilling"
+                                } else {
+                                    "streaming"
                                 }
-                            },
-                            onThinkingChunk = { thinkingChunk ->
-                                if (isAgentRunActive(runEpoch) && thinkingEnabled) {
-                                    fullThinking += thinkingChunk
-                                    _streamingThinking.value = fullThinking
-                                    checkpointRuntimeState(reason = "Agent streaming thinking")
+                                setStatusText(
+                                    context.getString(
+                                        R.string.agent_status_litert_waiting,
+                                        liteRtModelDisplay,
+                                        (quietMs / 1000L).coerceAtLeast(0L)
+                                    )
+                                )
+                                val shouldPersistHeartbeat = lastLiteRtHeartbeatRecordAt == 0L ||
+                                    now - lastLiteRtHeartbeatRecordAt >= BACKEND_HEARTBEAT_RECORD_INTERVAL_MS ||
+                                    lastLiteRtHeartbeatPhase != streamPhase
+                                if (shouldPersistHeartbeat) {
+                                    lastLiteRtHeartbeatRecordAt = now
+                                    lastLiteRtHeartbeatPhase = streamPhase
+                                    recordAgentEvent(
+                                        kind = "litert_heartbeat",
+                                        summary = "LiteRT still working",
+                                        details = "backend=$backend liteRtBackend=$liteRtBackendMode model=${liteRtModelDisplay.take(80)} " +
+                                            "phase=$streamPhase quietMs=$quietMs context=$contextSize maxOutput=$liteRtMaxOutputTokens " +
+                                            "queueDepth=${pendingContinuations.size} logicalJobs=${loadingRefCount.get()}"
+                                    )
+                                    GenerationDiagnosticsStore.recordBreadcrumb(
+                                        source = "agent_backend",
+                                        event = "litert_heartbeat",
+                                        details = "backend=$backend liteRtBackend=$liteRtBackendMode phase=$streamPhase quietMs=$quietMs " +
+                                            "context=$contextSize maxOutput=$liteRtMaxOutputTokens queueDepth=${pendingContinuations.size} " +
+                                            "logicalJobs=${loadingRefCount.get()}"
+                                    )
+                                    checkpointRuntimeState(reason = "LiteRT heartbeat")
                                 }
+                                delay(BACKEND_HEARTBEAT_UI_INTERVAL_MS)
                             }
-                        ).let { result ->
+                        }
+                        val liteRtResult = try {
+                            LiteRtTextGenerationClient(context).generate(
+                                model = liteRtModel,
+                                title = "Agent ${activeAgentRole.name}",
+                                systemPrompt = fullSystemPrompt,
+                                messages = initialLiteRtMessages,
+                                userPrompt = liteRtUserPrompt,
+                                contextSize = contextSize,
+                                maxTokens = liteRtMaxOutputTokens,
+                                temperature = 0.7f,
+                                thinkingEnabled = thinkingEnabled,
+                                backendMode = liteRtBackendMode,
+                                mtpEnabled = settingsRepo.agentLiteRtMtpEnabled.value,
+                                onStatus = { status ->
+                                    if (isAgentRunActive(runEpoch)) {
+                                        lastLiteRtActivityAt = android.os.SystemClock.elapsedRealtime()
+                                        val safeStatus = sanitizeJournalText(status, 120)
+                                        if (safeStatus.isNotBlank()) {
+                                            setStatusText(safeStatus)
+                                            recordAgentEvent(
+                                                kind = "litert_status",
+                                                summary = "LiteRT status",
+                                                details = "backend=$backend liteRtBackend=$liteRtBackendMode model=${liteRtModelDisplay.take(80)} " +
+                                                    "status=${safeStatus.take(80)} context=$contextSize maxOutput=$liteRtMaxOutputTokens"
+                                            )
+                                        }
+                                    }
+                                },
+                                onChunk = { chunk ->
+                                    if (isAgentRunActive(runEpoch)) {
+                                        lastLiteRtActivityAt = android.os.SystemClock.elapsedRealtime()
+                                        fullContent = appendStreamingPreview(
+                                            fullContent,
+                                            chunk,
+                                            STREAMING_RESPONSE_PREVIEW_CHARS
+                                        )
+                                        publishStreamingUi()
+                                        checkpointRuntimeState(reason = "Agent streaming content")
+                                    }
+                                },
+                                onThinkingChunk = { thinkingChunk ->
+                                    if (isAgentRunActive(runEpoch) && thinkingEnabled) {
+                                        lastLiteRtActivityAt = android.os.SystemClock.elapsedRealtime()
+                                        fullThinking = appendStreamingPreview(
+                                            fullThinking,
+                                            thinkingChunk,
+                                            STREAMING_REASONING_PREVIEW_CHARS
+                                        )
+                                        publishStreamingUi()
+                                        checkpointRuntimeState(reason = "Agent streaming thinking")
+                                    }
+                                }
+                            )
+                        } finally {
+                            liteRtHeartbeatJob.cancel()
+                        }
+                        liteRtResult.let { result ->
                             Result.success(
                                 OllamaService.ChatResponse(
                                     message = OllamaService.ChatMessage(
                                         role = "assistant",
                                         content = result.output,
-                                        thinking = fullThinking.takeIf { it.isNotBlank() }
+                                        thinking = result.thinking.takeIf { it.isNotBlank() }
                                     ),
                                     done = true,
                                     usage = OllamaService.ChatUsage(
@@ -4506,29 +7138,160 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         } else {
                             settingsRepo.llamaServerUrl.value
                         }
-                        llamaServerChatService.chatWithToolsStreaming(
-                            baseUrl = llamaUrl,
-                            messages = packedContext.messages.map { it.toOllamaMessage(includeThinking = false) },
-                            tools = availableTools,
-                            modelLabel = model,
-                            thinkingEnabled = thinkingEnabled,
-                            maxTokens = ollamaService.numCtx.value,
-                            onChunk = { chunk, thinkingChunk ->
-                                if (isAgentRunActive(runEpoch)) {
-                                    chunk?.let {
-                                        fullContent += it
-                                        _streamingContent.value = fullContent
-                                    }
-                                    thinkingChunk?.let {
-                                        if (thinkingEnabled) {
-                                            fullThinking += it
-                                            _streamingThinking.value = fullThinking
-                                            checkpointRuntimeState(reason = "Agent streaming thinking")
-                                        }
-                                    }
+                        val backendDisplay = if (useLlamaSwap) "llama-swap" else "llama-server"
+                        val modelDisplay = friendlyBackendModelLabel(model) ?: model
+                        var lastLlamaServerActivityAt = android.os.SystemClock.elapsedRealtime()
+                        var lastLlamaServerHeartbeatRecordAt = 0L
+                        var lastLlamaServerHealthCheckAt = 0L
+                        var lastLlamaServerHeartbeatPhase: String? = null
+                        var lastLlamaServerAlive: Boolean? = null
+                        var llamaPromptProcessed = 0
+                        var llamaPromptTotal = 0
+                        var llamaPromptCached = 0
+                        fun publishLlamaServerStatus(
+                            workerStatus: String? = null,
+                            quietSeconds: Long? = null
+                        ) {
+                            when {
+                                llamaPromptTotal > 0 && llamaPromptProcessed < llamaPromptTotal -> {
+                                    val percent = (
+                                        llamaPromptProcessed * 100L / llamaPromptTotal
+                                        ).toInt().coerceIn(0, 100)
+                                    setStatusText(
+                                        context.getString(
+                                            R.string.agent_status_prompt_processing,
+                                            backendDisplay,
+                                            llamaPromptProcessed,
+                                            llamaPromptTotal,
+                                            percent,
+                                            llamaPromptCached
+                                        )
+                                    )
+                                }
+                                fullContent.isNotBlank() || fullThinking.isNotBlank() -> {
+                                    setStatusText(
+                                        context.getString(
+                                            R.string.agent_status_streaming_response,
+                                            backendDisplay
+                                        )
+                                    )
+                                }
+                                !workerStatus.isNullOrBlank() -> {
+                                    setStatusText("$backendDisplay · ${workerStatus.take(120)}")
+                                }
+                                quietSeconds != null -> {
+                                    setStatusText(
+                                        context.getString(
+                                            R.string.agent_status_llama_server_waiting,
+                                            backendDisplay,
+                                            modelDisplay,
+                                            quietSeconds.coerceAtLeast(0L)
+                                        )
+                                    )
                                 }
                             }
-                        )
+                        }
+                        val heartbeatJob = agentScope.launch {
+                            delay(BACKEND_HEARTBEAT_UI_INTERVAL_MS)
+                            while (isActive && isAgentRunActive(runEpoch)) {
+                                val now = android.os.SystemClock.elapsedRealtime()
+                                val quietMs = (now - lastLlamaServerActivityAt).coerceAtLeast(0L)
+                                val streamPhase = if (fullContent.isBlank() && fullThinking.isBlank()) {
+                                    "waiting_first_token"
+                                } else {
+                                    "streaming"
+                                }
+                                publishLlamaServerStatus(quietSeconds = quietMs / 1000L)
+                                val previousAlive = lastLlamaServerAlive
+                                val shouldCheckHealth = lastLlamaServerHealthCheckAt == 0L ||
+                                    now - lastLlamaServerHealthCheckAt >= BACKEND_HEALTH_CHECK_INTERVAL_MS
+                                if (shouldCheckHealth) {
+                                    lastLlamaServerHealthCheckAt = now
+                                    lastLlamaServerAlive = runCatching { llamaServerChatService.checkConnection(llamaUrl) }
+                                        .getOrDefault(false)
+                                }
+                                val alive = lastLlamaServerAlive
+                                val aliveChanged = previousAlive != null && alive != previousAlive
+                                val shouldPersistHeartbeat = lastLlamaServerHeartbeatRecordAt == 0L ||
+                                    now - lastLlamaServerHeartbeatRecordAt >= BACKEND_HEARTBEAT_RECORD_INTERVAL_MS ||
+                                    lastLlamaServerHeartbeatPhase != streamPhase ||
+                                    aliveChanged
+                                if (shouldPersistHeartbeat) {
+                                    lastLlamaServerHeartbeatRecordAt = now
+                                    lastLlamaServerHeartbeatPhase = streamPhase
+                                    recordAgentEvent(
+                                        kind = "llama_server_heartbeat",
+                                        summary = when (alive) {
+                                            true -> "$backendDisplay still connected"
+                                            false -> "$backendDisplay health check failed"
+                                            null -> "$backendDisplay still waiting"
+                                        },
+                                        details = "backend=$backend model=${modelDisplay.take(80)} phase=$streamPhase quietMs=$quietMs " +
+                                            "queueDepth=${pendingContinuations.size} logicalJobs=${loadingRefCount.get()} alive=${alive ?: "unknown"}"
+                                    )
+                                    GenerationDiagnosticsStore.recordBreadcrumb(
+                                        source = "agent_backend",
+                                        event = "llama_server_heartbeat",
+                                        details = "backend=$backend phase=$streamPhase quietMs=$quietMs alive=${alive ?: "unknown"} " +
+                                            "queueDepth=${pendingContinuations.size} logicalJobs=${loadingRefCount.get()}"
+                                    )
+                                    checkpointRuntimeState(reason = "$backendDisplay heartbeat")
+                                }
+                                delay(BACKEND_HEARTBEAT_UI_INTERVAL_MS)
+                            }
+                        }
+                        try {
+                            AgentRemoteChatClient(context).chat(
+                                request = AgentRemoteChatRequest(
+                                    baseUrl = llamaUrl,
+                                    messages = packedContext.messages.map { it.toOllamaMessage(includeThinking = false) },
+                                    tools = availableTools,
+                                    modelLabel = model,
+                                    thinkingEnabled = thinkingEnabled,
+                                    maxTokens = effectiveMaxOutputTokens,
+                                    samplingParams = LlamaServerSamplingParams(),
+                                    requestOptions = LlamaServerRequestOptions(
+                                        cachePrompt = settingsRepo.serverCachePrompt.value
+                                    ),
+                                    slotOwner = LlamaSlotOwnerKey(
+                                        endpointGeneration = "$llamaUrl|${settingsRepo.serverParallel.value}|${settingsRepo.contextSize.value}",
+                                        modelConfiguration = "$model|$contextSize|$thinkingEnabled|${settingsRepo.speculativeMode.value}",
+                                        conversationId = _activeConversationId.value?.toString() ?: "unsaved",
+                                        agentSessionId = _currentSessionId.value ?: (activeCustomAgent?.name ?: activeAgentRole.name)
+                                    ),
+                                    slotAffinityMode = LlamaSlotAffinityMode.fromValue(
+                                        settingsRepo.agentLlamaSlotAffinityMode.value
+                                    ),
+                                    conversationId = _activeConversationId.value?.toString().orEmpty(),
+                                    rootTurnId = activeRootTurnStorageId,
+                                    runtimeEpoch = runEpoch,
+                                    invocationId = activeInvocationId.orEmpty()
+                                ),
+                                sessionId = rootWorkerSessionId(),
+                                onStatus = { workerStatus ->
+                                    if (isAgentRunActive(runEpoch)) {
+                                        lastLlamaServerActivityAt = android.os.SystemClock.elapsedRealtime()
+                                        publishLlamaServerStatus(workerStatus = workerStatus)
+                                    }
+                                },
+                                onStreamSnapshot = { snapshot ->
+                                    if (isAgentRunActive(runEpoch)) {
+                                        lastLlamaServerActivityAt = android.os.SystemClock.elapsedRealtime()
+                                        fullContent = snapshot.content
+                                        if (thinkingEnabled) {
+                                            fullThinking = snapshot.thinking
+                                        }
+                                        llamaPromptProcessed = snapshot.promptProcessed
+                                        llamaPromptTotal = snapshot.promptTotal
+                                        llamaPromptCached = snapshot.promptCached
+                                        publishLlamaServerStatus()
+                                        publishStreamingUi()
+                                    }
+                                }
+                            )
+                        } finally {
+                            heartbeatJob.cancel()
+                        }
                     } else {
                         // Use Ollama (default)
                         ollamaService.chatWithToolsStreaming(
@@ -4536,16 +7299,25 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             messages = packedContext.messages.map { it.toOllamaMessage(includeThinking = false) },
                             tools = availableTools,
                             thinkingEnabled = thinkingEnabled,
+                            maxOutputTokens = effectiveMaxOutputTokens,
                             onChunk = { chunk, thinkingChunk ->
                                 if (isAgentRunActive(runEpoch)) {
                                     chunk?.let {
-                                        fullContent += it
-                                        _streamingContent.value = fullContent
+                                        fullContent = appendStreamingPreview(
+                                            fullContent,
+                                            it,
+                                            STREAMING_RESPONSE_PREVIEW_CHARS
+                                        )
+                                        publishStreamingUi()
                                     }
                                     thinkingChunk?.let {
                                         if (thinkingEnabled) {
-                                            fullThinking += it
-                                            _streamingThinking.value = fullThinking
+                                            fullThinking = appendStreamingPreview(
+                                                fullThinking,
+                                                it,
+                                                STREAMING_REASONING_PREVIEW_CHARS
+                                            )
+                                            publishStreamingUi()
                                         }
                                     }
                                 }
@@ -4555,6 +7327,18 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
                     response.onSuccess { chatResponse ->
                         if (!isAgentRunActive(runEpoch)) throw CancellationException("Agent run cancelled")
+                        if (chatResponse.message.content.isNotBlank()) {
+                            fullContent = chatResponse.message.content
+                        }
+                        if (thinkingEnabled && !chatResponse.message.thinking.isNullOrBlank()) {
+                            fullThinking = chatResponse.message.thinking.orEmpty()
+                        }
+                        publishStreamingUi(force = true)
+                        GenerationDiagnosticsStore.recordBreadcrumb(
+                            source = "agent_stream",
+                            event = "stream_ui_finished",
+                            details = "contentChars=${fullContent.length} thinkingChars=${fullThinking.length}"
+                        )
                         val turnNumber = nextModelTurnNumber()
                         val calibratedFactor = chatResponse.usage?.promptTokens?.takeIf { it > 0 }?.let { actualPromptTokens ->
                             registerPromptTokenCalibration(
@@ -4619,14 +7403,41 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         _streamingThinking.value = ""
                         _streamingMessageId.value = null
 
+                        val queuedGuidanceAfterCompletedTurn = if (effectiveToolCall == null) {
+                            drainPendingUrgentUserGuidance(context, "completed model turn")
+                        } else {
+                            0
+                        }
+
+                        if (effectiveToolCall == null) {
+                            val turnCheckpoint = agentService.persistVisibleRuntimeStateNow(
+                                reason = "Committed no-tool model boundary"
+                            )
+                            if (turnCheckpoint.isFailure) {
+                                pauseForNeedsDirection(context, context.getString(R.string.agent_checkpoint_failed_continue))
+                                return@onSuccess
+                            }
+                        }
+
                         when {
+                            queuedGuidanceAfterCompletedTurn > 0 -> {
+                                enqueueAgentContinuation(
+                                    context = context,
+                                    ollamaService = ollamaService,
+                                    settingsRepo = settingsRepo,
+                                    agentService = agentService,
+                                    reason = "urgent user guidance after completed turn",
+                                    userInitiated = true,
+                                    runEpoch = runEpoch
+                                )
+                            }
                             effectiveToolCall != null -> {
                                 if (toolCall != null) {
                                     addDebugLog("🔧 Tool call detected: ${toolCall.name}")
                                 } else {
                                     addDebugLog("🛠️ Recovered tool call from ${recoveredToolAttempt?.source ?: "assistant output"}: ${effectiveToolCall.name}")
                                 }
-                                executeToolCall(context, ollamaService, settingsRepo, agentService, effectiveToolCall, runEpoch = runEpoch).join()
+                                executeToolCall(context, ollamaService, settingsRepo, agentService, effectiveToolCall, runEpoch = runEpoch)
                             }
                             recoveredToolAttempt?.attempted == true -> {
                                 val malformedSummary = context.getString(R.string.agent_tool_recovery_failed_summary)
@@ -4643,21 +7454,23 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 ))
                                 if (!recoveryMode) {
                                     if (!isAgentRunActive(runEpoch)) throw CancellationException("Agent run cancelled")
-                                    sendMessage(
-                                        context,
-                                        ollamaService,
-                                        settingsRepo,
-                                        agentService,
+                                    enqueueAgentContinuation(
+                                        context = context,
+                                        ollamaService = ollamaService,
+                                        settingsRepo = settingsRepo,
+                                        agentService = agentService,
+                                        reason = "malformed tool call repair",
                                         recoveryInstruction = buildToolCallRecoveryInstruction(
                                             recoveredToolAttempt.suspectedToolName,
                                             recoveredToolAttempt.error ?: "Your previous response attempted a tool call inside plain text, markdown, or <think>."
                                         ),
                                         recoveryMode = true,
-                                        queueBehindActiveJob = false
-                                    ).join()
+                                        runEpoch = runEpoch
+                                    )
                                 } else if (_currentSessionId.value != null && currentAgent != AgentRole.ORCHESTRATOR) {
                                     val agentOutput = finalContent.ifBlank { malformedSummary }
-                                    endSession(agentOutput)
+                                    val completed = endSession(agentOutput)
+                                    completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)
                                 } else {
                                     refreshIdleStatusIfNeeded()
                                 }
@@ -4677,17 +7490,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 ))
                                 if (!recoveryMode) {
                                     if (!isAgentRunActive(runEpoch)) throw CancellationException("Agent run cancelled")
-                                    sendMessage(
-                                        context,
-                                        ollamaService,
-                                        settingsRepo,
-                                        agentService,
+                                    enqueueAgentContinuation(
+                                        context = context,
+                                        ollamaService = ollamaService,
+                                        settingsRepo = settingsRepo,
+                                        agentService = agentService,
+                                        reason = "empty assistant response repair",
                                         recoveryInstruction = "Your previous response produced no visible answer and no structured tool call. First emit `{\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}`, then reply with either a concise answer or a proper structured tool call only. Tool calls must be emitted outside <think>, markdown fences, and plain text.",
                                         recoveryMode = true,
-                                        queueBehindActiveJob = false
-                                    ).join()
+                                        runEpoch = runEpoch
+                                    )
                                 } else if (_currentSessionId.value != null && currentAgent != AgentRole.ORCHESTRATOR) {
-                                    endSession(emptySummary)
+                                    val completed = endSession(emptySummary)
+                                    completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)
                                 } else {
                                     refreshIdleStatusIfNeeded()
                                 }
@@ -4707,15 +7522,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 ))
                                 if (!recoveryMode) {
                                     if (!isAgentRunActive(runEpoch)) throw CancellationException("Agent run cancelled")
-                                    sendMessage(
-                                        context,
-                                        ollamaService,
-                                        settingsRepo,
-                                        agentService,
+                                    enqueueAgentContinuation(
+                                        context = context,
+                                        ollamaService = ollamaService,
+                                        settingsRepo = settingsRepo,
+                                        agentService = agentService,
+                                        reason = "memory gate continuation",
                                         recoveryInstruction = buildMemoryGateRecoveryInstruction(),
                                         recoveryMode = true,
-                                        queueBehindActiveJob = false
-                                    ).join()
+                                        runEpoch = runEpoch
+                                    )
                                 } else {
                                     setStatusText(context.getString(R.string.agent_status_memory_update_required))
                                 }
@@ -4725,7 +7541,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 if (_currentSessionId.value != null && currentAgent != AgentRole.ORCHESTRATOR) {
                                     addDebugLog("🔙 Sub-agent finished. Returning to parent context.")
                                     val agentOutput = chatResponse.message.content
-                                    endSession(agentOutput)
+                                    val completed = endSession(agentOutput)
+                                    completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)
                                 } else if (currentAgent == AgentRole.ORCHESTRATOR) {
                                     val reflectionResult = runAutoReflectionGate(
                                         scope = "orchestrator final response",
@@ -4747,15 +7564,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                             toolOutput = reflectionResult.toJson()
                                         ))
                                         if (!isAgentRunActive(runEpoch)) throw CancellationException("Agent run cancelled")
-                                        sendMessage(
-                                            context,
-                                            ollamaService,
-                                            settingsRepo,
-                                            agentService,
+                                        enqueueAgentContinuation(
+                                            context = context,
+                                            ollamaService = ollamaService,
+                                            settingsRepo = settingsRepo,
+                                            agentService = agentService,
+                                            reason = "reflection blocked finalization",
                                             recoveryInstruction = context.getString(R.string.agent_reflection_recovery_instruction),
                                             recoveryMode = true,
-                                            queueBehindActiveJob = false
-                                        ).join()
+                                            runEpoch = runEpoch
+                                        )
                                     } else {
                                         refreshIdleStatusIfNeeded()
                                     }
@@ -4766,18 +7584,52 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         }
                     // Flush final content to UI (in case throttling skipped the last chunk)
                     if (isAgentRunActive(runEpoch)) {
-                        updateMessage(assistantMsgId) { m -> m.copy(content = fullContent, thinking = fullThinking) }
+                        val terminalMessage = response.getOrNull()?.message
+                        updateMessage(assistantMsgId) { m ->
+                            m.copy(
+                                content = terminalMessage?.content?.takeIf { it.isNotBlank() } ?: fullContent,
+                                thinking = terminalMessage?.thinking?.takeIf { it.isNotBlank() } ?: fullThinking
+                            )
+                        }
                     }
 
                         }.onFailure { e ->
-                        if (e is kotlinx.coroutines.CancellationException) {
+                        val errorMessage = e.message ?: ""
+                        val cancellationLike = e is kotlinx.coroutines.CancellationException ||
+                            e is java.util.concurrent.CancellationException ||
+                            e.cause is java.util.concurrent.CancellationException ||
+                            errorMessage.contains("Session is cancelled", ignoreCase = true)
+                        if (cancellationLike) {
                             addDebugLog("🛑 Job cancelled.")
                             if (isAgentRunActive(runEpoch)) {
-                                updateMessage(assistantMsgId) { it.copy(content = it.content + " [Interrupted]", isStreaming = false) }
+                                updateMessage(assistantMsgId) {
+                                    val partialContent = (fullContent.ifBlank { it.content }).trimEnd()
+                                    val nextContent = if (useLiteRtBackend) {
+                                        val reason = errorMessage.ifBlank { e::class.java.simpleName }
+                                        if (partialContent.isNotBlank()) {
+                                            partialContent + "\n\n" + context.getString(R.string.agent_stream_interrupted_suffix, reason)
+                                        } else {
+                                            context.getString(R.string.agent_error_prefix, reason)
+                                        }
+                                    } else {
+                                        partialContent + " [Interrupted]"
+                                    }
+                                    it.copy(content = nextContent, isStreaming = false)
+                                }
+                                if (useLiteRtBackend) {
+                                    val reason = errorMessage.ifBlank { e::class.java.simpleName }
+                                    blockAutomaticContinuations()
+                                    updateActiveConversationResumeState(RESUME_STATE_INTERRUPTED, reason)
+                                    recordAgentEvent(
+                                        kind = "backend_stream_failure",
+                                        summary = "LiteRT backend stream cancelled",
+                                        details = "backend=$backend model=${(friendlyBackendModelLabel(model) ?: model).take(80)} " +
+                                            "error=${e::class.java.simpleName}"
+                                    )
+                                }
                             }
                         } else {
                             addDebugLog("❌ LLM Error: ${e.message}")
-                            val errorMessage = e.message ?: ""
                             if (isAgentRunActive(runEpoch)) {
                                 updateMessage(assistantMsgId) {
                                     val partialContent = (fullContent.ifBlank { it.content }).trimEnd()
@@ -4788,6 +7640,63 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                     }
                                     it.copy(content = nextContent, isStreaming = false)
                                 }
+                            }
+                            if ((useOpenAiBackend || useLiteRtBackend || useLlamaServer) && isAgentRunActive(runEpoch)) {
+                                blockAutomaticContinuations()
+                                updateActiveConversationResumeState(RESUME_STATE_INTERRUPTED, errorMessage.ifBlank { e::class.java.simpleName })
+                                recordAgentEvent(
+                                    kind = "backend_stream_failure",
+                                    summary = if (useLlamaServer) {
+                                        "Llama server worker request failed"
+                                    } else if (useLiteRtBackend) {
+                                        "LiteRT backend stream failed"
+                                    } else {
+                                        "OpenAI-compatible backend stream failed"
+                                    },
+                                    details = "backend=$backend model=${(friendlyBackendModelLabel(model) ?: model).take(80)} error=${e::class.java.simpleName}"
+                                )
+                            }
+                            val supervisorRetry = supervisorRetriesByEpoch
+                                .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
+                                .incrementAndGet()
+                            if (supervisorRetry >= LOOP_WAKEUP_SUPERVISOR_RETRIES) {
+                                postLoopWakeup(
+                                    context = context,
+                                    signal = context.getString(R.string.agent_loop_signal_generation),
+                                    occurrenceCount = supervisorRetry,
+                                    evidence = e.message ?: e::class.java.simpleName
+                                )
+                            }
+                            if (
+                                isAgentRunActive(runEpoch) &&
+                                currentAgent == AgentRole.ORCHESTRATOR &&
+                                !recoveryMode &&
+                                !useOpenAiBackend &&
+                                !useLiteRtBackend &&
+                                !useLlamaServer &&
+                                supervisorRetry <= MAX_SUPERVISOR_RETRIES_PER_REQUEST
+                            ) {
+                                addDebugLog("🧭 Supervisor retry $supervisorRetry/$MAX_SUPERVISOR_RETRIES_PER_REQUEST after unexpected stop.")
+                                enqueueAgentContinuation(
+                                    context = context,
+                                    ollamaService = ollamaService,
+                                    settingsRepo = settingsRepo,
+                                    agentService = agentService,
+                                    reason = "supervisor retry",
+                                    recoveryInstruction = "Supervisor retry $supervisorRetry/$MAX_SUPERVISOR_RETRIES_PER_REQUEST: the previous generation stopped unexpectedly before the project was finished. Continue from the last visible message/tool state. If a tool call was interrupted, inspect current state before retrying it. Do not duplicate completed work.",
+                                    recoveryMode = true,
+                                    runEpoch = runEpoch
+                                )
+                            } else if (
+                                isAgentRunActive(runEpoch) &&
+                                currentAgent == AgentRole.ORCHESTRATOR &&
+                                supervisorRetry > MAX_SUPERVISOR_RETRIES_PER_REQUEST
+                            ) {
+                                addMessage(ChatMessage(
+                                    role = "assistant",
+                                    content = "The agents stopped working, we should pay them more\n\nError trace:\n```text\n${e::class.java.name}: ${e.message ?: "Unknown error"}\n```",
+                                    agentRole = currentAgent.name
+                                ))
                             }
                             // If sub-agent failed, return to orchestrator so user isn't stuck
                             if (currentAgent != AgentRole.ORCHESTRATOR) {
@@ -4805,15 +7714,27 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     } finally {
                         // Decrement ref count when thinking is done
                         setIsLoading(false)
+                        drainAgentContinuationQueue()
                     }
-                    }
-                    trackActiveAgentWorkJob(newJob)
-                    trackCurrentChatJob(newJob)
-                    newJob.start()
-                    newJob
                 }
+            if (!tryTrackCurrentChatJob(newJob, requireIdle = queueBehindActiveJob)) {
+                newJob.cancel()
+                return enqueueAgentContinuation(
+                    context = context,
+                    ollamaService = ollamaService,
+                    settingsRepo = settingsRepo,
+                    agentService = agentService,
+                    reason = recoveryInstruction?.take(80) ?: "queued behind active turn",
+                    isRedo = isRedo,
+                    recoveryInstruction = recoveryInstruction,
+                    recoveryMode = recoveryMode,
+                    userInitiated = userInitiated,
+                    runEpoch = runEpoch
+                )
             }
-            return job
+            trackActiveAgentWorkJob(newJob)
+            newJob.start()
+            return newJob
         }
 
         fun executeToolCall(
@@ -4832,6 +7753,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 return agentScope.launch { }
             }
             // Increment ref count immediately to bridge the gap
+            lastNotificationToolName = toolCall.name
             setIsLoading(true, context.getString(R.string.agent_executing_tool, toolCall.name))
 
             val job = agentScope.launch {
@@ -4842,6 +7764,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     // Ref count already incremented
                     addDebugLog("🔧 Executing tool: ${toolCall.name}")
                     recordAgentEvent("tool_call", "Executing ${toolCall.name}", buildToolArgsPreview(toolCall.arguments))
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "agent_tool_runtime",
+                        event = "tool_execution_started",
+                        details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} args=${toolCall.arguments.size} " +
+                            "agent=${_currentAgent.value.name} active=${GenerationDiagnosticsStore.activeSessionSummaryForBreadcrumb()}"
+                    )
                     syncAssistantToolProgress(toolCall)
 
                     val validatedToolCall = validateToolCall(toolCall, _currentAgent.value, _activeCustomAgent.value, settingsRepo).getOrElse { error ->
@@ -4849,11 +7777,23 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         val failureCount = noteRepeatedFailure(toolCall.name, toolCall.arguments, validationError)
                         addDebugLog("⚠️ Invalid tool call ${toolCall.name}: $validationError")
                         recordAgentEvent("tool_invalid", "Invalid tool call ${toolCall.name}", validationError)
+                        if (failureCount >= LOOP_WAKEUP_TOOL_FAILURES) {
+                            postLoopWakeup(
+                                context = context,
+                                signal = context.getString(R.string.agent_loop_signal_tool, toolCall.name),
+                                occurrenceCount = failureCount,
+                                evidence = validationError
+                            )
+                        }
+                        if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) {
+                            pauseForNeedsDirection(context, context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name))
+                            return@launch
+                        }
                         val invalidOutput = buildToolResultEnvelope(
                             toolName = toolCall.name,
                             status = "error",
                             summary = validationError,
-                            nextHint = if (failureCount >= 3) {
+                            nextHint = if (failureCount >= LOOP_WAKEUP_TOOL_FAILURES) {
                                 "Repeated invalid tool call detected. Do not retry unchanged arguments. Read brain/tools_reference.md, correct the schema, and only retry once the arguments differ."
                             } else {
                                 "Retry with a declared tool name and all required string arguments. If you need a reminder, first emit {\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}, then emit the tool call outside <think>."
@@ -4868,20 +7808,21 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             toolCallId = toolCall.id
                         ))
                         ensureAgentRunActive(runEpoch)
-                        sendMessage(
-                            context,
-                            ollamaService,
-                            settingsRepo,
-                            agentService,
+                        enqueueAgentContinuation(
+                            context = context,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            reason = "invalid tool call repair",
                             recoveryInstruction = buildToolCallRecoveryInstruction(toolCall.name, validationError),
                             recoveryMode = true,
-                            queueBehindActiveJob = false
-                        ).join()
+                            runEpoch = runEpoch
+                        )
                         return@launch
                     }
                     clearRepeatedFailure(toolCall.name, validatedToolCall.normalizedArguments)
 
-                    if (validatedToolCall.toolCall.name == "finish_task" && _memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER) {
+                    if (validatedToolCall.toolCall.name == "finish_task" && _memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) {
                         val gatedOutput = buildToolResultEnvelope(
                             toolName = "memory_gate",
                             status = "error",
@@ -4897,15 +7838,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             toolCallId = toolCall.id
                         ))
                         ensureAgentRunActive(runEpoch)
-                        sendMessage(
-                            context,
-                            ollamaService,
-                            settingsRepo,
-                            agentService,
+                        enqueueAgentContinuation(
+                            context = context,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            reason = "finish_task memory gate",
                             recoveryInstruction = buildMemoryGateRecoveryInstruction(),
                             recoveryMode = true,
-                            queueBehindActiveJob = false
-                        ).join()
+                            runEpoch = runEpoch
+                        )
                         return@launch
                     }
                     if (validatedToolCall.toolCall.name == "finish_task") {
@@ -4935,15 +7877,75 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 toolOutput = reflectionResult.toJson()
                             ))
                             ensureAgentRunActive(runEpoch)
-                            sendMessage(
-                                context,
-                                ollamaService,
-                                settingsRepo,
-                                agentService,
+                            enqueueAgentContinuation(
+                                context = context,
+                                ollamaService = ollamaService,
+                                settingsRepo = settingsRepo,
+                                agentService = agentService,
+                                reason = "finish_task reflection gate",
                                 recoveryInstruction = context.getString(R.string.agent_reflection_recovery_instruction),
                                 recoveryMode = true,
-                                queueBehindActiveJob = false
-                            ).join()
+                                runEpoch = runEpoch
+                            )
+                            return@launch
+                        }
+                    }
+
+                    val workflowToolCall = validatedToolCall.toolCall
+                    if (workflowToolCall.name == "question") {
+                        val specification = parseQuestionToolCall(workflowToolCall)
+                        persistPendingQuestion(context, workflowToolCall, specification)
+                        toolHandlesContinuation = true
+                        return@launch
+                    }
+
+                    if (
+                        workflowToolCall.name in setOf(
+                            "skill",
+                            "read_skill_resource",
+                            "run_skill_script"
+                        )
+                    ) {
+                        val requestedSkill = workflowToolCall.arguments["name"]
+                            ?: workflowToolCall.arguments["skill"]
+                            ?: throw IllegalArgumentException("A skill name or ID is required")
+                        val skillRepository = AgentSkillRepository(context.applicationContext)
+                        val skill = skillRepository.findSkill(requestedSkill)
+                            ?: throw IllegalArgumentException("Skill is not installed: $requestedSkill")
+                        val agentKey = _activeCustomAgent.value?.name ?: _currentAgent.value.name
+                        val permission = skillRepository.permissionFor(
+                            skill,
+                            _activeConversationId.value,
+                            agentKey
+                        )
+                        require(permission != SkillPermission.DENY) {
+                            "Skill '${skill.name}' is denied for this project or agent"
+                        }
+                        val approvalRequired = permission == SkillPermission.ASK ||
+                            workflowToolCall.name == "run_skill_script"
+                        if (approvalRequired && !isForced) {
+                            addMessage(
+                                ChatMessage(
+                                    role = "assistant",
+                                    content = if (workflowToolCall.name == "run_skill_script") {
+                                        context.getString(
+                                            R.string.agent_request_skill_script,
+                                            skill.name,
+                                            workflowToolCall.arguments["path"].orEmpty()
+                                        )
+                                    } else {
+                                        context.getString(R.string.agent_request_skill_load, skill.name)
+                                    },
+                                    toolName = workflowToolCall.name,
+                                    toolArgs = workflowToolCall.arguments,
+                                    needsApproval = true,
+                                    pendingToolCall = workflowToolCall,
+                                    agentRole = assistantAgentRole,
+                                    customAgentName = assistantCustomAgentName
+                                )
+                            )
+                            setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                            agentService.persistVisibleRuntimeStateNow("Skill approval requested.")
                             return@launch
                         }
                     }
@@ -5067,9 +8069,71 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 val appendNewline = toolCall.arguments["append_newline"]?.toBooleanStrictOrNull() ?: true
                                 agentService.sendCommandInput(commandId, input, appendNewline).getOrThrow()
                             }
+                            "run_project" -> {
+                                if (!settingsRepo.commandAutoAccept.value && !isForced) {
+                                    addMessage(ChatMessage(
+                                        role = "assistant",
+                                        content = context.getString(R.string.agent_request_local_run),
+                                        toolName = toolCall.name,
+                                        toolArgs = toolCall.arguments,
+                                        needsApproval = true,
+                                        pendingToolCall = toolCall,
+                                        agentRole = assistantAgentRole,
+                                        customAgentName = assistantCustomAgentName
+                                    ))
+                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                    agentService.persistVisibleRuntimeStateNow("Local project run approval requested.")
+                                    return@launch
+                                }
+                                agentService.runLocalProject().getOrThrow()
+                            }
+                            "check_project_run" -> {
+                                agentService.checkLocalProjectRun().getOrThrow()
+                            }
+                            "stop_project_run" -> {
+                                agentService.stopLocalProjectRun(force = false).getOrThrow()
+                            }
+                            "force_stop_project_run" -> {
+                                if (!settingsRepo.commandAutoAccept.value && !isForced) {
+                                    addMessage(ChatMessage(
+                                        role = "assistant",
+                                        content = context.getString(R.string.agent_request_local_force_stop),
+                                        toolName = toolCall.name,
+                                        toolArgs = toolCall.arguments,
+                                        needsApproval = true,
+                                        pendingToolCall = toolCall,
+                                        agentRole = assistantAgentRole,
+                                        customAgentName = assistantCustomAgentName
+                                    ))
+                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                    agentService.persistVisibleRuntimeStateNow("Local project force-stop approval requested.")
+                                    return@launch
+                                }
+                                agentService.stopLocalProjectRun(force = true).getOrThrow()
+                            }
+                            "install_python_dependency" -> {
+                                val packageName = toolCall.arguments["package"] ?: ""
+                                val wheelPath = toolCall.arguments["wheel_path"]
+                                if (!settingsRepo.autoMode.value && !isForced) {
+                                    addMessage(ChatMessage(
+                                        role = "assistant",
+                                        content = context.getString(R.string.agent_request_python_dependency, packageName),
+                                        toolName = toolCall.name,
+                                        toolArgs = toolCall.arguments,
+                                        needsApproval = true,
+                                        pendingToolCall = toolCall,
+                                        agentRole = assistantAgentRole,
+                                        customAgentName = assistantCustomAgentName
+                                    ))
+                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                    agentService.persistVisibleRuntimeStateNow("Python dependency approval requested.")
+                                    return@launch
+                                }
+                                agentService.installLocalPythonDependency(packageName, wheelPath).getOrThrow()
+                            }
                             "list_directory" -> {
                                 val files = agentService.listDirectory(toolCall.arguments["path"] ?: WORKSPACE_PATH).getOrThrow()
-                                files.joinToString("\n") { f -> "${if (f.isDirectory) "📁" else "📄"} ${f.name}" }
+                                files.joinToString("\n") { f -> "${if (f.isDirectory) "[dir]" else "[file]"} ${f.name}" }
                             }
                             "create_folder" -> {
                                 val path = effectiveToolCall.arguments["path"] ?: ""
@@ -5169,51 +8233,130 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             }
                             "call_agent" -> {
                                 val agentName = toolCall.arguments["agent"] ?: "CODER"
+                                val requestedInvocationName = normalizeAgentInvocationName(toolCall.arguments["name"].orEmpty())
+                                    ?: throw IllegalArgumentException("call_agent requires a non-blank name of at most 40 characters.")
+                                if (_currentAgent.value != AgentRole.ORCHESTRATOR || _activeCustomAgent.value != null) {
+                                    throw IllegalStateException("Only the Orchestrator can call another agent.")
+                                }
                                 val task = toolCall.arguments["task"] ?: ""
                                 val agentCtx = toolCall.arguments["context"] ?: ""
+                                val handoffCount = handoffsByEpoch
+                                    .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
+                                    .incrementAndGet()
+                                if (handoffCount >= LOOP_WAKEUP_HANDOFFS) {
+                                    postLoopWakeup(
+                                        context = context,
+                                        signal = context.getString(R.string.agent_loop_signal_handoff),
+                                        occurrenceCount = handoffCount,
+                                        evidence = "agent=$agentName task=$task"
+                                    )
+                                }
+                                if (handoffCount > MAX_HANDOFFS_PER_REQUEST) {
+                                    pauseForNeedsDirection(context, context.getString(R.string.agent_loop_handoff_budget_reason))
+                                    toolHandlesContinuation = true
+                                    return@launch
+                                }
                                 val parentSessionId = _currentSessionId.value
                                 val parentAgent = _currentAgent.value
                                 val parentTask = _currentTask.value
                                 val parentCustomAgent = _activeCustomAgent.value
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException("call_agent requires an active conversation.")
+                                suspend fun allocateInvocation(
+                                    agentClass: String,
+                                    agentKey: String
+                                ): com.example.llamadroid.data.db.AgentInvocationEntity {
+                                    val now = System.currentTimeMillis()
+                                    return AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao().allocateInvocation(
+                                        com.example.llamadroid.data.db.AgentInvocationEntity(
+                                            id = java.util.UUID.randomUUID().toString(),
+                                            conversationId = conversationId,
+                                            rootTurnId = activeRootTurnStorageId,
+                                            runtimeEpoch = runEpoch,
+                                            parentToolCallId = toolCall.id ?: java.util.UUID.randomUUID().toString(),
+                                            agentClass = agentClass,
+                                            agentKey = agentKey,
+                                            requestedName = requestedInvocationName.displayName,
+                                            baseNameKey = requestedInvocationName.key,
+                                            occurrence = 0,
+                                            resolvedName = requestedInvocationName.displayName,
+                                            resolvedNameKey = requestedInvocationName.key,
+                                            task = task,
+                                            context = agentCtx.takeIf { it.isNotBlank() },
+                                            startedAt = now,
+                                            updatedAt = now
+                                        )
+                                    )
+                                }
                                 var delegationSummary: String? = null
+                                postOrchestratorProgressUpdate(
+                                    context = context,
+                                    phase = progressPhaseForAgent(agentName),
+                                    summary = context.getString(R.string.agent_progress_delegating, agentName)
+                                )
+                                fun restoreParentAgentContext() {
+                                    _currentSessionId.value = parentSessionId
+                                    _activeCustomAgent.value = parentCustomAgent
+                                    setCurrentAgent(parentAgent)
+                                    setCurrentTask(parentTask)
+                                }
 
                                 // Check for built-in agents first (including SUMMARIZER)
                                 val builtInRole = when (agentName.uppercase()) {
                                     "CODER" -> AgentRole.CODER
                                     "REVIEWER" -> AgentRole.REVIEWER
                                     "EXECUTOR" -> AgentRole.EXECUTOR
+                                    "VISUAL_TESTER" -> AgentRole.VISUAL_TESTER
                                     "SUMMARIZER" -> AgentRole.SUMMARIZER
                                     else -> null
                                 }
 
                                 if (builtInRole != null) {
+                                    val invocation = allocateInvocation(builtInRole.name, builtInRole.name)
+                                    updateDelegationDisplayName(toolCall.id, invocation.resolvedName)
                                     try {
                                         // Delegate to built-in agent
+                                        activeInvocationId = invocation.id
                                         val childSessionId = startSession(builtInRole.name, _currentSessionId.value, task, agentCtx)
+                                        AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                            .attachInvocationSession(invocation.id, childSessionId)
+                                        pendingDelegations[childSessionId] = PendingAgentDelegation(
+                                            toolCall = toolCall,
+                                            parentSessionId = parentSessionId,
+                                            parentAgent = parentAgent,
+                                            parentTask = parentTask,
+                                            parentCustomAgent = parentCustomAgent,
+                                            agentLabel = builtInRole.name,
+                                            invocationId = invocation.id,
+                                            resolvedDisplayName = "${builtInRole.name} - ${invocation.resolvedName}"
+                                        )
                                         setCurrentTask(task)
                                         setCurrentAgent(builtInRole)
-
-                                        // Recursive call - wait for the delegated agent to finish
-                                        sendMessage(context, ollamaService, settingsRepo, agentService, queueBehindActiveJob = false).join()
-                                        val childStillActive = _sessions.value.containsKey(childSessionId)
-                                        if (!childStillActive) {
-                                            val completed = takeCompletedSession(childSessionId)
-                                            _currentSessionId.value = parentSessionId
-                                            _activeCustomAgent.value = parentCustomAgent
-                                            setCurrentAgent(parentAgent)
-                                            setCurrentTask(parentTask)
-                                            delegationSummary = completed?.let {
-                                                it.result.toParentFacingSummary(agentName, it.evidence)
-                                            }
-                                        } else {
-                                            toolHandlesContinuation = true
-                                        }
+                                        toolHandlesContinuation = true
+                                        enqueueAgentContinuation(
+                                            context = context,
+                                            ollamaService = ollamaService,
+                                            settingsRepo = settingsRepo,
+                                            agentService = agentService,
+                                            reason = "delegation ${builtInRole.name} started",
+                                            runEpoch = runEpoch
+                                        )
+                                        return@launch
                                     } catch (e: Exception) {
                                         addDebugLog("❌ Agent delegation to $agentName failed: ${e.message}")
                                         // Recover: end the failed session and return to orchestrator
                                         endSession("ERROR: Agent $agentName failed: ${e.message}")
-                                        setCurrentAgent(AgentRole.ORCHESTRATOR)
-                                        setCurrentTask(null)
+                                        restoreParentAgentContext()
+                                        activeInvocationId = null
+                                        AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                            .finishInvocationExactlyOnce(
+                                                invocation.id,
+                                                "FAILED",
+                                                null,
+                                                e.javaClass.simpleName,
+                                                e.message?.take(240)
+                                            )
+                                        delegationSummary = "ERROR: Agent $agentName failed: ${e.message ?: e::class.java.simpleName}"
                                     }
                                 } else {
                                     // Check custom agents
@@ -5221,35 +8364,55 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                         it.name.equals(agentName, ignoreCase = true) && it.isEnabled
                                     }
                                     if (customAgent != null) {
+                                        val agentClass = customAgent.displayName.takeIf { it.isNotBlank() } ?: customAgent.name
+                                        val invocation = allocateInvocation(agentClass, customAgent.name)
+                                        updateDelegationDisplayName(toolCall.id, invocation.resolvedName)
                                         try {
                                             addDebugLog("🤖 Delegating to custom agent: ${customAgent.displayName} (${customAgent.name})")
                                             // Start a session for the custom agent
+                                            activeInvocationId = invocation.id
                                             val childSessionId = startSession(customAgent.name, _currentSessionId.value, task, agentCtx)
+                                            AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                                .attachInvocationSession(invocation.id, childSessionId)
+                                            pendingDelegations[childSessionId] = PendingAgentDelegation(
+                                                toolCall = toolCall,
+                                                parentSessionId = parentSessionId,
+                                                parentAgent = parentAgent,
+                                                parentTask = parentTask,
+                                                parentCustomAgent = parentCustomAgent,
+                                                agentLabel = agentClass,
+                                                invocationId = invocation.id,
+                                                resolvedDisplayName = "$agentClass - ${invocation.resolvedName}"
+                                            )
                                             setCurrentTask(task)
                                             // Set current agent to CODER as base (custom agents use the same tool set)
                                             setCurrentAgent(AgentRole.CODER)
                                             // Store the custom agent info for system prompt override
                                             _activeCustomAgent.value = customAgent
-
-                                            sendMessage(context, ollamaService, settingsRepo, agentService, queueBehindActiveJob = false).join()
-                                            val childStillActive = _sessions.value.containsKey(childSessionId)
-                                            if (!childStillActive) {
-                                                val completed = takeCompletedSession(childSessionId)
-                                                _currentSessionId.value = parentSessionId
-                                                _activeCustomAgent.value = parentCustomAgent
-                                                setCurrentAgent(parentAgent)
-                                                setCurrentTask(parentTask)
-                                                delegationSummary = completed?.let {
-                                                    it.result.toParentFacingSummary(customAgent.displayName, it.evidence)
-                                                }
-                                            } else {
-                                                toolHandlesContinuation = true
-                                            }
+                                            toolHandlesContinuation = true
+                                            enqueueAgentContinuation(
+                                                context = context,
+                                                ollamaService = ollamaService,
+                                                settingsRepo = settingsRepo,
+                                                agentService = agentService,
+                                                reason = "delegation ${customAgent.name} started",
+                                                runEpoch = runEpoch
+                                            )
+                                            return@launch
                                         } catch (e: Exception) {
                                             addDebugLog("❌ Custom agent ${customAgent.name} failed: ${e.message}")
                                             endSession("ERROR: Custom agent ${customAgent.name} failed: ${e.message}")
-                                            setCurrentAgent(AgentRole.ORCHESTRATOR)
-                                            setCurrentTask(null)
+                                            restoreParentAgentContext()
+                                            activeInvocationId = null
+                                            AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                                .finishInvocationExactlyOnce(
+                                                    invocation.id,
+                                                    "FAILED",
+                                                    null,
+                                                    e.javaClass.simpleName,
+                                                    e.message?.take(240)
+                                                )
+                                            delegationSummary = "ERROR: Custom agent ${customAgent.displayName} failed: ${e.message ?: e::class.java.simpleName}"
                                         }
                                     } else {
                                         addDebugLog("⚠️ Unknown agent: $agentName")
@@ -5261,64 +8424,134 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             "propose_plan" -> {
                                 val plan = toolCall.arguments["plan"] ?: ""
                                 val summary = toolCall.arguments["summary"] ?: "Implementation Plan"
+                                val planToolCallId = toolCall.id?.takeIf { it.isNotBlank() }
+                                    ?: throw IllegalArgumentException("propose_plan requires a stable tool-call ID")
+                                if (hasPendingPlanApproval()) {
+                                    throw IllegalStateException(context.getString(R.string.agent_status_awaiting_approval))
+                                }
+                                if (_currentPlanningModeEnabled.value) {
+                                    val conversationId = _activeConversationId.value
+                                        ?: throw IllegalStateException(context.getString(R.string.agent_plan_question_required))
+                                    val answeredQuestions = AppDatabase.getDatabase(context.applicationContext)
+                                        .agentWorkflowDao()
+                                        .countAnsweredQuestionsForRootTurn(
+                                            conversationId = conversationId,
+                                            rootTurnId = currentRootTurnId().toString()
+                                        )
+                                    if (!isPlanQuestionRequirementSatisfied(true, answeredQuestions)) {
+                                        throw IllegalStateException(context.getString(R.string.agent_plan_question_required))
+                                    }
+                                }
                                 val repeatedPlanCount = noteRepeatedPlan(plan)
+                                if (repeatedPlanCount >= LOOP_WAKEUP_REPEATED_PLANS) {
+                                    postLoopWakeup(
+                                        context = context,
+                                        signal = context.getString(R.string.agent_loop_signal_plan),
+                                        occurrenceCount = repeatedPlanCount,
+                                        evidence = summary
+                                    )
+                                }
+                                if (repeatedPlanCount > MAX_REPEATED_PLANS) {
+                                    pauseForNeedsDirection(context, context.getString(R.string.agent_loop_repeated_plan_reason))
+                                    toolHandlesContinuation = true
+                                    return@launch
+                                }
 
-                                val isAuto = settingsRepo.autoMode.value || isForced
-
-                                // Signal that a plan is pending approval by creating a special message
-                                addMessage(ChatMessage(
+                                val planMessage = ChatMessage(
                                     role = "assistant",
                                     content = buildString {
                                         append("### Propose Plan: $summary\n\n")
-                                        if (repeatedPlanCount >= 3) {
-                                            append("Loop warning: this plan has been proposed repeatedly without state change. Revise the plan before retrying.\n\n")
+                                        if (repeatedPlanCount >= LOOP_WAKEUP_REPEATED_PLANS) {
+                                            append(context.getString(R.string.agent_loop_plan_wakeup))
+                                            append("\n\n")
                                         }
                                         append(plan)
                                     },
                                     isPlan = true,
-                                    isPlanApproved = isAuto,
-                                    toolCallId = toolCall.id,
+                                    isPlanApproved = false,
+                                    toolCallId = planToolCallId,
                                     toolName = "propose_plan",
                                     agentRole = assistantAgentRole,
                                     customAgentName = assistantCustomAgentName
-                                ))
+                                )
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException("No active conversation for plan approval.")
+                                val durablePlan = AgentPendingPlanEntity(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    conversationId = conversationId,
+                                    rootTurnId = activeRootTurnStorageId,
+                                    agentSessionId = _currentSessionId.value.orEmpty(),
+                                    planMessageId = planMessage.id,
+                                    toolCallId = planToolCallId,
+                                    originalPlan = plan,
+                                    summary = summary
+                                )
+                                AppDatabase.getDatabase(context.applicationContext)
+                                    .agentWorkflowDao()
+                                    .upsertPendingPlan(durablePlan)
+                                _pendingPlanApprovalId.value = durablePlan.id
+                                addMessage(planMessage)
 
-                                // PERSIST: Save the plan to the agent's brain folder immediately
-                                agentService.writeMemory("plan.md", plan, countsAsMemoryUpdate = false)
-
-                                if (!isAuto) {
-                                    setStatusText(context.getString(R.string.agent_status_awaiting_approval))
-                                    agentService.buildAttentionPreview("propose_plan", validatedToolCall).let { (title, body) ->
-                                        agentService.notifyAgentAttention(
-                                            UnifiedNotificationManager.AgentAttentionReason.PLAN_APPROVAL_REQUIRED,
-                                            title,
-                                            body
-                                        )
-                                    }
-                                    agentService.persistVisibleRuntimeStateNow("Plan approval requested.")
-                                    return@launch // Stop and wait for user approval
+                                blockAutomaticContinuations()
+                                updateActiveConversationResumeState(
+                                    RESUME_STATE_WAITING_FOR_USER,
+                                    context.getString(R.string.agent_resume_reason_waiting_for_answer)
+                                )
+                                setStatusText(context.getString(R.string.agent_status_awaiting_approval))
+                                agentService.buildAttentionPreview("propose_plan", validatedToolCall).let { (title, body) ->
+                                    agentService.notifyAgentAttention(
+                                        UnifiedNotificationManager.AgentAttentionReason.PLAN_APPROVAL_REQUIRED,
+                                        title,
+                                        body
+                                    )
                                 }
-
-                                markMemoryDirty("An implementation plan was approved. Record the chosen direction in project memory before finishing.")
-                                "Plan automatically approved. Proceeding with implementation."
+                                agentService.persistVisibleRuntimeStateNow("Plan approval requested.")
+                                return@launch // Hard durable wait boundary.
+                            }
+                            "report_progress" -> {
+                                val phase = toolCall.arguments["phase"].orEmpty()
+                                val summary = toolCall.arguments["summary"].orEmpty()
+                                postOrchestratorProgressUpdate(context, phase, summary)
+                                context.getString(R.string.agent_progress_reported)
                             }
                             "finish_task" -> {
+                                val targetedInvocationId = activeInvocationId
+                                val queuedTargetedGuidance = if (targetedInvocationId != null) {
+                                    val conversationId = _activeConversationId.value
+                                    if (conversationId != null) {
+                                        AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                            .getQueuedInputs(conversationId, targetedInvocationId)
+                                    } else {
+                                        emptyList()
+                                    }
+                                } else {
+                                    emptyList()
+                                }
+                                if (queuedTargetedGuidance.isNotEmpty()) {
+                                    addDebugLog("↪️ Deferring finish_task because targeted user guidance is queued.")
+                                    "Completion deferred: new user guidance arrived for this agent. The current result remains committed; incorporate the guidance before calling finish_task again."
+                                } else {
                                 val summary = toolCall.arguments["summary"] ?: "Completed"
                                 runCatching { AgentRuntimeSupport.parseAgentResult(_currentAgent.value.name, summary) }
                                     .getOrElse { throw IllegalArgumentException(it.message ?: "finish_task summary is not schema-valid.") }
-                                if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER) {
+                                if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) {
                                     throw IllegalStateException(context.getString(R.string.agent_memory_update_required_summary))
                                 }
                                 addDebugLog("✅ Task finished: $summary")
                                 if (_currentAgent.value == AgentRole.SUMMARIZER) {
                                     clearMemoryDirty("Summarizer finished after updating project memory.")
                                 }
-                                endSession(summary)
+                                val completed = endSession(summary)
+                                if (completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)) {
+                                    toolHandlesContinuation = true
+                                    return@launch
+                                }
                                 setCurrentAgent(AgentRole.ORCHESTRATOR)
                                 setCurrentTask(null)
                                 toolHandlesContinuation = true
                                 // Return summary so orchestrator sees what was accomplished
                                 "Task completed. Summary: $summary"
+                                }
                             }
                             "reflection" -> {
                                 val reflectionResult = runReflectionTool(
@@ -5336,6 +8569,47 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             "view_image" -> {
                                 val path = effectiveToolCall.arguments["path"] ?: ""
                                 agentService.queueVisionAttachment(path, _currentAgent.value, _activeCustomAgent.value).getOrThrow()
+                            }
+                            "observe_preview" -> {
+                                if (_currentAgent.value != AgentRole.VISUAL_TESTER) {
+                                    throw IllegalStateException("observe_preview is only available to VISUAL_TESTER.")
+                                }
+                                if (!settingsRepo.agentVisualTestingEnabled.value || !settingsRepo.getAgentVisionEnabledForRole("VISUAL_TESTER")) {
+                                    throw IllegalStateException("Visual testing is disabled or the selected tester model does not have vision enabled.")
+                                }
+                                val observation = AgentPreviewBridge.observe(
+                                    context.applicationContext,
+                                    _activeConversationId.value ?: _preferredConversationId.value
+                                ).getOrThrow()
+                                observation.screenshotPath?.takeIf { it.isNotBlank() }?.let { screenshotPath ->
+                                    pendingVisionAttachment = PendingVisionAttachment(
+                                        imagePath = screenshotPath,
+                                        workspacePath = "active_preview.png",
+                                        roleName = AgentRole.VISUAL_TESTER.name,
+                                        customAgentName = null,
+                                        sessionId = _currentSessionId.value
+                                    )
+                                }
+                                observation.toJson()
+                            }
+                            "interact_preview" -> {
+                                if (_currentAgent.value != AgentRole.VISUAL_TESTER) {
+                                    throw IllegalStateException("interact_preview is only available to VISUAL_TESTER.")
+                                }
+                                if (!settingsRepo.agentVisualTestingEnabled.value || !settingsRepo.getAgentVisionEnabledForRole("VISUAL_TESTER")) {
+                                    throw IllegalStateException("Visual testing is disabled or the selected tester model does not have vision enabled.")
+                                }
+                                AgentPreviewBridge.interact(
+                                    conversationId = _activeConversationId.value ?: _preferredConversationId.value,
+                                    action = effectiveToolCall.arguments["action"].orEmpty(),
+                                    x = effectiveToolCall.arguments["x"]?.toFloatOrNull(),
+                                    y = effectiveToolCall.arguments["y"]?.toFloatOrNull(),
+                                    text = effectiveToolCall.arguments["text"],
+                                    key = effectiveToolCall.arguments["key"],
+                                    scrollDx = effectiveToolCall.arguments["scroll_dx"]?.toIntOrNull(),
+                                    scrollDy = effectiveToolCall.arguments["scroll_dy"]?.toIntOrNull(),
+                                    waitMs = effectiveToolCall.arguments["wait_ms"]?.toLongOrNull()
+                                ).getOrThrow()
                             }
                             "generate_image" -> {
                                 val prompt = effectiveToolCall.arguments["prompt"] ?: ""
@@ -5396,6 +8670,79 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 agentService.removeImageBackground(imagePath, outputPath, settingsRepo).getOrThrow().also {
                                     markMemoryDirty("Removed image background for $imagePath.")
                                 }
+                            }
+                            "todo_write" -> {
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException("No active project conversation is selected")
+                                val todoDao = AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                val todos = parseTodoToolCall(conversationId, effectiveToolCall)
+                                todoDao.clearTodos(conversationId)
+                                if (todos.isNotEmpty()) todoDao.upsertTodos(todos)
+                                todoEntitiesJson(todos)
+                            }
+                            "todo_read" -> {
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException("No active project conversation is selected")
+                                todoEntitiesJson(
+                                    AppDatabase.getDatabase(context.applicationContext)
+                                        .agentWorkflowDao()
+                                        .getTodos(conversationId)
+                                )
+                            }
+                            "skill" -> {
+                                val requested = effectiveToolCall.arguments["name"].orEmpty()
+                                val skillRepository = AgentSkillRepository(context.applicationContext)
+                                val loaded = skillRepository.loadSkill(
+                                    skillIdOrName = requested,
+                                    conversationId = _activeConversationId.value,
+                                    agentKey = _activeCustomAgent.value?.name ?: _currentAgent.value.name,
+                                    approvedForCall = isForced
+                                )
+                                val loadedIds = loadedSkillIdsByTurnBranch.getOrPut(turnBranchKey()) {
+                                    java.util.concurrent.ConcurrentHashMap.newKeySet()
+                                }
+                                if (!loadedIds.add(loaded.entity.id)) {
+                                    "Skill '${loaded.entity.name}' is already loaded for this root turn."
+                                } else {
+                                    buildString {
+                                        appendLine("# Skill: ${loaded.entity.name}")
+                                        appendLine()
+                                        append(loaded.instructions)
+                                    }.take(32_000)
+                                }
+                            }
+                            "read_skill_resource" -> {
+                                val requested = effectiveToolCall.arguments["skill"].orEmpty()
+                                val path = effectiveToolCall.arguments["path"].orEmpty()
+                                val skillRepository = AgentSkillRepository(context.applicationContext)
+                                val loaded = skillRepository.loadSkill(
+                                    skillIdOrName = requested,
+                                    conversationId = _activeConversationId.value,
+                                    agentKey = _activeCustomAgent.value?.name ?: _currentAgent.value.name,
+                                    approvedForCall = isForced
+                                )
+                                skillRepository.readSkillResource(loaded.entity.id, path)
+                            }
+                            "run_skill_script" -> {
+                                require(isForced) { "Skill scripts require explicit approval" }
+                                val requested = effectiveToolCall.arguments["skill"].orEmpty()
+                                val path = effectiveToolCall.arguments["path"].orEmpty()
+                                val args = effectiveToolCall.arguments["args_json"]
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let(::JSONArray)
+                                    ?.let { array ->
+                                        (0 until array.length()).map { index -> array.getString(index) }
+                                    }
+                                    .orEmpty()
+                                val skillRepository = AgentSkillRepository(context.applicationContext)
+                                val loaded = skillRepository.loadSkill(
+                                    skillIdOrName = requested,
+                                    conversationId = _activeConversationId.value,
+                                    agentKey = _activeCustomAgent.value?.name ?: _currentAgent.value.name,
+                                    approvedForCall = true
+                                )
+                                val script = skillRepository.resolveSkillScript(loaded.entity.id, path)
+                                agentService.runApprovedSkillScript(script, args).getOrThrow()
                             }
                             "get_datetime" -> {
                                 java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
@@ -5706,7 +9053,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             "tool_failure",
                             "Tool ${toolCall.name} failed",
                             (result.exceptionOrNull()?.message ?: toolCall.name) +
-                                if (failureCount >= 3) " [repeat=$failureCount]" else ""
+                                if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) " [repeat=$failureCount]" else ""
                         )
                         agentService.appendAuditRecord(
                             ToolAuditRecord(
@@ -5715,14 +9062,57 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 validationResult = result.exceptionOrNull()?.message,
                                 approvalDecision = if (validatedToolCall.approvalRequired) "approved" else "not_required",
                                 memorySnapshotVersion = Integer.toHexString(agentService.snapshotPersistentState().hashCode()),
-                                notes = if (failureCount >= 3) "loop_detected" else null
+                                notes = if (failureCount >= LOOP_WAKEUP_TOOL_FAILURES) "loop_wakeup" else null
                             )
                         )
+                        if (failureCount >= LOOP_WAKEUP_TOOL_FAILURES) {
+                            postLoopWakeup(
+                                context = context,
+                                signal = context.getString(R.string.agent_loop_signal_tool, toolCall.name),
+                                occurrenceCount = failureCount,
+                                evidence = result.exceptionOrNull()?.message ?: toolCall.name
+                            )
+                        }
+                        if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) {
+                            pauseForNeedsDirection(context, context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name))
+                            toolHandlesContinuation = true
+                        }
                     }
                     syncAssistantToolProgress(toolCall, output)
+                    recordAgentEvent(
+                        "tool_output_shape",
+                        "Tool ${toolCall.name} output prepared",
+                        "toolCallId=${toolCall.id} chars=${output.length} lines=${output.lineSequence().count()}"
+                    )
+                    recordProjectJournalEvent(
+                        category = "TOOLS",
+                        eventType = "tool_output_prepared",
+                        phase = _statusText.value,
+                        agentRole = assistantAgentRole,
+                        customAgentName = assistantCustomAgentName,
+                        toolName = toolCall.name,
+                        toolCallId = toolCall.id,
+                        status = if (result.isSuccess) "OK" else "ERROR",
+                        contentChars = output.length,
+                        contentLines = output.lineSequence().count(),
+                        toolOutputChars = toolOutputDetails?.length,
+                        toolOutputLines = toolOutputDetails?.lineSequence()?.count(),
+                        summary = "Tool output prepared for chat insertion"
+                    )
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "agent_tool_runtime",
+                        event = "tool_output_prepared",
+                        details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} chars=${output.length} " +
+                            "lines=${output.lineSequence().count()} success=${result.isSuccess} active=${GenerationDiagnosticsStore.activeSessionSummaryForBreadcrumb()}"
+                    )
 
                     // Add tool output to chat
                     ensureAgentRunActive(runEpoch)
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "agent_tool_runtime",
+                        event = "tool_message_add_started",
+                        details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} chars=${output.length}"
+                    )
                     addMessage(ChatMessage(
                         role = "tool",
                         content = output,
@@ -5730,11 +9120,59 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         toolCallId = toolCall.id,
                         toolOutput = toolOutputDetails
                     ))
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "agent_tool_runtime",
+                        event = "tool_message_add_finished",
+                        details = "tool=${toolCall.name} id=${toolCall.id ?: "none"}"
+                    )
+                    if (result.isSuccess) {
+                        maybePostAutomaticToolProgress(context, toolCall.name)
+                    }
+                    val queuedGuidanceCount =
+                        drainPendingUrgentUserGuidance(context, "tool ${toolCall.name} result")
+
+                    val boundaryCheckpoint = agentService.persistVisibleRuntimeStateNow(
+                        reason = "Committed tool boundary: ${toolCall.name}"
+                    )
+                    if (boundaryCheckpoint.isFailure) {
+                        pauseForNeedsDirection(
+                            context,
+                            context.getString(R.string.agent_checkpoint_failed_continue)
+                        )
+                        return@launch
+                    }
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "agent_checkpoint",
+                        event = "semantic_boundary_persisted",
+                        details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} queuedGuidance=$queuedGuidanceCount invocation=${activeInvocationId?.take(8) ?: "orchestrator"}"
+                    )
 
                     // Continue conversation with tool output
                     if (!toolHandlesContinuation) {
                         ensureAgentRunActive(runEpoch)
-                        sendMessage(context, ollamaService, settingsRepo, agentService, queueBehindActiveJob = false).join()
+                        enqueueAgentContinuation(
+                            context = context,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            reason = if (queuedGuidanceCount > 0) {
+                                "tool ${toolCall.name} result with urgent user guidance"
+                            } else {
+                                "tool ${toolCall.name} result"
+                            },
+                            runEpoch = runEpoch
+                        )
+                    } else if (queuedGuidanceCount > 0) {
+                        ensureAgentRunActive(runEpoch)
+                        enqueueAgentContinuation(
+                            context = context,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            reason = "urgent user guidance after terminal tool ${toolCall.name}",
+                            userInitiated = true,
+                            runEpoch = runEpoch
+                        )
                     }
 
                 } catch (e: Exception) {
@@ -5744,6 +9182,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
                     addDebugLog("❌ Tool execution error: ${e.message}")
                     recordAgentEvent("tool_error", "Tool ${toolCall.name} crashed", e.message ?: toolCall.name)
+                    GenerationDiagnosticsStore.recordBreadcrumb(
+                        source = "agent_tool_runtime",
+                        event = "tool_execution_error",
+                        details = "tool=${toolCall.name} id=${toolCall.id ?: "none"} error=${(e.message ?: e::class.java.simpleName).take(220)} " +
+                            "active=${GenerationDiagnosticsStore.activeSessionSummaryForBreadcrumb()}"
+                    )
                     val orchestrationHint = if (_currentAgent.value == AgentRole.ORCHESTRATOR &&
                         toolCall.name !in setOf("call_agent", "propose_plan", "finish_task")
                     ) {
@@ -5764,22 +9208,40 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         toolName = toolCall.name,
                         toolCallId = toolCall.id
                     ))
-                    // Continue conversation so LLM can see the error and retry/recover
-                    try {
-                        ensureAgentRunActive(runEpoch)
-                        sendMessage(context, ollamaService, settingsRepo, agentService, queueBehindActiveJob = false).join()
-                    } catch (continueError: Exception) {
-                        addDebugLog("❌ Failed to continue after error: ${continueError.message}")
-                        // Last resort: if we can't continue, reset to orchestrator
-                        if (_currentAgent.value != AgentRole.ORCHESTRATOR) {
-                            endSession("ERROR: Tool ${toolCall.name} failed and recovery failed")
-                            setCurrentAgent(AgentRole.ORCHESTRATOR)
-                            setCurrentTask(null)
-                        }
+                    val queuedGuidanceCount = drainPendingUrgentUserGuidance(
+                        context,
+                        "tool ${toolCall.name} error"
+                    )
+                    val errorBoundaryCheckpoint = agentService.persistVisibleRuntimeStateNow(
+                        reason = "Committed tool error boundary: ${toolCall.name}"
+                    )
+                    if (errorBoundaryCheckpoint.isFailure) {
+                        pauseForNeedsDirection(
+                            context,
+                            context.getString(R.string.agent_checkpoint_error_failed_continue)
+                        )
+                        return@launch
                     }
+                    // Continue conversation so LLM can see the error and retry/recover
+                    ensureAgentRunActive(runEpoch)
+                    enqueueAgentContinuation(
+                        context = context,
+                        ollamaService = ollamaService,
+                        settingsRepo = settingsRepo,
+                        agentService = agentService,
+                        reason = if (queuedGuidanceCount > 0) {
+                            "tool ${toolCall.name} error with urgent user guidance"
+                        } else {
+                            "tool ${toolCall.name} error recovery"
+                        },
+                        recoveryInstruction = "The previous tool call ${toolCall.name} failed. Use the tool error envelope to choose a smaller recovery step. Do not retry unchanged arguments.",
+                        recoveryMode = true,
+                        runEpoch = runEpoch
+                    )
                 } finally {
                     // Decrement ref count when tool execution is done
                     setIsLoading(false)
+                    drainAgentContinuationQueue()
                 }
             }
             trackActiveAgentWorkJob(job)
@@ -5855,11 +9317,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 defaultCustomAgentToolNames()
             } else {
                 configuredTools + mandatoryCustomAgentToolNames()
-            } + if (activeCustom.canDelegateToOthers) setOf("call_agent") else emptySet()
+            }
             return ToolCapabilityPolicy(
                 agentLabel = role.name,
                 allowedToolNames = allowedTools,
-                canDelegate = activeCustom.canDelegateToOthers,
+                canDelegate = false,
                 modelOverride = activeCustom.model?.takeIf { it.isNotBlank() },
                 customAgentName = activeCustom.name
             )
@@ -5955,7 +9417,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val cleanPath = path.replace(Regex("/+"), "/").trim()
 
             // 2. Determine the project root
-            val projectFolder = _currentProjectFolder.value ?: "default"
+            val projectFolder = _currentProjectFolder.value
             val projectPath = "$WORKSPACE_PATH/$projectFolder"
 
             // 3. Resolve path
@@ -5984,7 +9446,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
          */
         fun isPathSafe(path: String): Boolean {
             if (AgentRuntimeSupport.containsTraversalSegments(path)) return false
-            val projectFolder = _currentProjectFolder.value ?: "default"
+            val projectFolder = _currentProjectFolder.value
             val projectPath = "$WORKSPACE_PATH/$projectFolder"
             val sanitized = runCatching { sanitizePath(path) }.getOrNull() ?: return false
             return sanitized.startsWith(projectPath) && sanitized.length > WORKSPACE_PATH.length
@@ -6011,7 +9473,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
          * Convert an absolute path to a project-relative path for LLM display.
          */
         fun toProjectRelativePath(absolutePath: String): String {
-            val projectFolder = _currentProjectFolder.value ?: "default"
+            val projectFolder = _currentProjectFolder.value
             val projectPath = "$WORKSPACE_PATH/$projectFolder"
 
             return when {
@@ -6163,7 +9625,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             messages: List<ChatMessage>,
             contextSize: Int
         ): HardCompactionTailSelection {
-            val cleanMessages = messages.filterNot(::isTransientCompactionStatusMessage)
+            val allCleanMessages = messages.filterNot(::isTransientCompactionStatusMessage)
+            val previousState = hardCompactionState
+            val cleanMessages = if (previousState != null) {
+                val previousTailStart = previousState.recentTailStartSequence
+                allCleanMessages.filter { message ->
+                    message.sequenceNumber > previousState.sourceMessageSequence ||
+                        (previousTailStart != null && message.sequenceNumber >= previousTailStart)
+                }
+            } else {
+                allCleanMessages
+            }
             if (cleanMessages.isEmpty()) {
                 return HardCompactionTailSelection(
                     messagesToSummarize = emptyList(),
@@ -6174,13 +9646,25 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             }
 
-            val selection = selectTokenBudgetedRecentTail(
-                messageTokenEstimates = cleanMessages.map { estimatePromptTokens(listOf(it)) },
-                tokenLimit = contextSize,
-                recentTailFraction = PROMPT_CONTEXT_HARD_COMPACTION_RECENT_TAIL_RATIO,
-                minRecentMessages = 2
+            val budget = resolveContextCompactionBudget(
+                modelContextTokens = contextSize,
+                outputTokens = AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
+                pinnedPromptTokens = 0
             )
-            var splitIndex = selection.splitIndex
+            val tokenEstimates = cleanMessages.map { estimatePromptTokens(listOf(it)) }
+            var retainedTokens = 0
+            var splitIndex = cleanMessages.size
+            while (splitIndex > 0 && retainedTokens < budget.recentTailTargetTokens) {
+                splitIndex -= 1
+                retainedTokens += tokenEstimates[splitIndex]
+            }
+            val protectedSecondLatestUser = cleanMessages.indices
+                .filter { cleanMessages[it].role == "user" }
+                .takeLast(2)
+                .firstOrNull()
+            if (protectedSecondLatestUser != null) {
+                splitIndex = minOf(splitIndex, protectedSecondLatestUser)
+            }
             if (splitIndex > 0 && splitIndex < cleanMessages.size && cleanMessages[splitIndex].role != "user") {
                 val boundary = (splitIndex downTo 1).firstOrNull { cleanMessages[it].role == "user" }
                 if (boundary != null) splitIndex = boundary
@@ -6192,7 +9676,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 messagesToSummarize = messagesToSummarize,
                 recentMessages = recentMessages,
                 recentTailStartSequence = recentMessages.firstOrNull()?.sequenceNumber,
-                recentTailTargetTokens = selection.targetRecentTokens,
+                recentTailTargetTokens = budget.recentTailTargetTokens,
                 recentTailEstimatedTokens = estimatePromptTokens(recentMessages)
             )
         }
@@ -6278,8 +9762,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         private fun extractWorkspaceFileReferences(messages: List<ChatMessage>, mutatingOnly: Boolean): List<String> {
-            val mutatingTools = setOf("write_file", "edit_lines", "apply_patch", "create_folder", "generate_image", "remove_image_background")
-            val readTools = setOf("read_file", "read_file_lines", "search_code", "list_directory", "view_image", "fetch_url", "web_search")
+            val mutatingTools = setOf("write_file", "edit_lines", "apply_patch", "create_folder", "generate_image", "remove_image_background", "run_project", "stop_project_run", "force_stop_project_run", "install_python_dependency")
+            val readTools = setOf("read_file", "read_file_lines", "search_code", "list_directory", "view_image", "fetch_url", "web_search", "check_project_run")
             val pathKeys = setOf("path", "output_path", "file", "directory", "target")
             val pathPattern = Regex("""(?:^|[\s`'"])([A-Za-z0-9._@+/\-]+(?:\.[A-Za-z0-9]{1,12})?)(?=$|[\s`'",:)])""")
             return messages.flatMap { message ->
@@ -6501,6 +9985,30 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         tailSelection = tailSelection
                     )
                     svc.rewriteMemory("context_compaction.md", summaryContent, countsAsMemoryUpdate = false).getOrThrow()
+                    _activeConversationId.value?.let { conversationId ->
+                        val workflowDao = AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                        val previous = workflowDao.getLatestCompaction(conversationId)
+                        workflowDao.insertCompaction(
+                            com.example.llamadroid.data.db.AgentCompactionEntity(
+                                id = java.util.UUID.randomUUID().toString(),
+                                conversationId = conversationId,
+                                rootTurnId = currentRootTurnStorageId(AgentRole.ORCHESTRATOR.name),
+                                summaryText = summaryContent,
+                                previousCompactionId = previous?.id,
+                                sourceStartSequence = tailSelection.messagesToSummarize
+                                    .minOfOrNull { it.sequenceNumber } ?: 0,
+                                sourceEndSequence = tailSelection.messagesToSummarize
+                                    .maxOfOrNull { it.sequenceNumber } ?: 0,
+                                tailStartSequence = tailSelection.recentTailStartSequence,
+                                summarizedMessageCount = tailSelection.messagesToSummarize.size,
+                                retainedTailTokens = tailSelection.recentTailEstimatedTokens,
+                                targetTailTokens = tailSelection.recentTailTargetTokens,
+                                modelLabel = friendlyBackendModelLabel(_selectedModel.value)
+                                    ?: _selectedModel.value,
+                                invocationId = activeInvocationId
+                            )
+                        )
+                    }
                     val retainedTurnGroupCount = extractUserLedTurnGroups(conversationMessages).size
                     hardCompactionState = HardCompactionState(
                         initialOrder = initialOrderContent ?: "No initial order captured.",
@@ -6576,6 +10084,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 svc.ensureStructuredBrainFiles().getOrThrow()
                 val planFilename = planSource?.trim().takeUnless { it.isNullOrBlank() } ?: "plan.md"
                 val planContent = svc.readBrainFileRaw(planFilename)
+                val assignedInvocation = activeInvocationId?.let { invocationId ->
+                    AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                        .agentWorkflowDao()
+                        .getInvocation(invocationId)
+                }
+                val reflectionTarget = assignedInvocation?.task?.takeIf { it.isNotBlank() } ?: planContent
                 val sessionEvidence = svc.buildSessionEvidenceBundlePreview()
                 val recentToolSummaries = getCurrentSessionMessages()
                     .asReversed()
@@ -6590,10 +10104,15 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     sessionEvidence.toPromptBlock(),
                     recentToolSummaries.joinToString("\n")
                 )
-                val (completedItems, missingItems) = coverageForPlan(planContent, evidenceBlocks)
+                val (completedItems, missingItems) = coverageForPlan(reflectionTarget, evidenceBlocks)
                 val qualityRisks = buildList {
-                    if (planContent.isBlank()) add("No approved plan source was available for reflection.")
-                    if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER) {
+                    if (reflectionTarget.isBlank()) {
+                        add(
+                            if (assignedInvocation != null) "No assigned invocation task was available for reflection."
+                            else "No approved plan source was available for reflection."
+                        )
+                    }
+                    if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) {
                         add(_memoryDirtyReason.value ?: "Project memory still needs updating before finalization.")
                     }
                     if (sessionEvidence.changedFiles.isEmpty() && _currentAgent.value == AgentRole.CODER) {
@@ -6602,18 +10121,30 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     if (sessionEvidence.commandIds.isEmpty() && _currentAgent.value == AgentRole.EXECUTOR) {
                         add("No command evidence was recorded for the executor task.")
                     }
+                    if (assignedInvocation != null && missingItems.isNotEmpty()) {
+                        add("The assigned invocation task is not fully evidenced yet: ${assignedInvocation.task.take(160)}")
+                    }
                     if (svc.activeCommands.values.any { it.isRunning }) {
                         add("There are still active background commands.")
                     }
                 }
                 val recommendedNextSteps = buildList {
-                    if (missingItems.isNotEmpty()) add("Address the missing plan items before finalizing.")
-                    if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER) add("Update project memory and summary files.")
-                    if (sessionEvidence.changedFiles.isNotEmpty()) add("Re-read or verify the touched files before completing.")
+                    if (missingItems.isNotEmpty()) {
+                        if (_currentAgent.value == AgentRole.REVIEWER) {
+                            add("Report the missing plan items as review findings with evidence; do not write code.")
+                        } else {
+                            add("Address the missing plan items before finalizing.")
+                        }
+                    }
+                    if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) add("Update project memory and summary files.")
+                    if (sessionEvidence.changedFiles.isNotEmpty() && _currentAgent.value != AgentRole.REVIEWER) add("Re-read or verify the touched files before completing.")
+                    if (_currentAgent.value == AgentRole.ORCHESTRATOR && isBuiltInAgentEnabled("REVIEWER")) add("Delegate code quality review to REVIEWER before final completion.")
                     if (qualityRisks.none()) add("The work matches the plan evidence closely. Finalization is allowed.")
                 }.distinct()
                 val canFinalize = missingItems.isEmpty() && qualityRisks.none { risk ->
                     risk.contains("No approved plan", ignoreCase = true) ||
+                        risk.contains("No assigned invocation task", ignoreCase = true) ||
+                        risk.contains("assigned invocation task is not fully evidenced", ignoreCase = true) ||
                         risk.contains("needs updating", ignoreCase = true) ||
                         risk.contains("active background commands", ignoreCase = true)
                 }
@@ -6638,6 +10169,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             candidateSummary: String,
             turnNumber: Int
         ): Result<ReflectionResult?> = withContext(Dispatchers.IO) {
+            if (!_autoReflectionEnabled.value) {
+                addDebugLog("🪞 Automatic reflection skipped because the user disabled it.")
+                recordAgentEvent("reflection_skipped", "Automatic reflection disabled", "scope=$scope", persist = false)
+                return@withContext Result.success(null)
+            }
             if (!canRunReflection(turnNumber)) {
                 addDebugLog("🪞 Reflection skipped because the 2-in-6-turn budget is exhausted")
                 recordAgentEvent("reflection_skipped", "Reflection budget exhausted", "turn=$turnNumber scope=$scope", persist = false)
@@ -6655,7 +10191,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         private fun packMessagesForContext(
             assembly: PromptAssembly,
             contextSize: Int,
-            profile: PromptPackingProfile
+            profile: PromptPackingProfile,
+            allowCompaction: Boolean = true
         ): PackedPromptContext {
             if (assembly.allMessages().isEmpty()) return PackedPromptContext(emptyList(), 0, 0)
 
@@ -6677,6 +10214,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val normalizedEstimate = estimatePromptTokens(
                 normalizedRequiredPrimacy + normalizedOptionalPrimacy + normalizedHistory
             )
+
+            if (!allowCompaction) {
+                return PackedPromptContext(
+                    messages = normalizedRequiredPrimacy + normalizedOptionalPrimacy + normalizedHistory,
+                    omittedCount = 0,
+                    estimatedTokens = normalizedEstimate,
+                    thresholdTriggered = normalizedEstimate >= thresholdTokens,
+                    didCompactHistory = false,
+                    compactionPasses = 0
+                )
+            }
 
             if (!assembly.compactMode && normalizedEstimate < thresholdTokens) {
                 return PackedPromptContext(
@@ -7389,7 +10937,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     toolCallId = message.toolCallId ?: toolCall.id,
                     pendingToolCall = message.pendingToolCall ?: toolCall,
                     toolOutput = toolOutput ?: message.toolOutput,
-                    isOutputExpanded = true
+                    isOutputExpanded = false
                 )
             }
         }
@@ -7400,6 +10948,18 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             activeCustom: com.example.llamadroid.data.db.CustomAgentEntity? = _activeCustomAgent.value,
             settingsRepo: com.example.llamadroid.data.SettingsRepository? = null
         ): Result<ValidatedToolCall> {
+            // Do this before resolving the advertised tool list. A model can
+            // emit a stale or hand-crafted build call after Plan mode hid it;
+            // the model must receive an actionable, localized repair result
+            // instead of a generic "not available" error.
+            if (isPlanModeToolBlocked(_currentPlanningModeEnabled.value, toolCall.name)) {
+                val appContext = com.example.llamadroid.LlamaApplication.instance
+                return Result.failure(
+                    IllegalStateException(
+                        appContext.getString(R.string.agent_plan_mode_build_tool_blocked, toolCall.name)
+                    )
+                )
+            }
             val tool = getAgentTools(role, activeCustom, settingsRepo).find { it.name == toolCall.name }
                 ?: return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` is not available to the current agent."))
             val customTool = _loadedCustomTools.value.find { it.name == toolCall.name && it.isEnabled }
@@ -7443,7 +11003,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
             normalizedArgs.forEach { (key, value) ->
                 val maxLength = when (key) {
-                    "path", "working_directory", "filename", "agent", "command_id" -> 512
+                    "path", "working_directory", "filename", "agent", "command_id", "package", "wheel_path" -> 512
                     "query", "url" -> 2048
                     "command" -> 4000
                     "task", "context", "summary" -> 12000
@@ -7475,6 +11035,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         return Result.failure(IllegalArgumentException("Tool `create_folder` path must stay inside the current workspace."))
                     }
                 }
+                "install_python_dependency" -> {
+                    val packageName = normalizedArgs["package"].orEmpty()
+                    if (!packageName.matches(Regex("[a-zA-Z0-9_.-]{1,80}"))) {
+                        return Result.failure(IllegalArgumentException("Tool `install_python_dependency` package contains unsupported characters."))
+                    }
+                    normalizedArgs["wheel_path"]?.takeIf { it.isNotBlank() }?.let { wheelPath ->
+                        if (!isPathSafe(wheelPath) || !wheelPath.endsWith(".whl", ignoreCase = true)) {
+                            return Result.failure(IllegalArgumentException("Tool `install_python_dependency` wheel_path must be a project-local .whl file."))
+                        }
+                    }
+                }
                 "generate_image" -> {
                     val outputPath = normalizedArgs["output_path"].orEmpty()
                     if (!isPathSafe(outputPath)) {
@@ -7498,8 +11069,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 }
             }
 
-            if (toolCall.name == "call_agent" && activeCustom != null && !activeCustom.canDelegateToOthers) {
-                return Result.failure(IllegalArgumentException("Custom agent `${activeCustom.name}` is not allowed to delegate to other agents."))
+            if (toolCall.name == "call_agent" && (_currentAgent.value != AgentRole.ORCHESTRATOR || activeCustom != null)) {
+                return Result.failure(IllegalArgumentException("Only the Orchestrator can call another agent."))
             }
             if (toolCall.name == "finish_task") {
                 val summary = normalizedArgs["summary"].orEmpty()
@@ -7536,8 +11107,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val customMode = customTool?.let { AgentRuntimeSupport.inferCustomToolExecutionMode(it.commandTemplate) }
             val riskLevel = when {
                 customTool != null && customMode == CustomToolExecutionMode.SHELL -> ToolRiskLevel.CRITICAL
-                toolCall.name in setOf("run_command", "cancel_command", "send_command_input") -> ToolRiskLevel.HIGH
-                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder") -> ToolRiskLevel.HIGH
+                toolCall.name in setOf("run_command", "cancel_command", "send_command_input", "force_stop_project_run") -> ToolRiskLevel.HIGH
+                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder", "run_project", "install_python_dependency") -> ToolRiskLevel.HIGH
                 toolCall.name == "fetch_url" -> ToolRiskLevel.MEDIUM
                 customTool != null -> ToolRiskLevel.HIGH
                 else -> ToolRiskLevel.LOW
@@ -7545,7 +11116,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val approvalRequired = when {
                 customTool != null -> customTool.needsApproval || customMode == CustomToolExecutionMode.SHELL
                 toolCall.name == "run_command" -> true
-                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder") -> true
+                toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder", "run_project", "force_stop_project_run", "install_python_dependency") -> true
                 else -> false
             }
 
@@ -7600,6 +11171,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "apply_patch" -> lines.firstOrNull() ?: "Patch applied."
                 "create_folder" -> lines.firstOrNull() ?: "Folder created."
                 "view_image" -> lines.firstOrNull() ?: "Image queued for inspection."
+                "observe_preview" -> lines.firstOrNull { it.contains("\"url\"") } ?: "Preview screenshot captured."
+                "interact_preview" -> lines.firstOrNull { it.contains("\"action\"") } ?: "Preview interaction completed."
                 "generate_image" -> lines.firstOrNull() ?: "Image generated successfully."
                 "remove_image_background" -> lines.firstOrNull() ?: "Background removed successfully."
                 "reflection" -> lines.firstOrNull { it.contains("\"status\"") } ?: "Reflection completed."
@@ -7633,6 +11206,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 "generate_image" -> "Inspect the saved image path or hand it to a vision-enabled agent with view_image if you need analysis."
                 "remove_image_background" -> "Inspect the transparent PNG path or use it as the next image artifact."
                 "view_image" -> "Use the visual evidence in the next response, or delegate the specialist follow-up through call_agent."
+                "observe_preview" -> "Use the screenshot evidence to decide the next single interaction or finish with a visual testing report."
+                "interact_preview" -> "Call observe_preview after the interaction to verify how the interface responded."
                 "reflection" -> "If can_finalize is false, address the missing items before finishing. If it passed, finalize only after one last verification read."
                 "write_memory" -> "If memory is getting long, read it back and use rewrite_memory to consolidate it."
                 "read_file" ->
@@ -7672,6 +11247,55 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val webSearchEnabled = repo.agentWebSearchEnabled.value
             val visionEnabled = isVisionEnabledForAgent(role, activeCustom, repo)
             val capabilityPolicy = resolveCapabilityPolicy(role, activeCustom)
+            val localBackend = _currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX
+            val localCapabilities = _currentRuntimeCapabilities.value
+            val visualPreviewAvailable = localBackend &&
+                repo.agentVisualTestingEnabled.value &&
+                repo.getAgentVisionEnabledForRole("VISUAL_TESTER") &&
+                AgentPreviewBridge.hasActivePreview(_activeConversationId.value ?: _preferredConversationId.value)
+
+            if (role == AgentRole.VISUAL_TESTER) {
+                val visualTools = mutableListOf<AgentTool>()
+                if (visualPreviewAvailable) {
+                    visualTools.add(
+                        AgentTool(
+                            name = "observe_preview",
+                            description = "Capture the active local WebUI preview. Returns URL, viewport, load state, screenshot metadata, and bounded visual context for the vision-capable tester model.",
+                            parameters = emptyMap(),
+                            requiredParams = emptyList()
+                        )
+                    )
+                    visualTools.add(
+                        AgentTool(
+                            name = "interact_preview",
+                            description = "Interact with the active local WebUI preview. Perform one action at a time: tap, type, key, scroll, wait, or reload.",
+                            parameters = mapOf(
+                                "action" to "One of: tap, click, type, key, scroll, wait, reload",
+                                "x" to "Optional x coordinate for tap/click",
+                                "y" to "Optional y coordinate for tap/click",
+                                "text" to "Optional text for type",
+                                "key" to "Optional key for key action: enter, tab, backspace, escape",
+                                "scroll_dx" to "Optional horizontal scroll delta",
+                                "scroll_dy" to "Optional vertical scroll delta",
+                                "wait_ms" to "Optional wait duration in milliseconds, max 5000"
+                            ),
+                            requiredParams = listOf("action")
+                        )
+                    )
+                }
+                visualTools.add(
+                    AgentTool(
+                        name = "finish_task",
+                        description = "Return a JSON visual testing report to the Orchestrator. Include status, tested_url, actions, findings, screens_observed, and recommendations.",
+                        parameters = mapOf(
+                            "summary" to "JSON visual testing report",
+                            "status" to "SUCCESS, FAILED, or BLOCKED"
+                        ),
+                        requiredParams = listOf("summary")
+                    )
+                )
+                return stableAgentToolSchemaAcrossModes(visualTools, _currentPlanningModeEnabled.value)
+            }
 
             val tools = mutableListOf(
                 AgentTool(
@@ -7902,6 +11526,173 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             )
 
+            tools.addAll(
+                listOf(
+                    AgentTool(
+                        name = "question",
+                        description = "Pause this exact agent session and ask the user 1 to 5 structured requirement questions. In Plan mode you MUST call this tool and receive at least one answer before propose_plan is accepted. Each question needs 2 to 3 coherent literal choices and always allows a custom answer. Never use this tool to ask for plan approval.",
+                        parameters = mapOf("questions" to "Structured question array"),
+                        requiredParams = listOf("questions"),
+                        schemaJson = """
+                            {
+                              "type":"object",
+                              "properties":{
+                                "questions":{
+                                  "type":"array","minItems":1,"maxItems":5,
+                                  "items":{
+                                    "type":"object",
+                                    "properties":{
+                                      "id":{"type":"string"},
+                                      "header":{"type":"string"},
+                                      "prompt":{"type":"string"},
+                                      "multiple":{"type":"boolean"},
+                                      "allow_custom":{"type":"boolean"},
+                                      "options":{
+                                        "type":"array","minItems":2,"maxItems":3,
+                                        "items":{
+                                          "type":"object",
+                                          "properties":{
+                                            "id":{"type":"string"},
+                                            "label":{"type":"string"},
+                                            "description":{"type":"string"}
+                                          },
+                                          "required":["label"],
+                                          "additionalProperties":false
+                                        }
+                                      }
+                                    },
+                                    "required":["prompt","options"],
+                                    "additionalProperties":false
+                                  }
+                                }
+                              },
+                              "required":["questions"],
+                              "additionalProperties":false
+                            }
+                        """.trimIndent()
+                    ),
+                    AgentTool(
+                        name = "todo_write",
+                        description = "Replace the durable project todo list with structured items. Keep todos concise and update statuses as work progresses. The result reports overall progressPercent and the nextTodo so the orchestrator can continue from durable state.",
+                        parameters = mapOf("todos" to "Ordered todo array"),
+                        requiredParams = listOf("todos"),
+                        schemaJson = """
+                            {
+                              "type":"object",
+                              "properties":{
+                                "todos":{
+                                  "type":"array","maxItems":100,
+                                  "items":{
+                                    "type":"object",
+                                    "properties":{
+                                      "id":{"type":"string"},
+                                      "text":{"type":"string"},
+                                      "status":{"type":"string","enum":["PENDING","IN_PROGRESS","COMPLETED","CANCELLED"]},
+                                      "priority":{"type":"string","enum":["LOW","NORMAL","HIGH"]}
+                                    },
+                                    "required":["text","status"],
+                                    "additionalProperties":false
+                                  }
+                                }
+                              },
+                              "required":["todos"],
+                              "additionalProperties":false
+                            }
+                        """.trimIndent()
+                    ),
+                    AgentTool(
+                        name = "todo_read",
+                        description = "Read the durable structured todo list for this project.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    ),
+                    AgentTool(
+                        name = "skill",
+                        description = "Load one installed SKILL.md package by name or ID for this frozen root turn. The stable prompt advertises only skill names and descriptions.",
+                        parameters = mapOf("name" to "Installed skill name or ID"),
+                        requiredParams = listOf("name")
+                    ),
+                    AgentTool(
+                        name = "read_skill_resource",
+                        description = "Read a bounded supporting file from an installed skill package after loading that skill.",
+                        parameters = mapOf(
+                            "skill" to "Installed skill ID",
+                            "path" to "Relative resource path inside the skill package"
+                        ),
+                        requiredParams = listOf("skill", "path")
+                    ),
+                    AgentTool(
+                        name = "run_skill_script",
+                        description = "Run a project-local skill script only after explicit approval and only through the current project sandbox. Scripts never execute automatically.",
+                        parameters = mapOf(
+                            "skill" to "Installed project skill ID",
+                            "path" to "Relative .py script path inside the skill",
+                            "args_json" to "Optional JSON array of string arguments"
+                        ),
+                        requiredParams = listOf("skill", "path")
+                    )
+                )
+            )
+
+            if (localBackend) {
+                tools.removeAll { tool ->
+                    tool.name in setOf(
+                        "run_command",
+                        "check_command",
+                        "wait_command",
+                        "command_list",
+                        "cancel_command",
+                        "send_command_input",
+                        "apply_patch"
+                    )
+                }
+                tools.add(
+                    AgentTool(
+                        name = "run_project",
+                        description = "Run the current LOCAL_SANDBOX project using .adt/run.json. Supports runtime 'python' through embedded Python and runtime 'web' through a retained local WebView preview. Shell commands, Android settings, and phone files are unavailable.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    )
+                )
+                tools.add(
+                    AgentTool(
+                        name = "check_project_run",
+                        description = "Check the latest local project run status, logs, exit code, and preview URL.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    )
+                )
+                tools.add(
+                    AgentTool(
+                        name = "stop_project_run",
+                        description = "Ask the current local project run to stop gracefully.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    )
+                )
+                tools.add(
+                    AgentTool(
+                        name = "force_stop_project_run",
+                        description = "Force stop the current local project run when graceful stop does not work.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    )
+                )
+                if (localCapabilities.allowPythonDependencies) {
+                    tools.add(
+                        AgentTool(
+                            name = "install_python_dependency",
+                            description = "Register a bundled Python package or install a user-approved pure-Python wheel into the current project's local .adt/site-packages. Native wheels are rejected unless already bundled and compatible.",
+                            parameters = mapOf(
+                                "package" to "Package name to register or install",
+                                "wheel_path" to "Optional project-relative path to a pure-Python .whl file already present in the sandbox"
+                            ),
+                            requiredParams = listOf("package")
+                        )
+                    )
+                }
+            }
+
             if (visionEnabled) {
                 tools.add(
                     AgentTool(
@@ -7980,10 +11771,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             }
 
-            // Only Orchestrator can call other agents to prevent loops
-            if (role == AgentRole.ORCHESTRATOR || capabilityPolicy.canDelegate) {
+            // Delegation is serialized and orchestrator-owned; children always return first.
+            if (role == AgentRole.ORCHESTRATOR) {
                 val disabled = _disabledBuiltInAgents.value
-                val builtInList = listOf("CODER", "REVIEWER", "EXECUTOR", "SUMMARIZER")
+                val builtInList = buildList {
+                    add("CODER")
+                    add("REVIEWER")
+                    add("EXECUTOR")
+                    if (repo.agentVisualTestingEnabled.value) add("VISUAL_TESTER")
+                    add("SUMMARIZER")
+                }
                 val enabledBuiltIn = builtInList.filter { it !in disabled }
                 val disabledBuiltIn = builtInList.filter { it in disabled }
                 val customAgentNames = loadedCustomAgents.value.filter { it.isEnabled }.map { it.name }
@@ -8000,13 +11797,14 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 tools.add(
                     AgentTool(
                         name = "call_agent",
-                        description = "Delegate a task to a specialized agent. Available: $available.$disabledNote",
+                        description = "Orchestrator-only. Start one durable, sequential specialist invocation for exactly ONE atomic todo-sized task. Never assign the entire implementation plan or multiple todos to one call. Create a separate invocation for each todo. Provide a short human-readable name; repeated names are accepted and the app automatically adds 2, 3, and so on. Child agents must finish and return to the orchestrator instead of delegating. Available: $available.$disabledNote",
                         parameters = mapOf(
-                            "agent" to "Agent to call ($available)",
-                            "task" to "Detailed description of the task to perform",
+                            "agent" to "Agent class to call ($available)",
+                            "name" to "Required invocation name, maximum 40 characters. Example: Darwin. Reusing it creates Darwin 2, Darwin 3, and so on",
+                            "task" to "One atomic todo-sized task with a clear completion boundary; never the whole plan or multiple todos",
                             "context" to "Any relevant context or file paths"
                         ),
-                        requiredParams = listOf("agent", "task")
+                        requiredParams = listOf("agent", "name", "task")
                     )
                 )
             }
@@ -8015,12 +11813,23 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 tools.add(
                     AgentTool(
                         name = "propose_plan",
-                        description = "Propose an implementation plan for user approval. Use this when you have a multi-step plan that needs user review before proceeding. The user can modify or approve the plan.",
+                        description = "Propose an implementation plan for explicit user approval. This always creates a hard durable wait boundary: do not expect a tool result or continue until the user approves. In Plan mode this is rejected until the question tool has collected at least one authoritative user answer during the current root turn. Describe the .adt/run.json needed for LOCAL_SANDBOX testing, but create it only after approval switches the project to Build mode.",
                         parameters = mapOf(
                             "plan" to "Detailed implementation plan in markdown format",
                             "summary" to "One-line summary of what the plan accomplishes"
                         ),
                         requiredParams = listOf("plan", "summary")
+                    )
+                )
+                tools.add(
+                    AgentTool(
+                        name = "report_progress",
+                        description = "Post a concise project checkpoint to the main chat. Use it at meaningful workflow milestones so the user can see the current phase without expanding tool activity.",
+                        parameters = mapOf(
+                            "phase" to "Current project phase, such as discovery, planning, implementation, review, validation, or wrap-up",
+                            "summary" to "One short sentence explaining what is happening now and what comes next"
+                        ),
+                        requiredParams = listOf("phase", "summary")
                     )
                 )
             }
@@ -8030,7 +11839,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 tools.add(
                     AgentTool(
                         name = "finish_task",
-                        description = "Signal that your assigned task is complete. ALWAYS update project memory first after meaningful changes, then call reflection if needed, then call this to return control to the Orchestrator.",
+                        description = "Signal that your one assigned todo-sized task is complete. ALWAYS update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, then call reflection to verify this assigned task itself (not the whole implementation plan), then call this to return control to the Orchestrator.",
                         parameters = mapOf(
                             "summary" to "Brief summary of what was accomplished",
                             "status" to "SUCCESS or FAILED"
@@ -8040,8 +11849,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             }
 
-            // Add custom tools loaded from database
-            loadedCustomTools.value.filter { it.isEnabled }.forEach { customTool ->
+            // Add custom tools loaded from database. Local sandbox hides arbitrary custom command templates.
+            if (!localBackend) loadedCustomTools.value.filter { it.isEnabled }.forEach { customTool ->
                 try {
                     val paramMap = mutableMapOf<String, String>()
                     val paramSpecs = AgentRuntimeSupport.parseCustomToolParameterSpecs(customTool.parametersJson)
@@ -8085,12 +11894,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     .filter { tool ->
                         capabilityPolicy.allowedToolNames.isEmpty() || tool.name in capabilityPolicy.allowedToolNames
                     }
-                    .filterNot { it.name == "call_agent" && !capabilityPolicy.canDelegate }
+                    .filterNot { it.name == "call_agent" && role != AgentRole.ORCHESTRATOR }
             } else {
                 tools
             }
 
-            return filteredTools.distinctBy { it.name }
+            val distinctTools = filteredTools
+                .distinctBy { it.name }
+                .filter { it.name !in _disabledStandardAgentTools.value }
+            // Keep schemas frozen across Plan → Build so prompt caches survive approval.
+            // validateToolCall still rejects every build mutation while Plan mode is active.
+            return stableAgentToolSchemaAcrossModes(distinctTools, _currentPlanningModeEnabled.value)
         }
     } // End of companion object
 
@@ -8104,6 +11918,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         username: String = AI_AGENT_USER,
         password: String = "agent"  // Default password, can be overridden by user in settings
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (_currentWorkspaceBackend.value == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+            _connectionStatus.value = ConnectionStatus.UNKNOWN
+            _retryMessage.value = null
+            return@withContext Result.success(Unit)
+        }
         sshMutex.withLock {
             lastConnectionHost = host
             lastConnectionPort = port
@@ -8626,6 +12445,14 @@ sys.exit(proc.returncode)
      */
     suspend fun readFile(path: String): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                return@withContext Result.success(formatNumberedContent(file.readText(Charsets.UTF_8)))
+            }
+
             val safePath = sanitizePath(path)
 
             // Check if file is staged (pending approval)
@@ -8647,6 +12474,14 @@ sys.exit(proc.returncode)
 
     suspend fun readFileBytes(path: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                return@withContext Result.success(file.readBytes())
+            }
+
             val safePath = sanitizePath(path)
             val stagedContent = StagedFileCache.getStagedContent(safePath)
             if (stagedContent != null) {
@@ -8666,6 +12501,29 @@ sys.exit(proc.returncode)
         maxLines: Int = TOOL_READ_FILE_DEFAULT_LINES
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                val displayPath = localDisplayPath(file)
+                val requestedStart = maxOf(1, startLine)
+                val requestedLines = maxLines.coerceIn(1, TOOL_READ_FILE_MAX_LINES)
+                val lines = file.readText(Charsets.UTF_8).let { content ->
+                    if (content.isEmpty()) emptyList() else content.split("\n")
+                }
+                recordSessionFileEvidence(displayPath, "$displayPath:$requestedStart-${requestedStart + requestedLines - 1}")
+                return@withContext Result.success(
+                    formatReadFileChunk(
+                        projectRelativePath = displayPath,
+                        lines = lines,
+                        requestedStart = requestedStart,
+                        requestedLines = requestedLines,
+                        staged = false
+                    )
+                )
+            }
+
             val safePath = sanitizePath(path)
             val projectRelativePath = toProjectRelativePath(safePath)
             val requestedStart = maxOf(1, startLine)
@@ -8777,6 +12635,17 @@ sys.exit(proc.returncode)
      */
     suspend fun writeFile(path: String, content: String, trackChange: Boolean = true): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                file.parentFile?.mkdirs()
+                file.writeText(content, Charsets.UTF_8)
+                if (trackChange) {
+                    appendChangedFilesLog(listOf(path), "write_file")
+                        .onFailure { addDebugLog("⚠️ Failed to track changed file $path: ${it.message}") }
+                }
+                return@withContext Result.success(Unit)
+            }
+
             val safePath = sanitizePath(path)
             // Ensure parent directory exists
             val parentDir = safePath.substringBeforeLast("/")
@@ -8806,6 +12675,17 @@ sys.exit(proc.returncode)
 
     suspend fun writeFileBytes(path: String, bytes: ByteArray, trackChange: Boolean = true): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                file.parentFile?.mkdirs()
+                file.writeBytes(bytes)
+                if (trackChange) {
+                    appendChangedFilesLog(listOf(path), "write_file")
+                        .onFailure { addDebugLog("⚠️ Failed to track changed file $path: ${it.message}") }
+                }
+                return@withContext Result.success(Unit)
+            }
+
             val safePath = sanitizePath(path)
             val parentDir = safePath.substringBeforeLast("/")
             executeCommand("mkdir -p '$parentDir'")
@@ -8841,6 +12721,13 @@ sys.exit(proc.returncode)
      */
     suspend fun writeFileRaw(path: String, content: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                file.parentFile?.mkdirs()
+                file.writeText(content, Charsets.UTF_8)
+                return@withContext Result.success(Unit)
+            }
+
             val safePath = sanitizePath(path)
             // Ensure parent directory exists
             val parentDir = safePath.substringBeforeLast("/")
@@ -8869,6 +12756,17 @@ sys.exit(proc.returncode)
      */
     suspend fun uploadFile(localUri: Uri, remotePath: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(remotePath)
+                file.parentFile?.mkdirs()
+                val bytes = context.contentResolver.openInputStream(localUri)?.use { it.readBytes() }
+                    ?: return@withContext Result.failure(Exception("Failed to open local file"))
+                file.writeBytes(bytes)
+                appendChangedFilesLog(listOf(remotePath), "upload_file")
+                    .onFailure { addDebugLog("⚠️ Failed to track uploaded file $remotePath: ${it.message}") }
+                return@withContext Result.success(Unit)
+            }
+
             val safePath = sanitizePath(remotePath)
             val parentDir = safePath.substringBeforeLast("/")
 
@@ -8914,6 +12812,17 @@ sys.exit(proc.returncode)
      */
     suspend fun downloadFile(remotePath: String, localUri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(remotePath)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                context.contentResolver.openOutputStream(localUri)?.use { os ->
+                    os.write(file.readBytes())
+                } ?: return@withContext Result.failure(Exception("Failed to open local destination"))
+                return@withContext Result.success(Unit)
+            }
+
             val safePath = sanitizePath(remotePath)
 
             // Step 1: Get file content as base64 via SSH
@@ -8946,6 +12855,10 @@ sys.exit(proc.returncode)
      */
     suspend fun compress(paths: List<String>, destinationTarGz: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                return@withContext Result.failure(Exception("Archive creation is available only for REMOTE_SSH projects in this version."))
+            }
+
             val safePaths = paths.joinToString(" ") { "'${sanitizePath(it)}'" }
             val safeDest = sanitizePath(destinationTarGz)
             val result = executeCommand("tar -czf '$safeDest' $safePaths")
@@ -8960,6 +12873,10 @@ sys.exit(proc.returncode)
      */
     suspend fun uncompress(tarGzPath: String, destinationDir: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                return@withContext Result.failure(Exception("Archive extraction is available only for REMOTE_SSH projects in this version."))
+            }
+
             val safeZip = sanitizePath(tarGzPath)
             val safeDest = sanitizePath(destinationDir)
             executeCommand("mkdir -p '$safeDest'")
@@ -8975,6 +12892,18 @@ sys.exit(proc.returncode)
      */
     suspend fun copy(source: String, destination: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val src = resolveLocalWorkspaceFile(source)
+                val dest = resolveLocalWorkspaceFile(destination)
+                dest.parentFile?.mkdirs()
+                if (src.isDirectory) {
+                    src.copyRecursively(dest, overwrite = true)
+                } else {
+                    src.copyTo(dest, overwrite = true)
+                }
+                return@withContext Result.success(Unit)
+            }
+
             val safeSrc = sanitizePath(source)
             val safeDest = sanitizePath(destination)
             val result = executeCommand("cp -r '$safeSrc' '$safeDest'")
@@ -8989,6 +12918,22 @@ sys.exit(proc.returncode)
      */
     suspend fun move(source: String, destination: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val src = resolveLocalWorkspaceFile(source)
+                val dest = resolveLocalWorkspaceFile(destination)
+                dest.parentFile?.mkdirs()
+                if (!src.renameTo(dest)) {
+                    if (src.isDirectory) {
+                        src.copyRecursively(dest, overwrite = true)
+                        src.deleteRecursively()
+                    } else {
+                        src.copyTo(dest, overwrite = true)
+                        src.delete()
+                    }
+                }
+                return@withContext Result.success(Unit)
+            }
+
             val safeSrc = sanitizePath(source)
             val safeDest = sanitizePath(destination)
             val result = executeCommand("mv '$safeSrc' '$safeDest'")
@@ -9110,6 +13055,31 @@ sys.exit(proc.returncode)
      */
     suspend fun editLines(path: String, startLine: Int, endLine: Int, newContent: String): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                val originalContent = file.readText(Charsets.UTF_8)
+                val computation = runCatching {
+                    AgentRuntimeSupport.computeEditedFileContent(
+                        originalContent = originalContent,
+                        startLine = startLine,
+                        endLine = endLine,
+                        newContent = newContent
+                    )
+                }.getOrElse { error ->
+                    return@withContext Result.failure(Exception(error.message ?: "Failed to compute edited file content."))
+                }
+                file.writeText(computation.updatedContent, Charsets.UTF_8)
+                appendChangedFilesLog(listOf(path), "edit_lines")
+                    .onFailure { addDebugLog("⚠️ Failed to track changed file $path: ${it.message}") }
+                val linesToRemove = endLine - startLine + 1
+                return@withContext Result.success(
+                    "Replaced lines $startLine-$endLine ($linesToRemove lines) with ${computation.insertedLineCount} new lines"
+                )
+            }
+
             val safePath = sanitizePath(path)
 
             // Read raw file content so we can preserve whether the original file ended with a newline.
@@ -9156,6 +13126,20 @@ sys.exit(proc.returncode)
 
     private suspend fun ensureStructuredBrainFiles(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val brainDir = resolveLocalWorkspaceFile("brain")
+                if (!brainDir.exists() && !brainDir.mkdirs()) {
+                    return@withContext Result.failure(Exception("Failed to create brain folder: ${localDisplayPath(brainDir)}"))
+                }
+                for ((filename, content) in DEFAULT_BRAIN_FILES) {
+                    val file = File(brainDir, filename)
+                    if (!file.exists()) {
+                        file.writeText(content, Charsets.UTF_8)
+                    }
+                }
+                return@withContext Result.success(Unit)
+            }
+
             val brainPath = getBrainPath()
             executeCommand("mkdir -p '$brainPath'").getOrThrow()
             for ((filename, content) in DEFAULT_BRAIN_FILES) {
@@ -9248,8 +13232,16 @@ sys.exit(proc.returncode)
     }
 
     private suspend fun readBrainFileRaw(filename: String): String {
-        val brainPath = getBrainPath()
         val safeName = filename.replace("..", "").replace("/", "")
+        if (isLocalWorkspaceBackend()) {
+            return runCatching {
+                resolveLocalWorkspaceFile("brain/$safeName").takeIf { it.exists() && it.isFile }
+                    ?.readText(Charsets.UTF_8)
+                    ?.trim()
+                    .orEmpty()
+            }.getOrDefault("")
+        }
+        val brainPath = getBrainPath()
         val fullPath = "$brainPath/$safeName"
         return executeCommand("cat '$fullPath' 2>/dev/null").getOrNull().orEmpty().trim()
     }
@@ -9671,6 +13663,14 @@ sys.exit(proc.returncode)
     suspend fun appendAuditRecord(record: ToolAuditRecord): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             ensureStructuredBrainFiles().getOrThrow()
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile("brain/audit.jsonl")
+                file.parentFile?.mkdirs()
+                file.appendText(record.toJsonLine() + "\n", Charsets.UTF_8)
+                enforceMemoryPolicy("audit.jsonl").getOrThrow()
+                return@withContext Result.success(Unit)
+            }
+
             val brainPath = getBrainPath()
             val fullPath = "$brainPath/audit.jsonl"
             executeCommand("touch '$fullPath'").getOrThrow()
@@ -9713,11 +13713,21 @@ sys.exit(proc.returncode)
             val safeName = filename.replace("..", "").replace("/", "")
             return@withContext when {
                 policy.rolloverTriggerLines != null && lines.size > policy.rolloverTriggerLines -> {
-                    val keptLines = when (safeName) {
-                        "timeline.md", "audit.jsonl", "changed_files.md" -> lines.take(1) + lines.takeLast(policy.sizeBudgetLines.coerceAtLeast(20) - 1)
-                        else -> lines.takeLast(policy.sizeBudgetLines)
-                    }
-                    rewriteMemory(safeName, keptLines.joinToString("\n"), countsAsMemoryUpdate = false).getOrThrow()
+                    val keptLines = selectMemoryRolloverLines(
+                        lines = lines,
+                        sizeBudgetLines = policy.sizeBudgetLines,
+                        rolloverTriggerLines = policy.rolloverTriggerLines,
+                        preserveFirstLine = safeName in setOf("timeline.md", "audit.jsonl", "changed_files.md")
+                    )
+                    // This write is the policy action itself. Re-entering policy enforcement here
+                    // caused rewriteMemory -> enforceMemoryPolicy recursion and a native stack
+                    // overflow in File.getCanonicalFile/realpath on the Default dispatcher.
+                    rewriteMemory(
+                        filename = safeName,
+                        content = keptLines.joinToString("\n"),
+                        countsAsMemoryUpdate = false,
+                        enforcePolicyAfterWrite = false
+                    ).getOrThrow()
                     Result.success("Memory rollover applied to $safeName to keep it within the configured budget.")
                 }
                 policy.consolidationTriggerLines != null && lines.size > policy.consolidationTriggerLines -> {
@@ -9738,8 +13748,17 @@ sys.exit(proc.returncode)
     suspend fun readMemory(filename: String): Result<String> = withContext(Dispatchers.IO) {
         try {
             ensureStructuredBrainFiles().getOrThrow()
-            val brainPath = getBrainPath()
             val safeName = filename.replace("..", "").replace("/", "")
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile("brain/$safeName")
+                return@withContext if (file.exists() && file.readText(Charsets.UTF_8).isNotBlank()) {
+                    Result.success(formatNumberedContent(file.readText(Charsets.UTF_8)))
+                } else {
+                    Result.success("No memories found. Use write_memory to save plans, summaries, and notes.")
+                }
+            }
+
+            val brainPath = getBrainPath()
             val fullPath = "$brainPath/$safeName"
 
             // Use cat -n to include line numbers so LLM can reference specific lines
@@ -9766,8 +13785,26 @@ sys.exit(proc.returncode)
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             ensureStructuredBrainFiles().getOrThrow()
-            val brainPath = getBrainPath()
             val safeName = filename.replace("..", "").replace("/", "")
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile("brain/$safeName")
+                file.parentFile?.mkdirs()
+                recordSessionMemoryEvidence(safeName)
+                file.appendText(content + "\n", Charsets.UTF_8)
+                val lineCount = file.readLines(Charsets.UTF_8).size
+                val policyMessage = enforceMemoryPolicy(safeName).getOrNull().orEmpty()
+                val tip = if (lineCount > 50) {
+                    "\nMemory file has $lineCount lines and is getting long. Consider calling SUMMARIZER or read_memory first, then rewrite_memory to summarize and consolidate it."
+                } else {
+                    "\nTIP: Memory file now has $lineCount lines. If it gets too long, call SUMMARIZER or use rewrite_memory to summarize it."
+                }
+                if (countsAsMemoryUpdate) {
+                    clearMemoryDirty("Updated $safeName with a new memory note.")
+                }
+                return@withContext Result.success("Memory appended: $safeName (+${content.lines().size} lines, total: $lineCount lines)$tip${if (policyMessage.isNotBlank()) "\n$policyMessage" else ""}")
+            }
+
+            val brainPath = getBrainPath()
             val fullPath = "$brainPath/$safeName"
             recordSessionMemoryEvidence(safeName)
 
@@ -9811,12 +13848,30 @@ sys.exit(proc.returncode)
     suspend fun rewriteMemory(
         filename: String,
         content: String,
-        countsAsMemoryUpdate: Boolean = true
+        countsAsMemoryUpdate: Boolean = true,
+        enforcePolicyAfterWrite: Boolean = true
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             ensureStructuredBrainFiles().getOrThrow()
-            val brainPath = getBrainPath()
             val safeName = filename.replace("..", "").replace("/", "")
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile("brain/$safeName")
+                file.parentFile?.mkdirs()
+                recordSessionMemoryEvidence(safeName)
+                file.writeText(content, Charsets.UTF_8)
+                val lineCount = content.lines().size
+                val policyMessage = if (enforcePolicyAfterWrite) {
+                    enforceMemoryPolicy(safeName).getOrNull().orEmpty()
+                } else {
+                    ""
+                }
+                if (countsAsMemoryUpdate) {
+                    clearMemoryDirty("Rewrote $safeName to consolidate project memory.")
+                }
+                return@withContext Result.success("Memory rewritten: $safeName ($lineCount lines)${if (policyMessage.isNotBlank()) "\n$policyMessage" else ""}")
+            }
+
+            val brainPath = getBrainPath()
             val fullPath = "$brainPath/$safeName"
             recordSessionMemoryEvidence(safeName)
 
@@ -9830,7 +13885,11 @@ sys.exit(proc.returncode)
 
             if (result.isSuccess) {
                 val lineCount = content.lines().size
-                val policyMessage = enforceMemoryPolicy(safeName).getOrNull().orEmpty()
+                val policyMessage = if (enforcePolicyAfterWrite) {
+                    enforceMemoryPolicy(safeName).getOrNull().orEmpty()
+                } else {
+                    ""
+                }
                 if (countsAsMemoryUpdate) {
                     clearMemoryDirty("Rewrote $safeName to consolidate project memory.")
                 }
@@ -9855,8 +13914,29 @@ sys.exit(proc.returncode)
     ): Result<String> = withContext(Dispatchers.IO) {
         try {
             ensureStructuredBrainFiles().getOrThrow()
-            val brainPath = getBrainPath()
             val safeName = filename.replace("..", "").replace("/", "")
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile("brain/$safeName")
+                recordSessionMemoryEvidence(safeName)
+                if (startLine < 1 || endLine < startLine) {
+                    return@withContext Result.failure(Exception("Invalid line range: $startLine-$endLine"))
+                }
+                if (!file.exists()) {
+                    return@withContext Result.failure(Exception("Memory file not found: $safeName"))
+                }
+                val lines = file.readLines(Charsets.UTF_8).toMutableList()
+                val from = (startLine - 1).coerceAtMost(lines.size)
+                val toExclusive = endLine.coerceAtMost(lines.size)
+                if (from < toExclusive) lines.subList(from, toExclusive).clear()
+                file.writeText(lines.joinToString("\n") + if (lines.isNotEmpty()) "\n" else "", Charsets.UTF_8)
+                val policyMessage = enforceMemoryPolicy(safeName).getOrNull().orEmpty()
+                if (countsAsMemoryUpdate) {
+                    clearMemoryDirty("Deleted obsolete lines from $safeName.")
+                }
+                return@withContext Result.success("Deleted lines $startLine-$endLine from $safeName. Remaining: ${lines.size} lines.${if (policyMessage.isNotBlank()) "\n$policyMessage" else ""}")
+            }
+
+            val brainPath = getBrainPath()
             val fullPath = "$brainPath/$safeName"
             recordSessionMemoryEvidence(safeName)
 
@@ -9887,6 +13967,18 @@ sys.exit(proc.returncode)
     suspend fun listMemory(): Result<String> = withContext(Dispatchers.IO) {
         try {
             ensureStructuredBrainFiles().getOrThrow()
+            if (isLocalWorkspaceBackend()) {
+                val brainDir = resolveLocalWorkspaceFile("brain")
+                val files = brainDir.listFiles().orEmpty().joinToString("\n") { file ->
+                    "${if (file.isDirectory) "dir" else "file"} ${file.name} ${file.length()} bytes"
+                }
+                return@withContext if (files.isBlank()) {
+                    Result.success("Brain folder is empty. Use write_memory to save plans, summaries, and notes.")
+                } else {
+                    Result.success("Memory files in ${localDisplayPath(brainDir)}:\n$files")
+                }
+            }
+
             val brainPath = getBrainPath()
             addDebugLog("📁 list_memory: brainPath=$brainPath")
 
@@ -9922,6 +14014,15 @@ sys.exit(proc.returncode)
      */
     suspend fun fileLineCount(path: String): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                val count = file.readLines(Charsets.UTF_8).size
+                return@withContext Result.success("$count lines in ${localDisplayPath(file)}")
+            }
+
             val safePath = sanitizePath(path)
             val result = executeCommand("wc -l < '$safePath'")
             if (result.isSuccess) {
@@ -9940,6 +14041,26 @@ sys.exit(proc.returncode)
      */
     suspend fun readFileLines(path: String, startLine: Int, endLine: Int): Result<String> = withContext(Dispatchers.IO) {
         try {
+            if (isLocalWorkspaceBackend()) {
+                val file = resolveLocalWorkspaceFile(path)
+                if (!file.exists() || !file.isFile) {
+                    return@withContext Result.failure(Exception("File not found: ${localDisplayPath(file)}"))
+                }
+                val start = maxOf(1, startLine)
+                val end = maxOf(start, endLine)
+                val content = file.readLines(Charsets.UTF_8)
+                    .mapIndexed { index, line -> index + 1 to line }
+                    .filter { (lineNumber, _) -> lineNumber in start..end }
+                    .joinToString("\n") { (lineNumber, line) -> String.format("%6d  %s", lineNumber, line) }
+                val displayPath = localDisplayPath(file)
+                recordSessionFileEvidence(displayPath, "$displayPath:$start-$end")
+                return@withContext if (content.isBlank()) {
+                    Result.success("[No content in lines $start-$end of $displayPath]")
+                } else {
+                    Result.success("Lines $start-$end of $displayPath:\n$content")
+                }
+            }
+
             val safePath = sanitizePath(path)
             val start = maxOf(1, startLine)
             val end = maxOf(start, endLine)
@@ -9982,6 +14103,15 @@ sys.exit(proc.returncode)
         )
 
         val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+        val summaryOutputTokens = resolveAgentEffectiveMaxOutputTokens(
+            configuredMaxOutputTokens = if (SettingsRepository.isLiteRtBackend(backend)) {
+                settingsRepo.agentLiteRtMaxOutputTokens.value
+            } else {
+                settingsRepo.agentSummarizerMaxOutputTokens.value
+            },
+            contextTokens = summarizerCtx,
+            estimatedPromptTokens = summaryMessages.sumOf { it.content.length }.div(4).coerceAtLeast(1)
+        )
         val result = if (SettingsRepository.isLiteRtBackend(backend)) {
             val appContext = context.applicationContext
             val selectedId = settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
@@ -9998,7 +14128,7 @@ sys.exit(proc.returncode)
                     messages = emptyList(),
                     userPrompt = userPrompt,
                     contextSize = summarizerCtx,
-                    maxTokens = null,
+                    maxTokens = summaryOutputTokens,
                     temperature = 0.3f,
                     thinkingEnabled = false,
                     backendMode = settingsRepo.agentLiteRtBackend.value,
@@ -10035,14 +14165,16 @@ sys.exit(proc.returncode)
                     settingsRepo.agentLlamaServerModelLabel.value
                 },
                 thinkingEnabled = false,
-                maxTokens = summarizerCtx
+                maxTokens = summaryOutputTokens,
+                requestOptions = LlamaServerRequestOptions(cachePrompt = settingsRepo.serverCachePrompt.value)
             ) { _, _ -> }
         } else {
             ollamaService.chatWithToolsStreaming(
                 model = summarizerModel,
                 messages = summaryMessages,
                 tools = emptyList(),
-                numCtxOverride = summarizerCtx
+                numCtxOverride = summarizerCtx,
+                maxOutputTokens = summaryOutputTokens
             ) { _, _ -> }
         }
 

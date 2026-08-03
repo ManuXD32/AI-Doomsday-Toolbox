@@ -7,7 +7,11 @@ import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.view.ViewGroup
 import android.widget.Toast
+import android.widget.VideoView
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.clickable
@@ -55,6 +59,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -76,6 +81,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -98,6 +104,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
@@ -132,11 +139,13 @@ import com.example.llamadroid.service.SdDistributedPlacementMode
 import com.example.llamadroid.service.SdDistributedPlacementPlan
 import com.example.llamadroid.service.SdDistributedRuntimeConfig
 import com.example.llamadroid.service.SdDistributedService
-import com.example.llamadroid.service.SdDistributedSplitMode
+import com.example.llamadroid.service.SdGeneratedImageMetadata
 import com.example.llamadroid.service.SdDistributedWorkerRuntime
 import com.example.llamadroid.service.SdDistributedModules
 import com.example.llamadroid.service.SdDistributedAutoRamScope
+import com.example.llamadroid.service.SdScheduler
 import com.example.llamadroid.service.StableDiffusionService
+import com.example.llamadroid.service.GeneratedVideoMetadata
 import com.example.llamadroid.service.VideoGenerationConfig
 import com.example.llamadroid.service.VideoGenerationMode
 import com.example.llamadroid.service.VideoGenerationService
@@ -157,6 +166,8 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.SdSchedulerPicker
+import com.example.llamadroid.ui.components.SdTensorTypeRulesPicker
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -165,6 +176,31 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private suspend fun copyDistributedInputImageToCache(
+    context: Context,
+    uri: Uri,
+    prefix: String
+): Result<String> = withContext(Dispatchers.IO) {
+    runCatching {
+        val mimeType = context.contentResolver.getType(uri).orEmpty()
+        val extension = when {
+            mimeType.contains("png", ignoreCase = true) -> "png"
+            mimeType.contains("webp", ignoreCase = true) -> "webp"
+            mimeType.contains("bmp", ignoreCase = true) -> "bmp"
+            else -> "jpg"
+        }
+        val dir = File(context.cacheDir, "sd_distributed_inputs").apply { mkdirs() }
+        val output = File(dir, "${prefix}_${System.currentTimeMillis()}.$extension")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            output.outputStream().use { stream -> input.copyTo(stream) }
+        } ?: error(context.getString(R.string.sd_dist_input_image_import_failed))
+        require(output.exists() && output.length() > 0L) {
+            context.getString(R.string.sd_dist_input_image_import_failed)
+        }
+        output.absolutePath
+    }
+}
 
 @Composable
 fun SdDistributedHubScreen(navController: NavController) {
@@ -212,6 +248,7 @@ fun SdDistributedGalleryScreen(navController: NavController) {
     var filter by remember { mutableStateOf(SdGeneratedMediaFilter.ALL) }
     var refreshNonce by remember { mutableStateOf(0) }
     var mediaItems by remember { mutableStateOf<List<SdGeneratedMediaItem>>(emptyList()) }
+    var selectedMedia by remember { mutableStateOf<SdGeneratedMediaItem?>(null) }
 
     LaunchedEffect(refreshNonce) {
         mediaItems = withContext(Dispatchers.IO) { scanSdGeneratedMedia(context) }
@@ -298,12 +335,21 @@ fun SdDistributedGalleryScreen(navController: NavController) {
                 items(filteredItems, key = { it.file.absolutePath }) { item ->
                     SdGeneratedMediaCard(
                         item = item,
-                        onOpen = { openSdGeneratedMedia(context, item) },
+                        onOpen = { selectedMedia = item },
                         onShare = { shareSdGeneratedMedia(context, item) }
                     )
                 }
             }
         }
+    }
+
+    selectedMedia?.let { item ->
+        SdGeneratedMediaDetailDialog(
+            item = item,
+            onDismiss = { selectedMedia = null },
+            onOpenExternal = { openSdGeneratedMedia(context, item) },
+            onShare = { shareSdGeneratedMedia(context, item) }
+        )
     }
 }
 
@@ -513,17 +559,28 @@ fun SdDistributedMasterScreen(navController: NavController) {
     var autoRamScope by remember { mutableStateOf(SdDistributedAutoRamScope.fromStoredValue(settings.autoRamScope)) }
     var maxVramEnabled by remember { mutableStateOf(settings.maxVramEnabled) }
     var maxVram by remember { mutableStateOf(settings.maxVramSpec) }
-    var splitMode by remember { mutableStateOf(SdDistributedSplitMode.fromCliName(settings.splitMode)) }
     var customFlags by remember { mutableStateOf(settings.customFlags) }
 
-    var prompt by remember { mutableStateOf(settings.prompt) }
-    var negativePrompt by remember { mutableStateOf(settings.negativePrompt) }
-    var dimensions by remember { mutableStateOf(settings.dimensions) }
-    var steps by remember { mutableStateOf(settings.steps) }
-    var cfg by remember { mutableStateOf(settings.cfg) }
-    var seed by remember { mutableStateOf(settings.seed) }
-    var sampler by remember { mutableStateOf(settings.sampler) }
-    var scheduler by remember { mutableStateOf(settings.scheduler) }
+    var imagePrompt by remember { mutableStateOf(settings.imagePrompt.ifBlank { settings.prompt }) }
+    var imageNegativePrompt by remember { mutableStateOf(settings.imageNegativePrompt.ifBlank { settings.negativePrompt }) }
+    var imageWidth by remember { mutableStateOf(settings.imageWidth) }
+    var imageHeight by remember { mutableStateOf(settings.imageHeight) }
+    var imageSteps by remember { mutableStateOf(settings.imageSteps) }
+    var imageCfg by remember { mutableStateOf(settings.imageCfg) }
+    var imageSeed by remember { mutableStateOf(settings.imageSeed) }
+    var imageSampler by remember { mutableStateOf(settings.imageSampler) }
+    var imageScheduler by remember { mutableStateOf(settings.imageScheduler) }
+    var imageFlowShift by remember { mutableStateOf(settings.imageFlowShift) }
+    var videoPrompt by remember { mutableStateOf(settings.videoPrompt.ifBlank { settings.prompt }) }
+    var videoNegativePrompt by remember { mutableStateOf(settings.videoNegativePrompt.ifBlank { settings.negativePrompt }) }
+    var videoWidth by remember { mutableStateOf(settings.videoWidth) }
+    var videoHeight by remember { mutableStateOf(settings.videoHeight) }
+    var videoSteps by remember { mutableStateOf(settings.videoSteps) }
+    var videoCfg by remember { mutableStateOf(settings.videoCfg) }
+    var videoSeed by remember { mutableStateOf(settings.videoSeed) }
+    var videoSampler by remember { mutableStateOf(settings.videoSampler) }
+    var videoScheduler by remember { mutableStateOf(settings.videoScheduler) }
+    var videoFlowShift by remember { mutableStateOf(settings.videoFlowShift) }
     var batch by remember { mutableStateOf(settings.batchCount) }
     var clipSkip by remember { mutableStateOf(settings.clipSkip) }
     var strength by remember { mutableStateOf(settings.strength) }
@@ -535,7 +592,6 @@ fun SdDistributedMasterScreen(navController: NavController) {
     var vaeTiling by remember { mutableStateOf(settings.vaeTiling) }
     var vaeTileSize by remember { mutableStateOf(settings.vaeTileSize) }
     var vaeTileOverlap by remember { mutableStateOf(settings.vaeTileOverlap) }
-    var flowShift by remember { mutableStateOf(settings.flowShift) }
     var quantization by remember { mutableStateOf(settings.quantization) }
     var tensorRules by remember { mutableStateOf(settings.tensorRules) }
     var loraStrength by remember { mutableStateOf(settings.loraStrength) }
@@ -578,6 +634,30 @@ fun SdDistributedMasterScreen(navController: NavController) {
     var videoT5xxlPath by remember { mutableStateOf(settings.videoT5xxlPath) }
     var videoCustomFlags by remember { mutableStateOf(settings.videoCustomFlags) }
     var launchError by remember { mutableStateOf<String?>(null) }
+    val imageInputPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            copyDistributedInputImageToCache(context, uri, "sd_dist_image_input").fold(
+                onSuccess = {
+                    imageInputPath = it
+                    launchError = null
+                },
+                onFailure = { launchError = it.message ?: context.getString(R.string.sd_dist_input_image_import_failed) }
+            )
+        }
+    }
+    val videoInputPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            copyDistributedInputImageToCache(context, uri, "sd_dist_video_input").fold(
+                onSuccess = {
+                    videoInputPath = it
+                    launchError = null
+                },
+                onFailure = { launchError = it.message ?: context.getString(R.string.sd_dist_input_image_import_failed) }
+            )
+        }
+    }
 
     val activeImageMode = imageWorkflowMode.toSdMasterImageMode()
     val imageGenerationState by remember(activeImageMode) {
@@ -614,16 +694,27 @@ fun SdDistributedMasterScreen(navController: NavController) {
         autoRamScope = SdDistributedAutoRamScope.fromStoredValue(fresh.autoRamScope)
         maxVramEnabled = fresh.maxVramEnabled
         maxVram = fresh.maxVramSpec
-        splitMode = SdDistributedSplitMode.fromCliName(fresh.splitMode)
         customFlags = fresh.customFlags
-        prompt = fresh.prompt
-        negativePrompt = fresh.negativePrompt
-        dimensions = fresh.dimensions
-        steps = fresh.steps
-        cfg = fresh.cfg
-        seed = fresh.seed
-        sampler = fresh.sampler
-        scheduler = fresh.scheduler
+        imagePrompt = fresh.imagePrompt.ifBlank { fresh.prompt }
+        imageNegativePrompt = fresh.imageNegativePrompt.ifBlank { fresh.negativePrompt }
+        imageWidth = fresh.imageWidth
+        imageHeight = fresh.imageHeight
+        imageSteps = fresh.imageSteps
+        imageCfg = fresh.imageCfg
+        imageSeed = fresh.imageSeed
+        imageSampler = fresh.imageSampler
+        imageScheduler = fresh.imageScheduler
+        imageFlowShift = fresh.imageFlowShift
+        videoPrompt = fresh.videoPrompt.ifBlank { fresh.prompt }
+        videoNegativePrompt = fresh.videoNegativePrompt.ifBlank { fresh.negativePrompt }
+        videoWidth = fresh.videoWidth
+        videoHeight = fresh.videoHeight
+        videoSteps = fresh.videoSteps
+        videoCfg = fresh.videoCfg
+        videoSeed = fresh.videoSeed
+        videoSampler = fresh.videoSampler
+        videoScheduler = fresh.videoScheduler
+        videoFlowShift = fresh.videoFlowShift
         batch = fresh.batchCount
         clipSkip = fresh.clipSkip
         strength = fresh.strength
@@ -635,7 +726,6 @@ fun SdDistributedMasterScreen(navController: NavController) {
         vaeTiling = fresh.vaeTiling
         vaeTileSize = fresh.vaeTileSize
         vaeTileOverlap = fresh.vaeTileOverlap
-        flowShift = fresh.flowShift
         quantization = fresh.quantization
         tensorRules = fresh.tensorRules
         loraStrength = fresh.loraStrength
@@ -697,16 +787,36 @@ fun SdDistributedMasterScreen(navController: NavController) {
         autoRamScope = autoRamScope.name,
         maxVramEnabled = maxVramEnabled,
         maxVramSpec = maxVram,
-        splitMode = splitMode.cliName,
+        splitMode = "layer",
         customFlags = customFlags,
-        prompt = prompt,
-        negativePrompt = negativePrompt,
-        dimensions = dimensions,
-        steps = steps,
-        cfg = cfg,
-        seed = seed,
-        sampler = sampler,
-        scheduler = scheduler,
+        prompt = imagePrompt,
+        negativePrompt = imageNegativePrompt,
+        dimensions = "${imageWidth.ifBlank { "512" }} x ${imageHeight.ifBlank { "512" }}",
+        steps = imageSteps,
+        cfg = imageCfg,
+        seed = imageSeed,
+        sampler = imageSampler,
+        scheduler = imageScheduler,
+        imagePrompt = imagePrompt,
+        imageNegativePrompt = imageNegativePrompt,
+        imageWidth = imageWidth,
+        imageHeight = imageHeight,
+        imageSteps = imageSteps,
+        imageCfg = imageCfg,
+        imageSeed = imageSeed,
+        imageSampler = imageSampler,
+        imageScheduler = imageScheduler,
+        imageFlowShift = imageFlowShift,
+        videoPrompt = videoPrompt,
+        videoNegativePrompt = videoNegativePrompt,
+        videoWidth = videoWidth,
+        videoHeight = videoHeight,
+        videoSteps = videoSteps,
+        videoCfg = videoCfg,
+        videoSeed = videoSeed,
+        videoSampler = videoSampler,
+        videoScheduler = videoScheduler,
+        videoFlowShift = videoFlowShift,
         batchCount = batch,
         clipSkip = clipSkip,
         strength = strength,
@@ -718,7 +828,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
         vaeTiling = vaeTiling,
         vaeTileSize = vaeTileSize,
         vaeTileOverlap = vaeTileOverlap,
-        flowShift = flowShift,
+        flowShift = imageFlowShift,
         quantization = quantization,
         tensorRules = tensorRules,
         loraStrength = loraStrength,
@@ -864,9 +974,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
     }
 
     fun startImageRun() {
-        saveDraftSettings()
         val mode = imageWorkflowMode.toSdMasterImageMode()
-        val (width, height) = parseSdDimensions(dimensions, 512, 512)
+        val width = parseSdDistributedDimension(imageWidth)
+        val height = parseSdDistributedDimension(imageHeight)
         val outputDir = File(context.filesDir, "sd_output").apply { mkdirs() }
         val subfolder = when (mode) {
             SDMode.TXT2IMG -> "txt2img"
@@ -874,13 +984,21 @@ fun SdDistributedMasterScreen(navController: NavController) {
             SDMode.UPSCALE -> "upscaled"
         }
         val outputFile = File(File(outputDir, subfolder).apply { mkdirs() }, "sd_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.png")
-        val samplerMethod = SamplingMethod.entries.firstOrNull { it.cliName == sampler || it.name == sampler } ?: SamplingMethod.EULER_A
+        val samplerMethod = SamplingMethod.entries.firstOrNull { it.cliName == imageSampler || it.name == imageSampler } ?: SamplingMethod.EULER_A
         val parsedCacheMode = SdCacheMode.fromStoredValue(cacheMode)
         val parsedScmPolicy = SdCacheScmPolicy.fromStoredValue(scmPolicy)
 
         launchError = when {
             mode != SDMode.UPSCALE && imageModelPath.isBlank() -> context.getString(R.string.sd_dist_error_select_image_model)
-            mode != SDMode.UPSCALE && prompt.isBlank() -> context.getString(R.string.sd_dist_error_prompt_required)
+            mode != SDMode.UPSCALE && imagePrompt.isBlank() -> context.getString(R.string.sd_dist_error_prompt_required)
+            mode != SDMode.UPSCALE && width == null -> context.getString(
+                R.string.video_gen_error_invalid_number,
+                context.getString(R.string.imagegen_width_label)
+            )
+            mode != SDMode.UPSCALE && height == null -> context.getString(
+                R.string.video_gen_error_invalid_number,
+                context.getString(R.string.imagegen_height_label)
+            )
             mode != SDMode.UPSCALE && imageMissingRequiredRoles.isNotEmpty() -> context.getString(
                 R.string.imagegen_error_missing_required_components,
                 imageMissingRequiredRoles.joinToString(", ") { sdDistributedComponentRoleLabel(context, it) }
@@ -899,6 +1017,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
             else -> null
         }
         if (launchError != null) return
+        saveDraftSettings()
 
         if (mode == SDMode.UPSCALE) {
             val config = SDUpscaleConfig(
@@ -924,14 +1043,15 @@ fun SdDistributedMasterScreen(navController: NavController) {
             val config = SDConfig(
                 mode = mode,
                 modelPath = imageModelPath,
-                prompt = prompt,
-                negativePrompt = negativePrompt,
-                width = width,
-                height = height,
-                steps = steps.toIntOrNull() ?: 20,
-                cfgScale = cfg.toFloatOrNull() ?: 7.0f,
-                seed = seed.toLongOrNull() ?: -1L,
+                prompt = imagePrompt,
+                negativePrompt = imageNegativePrompt,
+                width = requireNotNull(width),
+                height = requireNotNull(height),
+                steps = imageSteps.toIntOrNull() ?: 20,
+                cfgScale = imageCfg.toFloatOrNull() ?: 7.0f,
+                seed = imageSeed.toLongOrNull() ?: -1L,
                 samplingMethod = samplerMethod,
+                scheduler = SdScheduler.fromCliName(imageScheduler),
                 outputPath = outputFile.absolutePath,
                 initImage = imageInputPath.takeIf { mode == SDMode.IMG2IMG },
                 strength = strength.toFloatOrNull() ?: 0.75f,
@@ -960,7 +1080,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
                 cacheOption = if (parsedCacheMode != null) cacheOption else "",
                 scmMask = if (parsedCacheMode == SdCacheMode.CACHE_DIT) scmMask else "",
                 scmPolicy = if (parsedCacheMode == SdCacheMode.CACHE_DIT) parsedScmPolicy else null,
-                flowShift = flowShift.toFloatOrNull(),
+                flowShift = imageFlowShift.toFloatOrNull(),
                 diffusionFa = diffusionFa,
                 mmap = mmap,
                 sdParamsBackendMode = imageSelectedModel?.sdParamsBackendMode ?: "auto",
@@ -991,19 +1111,27 @@ fun SdDistributedMasterScreen(navController: NavController) {
     }
 
     fun startVideoRun() {
-        saveDraftSettings()
         val mode = videoWorkflowMode.toSdMasterVideoMode()
-        val (width, height) = parseSdDimensions(dimensions, 480, 832)
+        val width = parseSdDistributedDimension(videoWidth)
+        val height = parseSdDistributedDimension(videoHeight)
         val outputDir = File(context.filesDir, "video_gen_output").apply { mkdirs() }
         val modeDir = File(outputDir, mode.folderName).apply { mkdirs() }
         val baseName = "video_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
-        val samplerMethod = SamplingMethod.entries.firstOrNull { it.cliName == sampler || it.name == sampler } ?: SamplingMethod.EULER
+        val samplerMethod = SamplingMethod.entries.firstOrNull { it.cliName == videoSampler || it.name == videoSampler } ?: SamplingMethod.EULER
         val parsedCacheMode = SdCacheMode.fromStoredValue(cacheMode)
         val parsedScmPolicy = SdCacheScmPolicy.fromStoredValue(scmPolicy)
 
         launchError = when {
             videoModelPath.isBlank() -> context.getString(R.string.sd_dist_error_select_video_model)
-            prompt.isBlank() -> context.getString(R.string.sd_dist_error_prompt_required)
+            videoPrompt.isBlank() -> context.getString(R.string.sd_dist_error_prompt_required)
+            width == null -> context.getString(
+                R.string.video_gen_error_invalid_number,
+                context.getString(R.string.video_gen_width_label)
+            )
+            height == null -> context.getString(
+                R.string.video_gen_error_invalid_number,
+                context.getString(R.string.video_gen_height_label)
+            )
             mode == VideoGenerationMode.IMG2VID && videoInputPath.isBlank() -> context.getString(R.string.sd_dist_error_input_image_required)
             videoUseVae && videoVaePath.isBlank() -> context.getString(
                 R.string.imagegen_error_missing_required_components,
@@ -1016,11 +1144,12 @@ fun SdDistributedMasterScreen(navController: NavController) {
             else -> null
         }
         if (launchError != null) return
+        saveDraftSettings()
 
         val config = VideoGenerationConfig(
             mode = mode,
-            prompt = prompt,
-            negativePrompt = negativePrompt,
+            prompt = videoPrompt,
+            negativePrompt = videoNegativePrompt,
             diffusionModelPath = videoModelPath,
             outputAviPath = File(modeDir, "$baseName.avi").absolutePath,
             outputMp4Path = File(modeDir, "$baseName.mp4").absolutePath,
@@ -1032,12 +1161,13 @@ fun SdDistributedMasterScreen(navController: NavController) {
             t5xxlPath = if (videoUseT5xxl) videoT5xxlPath.ifBlank { null } else null,
             videoFrames = frames.toIntOrNull() ?: 8,
             fps = fps.toIntOrNull() ?: 5,
-            width = width,
-            height = height,
-            steps = steps.toIntOrNull() ?: 18,
-            cfgScale = cfg.toFloatOrNull() ?: 6.0f,
-            flowShift = flowShift.toFloatOrNull(),
+            width = requireNotNull(width),
+            height = requireNotNull(height),
+            steps = videoSteps.toIntOrNull() ?: 18,
+            cfgScale = videoCfg.toFloatOrNull() ?: 6.0f,
+            flowShift = videoFlowShift.toFloatOrNull(),
             samplingMethod = samplerMethod,
+            scheduler = SdScheduler.fromCliName(videoScheduler),
             cacheMode = parsedCacheMode,
             cacheOption = if (parsedCacheMode != null) cacheOption else "",
             scmMask = if (parsedCacheMode == SdCacheMode.CACHE_DIT) scmMask else "",
@@ -1244,10 +1374,13 @@ fun SdDistributedMasterScreen(navController: NavController) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
+                val rpcNameByWorkerId = planningWorkers
+                    .filterNot { it.isLocalMaster }
+                    .associate { it.id to it.rpcName }
                 workers.forEachIndexed { index, worker ->
                     WorkerRow(
                         worker = worker,
-                        rpcName = if (worker.isEnabled) "RPC${enabledWorkers.indexOfFirst { it.id == worker.id }.coerceAtLeast(0)}" else "-",
+                        rpcName = if (worker.isEnabled) rpcNameByWorkerId[worker.id] ?: "-" else "-",
                         onToggle = {
                             scope.launch(Dispatchers.IO) { dao.setWorkerEnabled(worker.id, !worker.isEnabled) }
                         },
@@ -1285,6 +1418,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
                 onCheckedChange = { enabled = it }
             )
             PlacementModeRow(placementMode) { placementMode = it }
+            WarningBand(text = stringResource(R.string.sd_dist_layer_split_max_vram_warning))
             if (placementMode == SdDistributedPlacementMode.AUTO_RAM) {
                 AutoRamScopePicker(autoRamScope) { autoRamScope = it }
                 RamPlanPreview(plan = autoRamPlan)
@@ -1293,17 +1427,27 @@ fun SdDistributedMasterScreen(navController: NavController) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            } else if (placementMode == SdDistributedPlacementMode.AUTO_FIT) {
-                ToggleRow(
-                    title = stringResource(R.string.sd_dist_auto_fit),
-                    subtitle = stringResource(R.string.sd_dist_auto_fit_desc),
-                    checked = autoFit,
-                    onCheckedChange = { autoFit = it }
+                Text(
+                    text = stringResource(R.string.sd_dist_first_rpc_overhead_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            } else {
+            } else if (placementMode == SdDistributedPlacementMode.AUTO_FIT) {
+                Text(
+                    text = stringResource(R.string.sd_dist_auto_fit_help),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (placementMode == SdDistributedPlacementMode.COMPONENTS) {
                 LabeledTextField(R.string.sd_dist_backend_spec, backendSpec, { backendSpec = it }, R.string.sd_dist_backend_spec_hint)
+                LabeledTextField(R.string.sd_dist_params_backend_spec, paramsBackend, { paramsBackend = it }, R.string.sd_dist_params_backend_hint)
+            } else {
+                Text(
+                    text = stringResource(R.string.sd_dist_manual_expert_flags_help),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
-            LabeledTextField(R.string.sd_dist_params_backend_spec, paramsBackend, { paramsBackend = it }, R.string.sd_dist_params_backend_hint)
         }
 
         launchError?.let {
@@ -1323,20 +1467,27 @@ fun SdDistributedMasterScreen(navController: NavController) {
             onUpscalerModelPathChange = { imageUpscalerModelPath = it },
             inputPath = imageInputPath,
             onInputPathChange = { imageInputPath = it },
-            prompt = prompt,
-            onPromptChange = { prompt = it },
-            negativePrompt = negativePrompt,
-            onNegativePromptChange = { negativePrompt = it },
-            dimensions = dimensions,
-            onDimensionsChange = { dimensions = it },
-            steps = steps,
-            onStepsChange = { steps = it },
-            cfg = cfg,
-            onCfgChange = { cfg = it },
-            seed = seed,
-            onSeedChange = { seed = it },
-            sampler = sampler,
-            onSamplerChange = { sampler = it },
+            onPickInputImage = { imageInputPicker.launch(arrayOf("image/*")) },
+            prompt = imagePrompt,
+            onPromptChange = { imagePrompt = it },
+            negativePrompt = imageNegativePrompt,
+            onNegativePromptChange = { imageNegativePrompt = it },
+            width = imageWidth,
+            onWidthChange = { imageWidth = it.filter(Char::isDigit).take(5) },
+            height = imageHeight,
+            onHeightChange = { imageHeight = it.filter(Char::isDigit).take(5) },
+            steps = imageSteps,
+            onStepsChange = { imageSteps = it },
+            cfg = imageCfg,
+            onCfgChange = { imageCfg = it },
+            seed = imageSeed,
+            onSeedChange = { imageSeed = it },
+            sampler = imageSampler,
+            onSamplerChange = { imageSampler = it },
+            scheduler = imageScheduler,
+            onSchedulerChange = { imageScheduler = it },
+            flowShift = imageFlowShift,
+            onFlowShiftChange = { imageFlowShift = it },
             strength = strength,
             onStrengthChange = { strength = it },
             components = imageComponentChoices,
@@ -1426,20 +1577,27 @@ fun SdDistributedMasterScreen(navController: NavController) {
             onT5xxlPathChange = { videoT5xxlPath = it },
             inputPath = videoInputPath,
             onInputPathChange = { videoInputPath = it },
-            prompt = prompt,
-            onPromptChange = { prompt = it },
-            negativePrompt = negativePrompt,
-            onNegativePromptChange = { negativePrompt = it },
-            dimensions = dimensions,
-            onDimensionsChange = { dimensions = it },
-            steps = steps,
-            onStepsChange = { steps = it },
-            cfg = cfg,
-            onCfgChange = { cfg = it },
-            seed = seed,
-            onSeedChange = { seed = it },
-            sampler = sampler,
-            onSamplerChange = { sampler = it },
+            onPickInputImage = { videoInputPicker.launch(arrayOf("image/*")) },
+            prompt = videoPrompt,
+            onPromptChange = { videoPrompt = it },
+            negativePrompt = videoNegativePrompt,
+            onNegativePromptChange = { videoNegativePrompt = it },
+            width = videoWidth,
+            onWidthChange = { videoWidth = it.filter(Char::isDigit).take(5) },
+            height = videoHeight,
+            onHeightChange = { videoHeight = it.filter(Char::isDigit).take(5) },
+            steps = videoSteps,
+            onStepsChange = { videoSteps = it },
+            cfg = videoCfg,
+            onCfgChange = { videoCfg = it },
+            seed = videoSeed,
+            onSeedChange = { videoSeed = it },
+            sampler = videoSampler,
+            onSamplerChange = { videoSampler = it },
+            scheduler = videoScheduler,
+            onSchedulerChange = { videoScheduler = it },
+            flowShift = videoFlowShift,
+            onFlowShiftChange = { videoFlowShift = it },
             frames = frames,
             onFramesChange = { frames = it },
             fps = fps,
@@ -1491,24 +1649,21 @@ fun SdDistributedMasterScreen(navController: NavController) {
             if (maxVramEnabled) {
                 LabeledTextField(R.string.sd_dist_max_vram, maxVram, { maxVram = it }, R.string.sd_dist_max_vram_hint)
             }
-            SplitModeRow(splitMode) { splitMode = it }
             TwoColumnFields(
                 first = { LabeledTextField(R.string.sd_dist_vae_tile_size, vaeTileSize, { vaeTileSize = it }, R.string.sd_dist_vae_tile_size_hint) },
                 second = { LabeledTextField(R.string.sd_dist_vae_tile_overlap, vaeTileOverlap, { vaeTileOverlap = it }, R.string.sd_dist_vae_tile_overlap_hint, KeyboardType.Number) }
             )
-            TwoColumnFields(
-                first = { LabeledTextField(R.string.sd_dist_flow_shift, flowShift, { flowShift = it }, R.string.sd_dist_flow_shift_hint, KeyboardType.Decimal) },
-                second = {
-                    SimpleStringPicker(
-                        label = stringResource(R.string.sd_dist_quantization),
-                        selected = quantization,
-                        options = sdQuantizationOptions(),
-                        offLabel = stringResource(R.string.sd_dist_picker_auto),
-                        onSelected = { quantization = it }
-                    )
-                }
+            SimpleStringPicker(
+                label = stringResource(R.string.sd_dist_quantization),
+                selected = quantization,
+                options = sdQuantizationOptions(),
+                offLabel = stringResource(R.string.sd_dist_picker_auto),
+                onSelected = { quantization = it }
             )
-            LabeledTextField(R.string.sd_dist_tensor_rules, tensorRules, { tensorRules = it }, R.string.sd_dist_tensor_rules_hint)
+            SdTensorTypeRulesPicker(
+                value = tensorRules,
+                onValueChange = { tensorRules = it }
+            )
         }
 
         CollapsibleFarmCard(
@@ -1690,7 +1845,9 @@ private data class SdGeneratedMediaItem(
     val mode: String,
     val prompt: String = "",
     val mimeType: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val imageMetadata: SdGeneratedImageMetadata? = null,
+    val videoMetadata: GeneratedVideoMetadata? = null
 )
 
 @Composable
@@ -1699,6 +1856,7 @@ private fun SdGeneratedMediaCard(
     onOpen: () -> Unit,
     onShare: () -> Unit
 ) {
+    val context = LocalContext.current
     val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, item.file.absolutePath, item.mimeType) {
         value = withContext(Dispatchers.IO) { loadSdGalleryThumbnail(item) }
     }
@@ -1756,7 +1914,11 @@ private fun SdGeneratedMediaCard(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = stringResource(R.string.sd_dist_gallery_item_meta, item.mode, formatSdGalleryDate(item.createdAt)),
+                text = stringResource(
+                    R.string.sd_dist_gallery_item_meta,
+                    sdGeneratedModeLabel(context, item),
+                    formatSdGalleryDate(item.createdAt)
+                ),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -1766,7 +1928,7 @@ private fun SdGeneratedMediaCard(
                 OutlinedButton(onClick = onOpen) {
                     Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text(stringResource(R.string.action_open), maxLines = 1)
+                    Text(stringResource(R.string.sd_dist_gallery_open_in_app), maxLines = 1)
                 }
                 OutlinedButton(onClick = onShare) {
                     Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1778,18 +1940,176 @@ private fun SdGeneratedMediaCard(
     }
 }
 
+@Composable
+private fun SdGeneratedMediaDetailDialog(
+    item: SdGeneratedMediaItem,
+    onDismiss: () -> Unit,
+    onOpenExternal: () -> Unit,
+    onShare: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(R.string.sd_dist_gallery_details_title),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                SdGeneratedMediaPreview(item)
+                SdGeneratedMediaDetails(item)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onOpenExternal) {
+                Text(stringResource(R.string.action_open))
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onShare) {
+                    Text(stringResource(R.string.action_share))
+                }
+                TextButton(onClick = onDismiss) {
+                    Text(stringResource(R.string.action_close))
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun SdGeneratedMediaPreview(item: SdGeneratedMediaItem) {
+    when (item.kind) {
+        SdGeneratedMediaKind.IMAGE -> {
+            val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, item.file.absolutePath) {
+                value = withContext(Dispatchers.IO) { decodeSdGalleryImage(item.file.absolutePath) }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 220.dp, max = 360.dp)
+                    .background(RenderFarmPalette.graphiteSoft, RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (bitmap != null) {
+                    ComposeImage(
+                        bitmap = bitmap!!.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Image,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+        SdGeneratedMediaKind.VIDEO -> {
+            AndroidView(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 220.dp, max = 360.dp)
+                    .background(RenderFarmPalette.graphiteSoft, RoundedCornerShape(8.dp)),
+                factory = { context ->
+                    VideoView(context).apply {
+                        tag = item.file.absolutePath
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
+                        setVideoURI(Uri.fromFile(item.file))
+                        setOnPreparedListener { player ->
+                            player.isLooping = true
+                            start()
+                        }
+                    }
+                },
+                update = { view ->
+                    if (view.tag != item.file.absolutePath) {
+                        view.tag = item.file.absolutePath
+                        view.setVideoURI(Uri.fromFile(item.file))
+                        view.setOnPreparedListener { player ->
+                            player.isLooping = true
+                            view.start()
+                        }
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun SdGeneratedMediaDetails(item: SdGeneratedMediaItem) {
+    val context = LocalContext.current
+    val lines by produceState(initialValue = emptyList<Pair<String, String>>(), item.file.absolutePath) {
+        value = withContext(Dispatchers.IO) { buildSdGeneratedMediaDetailLines(context, item) }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        lines.forEach { (label, value) ->
+            SdGeneratedMediaParameterLine(label = label, value = value)
+        }
+        if (item.imageMetadata == null && item.videoMetadata == null) {
+            Text(
+                text = stringResource(R.string.sd_dist_gallery_no_metadata),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun SdGeneratedMediaParameterLine(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.width(126.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            overflow = TextOverflow.Ellipsis,
+            maxLines = 4
+        )
+    }
+}
+
 private fun scanSdGeneratedMedia(context: Context): List<SdGeneratedMediaItem> {
     val imageRoot = File(context.filesDir, "sd_output")
     val imageItems = if (imageRoot.exists()) {
         imageRoot.walkTopDown()
             .filter { it.isFile && it.extension.lowercase(Locale.US) in setOf("png", "jpg", "jpeg") }
             .map { file ->
+                val metadata = SdGeneratedImageMetadata.fromFile(SdGeneratedImageMetadata.metadataFileForImage(file))
                 SdGeneratedMediaItem(
                     file = file,
                     kind = SdGeneratedMediaKind.IMAGE,
-                    mode = file.parentFile?.name?.takeIf { it != imageRoot.name } ?: context.getString(R.string.sd_dist_gallery_image),
+                    mode = metadata?.mode ?: file.parentFile?.name?.takeIf { it != imageRoot.name } ?: context.getString(R.string.sd_dist_gallery_image),
+                    prompt = metadata?.prompt.orEmpty(),
                     mimeType = "image/${if (file.extension.equals("png", ignoreCase = true)) "png" else "jpeg"}",
-                    createdAt = file.lastModified()
+                    createdAt = metadata?.createdAt?.takeIf { it > 0L } ?: file.lastModified(),
+                    imageMetadata = metadata
                 )
             }
             .toList()
@@ -1807,7 +2127,8 @@ private fun scanSdGeneratedMedia(context: Context): List<SdGeneratedMediaItem> {
                 mode = metadata.mode,
                 prompt = metadata.prompt,
                 mimeType = if (it.extension.equals("avi", ignoreCase = true)) "video/x-msvideo" else "video/mp4",
-                createdAt = metadata.createdAt.takeIf { createdAt -> createdAt > 0L } ?: it.lastModified()
+                createdAt = metadata.createdAt.takeIf { createdAt -> createdAt > 0L } ?: it.lastModified(),
+                videoMetadata = metadata
             )
         }
     }
@@ -1887,6 +2208,192 @@ private fun shareSdGeneratedMedia(context: Context, item: SdGeneratedMediaItem) 
 
 private fun formatSdGalleryDate(timestamp: Long): String =
     SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
+
+private fun buildSdGeneratedMediaDetailLines(
+    context: Context,
+    item: SdGeneratedMediaItem
+): List<Pair<String, String>> {
+    val lines = mutableListOf<Pair<String, String>>()
+    lines += context.getString(R.string.sd_dist_gallery_file_label) to item.file.name
+    lines += context.getString(R.string.sd_dist_gallery_mode_label) to sdGeneratedModeLabel(context, item)
+    lines += context.getString(R.string.sd_dist_gallery_created_label) to formatSdGalleryDate(item.createdAt)
+    readSdGeneratedMediaResolution(item)?.let { resolution ->
+        lines += context.getString(R.string.sd_dist_gallery_resolution_label) to resolution
+    }
+
+    item.imageMetadata?.let { metadata ->
+        metadata.generationDurationMs?.let {
+            lines += context.getString(R.string.sd_dist_gallery_total_time_label) to formatSdGenerationDuration(it)
+        }
+        addIfNotBlank(lines, context.getString(R.string.imagegen_prompt_label), metadata.prompt)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_negative_prompt_label), metadata.negativePrompt)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_sd_model), metadata.modelName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_vae), metadata.vaeName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_lora), metadata.loraName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_controlnet), metadata.controlNetName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_tae), metadata.taeName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_clip_l), metadata.clipLName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_clip_g), metadata.clipGName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_t5xxl), metadata.t5xxlName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_llm), metadata.llmName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_llm_vision), metadata.llmVisionName)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_component_photomaker), metadata.photoMakerName)
+        if (metadata.width > 0) lines += context.getString(R.string.imagegen_width_label) to metadata.width.toString()
+        if (metadata.height > 0) lines += context.getString(R.string.imagegen_height_label) to metadata.height.toString()
+        lines += context.getString(R.string.imagegen_steps_label) to metadata.steps.toString()
+        if (metadata.cfgScale > 0f) lines += context.getString(R.string.imagegen_cfg_label) to metadata.cfgScale.toString()
+        lines += context.getString(R.string.imagegen_seed_label) to metadata.seed.toString()
+        lines += context.getString(R.string.imagegen_sampler_label) to metadata.samplingMethod.cliName
+        metadata.scheduler?.let { lines += context.getString(R.string.imagegen_scheduler) to it.cliName }
+        metadata.flowShift?.let { lines += context.getString(R.string.video_gen_flow_shift_label) to it.toString() }
+        metadata.cacheMode?.let { lines += context.getString(R.string.gen_cache_mode_label) to it.cliName }
+        addIfNotBlank(lines, context.getString(R.string.gen_cache_option_label), metadata.cacheOption)
+        metadata.scmPolicy?.let { lines += context.getString(R.string.gen_cache_scm_policy_label) to it.cliName }
+        addIfNotBlank(lines, context.getString(R.string.gen_cache_scm_mask_label), metadata.scmMask)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_upscale_repeats), metadata.upscaleRepeats.takeIf { it > 0 }?.toString())
+        addIfNotBlank(lines, context.getString(R.string.video_gen_input_image_title), metadata.initImagePath?.let { File(it).name })
+        if (metadata.modeEnum == SDMode.IMG2IMG) {
+            lines += context.getString(R.string.imagegen_strength_label) to metadata.strength.toString()
+        }
+        if (metadata.loraStrength != 0f) {
+            lines += context.getString(R.string.imagegen_lora_strength_label) to metadata.loraStrength.toString()
+        }
+        if (metadata.controlStrength != 0f) {
+            lines += context.getString(R.string.imagegen_control_strength_label) to metadata.controlStrength.toString()
+        }
+        lines += context.getString(R.string.imagegen_threads) to metadata.threads.toString()
+        lines += context.getString(R.string.video_gen_vae_tiling_label) to enabledLabel(context, metadata.vaeTiling)
+        lines += context.getString(R.string.video_gen_diffusion_fa_label) to enabledLabel(context, metadata.diffusionFa)
+        lines += context.getString(R.string.video_gen_mmap_label) to enabledLabel(context, metadata.mmap)
+        addIfNotBlank(lines, context.getString(R.string.sd_models_params_backend_label), metadata.sdParamsBackendMode)
+        addIfNotBlank(lines, context.getString(R.string.sd_models_runtime_backend_label), metadata.sdRuntimeBackendMode)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_max_cpu_ram_label), metadata.maxVramCpuGiB)
+        addDistributedRuntimeLines(context, lines, metadata.distributedRuntime)
+        addIfNotBlank(lines, context.getString(R.string.sd_dist_custom_flags), metadata.customFlags)
+    }
+
+    item.videoMetadata?.let { metadata ->
+        metadata.generationDurationMs?.let {
+            lines += context.getString(R.string.sd_dist_gallery_total_time_label) to formatSdGenerationDuration(it)
+        }
+        addIfNotBlank(lines, context.getString(R.string.video_gen_prompt_label), metadata.prompt)
+        addIfNotBlank(lines, context.getString(R.string.video_gen_negative_prompt_label), metadata.negativePrompt)
+        addIfNotBlank(lines, context.getString(R.string.video_gen_model_label), metadata.diffusionModelName)
+        lines += context.getString(R.string.video_gen_frames_label) to metadata.videoFrames.toString()
+        lines += context.getString(R.string.video_gen_fps_label) to metadata.fps.toString()
+        lines += context.getString(R.string.video_gen_width_label) to metadata.width.toString()
+        lines += context.getString(R.string.video_gen_height_label) to metadata.height.toString()
+        lines += context.getString(R.string.video_gen_steps_label) to metadata.steps.toString()
+        lines += context.getString(R.string.video_gen_cfg_scale_label) to metadata.cfgScale.toString()
+        metadata.flowShift?.let { lines += context.getString(R.string.video_gen_flow_shift_label) to it.toString() }
+        lines += context.getString(R.string.video_gen_sampler_label) to metadata.samplingMethod.cliName
+        metadata.scheduler?.let { lines += context.getString(R.string.imagegen_scheduler) to it.cliName }
+        metadata.cacheMode?.let { lines += context.getString(R.string.gen_cache_mode_label) to it.cliName }
+        addIfNotBlank(lines, context.getString(R.string.gen_cache_option_label), metadata.cacheOption)
+        metadata.scmPolicy?.let { lines += context.getString(R.string.gen_cache_scm_policy_label) to it.cliName }
+        addIfNotBlank(lines, context.getString(R.string.gen_cache_scm_mask_label), metadata.scmMask)
+        lines += context.getString(R.string.video_gen_threads_label) to metadata.threads.toString()
+        lines += context.getString(R.string.video_gen_vae_toggle_label) to if (metadata.vaeEnabled) (metadata.vaeName ?: "-") else context.getString(R.string.video_gen_disabled)
+        lines += context.getString(R.string.video_gen_t5_toggle_label) to if (metadata.t5xxlEnabled) (metadata.t5xxlName ?: "-") else context.getString(R.string.video_gen_disabled)
+        lines += context.getString(R.string.video_gen_vae_tiling_label) to enabledLabel(context, metadata.vaeTiling)
+        addIfNotBlank(lines, context.getString(R.string.video_gen_vae_tile_size_label), metadata.vaeTileSize)
+        lines += context.getString(R.string.video_gen_diffusion_fa_label) to enabledLabel(context, metadata.diffusionFa)
+        lines += context.getString(R.string.video_gen_mmap_label) to enabledLabel(context, metadata.mmap)
+        addIfNotBlank(lines, context.getString(R.string.sd_models_params_backend_label), metadata.sdParamsBackendMode)
+        addIfNotBlank(lines, context.getString(R.string.sd_models_runtime_backend_label), metadata.sdRuntimeBackendMode)
+        addIfNotBlank(lines, context.getString(R.string.imagegen_max_cpu_ram_label), metadata.maxVramCpuGiB)
+        addIfNotBlank(lines, context.getString(R.string.video_gen_input_image_title), metadata.initImagePath?.let { File(it).name })
+        addDistributedRuntimeLines(context, lines, metadata.distributedRuntime)
+    }
+
+    return lines.distinctBy { it.first to it.second }
+}
+
+private fun addDistributedRuntimeLines(
+    context: Context,
+    lines: MutableList<Pair<String, String>>,
+    runtime: SdDistributedRuntimeConfig
+) {
+    if (!runtime.enabled) return
+    lines += context.getString(R.string.sd_dist_enabled) to context.getString(R.string.sd_dist_live)
+    addIfNotBlank(lines, context.getString(R.string.sd_dist_rpc_servers), runtime.rpcServers)
+    lines += context.getString(R.string.sd_dist_placement_mode) to runtime.placementMode.name
+    addIfNotBlank(lines, context.getString(R.string.sd_dist_backend_spec), runtime.backendSpec)
+    addIfNotBlank(lines, context.getString(R.string.sd_dist_params_backend_spec), runtime.paramsBackendSpec)
+    addIfNotBlank(lines, context.getString(R.string.sd_dist_max_vram), runtime.maxVramSpec)
+    addIfNotBlank(lines, context.getString(R.string.sd_dist_custom_flags), runtime.customFlags)
+}
+
+private fun addIfNotBlank(
+    lines: MutableList<Pair<String, String>>,
+    label: String,
+    value: String?
+) {
+    if (!value.isNullOrBlank()) {
+        lines += label to value
+    }
+}
+
+private fun readSdGeneratedMediaResolution(item: SdGeneratedMediaItem): String? {
+    item.imageMetadata?.takeIf { it.width > 0 && it.height > 0 }?.let {
+        return "${it.width} x ${it.height}"
+    }
+    item.videoMetadata?.let {
+        return "${it.width} x ${it.height}"
+    }
+    return when (item.kind) {
+        SdGeneratedMediaKind.IMAGE -> {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(item.file.absolutePath, bounds)
+            if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                "${bounds.outWidth} x ${bounds.outHeight}"
+            } else {
+                null
+            }
+        }
+        SdGeneratedMediaKind.VIDEO -> runCatching {
+            val retriever = MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(item.file.absolutePath)
+                val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+                if (width != null && height != null && width > 0 && height > 0) "$width x $height" else null
+            } finally {
+                retriever.release()
+            }
+        }.getOrNull()
+    }
+}
+
+private fun sdGeneratedModeLabel(context: Context, item: SdGeneratedMediaItem): String =
+    when {
+        item.kind == SdGeneratedMediaKind.VIDEO && item.mode == VideoGenerationMode.TXT2VID.folderName ->
+            context.getString(R.string.video_gen_mode_txt2vid)
+        item.kind == SdGeneratedMediaKind.VIDEO && item.mode == VideoGenerationMode.IMG2VID.folderName ->
+            context.getString(R.string.video_gen_mode_img2vid)
+        item.kind == SdGeneratedMediaKind.IMAGE && item.mode.equals(SDMode.TXT2IMG.name, ignoreCase = true) ->
+            context.getString(R.string.imagegen_mode_txt2img)
+        item.kind == SdGeneratedMediaKind.IMAGE && item.mode.equals(SDMode.IMG2IMG.name, ignoreCase = true) ->
+            context.getString(R.string.imagegen_mode_img2img)
+        item.kind == SdGeneratedMediaKind.IMAGE && item.mode.equals(SDMode.UPSCALE.name, ignoreCase = true) ->
+            context.getString(R.string.imagegen_upscale_title)
+        else -> item.mode
+    }
+
+private fun enabledLabel(context: Context, enabled: Boolean): String =
+    context.getString(if (enabled) R.string.video_gen_enabled else R.string.video_gen_disabled)
+
+private fun formatSdGenerationDuration(durationMs: Long): String {
+    val totalSeconds = (durationMs / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return when {
+        hours > 0L -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0L -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
+}
 
 @Composable
 private fun RenderFarmHeader(
@@ -2070,12 +2577,15 @@ private fun ImageRunCard(
     onUpscalerModelPathChange: (String) -> Unit,
     inputPath: String,
     onInputPathChange: (String) -> Unit,
+    onPickInputImage: () -> Unit,
     prompt: String,
     onPromptChange: (String) -> Unit,
     negativePrompt: String,
     onNegativePromptChange: (String) -> Unit,
-    dimensions: String,
-    onDimensionsChange: (String) -> Unit,
+    width: String,
+    onWidthChange: (String) -> Unit,
+    height: String,
+    onHeightChange: (String) -> Unit,
     steps: String,
     onStepsChange: (String) -> Unit,
     cfg: String,
@@ -2084,6 +2594,10 @@ private fun ImageRunCard(
     onSeedChange: (String) -> Unit,
     sampler: String,
     onSamplerChange: (String) -> Unit,
+    scheduler: String,
+    onSchedulerChange: (String) -> Unit,
+    flowShift: String,
+    onFlowShiftChange: (String) -> Unit,
     strength: String,
     onStrengthChange: (String) -> Unit,
     components: SdDistributedImageComponentChoices,
@@ -2142,19 +2656,35 @@ private fun ImageRunCard(
             )
         }
         if (mode != "TXT2IMG") {
-            LabeledTextField(R.string.sd_dist_input_image_path, inputPath, onInputPathChange, R.string.sd_dist_input_image_path_hint)
+            InputImagePathField(
+                inputPath = inputPath,
+                onInputPathChange = onInputPathChange,
+                onPickInputImage = onPickInputImage
+            )
         }
         LabeledTextField(R.string.sd_dist_prompt, prompt, onPromptChange, R.string.sd_dist_prompt_hint)
         LabeledTextField(R.string.sd_dist_negative_prompt, negativePrompt, onNegativePromptChange, R.string.sd_dist_negative_prompt_hint)
         TwoColumnFields(
-            first = { LabeledTextField(R.string.sd_dist_dimensions, dimensions, onDimensionsChange, R.string.sd_dist_dimensions_hint) },
-            second = { LabeledTextField(R.string.sd_dist_steps, steps, onStepsChange, R.string.sd_dist_steps_hint, KeyboardType.Number) }
+            first = { LabeledTextField(R.string.imagegen_width_label, width, onWidthChange, R.string.sd_dist_width_hint, KeyboardType.Number) },
+            second = { LabeledTextField(R.string.imagegen_height_label, height, onHeightChange, R.string.sd_dist_height_hint, KeyboardType.Number) }
         )
+        LabeledTextField(R.string.sd_dist_steps, steps, onStepsChange, R.string.sd_dist_steps_hint, KeyboardType.Number)
         TwoColumnFields(
             first = { LabeledTextField(R.string.sd_dist_cfg, cfg, onCfgChange, R.string.sd_dist_cfg_hint, KeyboardType.Decimal) },
             second = { LabeledTextField(R.string.sd_dist_seed, seed, onSeedChange, R.string.sd_dist_seed_hint, KeyboardType.Number) }
         )
         SamplingPicker(selected = sampler, onSelected = onSamplerChange)
+        SdSchedulerPicker(
+            value = SdScheduler.fromCliName(scheduler),
+            onValueChange = { onSchedulerChange(it?.cliName.orEmpty()) }
+        )
+        LabeledTextField(
+            R.string.sd_dist_flow_shift_optional,
+            flowShift,
+            onFlowShiftChange,
+            R.string.sd_dist_flow_shift_optional_hint,
+            KeyboardType.Decimal
+        )
         if (mode == "IMG2IMG") {
             LabeledTextField(R.string.sd_dist_strength, strength, onStrengthChange, R.string.sd_dist_strength_hint, KeyboardType.Decimal)
         }
@@ -2201,12 +2731,15 @@ private fun VideoRunCard(
     onT5xxlPathChange: (String) -> Unit,
     inputPath: String,
     onInputPathChange: (String) -> Unit,
+    onPickInputImage: () -> Unit,
     prompt: String,
     onPromptChange: (String) -> Unit,
     negativePrompt: String,
     onNegativePromptChange: (String) -> Unit,
-    dimensions: String,
-    onDimensionsChange: (String) -> Unit,
+    width: String,
+    onWidthChange: (String) -> Unit,
+    height: String,
+    onHeightChange: (String) -> Unit,
     steps: String,
     onStepsChange: (String) -> Unit,
     cfg: String,
@@ -2215,6 +2748,10 @@ private fun VideoRunCard(
     onSeedChange: (String) -> Unit,
     sampler: String,
     onSamplerChange: (String) -> Unit,
+    scheduler: String,
+    onSchedulerChange: (String) -> Unit,
+    flowShift: String,
+    onFlowShiftChange: (String) -> Unit,
     frames: String,
     onFramesChange: (String) -> Unit,
     fps: String,
@@ -2271,14 +2808,19 @@ private fun VideoRunCard(
             emptyMessage = stringResource(R.string.imagegen_no_t5xxl)
         )
         if (mode == "IMG2VID") {
-            LabeledTextField(R.string.sd_dist_input_image_path, inputPath, onInputPathChange, R.string.sd_dist_input_image_path_hint)
+            InputImagePathField(
+                inputPath = inputPath,
+                onInputPathChange = onInputPathChange,
+                onPickInputImage = onPickInputImage
+            )
         }
         LabeledTextField(R.string.sd_dist_prompt, prompt, onPromptChange, R.string.sd_dist_prompt_hint)
         LabeledTextField(R.string.sd_dist_negative_prompt, negativePrompt, onNegativePromptChange, R.string.sd_dist_negative_prompt_hint)
         TwoColumnFields(
-            first = { LabeledTextField(R.string.sd_dist_dimensions, dimensions, onDimensionsChange, R.string.sd_dist_dimensions_hint) },
-            second = { LabeledTextField(R.string.sd_dist_steps, steps, onStepsChange, R.string.sd_dist_steps_hint, KeyboardType.Number) }
+            first = { LabeledTextField(R.string.video_gen_width_label, width, onWidthChange, R.string.sd_dist_video_width_hint, KeyboardType.Number) },
+            second = { LabeledTextField(R.string.video_gen_height_label, height, onHeightChange, R.string.sd_dist_video_height_hint, KeyboardType.Number) }
         )
+        LabeledTextField(R.string.sd_dist_steps, steps, onStepsChange, R.string.sd_dist_video_steps_hint, KeyboardType.Number)
         TwoColumnFields(
             first = { LabeledTextField(R.string.sd_dist_cfg, cfg, onCfgChange, R.string.sd_dist_cfg_hint, KeyboardType.Decimal) },
             second = { LabeledTextField(R.string.sd_dist_seed, seed, onSeedChange, R.string.sd_dist_seed_hint, KeyboardType.Number) }
@@ -2288,6 +2830,17 @@ private fun VideoRunCard(
             second = { LabeledTextField(R.string.sd_dist_fps, fps, onFpsChange, R.string.sd_dist_fps_hint, KeyboardType.Number) }
         )
         SamplingPicker(selected = sampler, onSelected = onSamplerChange)
+        SdSchedulerPicker(
+            value = SdScheduler.fromCliName(scheduler),
+            onValueChange = { onSchedulerChange(it?.cliName.orEmpty()) }
+        )
+        LabeledTextField(
+            R.string.sd_dist_flow_shift_optional,
+            flowShift,
+            onFlowShiftChange,
+            R.string.sd_dist_flow_shift_optional_hint,
+            KeyboardType.Decimal
+        )
         LabeledTextField(
             R.string.sd_manual_flags_label,
             customFlags,
@@ -2325,6 +2878,36 @@ private fun RunButtons(isRunning: Boolean, onStart: () -> Unit, onCancel: () -> 
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(R.string.sd_dist_start_work), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+        }
+    }
+}
+
+@Composable
+private fun InputImagePathField(
+    inputPath: String,
+    onInputPathChange: (String) -> Unit,
+    onPickInputImage: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LabeledTextField(
+            R.string.sd_dist_input_image_path,
+            inputPath,
+            onInputPathChange,
+            R.string.sd_dist_input_image_path_hint
+        )
+        OutlinedButton(
+            onClick = onPickInputImage,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Image, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = stringResource(
+                    if (inputPath.isBlank()) R.string.sd_dist_choose_input_image else R.string.sd_dist_change_input_image
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -2878,6 +3461,9 @@ private fun TemplateManagerCard(
 @Composable
 private fun RamPlanPreview(plan: SdDistributedPlacementPlan) {
     Text(stringResource(R.string.sd_dist_auto_ram_plan), style = MaterialTheme.typography.labelLarge, color = RenderFarmPalette.violet)
+    Text(stringResource(R.string.sd_dist_auto_ram_budget_preview), style = MaterialTheme.typography.labelMedium)
+    CodeBlock(text = plan.maxVramSpec.ifBlank { "-" })
+    Text(stringResource(R.string.sd_dist_current_plan), style = MaterialTheme.typography.labelMedium)
     CodeBlock(text = plan.backendSpec.ifBlank { "-" })
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         plan.assignments.forEach { assignment ->
@@ -3266,20 +3852,6 @@ private fun PlacementModeRow(value: SdDistributedPlacementMode, onChange: (SdDis
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SplitModeRow(value: SdDistributedSplitMode, onChange: (SdDistributedSplitMode) -> Unit) {
-    Text(stringResource(R.string.sd_dist_split_mode), style = MaterialTheme.typography.labelLarge)
-    SimpleStringPicker(
-        label = stringResource(R.string.sd_dist_split_mode),
-        selected = value.cliName,
-        options = SdDistributedSplitMode.entries.map { it.cliName },
-        offLabel = SdDistributedSplitMode.LAYER.cliName,
-        onSelected = { onChange(SdDistributedSplitMode.fromCliName(it)) }
-    )
-    Text(stringResource(R.string.sd_dist_row_split_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
 private fun modulesForWorker(
     worker: SdDistributedWorkerEntity,
     runtimeConfig: SdDistributedRuntimeConfig
@@ -3355,15 +3927,8 @@ private fun String.toSdMasterVideoMode(): VideoGenerationMode = when (uppercase(
     else -> VideoGenerationMode.TXT2VID
 }
 
-private fun parseSdDimensions(value: String, defaultWidth: Int, defaultHeight: Int): Pair<Int, Int> {
-    val parts = value
-        .lowercase(Locale.US)
-        .replace(" ", "")
-        .split("x")
-    val width = parts.getOrNull(0)?.toIntOrNull() ?: defaultWidth
-    val height = parts.getOrNull(1)?.toIntOrNull() ?: defaultHeight
-    return width.coerceAtLeast(64) to height.coerceAtLeast(64)
-}
+private fun parseSdDistributedDimension(value: String): Int? =
+    value.toIntOrNull()?.takeIf { it >= 64 }
 
 @Composable
 private fun placementModeDescription(mode: SdDistributedPlacementMode): String = when (mode) {
