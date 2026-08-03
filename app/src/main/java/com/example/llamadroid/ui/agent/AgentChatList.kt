@@ -921,7 +921,7 @@ fun ChatMessageBubble(
 
                     // Tool Call block
                     message.toolName?.let { tool ->
-                        val isExpanded = message.isOutputExpanded || (message.isPlan && message.isPlanApproved != true)
+                        val isExpanded = message.isOutputExpanded || (message.isPlan && message.isPlanApproved == null)
                         Surface(
                             color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
                             shape = RoundedCornerShape(12.dp),
@@ -1027,62 +1027,6 @@ fun ChatMessageBubble(
                                             }
                                         }
 
-                                        // Action Row for Plans (at bottom)
-                                        if (
-                                            message.isPlan &&
-                                            message.isPlanApproved != true &&
-                                            message.planModifiedContent == null &&
-                                            !isEditing
-                                        ) {
-                                            Spacer(modifier = Modifier.height(16.dp))
-                                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-                                            Spacer(modifier = Modifier.height(16.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                            ) {
-                                                Button(
-                                                    onClick = onEdit,
-                                                    enabled = !isPlanResolving,
-                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                                    modifier = Modifier.weight(1f).height(40.dp),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text(stringResource(R.string.agent_modify_plan), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                                }
-                                                Button(
-                                                    onClick = onApprove,
-                                                    enabled = !isPlanResolving,
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                                                    modifier = Modifier.weight(1f).height(40.dp),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                                                ) {
-                                                    if (isPlanResolving) {
-                                                        CircularProgressIndicator(
-                                                            modifier = Modifier.size(16.dp),
-                                                            strokeWidth = 2.dp,
-                                                            color = Color.White
-                                                        )
-                                                    } else {
-                                                        Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = Color.White)
-                                                    }
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text(
-                                                        stringResource(
-                                                            if (isPlanResolving) R.string.agent_plan_saving
-                                                            else R.string.action_approve
-                                                        ),
-                                                        fontSize = 13.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = Color.White
-                                                    )
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             }
@@ -1122,6 +1066,22 @@ fun ChatMessageBubble(
             }
         }
         
+        if (
+            message.isPlan &&
+            message.isPlanApproved == null &&
+            !isEditing
+        ) {
+            AgentPlanDecisionButtons(
+                onDeny = onDeny,
+                onModify = onEdit,
+                onApprove = onApprove,
+                isResolving = isPlanResolving,
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .padding(top = 8.dp)
+            )
+        }
+
         if (!message.isStreaming) {
             val roleLabel = when {
                 isUser -> stringResource(R.string.agent_user_label)
@@ -1212,6 +1172,106 @@ fun ChatMessageBubble(
                         Text(stringResource(R.string.action_close))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentPlanDecisionButtons(
+    onDeny: () -> Unit,
+    onModify: () -> Unit,
+    onApprove: () -> Unit,
+    isResolving: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Button(
+            onClick = onDeny,
+            enabled = !isResolving,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.action_deny),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onModify,
+                enabled = !isResolving,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    stringResource(R.string.agent_modify_plan),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+
+            Button(
+                onClick = onApprove,
+                enabled = !isResolving,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF4CAF50)
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (isResolving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Check,
+                        null,
+                        modifier = Modifier.size(18.dp),
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    stringResource(
+                        if (isResolving) R.string.agent_plan_saving
+                        else R.string.action_approve
+                    ),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1
+                )
             }
         }
     }

@@ -2630,7 +2630,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
         /** Room is authoritative; the message scan keeps pre-104 histories recoverable. */
         fun hasPendingPlanApproval(): Boolean = _pendingPlanApprovalId.value != null || _messages.value.any {
-            it.isPlan && it.isPlanApproved != true
+            it.isPlan && it.isPlanApproved == null
         }
 
         private fun buildAgentNotificationDetails(appContext: Context, status: String): List<String> {
@@ -2809,6 +2809,34 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             if (loadingRefCount.get() == 0) {
                 val appContext = com.example.llamadroid.LlamaApplication.instance
                 _statusText.value = idleStatusText(appContext)
+            }
+        }
+
+        private fun publishLivePromptUsage(
+            promptTokens: Int,
+            contextSize: Int,
+            agentRole: AgentRole
+        ) {
+            if (promptTokens <= 0 || contextSize <= 0) return
+            val actualPercentUsed = (
+                promptTokens * 100L / contextSize
+            ).toInt().coerceIn(0, 100)
+
+            _promptContextSnapshot.update { current ->
+                current?.copy(
+                    actualPromptTokens = promptTokens,
+                    actualTotalTokens = promptTokens,
+                    actualPercentUsed = actualPercentUsed
+                )
+            }
+            if (agentRole == AgentRole.ORCHESTRATOR) {
+                _lastOrchestratorPromptSnapshot.update { current ->
+                    (current ?: _promptContextSnapshot.value)?.copy(
+                        actualPromptTokens = promptTokens,
+                        actualTotalTokens = promptTokens,
+                        actualPercentUsed = actualPercentUsed
+                    )
+                }
             }
         }
 
@@ -3992,12 +4020,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 role = "assistant",
                                 content = "### Propose Plan: ${plan.summary}\n\n${plan.originalPlan}",
                                 isPlan = true,
-                                isPlanApproved = false,
+                                isPlanApproved = null,
                                 planModifiedContent = plan.editedPlan,
                                 toolCallId = plan.toolCallId,
                                 toolName = "propose_plan"
                             )
                         )
+                    } else {
+                        updateMessage(plan.planMessageId) {
+                            it.copy(
+                                isPlanApproved = null,
+                                planModifiedContent = plan.editedPlan
+                            )
+                        }
                     }
                 }
                 if (
@@ -5398,7 +5433,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 }
                 recordMessageJournalEvent(stampedMessage)
                 _messages.update { current -> current + stampedMessage }
-                checkpointRuntimeState(reason = "Agent message added", force = stampedMessage.needsApproval || (stampedMessage.isPlan && stampedMessage.isPlanApproved != true))
+                checkpointRuntimeState(reason = "Agent message added", force = stampedMessage.needsApproval || (stampedMessage.isPlan && stampedMessage.isPlanApproved == null))
                 // AUTOMATICALLY add to current session history if one is active
                 getCurrentSession()?.addMessage(stampedMessage)
                 if (stampedMessage.role == "user" && !isTransientCompactionStatusMessage(stampedMessage)) {
@@ -5681,12 +5716,29 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             return workflowTransitionMutex.withLock {
                 val database = AppDatabase.getDatabase(context.applicationContext)
                 val workflowDao = database.agentWorkflowDao()
+                val existingDurablePlan = workflowDao.getPendingPlanByMessageId(id)
                 val pendingMessage = _messages.value.firstOrNull {
                     it.id == id && it.isPlan
+                } ?: existingDurablePlan?.let { plan ->
+                    ChatMessage(
+                        id = plan.planMessageId,
+                        role = "assistant",
+                        content = "### Propose Plan: ${plan.summary}\n\n${plan.originalPlan}",
+                        isPlan = true,
+                        isPlanApproved = null,
+                        planModifiedContent = plan.editedPlan,
+                        toolCallId = plan.toolCallId,
+                        toolName = "propose_plan"
+                    )
                 } ?: run {
-                    return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_missing))
+                    return@withLock PlanApprovalResult(
+                        false,
+                        context.getString(R.string.agent_plan_resolution_missing)
+                    )
                 }
-                val existingDurablePlan = workflowDao.getPendingPlanByMessageId(id)
+                if (_messages.value.none { it.id == pendingMessage.id }) {
+                    addMessage(pendingMessage)
+                }
                 if (existingDurablePlan == null && pendingMessage.isPlanApproved == true) {
                     _pendingPlanApprovalId.value = null
                     return@withLock PlanApprovalResult(
@@ -5867,6 +5919,115 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         error.message ?: context.getString(R.string.agent_plan_resolution_failed)
                     )
                 }
+            }
+        }
+
+        suspend fun rejectPendingPlan(
+            context: Context,
+            agentService: AgentService,
+            id: String
+        ): PlanApprovalResult {
+            return workflowTransitionMutex.withLock {
+                val database = AppDatabase.getDatabase(context.applicationContext)
+                val workflowDao = database.agentWorkflowDao()
+                val durablePlan = workflowDao.getPendingPlanByMessageId(id)
+                val pendingMessage = _messages.value.firstOrNull {
+                    it.id == id && it.isPlan
+                } ?: durablePlan?.let { plan ->
+                    ChatMessage(
+                        id = plan.planMessageId,
+                        role = "assistant",
+                        content = "### Propose Plan: ${plan.summary}\n\n${plan.originalPlan}",
+                        isPlan = true,
+                        isPlanApproved = null,
+                        planModifiedContent = plan.editedPlan,
+                        toolCallId = plan.toolCallId,
+                        toolName = "propose_plan"
+                    )
+                }
+
+                if (durablePlan?.state == "BUILDING" || durablePlan?.continuationEnqueued == true) {
+                    return@withLock PlanApprovalResult(
+                        false,
+                        context.getString(R.string.agent_plan_resolution_in_progress)
+                    )
+                }
+
+                val conversationId = durablePlan?.conversationId
+                    ?: _activeConversationId.value
+                    ?: _preferredConversationId.value
+                    ?: return@withLock PlanApprovalResult(
+                        false,
+                        context.getString(R.string.agent_plan_resolution_missing)
+                    )
+
+                if (pendingMessage != null && _messages.value.none { it.id == pendingMessage.id }) {
+                    addMessage(pendingMessage)
+                }
+
+                workflowDao.terminatePendingPlans(
+                    conversationId = conversationId,
+                    state = "REJECTED"
+                )
+
+                updateMessage(id) {
+                    it.copy(
+                        isPlanApproved = false,
+                        isStreaming = false
+                    )
+                }
+
+                val toolCallId = durablePlan?.toolCallId ?: pendingMessage?.toolCallId
+                if (!toolCallId.isNullOrBlank()) {
+                    _messages.update { current ->
+                        current.filterNot {
+                            it.role == "tool" &&
+                                it.toolName == "propose_plan" &&
+                                it.toolCallId == toolCallId
+                        }
+                    }
+                    getCurrentSession()?.let { session ->
+                        synchronized(session.messages) {
+                            session.messages.removeAll {
+                                it.role == "tool" &&
+                                    it.toolName == "propose_plan" &&
+                                    it.toolCallId == toolCallId
+                            }
+                        }
+                    }
+                    addMessage(
+                        ChatMessage(
+                            role = "tool",
+                            toolName = "propose_plan",
+                            toolCallId = toolCallId,
+                            content = buildToolResultEnvelope(
+                                toolName = "propose_plan",
+                                status = "error",
+                                summary = "The user rejected this implementation plan.",
+                                nextHint = "Do not implement the rejected plan. Remain in Plan mode and wait for the user's next instruction or revision feedback."
+                            )
+                        )
+                    )
+                }
+
+                _pendingPlanApprovalId.value = null
+                _currentPlanningModeEnabled.value = true
+                database.agentChatDao().updatePlanningMode(conversationId, true)
+                updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
+                allowAutomaticContinuations()
+                UnifiedNotificationManager.dismissAgentAttention()
+                addDebugLog(context.getString(R.string.agent_plan_rejected))
+                recordAgentEvent(
+                    kind = "plan_rejected",
+                    summary = "Implementation plan rejected",
+                    details = "message=${id.take(12)} toolCall=${toolCallId?.take(12).orEmpty()}"
+                )
+                agentService.persistVisibleRuntimeStateNow("Plan rejected by user.")
+                refreshIdleStatusIfNeeded()
+                PlanApprovalResult(
+                    true,
+                    context.getString(R.string.agent_plan_rejected)
+                )
             }
         }
 
@@ -7284,6 +7445,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                         llamaPromptProcessed = snapshot.promptProcessed
                                         llamaPromptTotal = snapshot.promptTotal
                                         llamaPromptCached = snapshot.promptCached
+                                        publishLivePromptUsage(
+                                            promptTokens = llamaPromptTotal,
+                                            contextSize = contextSize,
+                                            agentRole = activeAgentRole
+                                        )
                                         publishLlamaServerStatus()
                                         publishStreamingUi()
                                     }
@@ -8468,7 +8634,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                         append(plan)
                                     },
                                     isPlan = true,
-                                    isPlanApproved = false,
+                                    isPlanApproved = null,
                                     toolCallId = planToolCallId,
                                     toolName = "propose_plan",
                                     agentRole = assistantAgentRole,

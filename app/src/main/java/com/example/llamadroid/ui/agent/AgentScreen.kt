@@ -266,7 +266,7 @@ fun AgentScreen(navController: NavController) {
     var moveTargetFolderId by remember { mutableStateOf<Long?>(null) }
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var editingText by remember { mutableStateOf("") }
-    var resolvingPlanMessageId by rememberSaveable { mutableStateOf<String?>(null) }
+    var resolvingPlanMessageId by remember { mutableStateOf<String?>(null) }
     var pendingDenyMessage by remember { mutableStateOf<AgentService.Companion.ChatMessage?>(null) }
     var pendingActiveUserMessage by remember { mutableStateOf<AgentService.Companion.ChatMessage?>(null) }
     var denyExplanation by remember { mutableStateOf("") }
@@ -837,11 +837,36 @@ fun AgentScreen(navController: NavController) {
                     }
                 }
             } else {
-                AgentService.updateMessage(msg.id) { it.copy(isPlanApproved = false) }
-                AgentService.addDebugLog(context.getString(R.string.agent_plan_rejected))
-                com.example.llamadroid.service.UnifiedNotificationManager.dismissAgentAttention()
+                if (resolvingPlanMessageId != null) return
+                resolvingPlanMessageId = msg.id
                 scope.launch {
-                    agentService.persistVisibleRuntimeStateNow("Plan rejected by user.")
+                    try {
+                        val result = AgentService.rejectPendingPlan(
+                            context = context,
+                            agentService = agentService,
+                            id = msg.id
+                        )
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        if (result.approved && denyReason.isNotBlank()) {
+                            AgentService.addMessage(
+                                AgentService.Companion.ChatMessage(
+                                    role = "user",
+                                    content = buildString {
+                                        appendLine("The proposed plan was rejected.")
+                                        appendLine("Revise it according to these requested changes:")
+                                        appendLine()
+                                        append(denyReason.trim())
+                                    }
+                                )
+                            )
+                            agentService.persistVisibleRuntimeStateNow(
+                                "Plan rejected with user revision feedback."
+                            )
+                            triggerAgent()
+                        }
+                    } finally {
+                        resolvingPlanMessageId = null
+                    }
                 }
             }
         } else if (approved) {
@@ -1034,8 +1059,16 @@ fun AgentScreen(navController: NavController) {
     }
 
     fun editMessage(id: String, content: String) {
+        val sourceMessage = messages.firstOrNull { it.id == id }
+            ?: selectedConversationMessages.firstOrNull { it.id == id }
         editingMessageId = id
-        editingText = content
+        editingText = if (sourceMessage?.isPlan == true) {
+            sourceMessage.planModifiedContent
+                ?.takeIf { it.isNotBlank() }
+                ?: sourceMessage.content.substringAfter("\n\n", sourceMessage.content)
+        } else {
+            content
+        }
     }
 
     fun saveEdit() {
@@ -1067,6 +1100,8 @@ fun AgentScreen(navController: NavController) {
             messages
         }
         val message = activeMessages.find { it.id == id }
+            ?: messages.find { it.id == id }
+            ?: selectedConversationMessages.find { it.id == id }
         
         if (message?.isPlan == true) {
             val modifiedPlan = editingText
@@ -2322,9 +2357,8 @@ fun AgentScreen(navController: NavController) {
     if (pendingDenyMessage != null) {
         AlertDialog(
             onDismissRequest = {
-                // Quick deny without explanation
-                handleApproval(false, pendingDenyMessage!!)
                 pendingDenyMessage = null
+                denyExplanation = ""
             },
             title = { Text(stringResource(R.string.agent_deny_reason_title)) },
             text = {
