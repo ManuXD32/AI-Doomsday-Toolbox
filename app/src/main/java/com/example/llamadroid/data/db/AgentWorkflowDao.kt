@@ -329,6 +329,323 @@ interface AgentWorkflowDao {
     @Update
     suspend fun updateTodo(todo: AgentTodoEntity)
 
+    @Query("SELECT * FROM agent_todos WHERE id = :id LIMIT 1")
+    suspend fun getTodoById(id: String): AgentTodoEntity?
+
+    @Query(
+        """
+        SELECT * FROM agent_todos
+        WHERE conversationId = :conversationId
+          AND planVersionId = :planVersionId
+        ORDER BY position ASC
+        """
+    )
+    suspend fun getTodosForPlanVersion(
+        conversationId: Long,
+        planVersionId: String
+    ): List<AgentTodoEntity>
+
+    @Query(
+        """
+        UPDATE agent_todos
+        SET status = :newStatus,
+            ownerRole = :ownerRole,
+            assignedInvocationId = :assignedInvocationId,
+            resultSummary = :resultSummary,
+            blockReason = :blockReason,
+            evidenceJson = :evidenceJson,
+            completedAt = :completedAt,
+            updatedAt = :updatedAt
+        WHERE id = :id AND status = :expectedStatus
+        """
+    )
+    suspend fun transitionTodoExactlyOnce(
+        id: String,
+        expectedStatus: String,
+        newStatus: String,
+        ownerRole: String?,
+        assignedInvocationId: String?,
+        resultSummary: String?,
+        blockReason: String?,
+        evidenceJson: String,
+        completedAt: Long?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_todos
+        SET status = 'IN_PROGRESS',
+            ownerRole = :ownerRole,
+            assignedInvocationId = :invocationId,
+            attemptCount = attemptCount + 1,
+            blockReason = NULL,
+            updatedAt = :updatedAt
+        WHERE id = :id
+          AND status = :expectedStatus
+          AND assignedInvocationId IS NULL
+        """
+    )
+    suspend fun claimTodoExactlyOnce(
+        id: String,
+        expectedStatus: String,
+        invocationId: String,
+        ownerRole: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_todos
+        SET status = :newStatus,
+            ownerRole = :ownerRole,
+            assignedInvocationId = NULL,
+            resultSummary = :resultSummary,
+            blockReason = :blockReason,
+            evidenceJson = :evidenceJson,
+            completedAt = :completedAt,
+            updatedAt = :updatedAt
+        WHERE id = :id
+          AND status = :expectedStatus
+          AND assignedInvocationId = :invocationId
+        """
+    )
+    suspend fun completeTodoInvocationExactlyOnce(
+        id: String,
+        invocationId: String,
+        expectedStatus: String,
+        newStatus: String,
+        ownerRole: String?,
+        resultSummary: String?,
+        blockReason: String?,
+        evidenceJson: String,
+        completedAt: Long?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_todos
+        SET status = :newStatus, updatedAt = :updatedAt
+        WHERE id = :id AND status = :expectedStatus
+        """
+    )
+    suspend fun markTodoReadyExactlyOnce(
+        id: String,
+        expectedStatus: String,
+        newStatus: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertProjectStateIfMissing(
+        state: AgentProjectStateEntity
+    ): Long
+
+    @Query(
+        "SELECT * FROM agent_project_states " +
+            "WHERE conversationId = :conversationId LIMIT 1"
+    )
+    suspend fun getProjectState(
+        conversationId: Long
+    ): AgentProjectStateEntity?
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET mode = COALESCE(:mode, mode),
+            currentGoal = COALESCE(:currentGoal, currentGoal),
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun updateProjectStateBasics(
+        conversationId: Long,
+        mode: String?,
+        currentGoal: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET revision = revision + 1,
+            semanticEventCount = semanticEventCount + 1,
+            lastSemanticEvent = :semanticEvent,
+            currentGoal = COALESCE(:currentGoal, currentGoal),
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun bumpProjectStateRevision(
+        conversationId: Long,
+        semanticEvent: String,
+        currentGoal: String? = null,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET revision = revision + 1,
+            semanticEventCount = semanticEventCount + 1,
+            lastSemanticEvent = 'plan_approved',
+            mode = 'BUILD',
+            currentGoal = :currentGoal,
+            activePlanVersionId = :planVersionId,
+            currentPhaseId = :currentPhaseId,
+            currentTodoId = :currentTodoId,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun activateApprovedPlanState(
+        conversationId: Long,
+        planVersionId: String,
+        currentPhaseId: String?,
+        currentTodoId: String?,
+        currentGoal: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET currentPhaseId = :phaseId,
+            currentTodoId = :todoId,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun setProjectCurrentTodo(
+        conversationId: Long,
+        phaseId: String?,
+        todoId: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET lastCompactedRevision = revision,
+            lastCompactionSemanticEventCount = semanticEventCount,
+            lastCompactionKey = :compactionKey,
+            lastCompactionStatus = 'RUNNING',
+            lastCompactionPreTokens = :preTokens,
+            lastCompactionPostTokens = NULL,
+            lastCompactionSavedTokens = NULL,
+            lastCompactionSaturationReason = NULL,
+            lastCompactionAt = :updatedAt,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun recordProjectCompactionStarted(
+        conversationId: Long,
+        compactionKey: String,
+        preTokens: Int,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET lastCompactionStatus = :status,
+            lastCompactionPostTokens = :postTokens,
+            lastCompactionSavedTokens = :savedTokens,
+            lastCompactionSaturationReason = :saturationReason,
+            lastCompactionAt = :updatedAt,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun recordProjectCompactionCompleted(
+        conversationId: Long,
+        status: String,
+        postTokens: Int,
+        savedTokens: Int,
+        saturationReason: String?,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_project_states
+        SET lastCompactionStatus = 'FAILED',
+            lastCompactionSaturationReason = :reason,
+            lastCompactionAt = :updatedAt,
+            updatedAt = :updatedAt
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun recordProjectCompactionFailed(
+        conversationId: Long,
+        reason: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPlanVersion(plan: AgentPlanVersionEntity)
+
+    @Query(
+        """
+        SELECT * FROM agent_plan_versions
+        WHERE conversationId = :conversationId AND planHash = :planHash
+        LIMIT 1
+        """
+    )
+    suspend fun getPlanVersionByHash(
+        conversationId: Long,
+        planHash: String
+    ): AgentPlanVersionEntity?
+
+    @Query(
+        "SELECT * FROM agent_plan_versions WHERE id = :id LIMIT 1"
+    )
+    suspend fun getPlanVersionById(id: String): AgentPlanVersionEntity?
+
+    @Query(
+        """
+        SELECT * FROM agent_plan_versions
+        WHERE conversationId = :conversationId AND status = 'APPROVED'
+        ORDER BY versionNumber DESC
+        LIMIT 1
+        """
+    )
+    suspend fun getLatestApprovedPlan(
+        conversationId: Long
+    ): AgentPlanVersionEntity?
+
+    @Query(
+        """
+        SELECT COALESCE(MAX(versionNumber), 0) + 1
+        FROM agent_plan_versions
+        WHERE conversationId = :conversationId
+        """
+    )
+    suspend fun getNextPlanVersionNumber(conversationId: Long): Int
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertWorkReport(report: AgentWorkReportEntity)
+
+    @Query(
+        "SELECT * FROM agent_work_reports WHERE id = :id LIMIT 1"
+    )
+    suspend fun getWorkReport(id: String): AgentWorkReportEntity?
+
+    @Query(
+        """
+        SELECT * FROM agent_work_reports
+        WHERE conversationId = :conversationId
+        ORDER BY createdAt DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getRecentWorkReports(
+        conversationId: Long,
+        limit: Int
+    ): List<AgentWorkReportEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCompaction(compaction: AgentCompactionEntity)
 
@@ -396,6 +713,20 @@ interface AgentWorkflowDao {
     suspend fun attachInvocationSession(
         id: String,
         sessionId: String,
+        updatedAt: Long = System.currentTimeMillis()
+    ): Int
+
+    @Query(
+        """
+        UPDATE agent_invocations
+        SET workReportId = :workReportId,
+            updatedAt = :updatedAt
+        WHERE id = :id
+        """
+    )
+    suspend fun attachInvocationWorkReport(
+        id: String,
+        workReportId: String,
         updatedAt: Long = System.currentTimeMillis()
     ): Int
 

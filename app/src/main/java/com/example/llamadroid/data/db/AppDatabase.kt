@@ -103,6 +103,9 @@ class Converters {
         AgentPendingPlanEntity::class,
         AgentTodoEntity::class,
         AgentCompactionEntity::class,
+        AgentProjectStateEntity::class,
+        AgentPlanVersionEntity::class,
+        AgentWorkReportEntity::class,
         AgentInvocationEntity::class,
         AgentPendingInputEntity::class,
         // Custom tools/agents
@@ -152,7 +155,7 @@ class Converters {
         SystemStatsSampleEntity::class,
         SystemStatsEventEntity::class
     ], 
-    version = 106,
+    version = 107,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

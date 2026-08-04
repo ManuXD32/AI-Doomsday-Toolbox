@@ -2979,6 +2979,299 @@ object Migrations {
         }
     }
 
+    /**
+     * Canonical project control state, structured plans, durable work reports,
+     * and transactional TODO ownership.
+     */
+    val MIGRATION_106_107 = object : Migration(106, 107) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log(
+                "[DB] Running migration 106 -> 107: Agent control plane"
+            )
+
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`planVersionId` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`planStepId` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`phaseId` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`ownerRole` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`assignedInvocationId` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`dependenciesJson` TEXT NOT NULL DEFAULT '[]'"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`acceptanceCriteriaJson` TEXT NOT NULL DEFAULT '[]'"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`evidenceJson` TEXT NOT NULL DEFAULT '[]'"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`attemptCount` INTEGER NOT NULL DEFAULT 0"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`blockReason` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`resultSummary` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_todos` ADD COLUMN " +
+                    "`completedAt` INTEGER"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_todos_planVersionId` ON " +
+                    "`agent_todos` (`planVersionId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_todos_assignedInvocationId` ON " +
+                    "`agent_todos` (`assignedInvocationId`)"
+            )
+
+            db.execSQL(
+                "ALTER TABLE `agent_invocations` ADD COLUMN " +
+                    "`todoId` TEXT"
+            )
+            db.execSQL(
+                "ALTER TABLE `agent_invocations` ADD COLUMN " +
+                    "`workReportId` TEXT"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_invocations_todoId` ON " +
+                    "`agent_invocations` (`todoId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_invocations_workReportId` ON " +
+                    "`agent_invocations` (`workReportId`)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_project_states` (
+                    `conversationId` INTEGER NOT NULL,
+                    `revision` INTEGER NOT NULL,
+                    `mode` TEXT NOT NULL,
+                    `currentGoal` TEXT NOT NULL,
+                    `activePlanVersionId` TEXT,
+                    `currentPhaseId` TEXT,
+                    `currentTodoId` TEXT,
+                    `semanticEventCount` INTEGER NOT NULL,
+                    `lastSemanticEvent` TEXT,
+                    `lastCompactedRevision` INTEGER,
+                    `lastCompactionSemanticEventCount` INTEGER NOT NULL,
+                    `lastCompactionKey` TEXT,
+                    `lastCompactionStatus` TEXT,
+                    `lastCompactionPreTokens` INTEGER,
+                    `lastCompactionPostTokens` INTEGER,
+                    `lastCompactionSavedTokens` INTEGER,
+                    `lastCompactionSaturationReason` TEXT,
+                    `lastCompactionAt` INTEGER,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`conversationId`),
+                    FOREIGN KEY(`conversationId`)
+                        REFERENCES `agent_conversations`(`id`)
+                        ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_project_states_mode` ON " +
+                    "`agent_project_states` (`mode`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_project_states_updatedAt` ON " +
+                    "`agent_project_states` (`updatedAt`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_project_states_activePlanVersionId` ON " +
+                    "`agent_project_states` (`activePlanVersionId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_project_states_currentTodoId` ON " +
+                    "`agent_project_states` (`currentTodoId`)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_plan_versions` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `sourcePendingPlanId` TEXT,
+                    `versionNumber` INTEGER NOT NULL,
+                    `summary` TEXT NOT NULL,
+                    `planMarkdown` TEXT NOT NULL,
+                    `structuredJson` TEXT NOT NULL,
+                    `planHash` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `approvedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`)
+                        REFERENCES `agent_conversations`(`id`)
+                        ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_plan_versions_conversationId` ON " +
+                    "`agent_plan_versions` (`conversationId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_plan_versions_status` ON " +
+                    "`agent_plan_versions` (`status`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_plan_versions_approvedAt` ON " +
+                    "`agent_plan_versions` (`approvedAt`)"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                    "`index_agent_plan_versions_conversationId_versionNumber` " +
+                    "ON `agent_plan_versions` " +
+                    "(`conversationId`, `versionNumber`)"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                    "`index_agent_plan_versions_conversationId_planHash` " +
+                    "ON `agent_plan_versions` " +
+                    "(`conversationId`, `planHash`)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_work_reports` (
+                    `id` TEXT NOT NULL,
+                    `conversationId` INTEGER NOT NULL,
+                    `invocationId` TEXT NOT NULL,
+                    `todoId` TEXT,
+                    `agentRole` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `summary` TEXT NOT NULL,
+                    `structuredJson` TEXT NOT NULL,
+                    `evidenceJson` TEXT NOT NULL,
+                    `changedFilesJson` TEXT NOT NULL,
+                    `risksJson` TEXT NOT NULL,
+                    `recommendationsJson` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`id`),
+                    FOREIGN KEY(`conversationId`)
+                        REFERENCES `agent_conversations`(`id`)
+                        ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_work_reports_conversationId` ON " +
+                    "`agent_work_reports` (`conversationId`)"
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS " +
+                    "`index_agent_work_reports_invocationId` ON " +
+                    "`agent_work_reports` (`invocationId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_work_reports_todoId` ON " +
+                    "`agent_work_reports` (`todoId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_work_reports_agentRole` ON " +
+                    "`agent_work_reports` (`agentRole`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_work_reports_status` ON " +
+                    "`agent_work_reports` (`status`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS " +
+                    "`index_agent_work_reports_createdAt` ON " +
+                    "`agent_work_reports` (`createdAt`)"
+            )
+
+            db.execSQL(
+                """
+                INSERT OR IGNORE INTO `agent_project_states` (
+                    `conversationId`, `revision`, `mode`, `currentGoal`,
+                    `activePlanVersionId`, `currentPhaseId`, `currentTodoId`,
+                    `semanticEventCount`, `lastSemanticEvent`,
+                    `lastCompactedRevision`,
+                    `lastCompactionSemanticEventCount`,
+                    `lastCompactionKey`, `lastCompactionStatus`,
+                    `lastCompactionPreTokens`, `lastCompactionPostTokens`,
+                    `lastCompactionSavedTokens`,
+                    `lastCompactionSaturationReason`,
+                    `lastCompactionAt`, `createdAt`, `updatedAt`
+                )
+                SELECT
+                    `id`, 0,
+                    CASE WHEN `planningModeEnabled` = 1
+                         THEN 'PLAN' ELSE 'BUILD' END,
+                    COALESCE(`lastTask`, ''),
+                    NULL, NULL, NULL, 0, 'migration_106_107',
+                    NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                    `createdAt`, `updatedAt`
+                FROM `agent_conversations`
+                """.trimIndent()
+            )
+
+            db.execSQL(
+                """
+                UPDATE `agent_todos`
+                SET `status` = CASE UPPER(`status`)
+                    WHEN 'DONE' THEN 'COMPLETED'
+                    WHEN 'SUCCESS' THEN 'COMPLETED'
+                    WHEN 'VERIFIED' THEN 'COMPLETED'
+                    WHEN 'RUNNING' THEN 'IN_PROGRESS'
+                    WHEN 'FAILED' THEN 'NEEDS_FIX'
+                    ELSE UPPER(`status`)
+                END,
+                `planStepId` = COALESCE(`planStepId`, `id`),
+                `phaseId` = COALESCE(`phaseId`, 'legacy'),
+                `source` = CASE
+                    WHEN `source` IS NULL OR `source` = ''
+                    THEN 'LEGACY'
+                    ELSE `source`
+                END
+                """.trimIndent()
+            )
+
+            DebugLog.log("[DB] Migration 106 -> 107 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3058,7 +3351,8 @@ object Migrations {
         MIGRATION_102_103,
         MIGRATION_103_104,
         MIGRATION_104_105,
-        MIGRATION_105_106
+        MIGRATION_105_106,
+        MIGRATION_106_107
     )
     /**
      * Check if a column exists in a table.

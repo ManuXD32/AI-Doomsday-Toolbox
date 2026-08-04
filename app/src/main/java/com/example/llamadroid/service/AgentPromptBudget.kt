@@ -91,6 +91,14 @@ data class AgentHardCompactionMetadata(
     val profileName: String,
     val toolDefinitionsHash: String,
     val summaryHash: String,
+    val stateRevision: Long = 0L,
+    val semanticEventCount: Long = 0L,
+    val compactionKey: String = "",
+    val preCompactionTokens: Int? = null,
+    val postCompactionTokens: Int? = null,
+    val savedTokens: Int? = null,
+    val status: String = AgentCompactionStatus.REQUESTED,
+    val saturationReason: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 ) {
     fun toJson(): String = JSONObject().apply {
@@ -105,6 +113,14 @@ data class AgentHardCompactionMetadata(
         put("profile_name", profileName)
         put("tool_definitions_hash", toolDefinitionsHash)
         put("summary_hash", summaryHash)
+        put("state_revision", stateRevision)
+        put("semantic_event_count", semanticEventCount)
+        put("compaction_key", compactionKey)
+        put("pre_compaction_tokens", preCompactionTokens)
+        put("post_compaction_tokens", postCompactionTokens)
+        put("saved_tokens", savedTokens)
+        put("status", status)
+        put("saturation_reason", saturationReason)
         put("created_at", createdAt)
     }.toString()
 
@@ -113,7 +129,10 @@ data class AgentHardCompactionMetadata(
             if (raw.isNullOrBlank()) return null
             return runCatching {
                 val json = JSONObject(raw)
-                if (json.optString("kind") != "agent_hard_compaction_metadata") {
+                if (
+                    json.optString("kind") !=
+                    "agent_hard_compaction_metadata"
+                ) {
                     return@runCatching null
                 }
                 AgentHardCompactionMetadata(
@@ -128,16 +147,50 @@ data class AgentHardCompactionMetadata(
                         json.optInt("maximum_input_tokens", 0),
                     requiredPrimacyTokens =
                         json.optInt("required_primacy_tokens", 0),
-                    profileName = json.optString("profile_name", "unknown"),
+                    profileName =
+                        json.optString("profile_name", "unknown"),
                     toolDefinitionsHash =
                         json.optString("tool_definitions_hash", ""),
                     summaryHash = json.optString("summary_hash", ""),
+                    stateRevision =
+                        json.optLong("state_revision", 0L),
+                    semanticEventCount =
+                        json.optLong("semantic_event_count", 0L),
+                    compactionKey =
+                        json.optString("compaction_key", ""),
+                    preCompactionTokens =
+                        json.optInt("pre_compaction_tokens")
+                            .takeIf {
+                                json.has("pre_compaction_tokens") &&
+                                    !json.isNull("pre_compaction_tokens")
+                            },
+                    postCompactionTokens =
+                        json.optInt("post_compaction_tokens")
+                            .takeIf {
+                                json.has("post_compaction_tokens") &&
+                                    !json.isNull("post_compaction_tokens")
+                            },
+                    savedTokens =
+                        json.optInt("saved_tokens")
+                            .takeIf {
+                                json.has("saved_tokens") &&
+                                    !json.isNull("saved_tokens")
+                            },
+                    status = json.optString(
+                        "status",
+                        AgentCompactionStatus.APPLIED
+                    ),
+                    saturationReason =
+                        json.optString("saturation_reason")
+                            .takeIf { it.isNotBlank() },
                     createdAt = json.optLong("created_at", 0L)
                 )
             }.getOrNull()
         }
     }
 }
+
+
 
 fun resolveAgentPromptCapacity(
     configuredContextTokens: Int,

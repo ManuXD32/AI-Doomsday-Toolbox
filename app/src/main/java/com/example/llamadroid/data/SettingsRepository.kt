@@ -3421,6 +3421,10 @@ class SettingsRepository(private val context: Context) {
     fun getAgentModelForRole(role: String): String {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorModel.value
+            "CODEBASE_SCOUT", "PLANNER" -> _agentOrchestratorModel.value
+            "RESEARCHER" -> _agentWebSearchModel.value
+                .takeIf { it.isNotBlank() }
+                ?: _agentOrchestratorModel.value
             "CODER" -> _agentCoderModel.value
             "REVIEWER" -> _agentReviewerModel.value
             "EXECUTOR" -> _agentExecutorModel.value
@@ -3436,6 +3440,8 @@ class SettingsRepository(private val context: Context) {
     fun setAgentModelForRole(role: String, model: String) {
         when (role.uppercase()) {
             "ORCHESTRATOR" -> setAgentOrchestratorModel(model)
+            "CODEBASE_SCOUT", "PLANNER" -> setAgentOrchestratorModel(model)
+            "RESEARCHER" -> setAgentWebSearchModel(model)
             "CODER" -> setAgentCoderModel(model)
             "REVIEWER" -> setAgentReviewerModel(model)
             "EXECUTOR" -> setAgentExecutorModel(model)
@@ -3450,6 +3456,8 @@ class SettingsRepository(private val context: Context) {
     fun getAgentThinkingEnabledForRole(role: String): Boolean {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorThinkingEnabled.value
+            "CODEBASE_SCOUT", "PLANNER" -> _agentOrchestratorThinkingEnabled.value
+            "RESEARCHER" -> _agentWebSearchThinkingEnabled.value
             "CODER" -> _agentCoderThinkingEnabled.value
             "REVIEWER" -> _agentReviewerThinkingEnabled.value
             "EXECUTOR" -> _agentExecutorThinkingEnabled.value
@@ -3467,6 +3475,8 @@ class SettingsRepository(private val context: Context) {
     fun setAgentThinkingEnabledForRole(role: String, enabled: Boolean) {
         when (role.uppercase()) {
             "ORCHESTRATOR" -> setAgentOrchestratorThinkingEnabled(enabled)
+            "CODEBASE_SCOUT", "PLANNER" -> setAgentOrchestratorThinkingEnabled(enabled)
+            "RESEARCHER" -> setAgentWebSearchThinkingEnabled(enabled)
             "CODER" -> setAgentCoderThinkingEnabled(enabled)
             "REVIEWER" -> setAgentReviewerThinkingEnabled(enabled)
             "EXECUTOR" -> setAgentExecutorThinkingEnabled(enabled)
@@ -3480,6 +3490,7 @@ class SettingsRepository(private val context: Context) {
     fun getAgentVisionEnabledForRole(role: String): Boolean {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorVisionEnabled.value
+            "CODEBASE_SCOUT", "RESEARCHER", "PLANNER" -> false
             "CODER" -> _agentCoderVisionEnabled.value
             "REVIEWER" -> _agentReviewerVisionEnabled.value
             "EXECUTOR" -> _agentExecutorVisionEnabled.value
@@ -3492,6 +3503,7 @@ class SettingsRepository(private val context: Context) {
     fun setAgentVisionEnabledForRole(role: String, enabled: Boolean) {
         when (role.uppercase()) {
             "ORCHESTRATOR" -> setAgentOrchestratorVisionEnabled(enabled)
+            "CODEBASE_SCOUT", "RESEARCHER", "PLANNER" -> Unit
             "CODER" -> setAgentCoderVisionEnabled(enabled)
             "REVIEWER" -> setAgentReviewerVisionEnabled(enabled)
             "EXECUTOR" -> setAgentExecutorVisionEnabled(enabled)
@@ -3736,6 +3748,8 @@ class SettingsRepository(private val context: Context) {
     fun getAgentContextForRole(role: String): Int {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorCtx.value
+            "CODEBASE_SCOUT", "PLANNER" -> _agentOrchestratorCtx.value
+            "RESEARCHER" -> _agentWebSearchNumCtx.value
             "CODER" -> _agentCoderCtx.value
             "REVIEWER" -> _agentReviewerCtx.value
             "EXECUTOR" -> _agentExecutorCtx.value
@@ -3747,6 +3761,8 @@ class SettingsRepository(private val context: Context) {
     fun getAgentMaxOutputTokensForRole(role: String): Int {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorMaxOutputTokens.value
+            "CODEBASE_SCOUT", "RESEARCHER", "PLANNER" ->
+                _agentOrchestratorMaxOutputTokens.value
             "CODER" -> _agentCoderMaxOutputTokens.value
             "REVIEWER" -> _agentReviewerMaxOutputTokens.value
             "EXECUTOR" -> _agentExecutorMaxOutputTokens.value

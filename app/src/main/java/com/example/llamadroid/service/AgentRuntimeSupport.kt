@@ -177,19 +177,30 @@ fun buildCompactPromptBasisSections(
 ): CompactPromptBasisSections {
     val required = buildList {
         add(systemPrompt)
-        add(
-            buildString {
-                appendLine("# Initial Order")
-                appendLine()
-                append(initialOrder)
-            }.trimEnd()
-        )
-        planContent?.takeIf { it.isNotBlank() }?.let { add(it) }
-        add(compactionSummary)
+        AgentProjectControlPlane.compactDocumentReference(
+            title = "Initial Order",
+            content = initialOrder,
+            maxChars = 1_400
+        )?.let(::add)
+        AgentProjectControlPlane.compactDocumentReference(
+            title = "Plan",
+            content = planContent,
+            maxChars = 2_000
+        )?.let(::add)
+        add(compactionSummary.take(8_000))
     }
-    val optional = listOfNotNull(compactStateSnapshot?.takeIf { it.isNotBlank() })
-    return CompactPromptBasisSections(requiredSections = required, optionalSections = optional)
+    val optional = listOfNotNull(
+        compactStateSnapshot
+            ?.takeIf { it.isNotBlank() }
+            ?.take(12_000)
+    )
+    return CompactPromptBasisSections(
+        requiredSections = required,
+        optionalSections = optional
+    )
 }
+
+
 
 fun buildHardCompactionSummaryDocument(
     generatedAt: String,
@@ -735,6 +746,35 @@ sealed class AgentResult {
         val carryForwardNotes: List<String>
     ) : AgentResult()
 
+    data class ScoutResult(
+        override val status: String,
+        val relevantFiles: List<String>,
+        val architecture: List<String>,
+        val dependencies: List<String>,
+        val constraints: List<String>,
+        val risks: List<String>,
+        val openQuestions: List<String>,
+        val recommendedScope: List<String>
+    ) : AgentResult()
+
+    data class ResearcherResult(
+        override val status: String,
+        val researchQuestion: String,
+        val sources: List<String>,
+        val facts: List<String>,
+        val conflicts: List<String>,
+        val uncertainties: List<String>,
+        val recommendations: List<String>
+    ) : AgentResult()
+
+    data class PlannerResult(
+        override val status: String,
+        val planMarkdown: String,
+        val structuredPlanJson: String,
+        val openQuestions: List<String>,
+        val recommendedNextSteps: List<String>
+    ) : AgentResult()
+
     data class GenericResult(
         override val status: String,
         val summary: String
@@ -783,6 +823,32 @@ sealed class AgentResult {
                     }
                     append("- carry_forward_notes: ${carryForwardNotes.joinToString().ifBlank { "none" }}")
                 }
+                is ScoutResult -> {
+                    appendLine("- status: $status")
+                    appendLine("- relevant_files: ${relevantFiles.joinToString().ifBlank { "none" }}")
+                    appendLine("- architecture: ${architecture.joinToString().ifBlank { "none" }}")
+                    appendLine("- dependencies: ${dependencies.joinToString().ifBlank { "none" }}")
+                    appendLine("- constraints: ${constraints.joinToString().ifBlank { "none" }}")
+                    appendLine("- risks: ${risks.joinToString().ifBlank { "none" }}")
+                    appendLine("- open_questions: ${openQuestions.joinToString().ifBlank { "none" }}")
+                    append("- recommended_scope: ${recommendedScope.joinToString().ifBlank { "none" }}")
+                }
+                is ResearcherResult -> {
+                    appendLine("- status: $status")
+                    appendLine("- research_question: $researchQuestion")
+                    appendLine("- sources: ${sources.joinToString().ifBlank { "none" }}")
+                    appendLine("- facts: ${facts.joinToString().ifBlank { "none" }}")
+                    appendLine("- conflicts: ${conflicts.joinToString().ifBlank { "none" }}")
+                    appendLine("- uncertainties: ${uncertainties.joinToString().ifBlank { "none" }}")
+                    append("- recommendations: ${recommendations.joinToString().ifBlank { "none" }}")
+                }
+                is PlannerResult -> {
+                    appendLine("- status: $status")
+                    appendLine("- plan_markdown: ${planMarkdown.take(1_200)}")
+                    appendLine("- structured_plan_json: ${structuredPlanJson.take(1_200)}")
+                    appendLine("- open_questions: ${openQuestions.joinToString().ifBlank { "none" }}")
+                    append("- recommended_next_steps: ${recommendedNextSteps.joinToString().ifBlank { "none" }}")
+                }
                 is GenericResult -> {
                     appendLine("- status: $status")
                     append("- summary: $summary")
@@ -798,6 +864,7 @@ data class CompletedAgentSession(
     val sessionId: String,
     val agentLabel: String,
     val customAgentName: String? = null,
+    val rawSummary: String,
     val result: AgentResult,
     val evidence: AgentEvidenceBundle
 )
@@ -905,7 +972,10 @@ internal object AgentRuntimeSupport {
         "reflection",
         "write_memory",
         "rewrite_memory",
-        "delete_memory"
+        "delete_memory",
+        "todo_write",
+        "todo_reconcile",
+        "todo_transition"
     )
 
     fun containsTraversalSegments(path: String): Boolean {
@@ -1176,7 +1246,12 @@ internal object AgentRuntimeSupport {
         }
 
         val json = JSONObject(trimmed)
-        val status = json.optString("status", "SUCCESS").ifBlank { "SUCCESS" }
+        val status = json.optString("status", "SUCCESS")
+            .ifBlank { "SUCCESS" }
+            .uppercase()
+        require(status in setOf("SUCCESS", "FAILED", "BLOCKED")) {
+            "Agent result status must be SUCCESS, FAILED, or BLOCKED."
+        }
         return when (agentLabel.uppercase()) {
             "CODER" -> AgentResult.CoderResult(
                 status = status,
@@ -1185,7 +1260,11 @@ internal object AgentRuntimeSupport {
                 verificationReads = json.optJSONArray("verification_reads").toStringList(),
                 remainingRisks = json.optJSONArray("remaining_risks").toStringList()
             ).also {
-                require(it.changedFiles.isNotEmpty()) { "CoderResult.changed_files must not be empty." }
+                if (it.status == "SUCCESS") {
+                    require(it.changedFiles.isNotEmpty()) {
+                        "CoderResult.changed_files must not be empty on success."
+                    }
+                }
             }
             "REVIEWER" -> AgentResult.ReviewerResult(
                 status = status,
@@ -1206,7 +1285,42 @@ internal object AgentRuntimeSupport {
                 reasonPerFile = json.optJSONObject("reason_per_file").toStringMap(),
                 carryForwardNotes = json.optJSONArray("carry_forward_notes").toStringList()
             ).also {
-                require(it.memoryFilesUpdated.isNotEmpty()) { "SummarizerResult.memory_files_updated must not be empty." }
+                if (it.status == "SUCCESS") {
+                    require(it.memoryFilesUpdated.isNotEmpty()) {
+                        "SummarizerResult.memory_files_updated must not be empty on success."
+                    }
+                }
+            }
+            "CODEBASE_SCOUT" -> AgentResult.ScoutResult(
+                status = status,
+                relevantFiles = json.optJSONArray("relevant_files").toStringList(),
+                architecture = json.optJSONArray("architecture").toStringList(),
+                dependencies = json.optJSONArray("dependencies").toStringList(),
+                constraints = json.optJSONArray("constraints").toStringList(),
+                risks = json.optJSONArray("risks").toStringList(),
+                openQuestions = json.optJSONArray("open_questions").toStringList(),
+                recommendedScope = json.optJSONArray("recommended_scope").toStringList()
+            )
+            "RESEARCHER" -> AgentResult.ResearcherResult(
+                status = status,
+                researchQuestion = json.optString("research_question").ifBlank { "Unspecified research question" },
+                sources = json.optJSONArray("sources").toStringList(),
+                facts = json.optJSONArray("facts").toStringList(),
+                conflicts = json.optJSONArray("conflicts").toStringList(),
+                uncertainties = json.optJSONArray("uncertainties").toStringList(),
+                recommendations = json.optJSONArray("recommendations").toStringList()
+            )
+            "PLANNER" -> AgentResult.PlannerResult(
+                status = status,
+                planMarkdown = json.optString("plan_markdown"),
+                structuredPlanJson = json.optJSONObject("structured_plan")?.toString()
+                    ?: json.optString("structured_plan_json"),
+                openQuestions = json.optJSONArray("open_questions").toStringList(),
+                recommendedNextSteps = json.optJSONArray("recommended_next_steps").toStringList()
+            ).also {
+                require(it.planMarkdown.isNotBlank() || it.structuredPlanJson.isNotBlank()) {
+                    "PlannerResult requires plan_markdown or structured_plan."
+                }
             }
             else -> AgentResult.GenericResult(
                 status = status,

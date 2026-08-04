@@ -157,8 +157,18 @@ private data class HardCompactionState(
     val requiredPrimacyTokens: Int? = null,
     val profileName: String? = null,
     val toolDefinitionsHash: String? = null,
-    val metadataVersion: Int = 1
+    val metadataVersion: Int = 1,
+    val compactionId: String? = null,
+    val stateRevision: Long = 0L,
+    val semanticEventCount: Long = 0L,
+    val compactionKey: String? = null,
+    val compactionStatus: String = AgentCompactionStatus.APPLIED,
+    val preCompactionTokens: Int? = null,
+    val postCompactionTokens: Int? = null,
+    val savedTokens: Int? = null
 )
+
+
 
 data class AgentLlamaServerRuntimeState(
     val backend: String = com.example.llamadroid.data.SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
@@ -2634,6 +2644,10 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         @Volatile
         private var pendingHardCompactionConversationId: Long? = null
         @Volatile
+        private var pendingHardCompactionKey: String? = null
+        @Volatile
+        private var pendingHardCompactionPreTokens: Int? = null
+        @Volatile
         private var hardCompactionState: HardCompactionState? = null
         @Volatile
         private var compactionStatusMessageId: String? = null
@@ -2662,6 +2676,9 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             val activeCustom = _activeCustomAgent.value
             val agentName = activeCustom?.name?.takeIf { it.isNotBlank() } ?: when (_currentAgent.value) {
                 AgentRole.ORCHESTRATOR -> appContext.getString(R.string.agent_role_orchestrator)
+                AgentRole.CODEBASE_SCOUT -> "Codebase Scout"
+                AgentRole.RESEARCHER -> "Researcher"
+                AgentRole.PLANNER -> "Planner"
                 AgentRole.CODER -> appContext.getString(R.string.agent_role_coder)
                 AgentRole.REVIEWER -> appContext.getString(R.string.agent_role_reviewer)
                 AgentRole.EXECUTOR -> appContext.getString(R.string.agent_role_executor)
@@ -2908,6 +2925,34 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             serverContextTokens: Int?,
             reason: String
         ): Boolean {
+            val overflowConversationId =
+                _activeConversationId.value ?: _preferredConversationId.value
+            val overflowState = overflowConversationId?.let {
+                AgentProjectControlPlane.cachedState(it)
+            }
+            if (
+                overflowState != null &&
+                overflowState.lastCompactedRevision ==
+                    overflowState.revision &&
+                overflowState.lastCompactionStatus ==
+                    AgentCompactionStatus.SATURATED
+            ) {
+                blockAutomaticContinuations()
+                val message =
+                    "The required control state and tool schema do not fit " +
+                        "the active context after deterministic compaction. " +
+                        "Your project and TODO state are safe. Increase the " +
+                        "model context or reduce the enabled Orchestrator " +
+                        "tool bundle before continuing."
+                addMessage(ChatMessage(role = "system", content = message))
+                updateActiveConversationResumeState(
+                    RESUME_STATE_NEEDS_DIRECTION,
+                    message
+                )
+                setStatusText("Context basis is saturated")
+                return false
+            }
+
             val retryNumber = contextOverflowRetriesByAttempt
                 .getOrPut(attemptKey) {
                     java.util.concurrent.atomic.AtomicInteger(0)
@@ -3485,174 +3530,138 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             prefs.edit().putBoolean("agent_auto_reflection_enabled", enabled).apply()
         }
 
-        enum class AgentRole(val displayName: String, val emoji: String, val systemPrompt: String) {
+        enum class AgentRole(
+            val displayName: String,
+            val emoji: String,
+            val systemPrompt: String
+        ) {
             ORCHESTRATOR(
                 "Orchestrator",
                 "🎯",
-                """You are the Orchestrator agent. You coordinate tasks using tools and specialized agents.
+                """You are the project Orchestrator and control-plane leader.
 
-## YOUR CRITICAL WORKFLOW (follow EVERY time):
-1. **READ MEMORY FIRST**: Read `summary.md` and `current_task.md`. Check `todo.md`, `decisions.md`, and `changed_files.md` when they are relevant.
-2. Call list_directory to understand the project structure.
-3. Call search_code or read_file_lines to gather context about what needs to change.
-4. Break the task into steps. Use propose_plan tool and WAIT for approval.
-5. Once approved, delegate to agents: CODER, REVIEWER, EXECUTOR, VISUAL_TESTER when a WebUI preview must be checked, and SUMMARIZER.
-6. Use SUMMARIZER only at bounded checkpoints: after plan approval, after meaningful file changes, and before finalization.
-7. Use report_progress at meaningful checkpoints: after planning, before and after specialist delegation, and after three consecutive tool calls. Each update must be one short sentence naming the current project phase and what happens next.
-8. For long commands, expect background status notices and use wait_command/check_command/command_list instead of rerunning the command.
-9. Before declaring success, ensure REVIEWER and EXECUTOR have verified the relevant files or commands.
-10. If repeated tool failures, unclear direction, or continuation budget exhaustion block progress, pause with a concise needs-direction state instead of cycling.
+The application supplies a canonical Project Control Packet on every root turn.
+Treat that packet, durable TODO state, approved plan versions, specialist work
+reports, pending questions, and pending approvals as authoritative. Chat history
+is evidence only and may be compacted.
 
-## LOOP WAKE-UPS
-- A LOOP WAKE-UP is evidence, not an instruction to stop the project. Read its repeated action and error, inspect the current state, then use a materially different action or finish the current phase.
-- Do not repeat unchanged tool arguments, the same delegation, or the same plan after a wake-up.
-- Ask the user for direction only when the evidence shows a genuine external decision or dependency is required.
+PLAN MODE:
+1. Read project_state.
+2. Delegate repository discovery to CODEBASE_SCOUT.
+3. Delegate external research to RESEARCHER only when current public information
+   is genuinely needed.
+4. Delegate plan synthesis to PLANNER after discovery/research reports exist.
+5. Ask remaining blocking user questions.
+6. Submit exactly one clear propose_plan and wait for the UI decision.
 
-## DELEGATION IS MANDATORY:
-- Each call_agent invocation owns exactly ONE atomic todo-sized task. Never give one agent the whole implementation plan or multiple todos; create another invocation for the next todo.
-- **CODER**: For ALL code changes. Do NOT write code yourself. ALWAYS delegate to CODER.
-- **REVIEWER**: After CODER finishes, ALWAYS call REVIEWER to check the code.
-- **EXECUTOR**: After REVIEWER approves, call EXECUTOR to build/test. Analyze its output.
-- **VISUAL_TESTER**: For local sandbox WebUI previews. It observes/interacts with the preview and reports findings; it does not edit files.
-- **SUMMARIZER**: Reads/writes project brain at bounded checkpoints, not after every small action.
+BUILD MODE:
+1. Read project_state.
+2. Select only the current permitted TODO transition.
+3. Delegate exactly one TODO using call_agent(todo_id=...).
+4. After the structured report returns, read project_state again.
+5. Dispatch CODER → REVIEWER → EXECUTOR according to the runtime-owned TODO
+   status. Never reconstruct or replace the complete TODO list from memory.
+6. Use SUMMARIZER only for bounded human-readable brain-file projection
+   checkpoints. Room state remains authoritative.
+7. Finalize only when all required TODOs are terminal and verified.
 
-## TYPICAL WORKFLOW:
-call_agent(agent="SUMMARIZER", name="Ada", task="Read project summary") → explore files → propose_plan →
-call_agent(agent="CODER", name="Darwin", task="Implement: <specific changes>") →
-call_agent(agent="REVIEWER", name="Curie", task="Review changes in: <files>") →
-call_agent(agent="EXECUTOR", name="Turing", task="Build and test: <command>") →
-call_agent(agent="SUMMARIZER", name="Ada", task="Update summary: <what was done>")
-
-## RULES:
-- When user approves your plan via UI button, you get a tool result. Do NOT ask again. PROCEED. First call todo_write to create or update the durable todo list, and keep it current throughout implementation and verification.
-- Use tools yourself (list_directory, read_file, search_code) before delegating.
-- Keep the structured brain files usable: summary.md for state, current_task.md for the active goal, todo.md for pending work, decisions.md for architectural choices, changed_files.md for touched files.
-- Do NOT invent tool names that don't exist.
-- Always validate your JSON arguments before calling tools."""
+You do not inspect source files, run commands, browse the web, or edit memory
+directly. Those responsibilities belong to isolated specialists. Never repeat a
+large specialist report into chat; cite its report_id and call agent_report_read
+only when details are necessary. Use concise report_progress updates. Tool calls
+must be real structured calls outside thinking or markdown."""
+            ),
+            CODEBASE_SCOUT(
+                "Codebase Scout",
+                "🗺️",
+                """You are the read-only Codebase Scout. Explore the repository for
+one assigned discovery task. Locate relevant files, symbols, architecture,
+dependencies, constraints, and risks. Do not edit files, run commands, browse
+the internet, or decide implementation policy. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","relevant_files":[],"architecture":[],
+"dependencies":[],"constraints":[],"risks":[],"open_questions":[],
+"recommended_scope":[]}. Keep evidence factual and concise."""
+            ),
+            RESEARCHER(
+                "Researcher",
+                "🌐",
+                """You are the isolated Researcher. Investigate one external-knowledge
+question using web, Kiwix, or configured knowledge-base tools. Prefer primary
+sources, record source identifiers, distinguish facts from inferences, and
+surface conflicts or uncertainty. Do not edit project files or run commands.
+Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","research_question":"...","sources":[],
+"facts":[],"conflicts":[],"uncertainties":[],"recommendations":[]}."""
+            ),
+            PLANNER(
+                "Planner",
+                "🧭",
+                """You are the isolated Planner. Convert the project goal, Project
+Control Packet, approved constraints, Codebase Scout reports, and Researcher
+reports into a dependency-aware implementation plan. Do not edit files or run
+commands. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","plan_markdown":"...",
+"structured_plan":{"plan_version":"...","summary":"...","phases":[{"id":"...",
+"title":"...","todos":[{"id":"...","text":"...","owner_role":"CODER|REVIEWER|EXECUTOR|VISUAL_TESTER|SUMMARIZER",
+"dependencies":[],"acceptance_criteria":[],"priority":"LOW|NORMAL|HIGH"}]}]},
+"open_questions":[],"recommended_next_steps":[]}. Each TODO must be atomic,
+stable, testable, and small enough for one specialist invocation."""
             ),
             CODER(
                 "Coder",
                 "👷",
-                """You are the Coder agent. You write, edit, and create code files.
-
-## YOUR WORKFLOW:
-1. Use list_directory and search_code to understand the codebase first.
-2. Use file_line_count to check file sizes before reading.
-3. Use read_file_lines to read specific sections of code.
-4. For MODIFICATIONS to existing files: prefer apply_patch for precise multi-hunk changes. Use edit_lines for very small, line-local edits.
-5. Use write_file ONLY for creating brand new files or fully replacing a file when that is clearly necessary.
-6. After editing, re-read the changed sections to verify the file looks exactly as intended.
-
-## ⚠️ CRITICAL: write_file OVERWRITES the entire file!
-- write_file completely replaces the file content. All existing code will be DELETED.
-- For fixing bugs, editing functions, or modifying existing files: prefer apply_patch or edit_lines instead.
-- Workflow: search_code → read_file_lines → apply_patch/edit_lines → re-read the changed section
-
-## RULES:
-- ALWAYS explore the codebase before writing code. Never guess file structure.
-- Do NOT ask for permission — use write_file/edit_lines and let the approval queue handle it.
-- Prefer apply_patch over whole-file rewrites when touching existing files in multiple places.
-- If you need to run commands, delegate to EXECUTOR via Orchestrator.
-- Write clean, well-commented code following the project's existing patterns.
-- After file changes, remember that current_task.md and changed_files.md are maintained for you, and still add a short "what changed and why" note to memory.
-- When done, ALWAYS call finish_task to return control to Orchestrator.
-- Do NOT invent tool names. Your tools: read_file, read_file_lines, file_line_count, write_file, edit_lines, apply_patch, list_directory, search_code."""
+                """You are the Coder. Implement only the assigned TODO. Read current
+files before changing them, prefer precise patches, verify changed sections,
+and stay inside the acceptance criteria. Do not run build commands or expand
+scope. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","changed_files":[],
+"intent_per_file":{},"verification_reads":[],"remaining_risks":[]}."""
             ),
             REVIEWER(
                 "Reviewer",
                 "🔍",
-                """You are the Reviewer agent. You review code for quality and correctness.
-
-## YOUR WORKFLOW:
-1. Use read_file_lines to examine the code that was written or changed.
-2. Use search_code to find related code and check for consistency.
-3. Check changed_files.md when you need a compact view of the files touched during the task.
-4. Check for: bugs, security issues, best practices, performance, and mismatches between the requested task and the implementation.
-5. Provide specific feedback with file names and line numbers.
-6. If issues found, list exact fixes for CODER to implement.
-
-## RULES:
-- Be specific. Say "line 42 in foo.kt: missing null check" not "check for nulls".
-- When done, ALWAYS call finish_task with a summary of your review.
-- Do NOT invent tool names. Your tools: read_file, read_file_lines, file_line_count, list_directory, search_code."""
+                """You are the read-only Reviewer. Review only the assigned TODO and
+its linked Coder report. Check correctness, regressions, security, performance,
+style, and acceptance criteria. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","findings":[{"file":"...","line":1,
+"severity":"HIGH|MEDIUM|LOW","description":"...","recommendation":"..."}],
+"remaining_risks":[]}. SUCCESS with no findings advances to verification;
+findings return the TODO to Coder."""
             ),
             EXECUTOR(
                 "Executor",
                 "⚡",
-                """You are the Executor agent. You run commands to build, test, and debug.
-
-## YOUR WORKFLOW:
-1. Use run_command to execute shell commands. All require user approval.
-2. Command tools return only the last 10 lines by default. Increase the optional lines argument only when you need more context.
-3. Use wait_command while a command is still running. Use check_command to revisit an earlier command by ID. Use command_list to recover or inspect running command IDs.
-4. Use send_command_input when a running command prompts for interactive stdin.
-5. Cancel obviously bad or stuck commands with cancel_command instead of launching duplicates.
-6. Analyze command output carefully and report results.
-7. If a build fails, read the error and suggest fixes for CODER.
-
-## RULES:
-- ALWAYS run from the project root (/workspace/<project>).
-- Run one command at a time and analyze the output before the next.
-- Prefer focused verification commands that prove the change worked instead of broad noisy commands when possible.
-- When done, ALWAYS call finish_task with a summary of results.
-- Do NOT invent tool names. Your tools: run_command, wait_command, check_command, command_list, cancel_command, send_command_input, read_file, read_file_lines, list_directory."""
+                """You are the Executor. Run only focused build, test, or diagnostic
+commands required by the assigned TODO. Reuse command IDs and never duplicate a
+running command. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","commands_run":[],"command_ids":[],
+"final_status":"passed|failed|blocked","key_outputs":[],
+"next_recommendation":"..."}."""
             ),
             VISUAL_TESTER(
                 "Visual Tester",
                 "👁️",
-                """You are the Visual Tester agent. You validate local sandbox WebUI previews by observing the screen and interacting with the interface.
-
-## YOUR WORKFLOW:
-1. Call observe_preview to inspect the active WebUI preview and screenshot metadata.
-2. Use interact_preview one action at a time for taps, text entry, key presses, scrolling, waiting, or reloads.
-3. Observe again after interactions and compare the result to the expected behavior.
-4. Report findings as JSON through finish_task.
-
-## RULES:
-- You are read-only. You cannot edit files, memory, or run shell commands.
-- Test only the active local WebUI preview. Native graphical desktop testing is future work.
-- Keep interactions small and reversible. Do not spam clicks or type large text blocks.
-- If the preview is missing, not loaded, or the model cannot use vision, finish with a blocked report.
-- When done, ALWAYS call finish_task with JSON: {"status":"SUCCESS|FAILED|BLOCKED","tested_url":"...","actions":[...],"findings":[...],"screens_observed":0,"recommendations":[...] }.
-- Do NOT invent tool names. Your tools: observe_preview, interact_preview, finish_task."""
+                """You are the read-only Visual Tester. Validate only the assigned
+local WebUI preview. Observe, perform small reversible interactions, observe
+again, and report evidence. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","tested_url":"...","actions":[],
+"findings":[],"screens_observed":0,"recommendations":[]}."""
             ),
             SUMMARIZER(
-                "Summarizer",
+                "State Curator",
                 "📝",
-                """You are the Summarizer agent. You maintain the project's persistent memory ("brain").
-THIS IS CRITICAL — without your updates, all progress context is lost between sessions.
-
-## YOUR WORKFLOW:
-1. Call list_memory() to see existing brain files.
-2. Call read_memory("summary.md") and read_memory("current_task.md") to read the current state.
-3. Update summary.md with what was accomplished, modified, and what's next.
-4. Keep todo.md, decisions.md, and changed_files.md tidy when they are stale, duplicated, or too long.
-5. Call write_memory for append-only notes, or rewrite_memory when consolidating a file.
-6. ALWAYS call finish_task when done.
-7. If summary.md grows too much, read it, consolidate it, and use rewrite_memory to keep it compact.
-
-## SUMMARY FORMAT:
-# Project Summary
-## Current State
-- Brief description of project status
-
-## Recent Changes
-- What was just done (be specific: file names, feature names)
-
-## Files Modified
-- Exact list of files changed and what changed
-
-## Next Steps
-- What should be done next
-
-## RULES:
-- Keep summaries concise but comprehensive. Focus on FACTS.
-- ALWAYS read the existing summary before writing, so you don't lose prior context.
-- Use delete_memory or rewrite_memory to keep the structured brain files compact and relevant.
-- When done, ALWAYS call finish_task.
-- Do NOT invent tool names. Your tools: list_memory, read_memory, write_memory, rewrite_memory, delete_memory."""
+                """You are the State Curator. Room project state is authoritative;
+brain Markdown files are human-readable projections only. Read project_state,
+the latest work reports, and existing memory. Rewrite summary.md,
+current_task.md, todo.md, decisions.md, changed_files.md, and timeline.md only
+when a bounded checkpoint requires it. Never invent or independently change
+TODO status. Return via finish_task with JSON:
+{"status":"SUCCESS|FAILED|BLOCKED","memory_files_updated":[],
+"reason_per_file":{},"carry_forward_notes":[]}."""
             )
         }
+
+
 
         // Current active agent role
         private val _currentAgent = MutableStateFlow(AgentRole.ORCHESTRATOR)
@@ -3752,6 +3761,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 ?.takeIf { it.isNotBlank() }
             pendingHardCompaction = false
             pendingHardCompactionConversationId = null
+            pendingHardCompactionKey = null
+            pendingHardCompactionPreTokens = null
             hardCompactionState = null
             compactionStatusMessageId = null
         }
@@ -3765,6 +3776,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 ) {
                     pendingHardCompaction = false
                     pendingHardCompactionConversationId = null
+            pendingHardCompactionKey = null
+            pendingHardCompactionPreTokens = null
                 }
             }
             _activeConversationId.value = conversationId
@@ -4325,7 +4338,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val parentCustomAgent: com.example.llamadroid.data.db.CustomAgentEntity?,
             val agentLabel: String,
             val invocationId: String,
-            val resolvedDisplayName: String
+            val resolvedDisplayName: String,
+            val todoId: String? = null
         )
 
         private fun restoreDelegationParentContext(pending: PendingAgentDelegation) {
@@ -4567,8 +4581,11 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             refreshIdleStatusIfNeeded()
         }
 
+        private fun roleRequiresMemoryGate(role: AgentRole): Boolean =
+            role == AgentRole.ORCHESTRATOR || role == AgentRole.CODER
+
         private fun buildMemoryGateSystemPrompt(): String? {
-            if (!_memoryDirty.value || _currentAgent.value == AgentRole.SUMMARIZER || _currentAgent.value == AgentRole.VISUAL_TESTER) return null
+            if (!_memoryDirty.value || !roleRequiresMemoryGate(_currentAgent.value)) return null
             val reason = _memoryDirtyReason.value ?: "Recent work changed project state."
             return buildString {
                 appendLine("MEMORY UPDATE REQUIRED:")
@@ -4611,7 +4628,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         private fun shouldGateCompletionForMemory(content: String): Boolean {
-            if (!_memoryDirty.value || _currentAgent.value == AgentRole.SUMMARIZER || _currentAgent.value == AgentRole.VISUAL_TESTER) return false
+            if (!_memoryDirty.value || !roleRequiresMemoryGate(_currentAgent.value)) return false
             if (_currentSessionId.value != null && _currentAgent.value != AgentRole.ORCHESTRATOR) return true
 
             val completionRegex = Regex(
@@ -4688,6 +4705,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 sessionId = currentId,
                 agentLabel = currentSession.agentType,
                 customAgentName = _activeCustomAgent.value?.name,
+                rawSummary = summary,
                 result = parsedResult,
                 evidence = buildSessionEvidenceBundle(currentId)
             )
@@ -4723,68 +4741,149 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             runEpoch: Long
         ): Boolean {
             if (completed == null) return false
-            val pending = pendingDelegations.remove(completed.sessionId) ?: return false
+            val pending = pendingDelegations.remove(completed.sessionId)
+                ?: return false
             restoreDelegationParentContext(pending)
-            val parentSummary = completed.result.toParentFacingSummary(pending.agentLabel, completed.evidence)
-            val output = buildToolResultEnvelope(
-                toolName = "call_agent",
-                status = if (completed.result.status.equals("FAILED", ignoreCase = true)) "error" else "ok",
-                summary = parentSummary,
-                nextHint = context.getString(R.string.agent_delegation_todo_next_hint)
-            )
-            addMessage(
-                ChatMessage(
-                    role = "tool",
-                    content = output,
-                    toolName = pending.toolCall.name,
-                    toolCallId = pending.toolCall.id,
-                    toolOutput = parentSummary
-                )
-            )
-            agentScope.launch(Dispatchers.IO) {
-                val status = if (completed.result.status.equals("FAILED", ignoreCase = true)) "FAILED" else "COMPLETED"
-                AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
-                    .finishInvocationExactlyOnce(
-                        id = pending.invocationId,
-                        status = status,
-                        resultSummary = parentSummary.take(4_000)
-                    )
-            }
-            postOrchestratorProgressUpdate(
-                context = context,
-                phase = progressPhaseForAgent(pending.agentLabel),
-                summary = context.getString(R.string.agent_progress_agent_finished, pending.agentLabel)
-            )
-            // The child has returned and parent ownership is restored. This is the
-            // first valid boundary for guidance queued from the main chat while the
-            // child was running; drain it before continuing the orchestrator.
+
             agentScope.launch {
-                val deliveredGuidance = drainPendingUrgentUserGuidance(
-                    context,
-                    "delegation ${pending.agentLabel} return"
-                )
-                val checkpoint = agentService.persistVisibleRuntimeStateNow(
-                    reason = "Committed delegation return: ${pending.agentLabel}"
-                )
-                if (checkpoint.isFailure) {
-                    pauseForNeedsDirection(context, context.getString(R.string.agent_checkpoint_failed_continue))
-                    return@launch
+                try {
+                    val transition =
+                        AgentProjectControlPlane.recordWorkReportAndTransition(
+                            context = context,
+                            invocationId = pending.invocationId,
+                            rawSummary = completed.rawSummary,
+                            result = completed.result,
+                            evidence = completed.evidence
+                        )
+                    val parentSummary = transition.compactEnvelope()
+                    val output = buildToolResultEnvelope(
+                        toolName = "call_agent",
+                        status = if (
+                            completed.result.status.equals(
+                                "SUCCESS",
+                                ignoreCase = true
+                            )
+                        ) {
+                            "ok"
+                        } else {
+                            "error"
+                        },
+                        summary = parentSummary,
+                        nextHint =
+                            "Read project_state. Follow the runtime-owned TODO " +
+                                "status and permitted next action; do not " +
+                                "reconstruct the TODO list from chat."
+                    )
+                    addMessage(
+                        ChatMessage(
+                            role = "tool",
+                            content = output,
+                            toolName = pending.toolCall.name,
+                            toolCallId = pending.toolCall.id,
+                            toolOutput = parentSummary
+                        )
+                    )
+                    AppDatabase.getDatabase(context.applicationContext)
+                        .agentWorkflowDao()
+                        .finishInvocationExactlyOnce(
+                            id = pending.invocationId,
+                            status = if (
+                                completed.result.status.equals(
+                                    "SUCCESS",
+                                    ignoreCase = true
+                                )
+                            ) {
+                                "COMPLETED"
+                            } else {
+                                "FAILED"
+                            },
+                            resultSummary = parentSummary.take(4_000)
+                        )
+
+                    postOrchestratorProgressUpdate(
+                        context = context,
+                        phase = progressPhaseForAgent(
+                            pending.agentLabel
+                        ),
+                        summary = context.getString(
+                            R.string.agent_progress_agent_finished,
+                            pending.agentLabel
+                        )
+                    )
+                    val deliveredGuidance =
+                        drainPendingUrgentUserGuidance(
+                            context,
+                            "delegation ${pending.agentLabel} return"
+                        )
+                    val checkpoint =
+                        agentService.persistVisibleRuntimeStateNow(
+                            reason =
+                                "Committed structured delegation report: " +
+                                    pending.agentLabel
+                        )
+                    if (checkpoint.isFailure) {
+                        pauseForNeedsDirection(
+                            context,
+                            context.getString(
+                                R.string.agent_checkpoint_failed_continue
+                            )
+                        )
+                        return@launch
+                    }
+                    enqueueAgentContinuation(
+                        context = context,
+                        ollamaService = ollamaService,
+                        settingsRepo = settingsRepo,
+                        agentService = agentService,
+                        reason = if (deliveredGuidance > 0) {
+                            "delegation ${pending.agentLabel} completed " +
+                                "with user guidance"
+                        } else {
+                            "delegation ${pending.agentLabel} completed"
+                        },
+                        runEpoch = runEpoch
+                    )
+                } catch (error: Throwable) {
+                    AppDatabase.getDatabase(context.applicationContext)
+                        .agentWorkflowDao()
+                        .finishInvocationExactlyOnce(
+                            id = pending.invocationId,
+                            status = "FAILED",
+                            resultSummary = null,
+                            errorClass = error.javaClass.simpleName,
+                            errorMessage = error.message
+                        )
+                    addMessage(
+                        ChatMessage(
+                            role = "tool",
+                            content = buildToolResultEnvelope(
+                                toolName = "call_agent",
+                                status = "error",
+                                summary =
+                                    "The specialist report could not be " +
+                                        "committed transactionally.",
+                                importantOutput =
+                                    error.message
+                                        ?: error.javaClass.simpleName,
+                                nextHint =
+                                    "Reload project_state before retrying. " +
+                                        "Do not assume the TODO advanced."
+                            ),
+                            toolName = pending.toolCall.name,
+                            toolCallId = pending.toolCall.id
+                        )
+                    )
+                    pauseForNeedsDirection(
+                        context,
+                        "Specialist state transition failed: " +
+                            (error.message ?: error.javaClass.simpleName)
+                    )
                 }
-                enqueueAgentContinuation(
-                    context = context,
-                    ollamaService = ollamaService,
-                    settingsRepo = settingsRepo,
-                    agentService = agentService,
-                    reason = if (deliveredGuidance > 0) {
-                        "delegation ${pending.agentLabel} completed with user guidance"
-                    } else {
-                        "delegation ${pending.agentLabel} completed"
-                    },
-                    runEpoch = runEpoch
-                )
             }
             return true
         }
+
+
 
         /**
          * Get current session
@@ -4890,6 +4989,18 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             _currentPlanningModeEnabled.value = enabled
             if (!enabled) {
                 _planningImplementationUnlocked.value = false
+            }
+            val conversationId = _activeConversationId.value
+                ?: _preferredConversationId.value
+            if (conversationId != null) {
+                agentScope.launch(Dispatchers.IO) {
+                    AgentProjectControlPlane.ensureState(
+                        context =
+                            com.example.llamadroid.LlamaApplication.instance,
+                        conversationId = conversationId,
+                        mode = if (enabled) "PLAN" else "BUILD"
+                    )
+                }
             }
         }
 
@@ -5047,31 +5158,55 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         private fun buildAgentContract(agentType: String): String {
             return when (agentType.uppercase()) {
-                "CODER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"changed_files\":[...],\"intent_per_file\":{\"path\":\"why\"},\"verification_reads\":[...],\"remaining_risks\":[...]}. Write memory before finishing."
-                "REVIEWER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"findings\":[{\"file\":\"...\",\"line\":12,\"severity\":\"HIGH|MEDIUM|LOW\",\"description\":\"...\",\"recommendation\":\"...\"}],\"remaining_risks\":[...]}. Write memory before finishing."
-                "EXECUTOR" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"commands_run\":[...],\"command_ids\":[...],\"final_status\":\"...\",\"key_outputs\":[...],\"next_recommendation\":\"...\"}. Write memory before finishing."
-                "VISUAL_TESTER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"tested_url\":\"...\",\"actions\":[...],\"findings\":[...],\"screens_observed\":0,\"recommendations\":[...] }."
-                "SUMMARIZER" -> "Return via finish_task with summary as JSON: {\"status\":\"SUCCESS|FAILED\",\"memory_files_updated\":[...],\"reason_per_file\":{\"file\":\"why\"},\"carry_forward_notes\":[...] }."
-                else -> "Return via finish_task with a JSON object that includes status plus a concise summary, the evidence collected, and the next recommended step."
+                "CODEBASE_SCOUT" ->
+                    "Return via finish_task with JSON containing status, relevant_files, architecture, dependencies, constraints, risks, open_questions, and recommended_scope."
+                "RESEARCHER" ->
+                    "Return via finish_task with JSON containing status, research_question, sources, facts, conflicts, uncertainties, and recommendations."
+                "PLANNER" ->
+                    "Return via finish_task with JSON containing status, plan_markdown, structured_plan, open_questions, and recommended_next_steps."
+                "CODER" ->
+                    "Return via finish_task with JSON containing status, changed_files, intent_per_file, verification_reads, and remaining_risks."
+                "REVIEWER" ->
+                    "Return via finish_task with JSON containing status, findings, and remaining_risks."
+                "EXECUTOR" ->
+                    "Return via finish_task with JSON containing status, commands_run, command_ids, final_status, key_outputs, and next_recommendation."
+                "VISUAL_TESTER" ->
+                    "Return via finish_task with JSON containing status, tested_url, actions, findings, screens_observed, and recommendations."
+                "SUMMARIZER" ->
+                    "Return via finish_task with JSON containing status, memory_files_updated, reason_per_file, and carry_forward_notes."
+                else ->
+                    "Return via finish_task with a JSON object containing status, a concise summary, evidence, and the next recommended step."
             }
         }
+
+
 
         private fun buildFinishTaskSchemaPrompt(
             role: AgentRole,
             activeCustom: com.example.llamadroid.data.db.CustomAgentEntity?
         ): String? {
-            if (role == AgentRole.ORCHESTRATOR && activeCustom == null) return null
+            if (role == AgentRole.ORCHESTRATOR && activeCustom == null) {
+                return null
+            }
             return when (role) {
-                AgentRole.CODER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"changed_files\":[\"path\"],\"intent_per_file\":{\"path\":\"what changed and why\"},\"verification_reads\":[\"file:line\"],\"remaining_risks\":[\"risk\"]}"
-                AgentRole.REVIEWER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"findings\":[{\"file\":\"path\",\"line\":123,\"severity\":\"HIGH|MEDIUM|LOW\",\"description\":\"issue\",\"recommendation\":\"fix\"}],\"remaining_risks\":[\"risk\"]}"
-                AgentRole.EXECUTOR -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"commands_run\":[\"./gradlew test\"],\"command_ids\":[\"cmd_123\"],\"final_status\":\"passed|failed|blocked\",\"key_outputs\":[\"important output\"],\"next_recommendation\":\"next action\"}"
-                AgentRole.VISUAL_TESTER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"tested_url\":\"url\",\"actions\":[\"observe\",\"tap\"],\"findings\":[\"finding\"],\"screens_observed\":1,\"recommendations\":[\"next action\"]}"
-                AgentRole.SUMMARIZER -> "FINISH TASK JSON SCHEMA: {\"status\":\"SUCCESS|FAILED\",\"memory_files_updated\":[\"summary.md\"],\"reason_per_file\":{\"summary.md\":\"why\"},\"carry_forward_notes\":[\"note\"]}"
-                AgentRole.ORCHESTRATOR -> if (activeCustom != null) {
-                    "FINISH TASK JSON SCHEMA: return a JSON object with status, summary, evidence, and next step."
-                } else {
-                    null
-                }
+                AgentRole.CODEBASE_SCOUT ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"relevant_files\":[\"path\"],\"architecture\":[\"fact\"],\"dependencies\":[\"dependency\"],\"constraints\":[\"constraint\"],\"risks\":[\"risk\"],\"open_questions\":[\"question\"],\"recommended_scope\":[\"scope\"]}"
+                AgentRole.RESEARCHER ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"research_question\":\"question\",\"sources\":[\"source + URL/reference\"],\"facts\":[\"fact\"],\"conflicts\":[\"conflict\"],\"uncertainties\":[\"uncertainty\"],\"recommendations\":[\"recommendation\"]}"
+                AgentRole.PLANNER ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"plan_markdown\":\"plan\",\"structured_plan\":{\"plan_version\":\"id\",\"summary\":\"summary\",\"phases\":[{\"id\":\"phase\",\"title\":\"title\",\"todos\":[{\"id\":\"todo\",\"text\":\"task\",\"owner_role\":\"CODER\",\"dependencies\":[],\"acceptance_criteria\":[],\"priority\":\"NORMAL\"}]}]},\"open_questions\":[],\"recommended_next_steps\":[]}"
+                AgentRole.CODER ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"changed_files\":[\"path\"],\"intent_per_file\":{\"path\":\"what and why\"},\"verification_reads\":[\"file:line\"],\"remaining_risks\":[\"risk\"]}"
+                AgentRole.REVIEWER ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"findings\":[{\"file\":\"path\",\"line\":123,\"severity\":\"HIGH|MEDIUM|LOW\",\"description\":\"issue\",\"recommendation\":\"fix\"}],\"remaining_risks\":[\"risk\"]}"
+                AgentRole.EXECUTOR ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"commands_run\":[\"command\"],\"command_ids\":[\"cmd\"],\"final_status\":\"passed|failed|blocked\",\"key_outputs\":[\"output\"],\"next_recommendation\":\"next\"}"
+                AgentRole.VISUAL_TESTER ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"tested_url\":\"url\",\"actions\":[\"action\"],\"findings\":[\"finding\"],\"screens_observed\":1,\"recommendations\":[\"next\"]}"
+                AgentRole.SUMMARIZER ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"memory_files_updated\":[\"summary.md\"],\"reason_per_file\":{\"summary.md\":\"why\"},\"carry_forward_notes\":[\"note\"]}"
+                AgentRole.ORCHESTRATOR ->
+                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"summary\":\"summary\",\"evidence\":[],\"next_step\":\"next\"}"
             }
         }
 
@@ -5089,9 +5224,32 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             }
 
             return when (role) {
-                AgentRole.SUMMARIZER -> baseProfile.copy(promptContextRatio = (baseProfile.promptContextRatio + 0.05).coerceAtMost(0.75))
-                AgentRole.REVIEWER -> baseProfile.copy(digestItems = (baseProfile.digestItems + 2).coerceAtMost(18))
-                AgentRole.EXECUTOR -> baseProfile.copy(toolRecentChars = baseProfile.toolRecentChars + 400, toolOldChars = baseProfile.toolOldChars + 200)
+                AgentRole.ORCHESTRATOR ->
+                    baseProfile.copy(
+                        promptContextRatio = minOf(baseProfile.promptContextRatio, 0.50),
+                        recentMessages = minOf(baseProfile.recentMessages, 6),
+                        digestItems = minOf(baseProfile.digestItems, 10)
+                    )
+                AgentRole.CODEBASE_SCOUT,
+                AgentRole.RESEARCHER,
+                AgentRole.PLANNER ->
+                    baseProfile.copy(
+                        promptContextRatio = minOf(baseProfile.promptContextRatio, 0.55),
+                        recentMessages = minOf(baseProfile.recentMessages, 7)
+                    )
+                AgentRole.SUMMARIZER ->
+                    baseProfile.copy(
+                        promptContextRatio = (baseProfile.promptContextRatio + 0.05).coerceAtMost(0.75)
+                    )
+                AgentRole.REVIEWER ->
+                    baseProfile.copy(
+                        digestItems = (baseProfile.digestItems + 2).coerceAtMost(18)
+                    )
+                AgentRole.EXECUTOR ->
+                    baseProfile.copy(
+                        toolRecentChars = baseProfile.toolRecentChars + 400,
+                        toolOldChars = baseProfile.toolOldChars + 200
+                    )
                 else -> baseProfile
             }
         }
@@ -5630,6 +5788,26 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 if (stampedMessage.role == "user" && !isTransientCompactionStatusMessage(stampedMessage)) {
                     captureInitialOrderIfNeeded(stampedMessage.content)
                 }
+                if (
+                    stampedMessage.role == "user" &&
+                    stampedMessage.invocationId == null &&
+                    !isTransientCompactionStatusMessage(stampedMessage) &&
+                    !isQueuedGuidanceEnvelope(stampedMessage.content)
+                ) {
+                    val conversationId = _activeConversationId.value
+                        ?: _preferredConversationId.value
+                    if (conversationId != null) {
+                        agentScope.launch(Dispatchers.IO) {
+                            AgentProjectControlPlane.noteSemanticEvent(
+                                context =
+                                    com.example.llamadroid.LlamaApplication.instance,
+                                conversationId = conversationId,
+                                kind = "user_guidance",
+                                goal = stampedMessage.content
+                            )
+                        }
+                    }
+                }
                 if (shouldTrackMessageAsCurrentTask(stampedMessage)) {
                     setCurrentTask(stampedMessage.content)
                     recordAgentEvent("user_request", "Updated current task from user message", stampedMessage.content)
@@ -5955,9 +6133,30 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     created
                 }
                 if (durablePlan.state == "BUILDING" || durablePlan.continuationEnqueued) {
+                    val effectivePlan = (
+                        durablePlan.editedPlan ?: durablePlan.originalPlan
+                    ).trim()
+                    val materialized =
+                        AgentProjectControlPlane.materializeApprovedPlan(
+                            context = context,
+                            conversationId = durablePlan.conversationId,
+                            pendingPlanId = durablePlan.id,
+                            summary = durablePlan.summary,
+                            approvedPlan = effectivePlan
+                        )
+                    agentService.rewriteMemory(
+                        "todo.md",
+                        AgentProjectControlPlane.renderTodoMarkdown(
+                            materialized.todos
+                        ),
+                        countsAsMemoryUpdate = false
+                    )
                     _pendingPlanApprovalId.value = null
                     updateMessage(id) { it.copy(isPlanApproved = true) }
-                    return@withLock PlanApprovalResult(true, context.getString(R.string.agent_plan_approved_msg))
+                    return@withLock PlanApprovalResult(
+                        true,
+                        context.getString(R.string.agent_plan_approved_msg)
+                    )
                 }
                 val approvedPlan = (editedPlan ?: durablePlan.editedPlan ?: durablePlan.originalPlan).trim()
                 val approvalCacheDecision = planApprovalPromptCacheDecision(durablePlan.originalPlan, approvedPlan)
@@ -5982,6 +6181,21 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             countsAsMemoryUpdate = false
                         ).getOrThrow()
                     }
+                    val materializedPlan =
+                        AgentProjectControlPlane.materializeApprovedPlan(
+                            context = context,
+                            conversationId = durablePlan.conversationId,
+                            pendingPlanId = durablePlan.id,
+                            summary = durablePlan.summary,
+                            approvedPlan = approvedPlan
+                        )
+                    agentService.rewriteMemory(
+                        "todo.md",
+                        AgentProjectControlPlane.renderTodoMarkdown(
+                            materializedPlan.todos
+                        ),
+                        countsAsMemoryUpdate = false
+                    ).getOrThrow()
                     workflowDao.checkpointPlanResolution(
                         id = durablePlan.id,
                         operationId = operationId,
@@ -6024,7 +6238,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             // The proposal already remains in prompt history. Repeating an
                             // unchanged plan here destroys the stable cache prefix.
                             importantOutput = approvalCacheDecision.modifiedPlanForToolResult,
-                            nextHint = "The user explicitly approved this plan. Begin implementation now: first call todo_write to create or update the durable todo list, then keep it updated after each meaningful implementation and verification step."
+                            nextHint = "The user explicitly approved this plan. The runtime already materialized stable durable TODOs. Call project_state_read, then delegate exactly the current permitted TODO transition. Do not replace the complete TODO list."
                         )
                     )
                     _messages.update { current -> current.filterNot {
@@ -7121,6 +7335,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             return@launch
                         }
                     }
+                    val hardCompactionApplied =
+                        hardCompactionResult.getOrDefault(false)
                     agentService.ensureStructuredBrainFiles()
                         .onFailure {
                             addDebugLog(
@@ -7139,16 +7355,34 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 "⚠️ Failed to sync agent_state.json before prompting: ${it.message}"
                             )
                         }
-                    val hardCompactionMode = _currentSessionId.value == null &&
-                        activeAgentRole == AgentRole.ORCHESTRATOR &&
-                        hardCompactionState != null
-                    val structuredResumeState = if (hardCompactionMode) {
+                    val isRootOrchestrator =
+                        _currentSessionId.value == null &&
+                            activeAgentRole == AgentRole.ORCHESTRATOR
+                    val hardCompactionMode =
+                        isRootOrchestrator && hardCompactionState != null
+                    val rootProjectControlPacket = if (isRootOrchestrator) {
+                        val conversationId = _activeConversationId.value
+                            ?: _preferredConversationId.value
+                        conversationId?.let {
+                            AgentProjectControlPlane.buildControlPacket(
+                                context = context,
+                                conversationId = it,
+                                initialOrder = initialOrderContent,
+                                maxChars = 12_000
+                            )
+                        }
+                    } else {
+                        null
+                    }
+                    val structuredResumeState = if (
+                        isRootOrchestrator || hardCompactionMode
+                    ) {
                         null
                     } else {
                         agentService.buildStructuredBrainState().getOrNull()
                     }
                     val compactStateSnapshot = if (hardCompactionMode) {
-                        agentService.buildCompactStateSnapshot().getOrNull()
+                        rootProjectControlPacket
                     } else {
                         null
                     }
@@ -7233,8 +7467,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         append("When you need a tool, emit a real tool call. Do NOT place tool JSON inside <think>, markdown fences, or plain assistant text.\n")
                         append("Before writing or editing a file, read the current file state first. After you change a file, reread it or check brain/changed_files.md before editing it again.\n")
                         if (currentAgent == AgentRole.ORCHESTRATOR) {
-                            append("As ORCHESTRATOR, decide the strategy and delegate specialist work through call_agent. Read or inspect context if needed, but do not directly do coder, reviewer, executor, or summarizer work yourself. Use CODER for code changes, REVIEWER for findings, EXECUTOR for command-heavy execution, and SUMMARIZER for memory consolidation.\n")
-                            append("Assign exactly one atomic todo-sized task to each call_agent invocation. Never delegate the whole implementation plan or multiple todo items to one agent; create a separate sequential invocation for each todo.\n")
+                            append("As ORCHESTRATOR, operate only as the project control plane. Treat the fresh Project Control Packet and runtime-owned TODO transitions as authoritative. Use CODEBASE_SCOUT for repository discovery, RESEARCHER for external information, PLANNER for structured plan synthesis, CODER for changes, REVIEWER for findings, EXECUTOR for commands, VISUAL_TESTER for previews, and SUMMARIZER only for bounded human-readable state projection.\n")
+                            append("In Build mode every worker/custom call_agent invocation must include exactly one current todo_id from project_state. After each specialist return, read project_state again and follow only the permitted next action. Never replace or reconstruct the complete TODO list from chat.\n")
                             if (isBuiltInAgentEnabled("REVIEWER")) {
                                 append("Code integrity and quality review belongs to REVIEWER. Never claim review or code-quality signoff yourself; call_agent REVIEWER and use its findings before final completion.\n")
                             } else {
@@ -7242,7 +7476,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             }
                         }
                         append("Verify edits with targeted reads, review, and focused build/test commands before claiming completion.\n")
-                        append("Older history may be compacted into digests and action rationale notes to stay within the model context window. After a turn crosses 70% usage, the next turn may hard-compact the retained context to the initial order, approved plan, compaction summary, and a token-budgeted recent tail of the conversation.\n")
+                        append("Older chat is evidence and may be omitted. Canonical project state, stable TODOs, plan/report IDs, blockers, and verification transitions survive in Room. Hard compaction renders a deterministic control-state projection and a token-budgeted atomic recent tail; it never recursively summarizes previous compaction prose.\n")
                         if (_autoReflectionEnabled.value) {
                             append("Use reflection near completion or after a major milestone to compare the work against plan.md before finalizing.\n")
                         } else {
@@ -7341,21 +7575,85 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             compactMode = true
                         )
                     } else {
-                        val frozenOptionalMessages = frozenOptionalPromptByTurnBranch.getOrPut(
-                            activeTurnBranchKey
-                        ) {
-                            buildList {
-                                structuredResumeState?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
-                                relevantLessons?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
-                                retrievedWorkingSet?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
-                                buildMemoryGateSystemPrompt()?.let { add(ChatMessage(role = "system", content = it)) }
-                                memoryInterruptPrompt?.takeIf { it.isNotBlank() }?.let { add(ChatMessage(role = "system", content = it)) }
+                        val frozenOptionalMessages =
+                            frozenOptionalPromptByTurnBranch.getOrPut(
+                                activeTurnBranchKey
+                            ) {
+                                buildList {
+                                    structuredResumeState
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let {
+                                            add(
+                                                ChatMessage(
+                                                    role = "system",
+                                                    content = it
+                                                )
+                                            )
+                                        }
+                                    relevantLessons
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let {
+                                            add(
+                                                ChatMessage(
+                                                    role = "system",
+                                                    content = it
+                                                )
+                                            )
+                                        }
+                                    retrievedWorkingSet
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let {
+                                            add(
+                                                ChatMessage(
+                                                    role = "system",
+                                                    content = it
+                                                )
+                                            )
+                                        }
+                                    buildMemoryGateSystemPrompt()?.let {
+                                        add(
+                                            ChatMessage(
+                                                role = "system",
+                                                content = it
+                                            )
+                                        )
+                                    }
+                                    memoryInterruptPrompt
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let {
+                                            add(
+                                                ChatMessage(
+                                                    role = "system",
+                                                    content = it
+                                                )
+                                            )
+                                        }
+                                }
                             }
+                        val currentOptionalMessages = buildList {
+                            rootProjectControlPacket
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let {
+                                    add(
+                                        ChatMessage(
+                                            role = "system",
+                                            content = it
+                                        )
+                                    )
+                                }
+                            addAll(frozenOptionalMessages)
                         }
                         PromptAssembly(
-                            requiredPrimacyMessages = listOf(ChatMessage(role = "system", content = fullSystemPrompt)),
-                            optionalPrimacyMessages = frozenOptionalMessages,
-                            historyMessages = messagesWithReminders + lateTurnMessages,
+                            requiredPrimacyMessages = listOf(
+                                ChatMessage(
+                                    role = "system",
+                                    content = fullSystemPrompt
+                                )
+                            ),
+                            optionalPrimacyMessages =
+                                currentOptionalMessages,
+                            historyMessages =
+                                messagesWithReminders + lateTurnMessages,
                             compactMode = false
                         )
                     }
@@ -7472,6 +7770,55 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             exactCountingAvailable =
                                 promptCount.countSource ==
                                     AgentPromptCountSource.LLAMA_SERVER_EXACT
+                        )
+                    }
+
+                    if (
+                        hardCompactionApplied &&
+                        activeAgentRole == AgentRole.ORCHESTRATOR &&
+                        _currentSessionId.value == null
+                    ) {
+                        val measurement =
+                            AgentProjectControlPlane
+                                .completeCompactionMeasurement(
+                                    context = context,
+                                    conversationId =
+                                        _activeConversationId.value
+                                            ?: _preferredConversationId.value
+                                            ?: error(
+                                                "Compaction lost its project"
+                                            ),
+                                    postTokens =
+                                        promptCount.resolvedInputTokens,
+                                    maximumInputTokens =
+                                        activeCapacity.maximumInputTokens
+                                )
+                        hardCompactionState = hardCompactionState?.copy(
+                            compactionStatus = measurement.status,
+                            postCompactionTokens = measurement.postTokens,
+                            savedTokens = measurement.savedTokens,
+                            lastPostCompactionRawTokens =
+                                promptCount.rawSerializedRequestTokens,
+                            lastPostCompactionPackedTokens =
+                                promptCount.resolvedInputTokens
+                        )
+                        recordAgentEvent(
+                            kind = if (
+                                measurement.status ==
+                                AgentCompactionStatus.SATURATED
+                            ) {
+                                "hard_compaction_saturated"
+                            } else {
+                                "hard_compaction_measured"
+                            },
+                            summary =
+                                "Measured deterministic compaction savings",
+                            details =
+                                "pre=${measurement.preTokens} " +
+                                    "post=${measurement.postTokens} " +
+                                    "saved=${measurement.savedTokens} " +
+                                    "minimum=${measurement.minimumUsefulSavings} " +
+                                    "revision=${measurement.stateRevision}"
                         )
                     }
 
@@ -8044,10 +8391,13 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         )
                         scheduleHardCompactionIfNeeded(
                             contextSize = contextSize,
+                            maximumInputTokens =
+                                activeCapacity.maximumInputTokens,
                             packedEstimatedTokens =
                                 promptCount.resolvedInputTokens,
                             actualPromptTokens =
-                                chatResponse.usage?.promptTokens
+                                chatResponse.usage?.promptTokens,
+                            toolDefinitionsHash = toolDefinitionsHash
                         )
                         chatResponse.usage?.let { usage ->
                             agentService.appendAuditRecord(
@@ -8556,7 +8906,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
                     clearRepeatedFailure(toolCall.name, validatedToolCall.normalizedArguments)
 
-                    if (validatedToolCall.toolCall.name == "finish_task" && _memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) {
+                    if (validatedToolCall.toolCall.name == "finish_task" && _memoryDirty.value && roleRequiresMemoryGate(_currentAgent.value)) {
                         val gatedOutput = buildToolResultEnvelope(
                             toolName = "memory_gate",
                             status = "error",
@@ -8966,104 +9316,295 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 } + "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "call_agent" -> {
-                                val agentName = toolCall.arguments["agent"] ?: "CODER"
-                                val requestedInvocationName = normalizeAgentInvocationName(toolCall.arguments["name"].orEmpty())
-                                    ?: throw IllegalArgumentException("call_agent requires a non-blank name of at most 40 characters.")
-                                if (_currentAgent.value != AgentRole.ORCHESTRATOR || _activeCustomAgent.value != null) {
-                                    throw IllegalStateException("Only the Orchestrator can call another agent.")
+                                val agentName = toolCall.arguments["agent"]
+                                    ?.trim()
+                                    ?.uppercase()
+                                    ?: "CODEBASE_SCOUT"
+                                val requestedInvocationName =
+                                    normalizeAgentInvocationName(
+                                        toolCall.arguments["name"].orEmpty()
+                                    )
+                                        ?: throw IllegalArgumentException(
+                                            "call_agent requires a non-blank " +
+                                                "name of at most 40 characters."
+                                        )
+                                if (
+                                    _currentAgent.value != AgentRole.ORCHESTRATOR ||
+                                    _activeCustomAgent.value != null
+                                ) {
+                                    throw IllegalStateException(
+                                        "Only the Orchestrator can call another agent."
+                                    )
                                 }
-                                val task = toolCall.arguments["task"] ?: ""
-                                val agentCtx = toolCall.arguments["context"] ?: ""
+
+                                val task = toolCall.arguments["task"]
+                                    ?.trim()
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?: throw IllegalArgumentException(
+                                        "call_agent requires one atomic task."
+                                    )
+                                val requestedTodoId =
+                                    toolCall.arguments["todo_id"]
+                                        ?.trim()
+                                        ?.takeIf { it.isNotBlank() }
+                                val suppliedContext =
+                                    toolCall.arguments["context"]
+                                        ?.trim()
+                                        .orEmpty()
+                                val builtInRole = when (agentName) {
+                                    "CODEBASE_SCOUT", "SCOUT" ->
+                                        AgentRole.CODEBASE_SCOUT
+                                    "RESEARCHER", "RESEARCH" ->
+                                        AgentRole.RESEARCHER
+                                    "PLANNER" -> AgentRole.PLANNER
+                                    "CODER" -> AgentRole.CODER
+                                    "REVIEWER" -> AgentRole.REVIEWER
+                                    "EXECUTOR" -> AgentRole.EXECUTOR
+                                    "VISUAL_TESTER" ->
+                                        AgentRole.VISUAL_TESTER
+                                    "SUMMARIZER", "STATE_CURATOR" ->
+                                        AgentRole.SUMMARIZER
+                                    else -> null
+                                }
+                                val isPlanMode =
+                                    _currentPlanningModeEnabled.value
+                                if (
+                                    builtInRole != null &&
+                                    isPlanMode &&
+                                    AgentProjectControlPlane
+                                        .isSequentialWorkerRole(
+                                            builtInRole.name
+                                        ) &&
+                                    builtInRole != AgentRole.SUMMARIZER
+                                ) {
+                                    throw IllegalStateException(
+                                        "${builtInRole.name} is a Build-mode " +
+                                            "worker. Use CODEBASE_SCOUT, " +
+                                            "RESEARCHER, or PLANNER in Plan mode."
+                                    )
+                                }
+                                if (
+                                    !isPlanMode &&
+                                    (
+                                        builtInRole?.let {
+                                            AgentProjectControlPlane
+                                                .isSequentialWorkerRole(it.name)
+                                        } == true ||
+                                            builtInRole == null
+                                        ) &&
+                                    requestedTodoId == null
+                                ) {
+                                    throw IllegalArgumentException(
+                                        "Build-mode specialist delegations " +
+                                            "require todo_id from project_state."
+                                    )
+                                }
+
                                 val handoffCount = handoffsByEpoch
-                                    .getOrPut(runEpoch) { java.util.concurrent.atomic.AtomicInteger(0) }
+                                    .getOrPut(runEpoch) {
+                                        java.util.concurrent.atomic.AtomicInteger(0)
+                                    }
                                     .incrementAndGet()
                                 if (handoffCount >= LOOP_WAKEUP_HANDOFFS) {
                                     postLoopWakeup(
                                         context = context,
-                                        signal = context.getString(R.string.agent_loop_signal_handoff),
+                                        signal = context.getString(
+                                            R.string.agent_loop_signal_handoff
+                                        ),
                                         occurrenceCount = handoffCount,
-                                        evidence = "agent=$agentName task=$task"
+                                        evidence =
+                                            "agent=$agentName todo=" +
+                                                (requestedTodoId ?: "none")
                                     )
                                 }
                                 if (handoffCount > MAX_HANDOFFS_PER_REQUEST) {
-                                    pauseForNeedsDirection(context, context.getString(R.string.agent_loop_handoff_budget_reason))
+                                    pauseForNeedsDirection(
+                                        context,
+                                        context.getString(
+                                            R.string.agent_loop_handoff_budget_reason
+                                        )
+                                    )
                                     toolHandlesContinuation = true
                                     return@launch
                                 }
+
                                 val parentSessionId = _currentSessionId.value
                                 val parentAgent = _currentAgent.value
                                 val parentTask = _currentTask.value
-                                val parentCustomAgent = _activeCustomAgent.value
-                                val conversationId = _activeConversationId.value
-                                    ?: throw IllegalStateException("call_agent requires an active conversation.")
+                                val parentCustomAgent =
+                                    _activeCustomAgent.value
+                                val conversationId =
+                                    _activeConversationId.value
+                                        ?: throw IllegalStateException(
+                                            "call_agent requires an active " +
+                                                "conversation."
+                                        )
+                                val controlPacket =
+                                    AgentProjectControlPlane
+                                        .buildControlPacket(
+                                            context = context,
+                                            conversationId = conversationId,
+                                            initialOrder =
+                                                initialOrderContent,
+                                            maxChars = 8_000
+                                        )
+                                val agentCtx = buildString {
+                                    append(controlPacket)
+                                    if (suppliedContext.isNotBlank()) {
+                                        appendLine()
+                                        appendLine()
+                                        appendLine(
+                                            "# Orchestrator Handoff Context"
+                                        )
+                                        append(suppliedContext.take(8_000))
+                                    }
+                                }
+
                                 suspend fun allocateInvocation(
                                     agentClass: String,
-                                    agentKey: String
+                                    agentKey: String,
+                                    claimRole: String
                                 ): com.example.llamadroid.data.db.AgentInvocationEntity {
                                     val now = System.currentTimeMillis()
-                                    return AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao().allocateInvocation(
-                                        com.example.llamadroid.data.db.AgentInvocationEntity(
-                                            id = java.util.UUID.randomUUID().toString(),
-                                            conversationId = conversationId,
-                                            rootTurnId = activeRootTurnStorageId,
-                                            runtimeEpoch = runEpoch,
-                                            parentToolCallId = toolCall.id ?: java.util.UUID.randomUUID().toString(),
-                                            agentClass = agentClass,
-                                            agentKey = agentKey,
-                                            requestedName = requestedInvocationName.displayName,
-                                            baseNameKey = requestedInvocationName.key,
-                                            occurrence = 0,
-                                            resolvedName = requestedInvocationName.displayName,
-                                            resolvedNameKey = requestedInvocationName.key,
-                                            task = task,
-                                            context = agentCtx.takeIf { it.isNotBlank() },
-                                            startedAt = now,
-                                            updatedAt = now
+                                    val prototype =
+                                        com.example.llamadroid.data.db
+                                            .AgentInvocationEntity(
+                                                id = java.util.UUID
+                                                    .randomUUID()
+                                                    .toString(),
+                                                conversationId =
+                                                    conversationId,
+                                                rootTurnId =
+                                                    activeRootTurnStorageId,
+                                                runtimeEpoch = runEpoch,
+                                                parentToolCallId =
+                                                    toolCall.id
+                                                        ?: java.util.UUID
+                                                            .randomUUID()
+                                                            .toString(),
+                                                agentClass = agentClass,
+                                                agentKey = agentKey,
+                                                requestedName =
+                                                    requestedInvocationName
+                                                        .displayName,
+                                                baseNameKey =
+                                                    requestedInvocationName.key,
+                                                occurrence = 0,
+                                                resolvedName =
+                                                    requestedInvocationName
+                                                        .displayName,
+                                                resolvedNameKey =
+                                                    requestedInvocationName.key,
+                                                task = task,
+                                                context = agentCtx,
+                                                todoId = requestedTodoId,
+                                                startedAt = now,
+                                                updatedAt = now
+                                            )
+                                    return if (requestedTodoId != null) {
+                                        AgentProjectControlPlane
+                                            .allocateInvocationForTodo(
+                                                context = context,
+                                                prototype = prototype,
+                                                todoId = requestedTodoId,
+                                                role = claimRole
+                                            )
+                                    } else {
+                                        AppDatabase.getDatabase(
+                                            context.applicationContext
                                         )
-                                    )
+                                            .agentWorkflowDao()
+                                            .allocateInvocation(prototype)
+                                    }
                                 }
+
                                 var delegationSummary: String? = null
                                 postOrchestratorProgressUpdate(
                                     context = context,
                                     phase = progressPhaseForAgent(agentName),
-                                    summary = context.getString(R.string.agent_progress_delegating, agentName)
+                                    summary = context.getString(
+                                        R.string.agent_progress_delegating,
+                                        agentName
+                                    )
                                 )
                                 fun restoreParentAgentContext() {
                                     _currentSessionId.value = parentSessionId
-                                    _activeCustomAgent.value = parentCustomAgent
+                                    _activeCustomAgent.value =
+                                        parentCustomAgent
                                     setCurrentAgent(parentAgent)
                                     setCurrentTask(parentTask)
                                 }
 
-                                // Check for built-in agents first (including SUMMARIZER)
-                                val builtInRole = when (agentName.uppercase()) {
-                                    "CODER" -> AgentRole.CODER
-                                    "REVIEWER" -> AgentRole.REVIEWER
-                                    "EXECUTOR" -> AgentRole.EXECUTOR
-                                    "VISUAL_TESTER" -> AgentRole.VISUAL_TESTER
-                                    "SUMMARIZER" -> AgentRole.SUMMARIZER
-                                    else -> null
+                                suspend fun markFailedClaim(
+                                    todoId: String?,
+                                    reason: String
+                                ) {
+                                    if (todoId == null) return
+                                    runCatching {
+                                        AgentProjectControlPlane
+                                            .transitionTodo(
+                                                context = context,
+                                                conversationId =
+                                                    conversationId,
+                                                todoId = todoId,
+                                                expectedStatus =
+                                                    AgentTodoStatus
+                                                        .IN_PROGRESS,
+                                                requestedStatus =
+                                                    AgentTodoStatus.BLOCKED,
+                                                resultSummary =
+                                                    "Delegation failed before " +
+                                                        "the specialist could " +
+                                                        "return a report.",
+                                                blockReason =
+                                                    reason.take(1_000)
+                                            )
+                                    }
                                 }
 
                                 if (builtInRole != null) {
-                                    val invocation = allocateInvocation(builtInRole.name, builtInRole.name)
-                                    updateDelegationDisplayName(toolCall.id, invocation.resolvedName)
+                                    val invocation = allocateInvocation(
+                                        builtInRole.name,
+                                        builtInRole.name,
+                                        builtInRole.name
+                                    )
+                                    updateDelegationDisplayName(
+                                        toolCall.id,
+                                        invocation.resolvedName
+                                    )
                                     try {
-                                        // Delegate to built-in agent
                                         activeInvocationId = invocation.id
-                                        val childSessionId = startSession(builtInRole.name, _currentSessionId.value, task, agentCtx)
-                                        AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
-                                            .attachInvocationSession(invocation.id, childSessionId)
-                                        pendingDelegations[childSessionId] = PendingAgentDelegation(
-                                            toolCall = toolCall,
-                                            parentSessionId = parentSessionId,
-                                            parentAgent = parentAgent,
-                                            parentTask = parentTask,
-                                            parentCustomAgent = parentCustomAgent,
-                                            agentLabel = builtInRole.name,
-                                            invocationId = invocation.id,
-                                            resolvedDisplayName = "${builtInRole.name} - ${invocation.resolvedName}"
+                                        val childSessionId = startSession(
+                                            builtInRole.name,
+                                            _currentSessionId.value,
+                                            task,
+                                            agentCtx
                                         )
+                                        AppDatabase.getDatabase(
+                                            context.applicationContext
+                                        )
+                                            .agentWorkflowDao()
+                                            .attachInvocationSession(
+                                                invocation.id,
+                                                childSessionId
+                                            )
+                                        pendingDelegations[childSessionId] =
+                                            PendingAgentDelegation(
+                                                toolCall = toolCall,
+                                                parentSessionId =
+                                                    parentSessionId,
+                                                parentAgent = parentAgent,
+                                                parentTask = parentTask,
+                                                parentCustomAgent =
+                                                    parentCustomAgent,
+                                                agentLabel =
+                                                    builtInRole.name,
+                                                invocationId = invocation.id,
+                                                resolvedDisplayName =
+                                                    "${builtInRole.name} - " +
+                                                        invocation.resolvedName,
+                                                todoId = requestedTodoId
+                                            )
                                         setCurrentTask(task)
                                         setCurrentAgent(builtInRole)
                                         toolHandlesContinuation = true
@@ -9072,88 +9613,186 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                             ollamaService = ollamaService,
                                             settingsRepo = settingsRepo,
                                             agentService = agentService,
-                                            reason = "delegation ${builtInRole.name} started",
+                                            reason =
+                                                "delegation " +
+                                                    builtInRole.name +
+                                                    " started",
                                             runEpoch = runEpoch
                                         )
                                         return@launch
-                                    } catch (e: Exception) {
-                                        addDebugLog("❌ Agent delegation to $agentName failed: ${e.message}")
-                                        // Recover: end the failed session and return to orchestrator
-                                        endSession("ERROR: Agent $agentName failed: ${e.message}")
+                                    } catch (error: Exception) {
+                                        addDebugLog(
+                                            "❌ Agent delegation to " +
+                                                "$agentName failed: " +
+                                                error.message
+                                        )
+                                        endSession(
+                                            "ERROR: Agent $agentName failed: " +
+                                                error.message
+                                        )
                                         restoreParentAgentContext()
                                         activeInvocationId = null
-                                        AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                        AppDatabase.getDatabase(
+                                            context.applicationContext
+                                        )
+                                            .agentWorkflowDao()
                                             .finishInvocationExactlyOnce(
                                                 invocation.id,
                                                 "FAILED",
                                                 null,
-                                                e.javaClass.simpleName,
-                                                e.message?.take(240)
+                                                error.javaClass.simpleName,
+                                                error.message?.take(240)
                                             )
-                                        delegationSummary = "ERROR: Agent $agentName failed: ${e.message ?: e::class.java.simpleName}"
+                                        markFailedClaim(
+                                            requestedTodoId,
+                                            error.message
+                                                ?: error.javaClass.simpleName
+                                        )
+                                        delegationSummary =
+                                            "ERROR: Agent $agentName failed: " +
+                                                (
+                                                    error.message
+                                                        ?: error.javaClass
+                                                            .simpleName
+                                                    )
                                     }
                                 } else {
-                                    // Check custom agents
-                                    val customAgent = _loadedCustomAgents.value.find {
-                                        it.name.equals(agentName, ignoreCase = true) && it.isEnabled
-                                    }
+                                    val customAgent =
+                                        _loadedCustomAgents.value.find {
+                                            it.name.equals(
+                                                agentName,
+                                                ignoreCase = true
+                                            ) && it.isEnabled
+                                        }
                                     if (customAgent != null) {
-                                        val agentClass = customAgent.displayName.takeIf { it.isNotBlank() } ?: customAgent.name
-                                        val invocation = allocateInvocation(agentClass, customAgent.name)
-                                        updateDelegationDisplayName(toolCall.id, invocation.resolvedName)
+                                        val agentClass =
+                                            customAgent.displayName.takeIf {
+                                                it.isNotBlank()
+                                            } ?: customAgent.name
+                                        val invocation = allocateInvocation(
+                                            agentClass,
+                                            customAgent.name,
+                                            "CODER"
+                                        )
+                                        updateDelegationDisplayName(
+                                            toolCall.id,
+                                            invocation.resolvedName
+                                        )
                                         try {
-                                            addDebugLog("🤖 Delegating to custom agent: ${customAgent.displayName} (${customAgent.name})")
-                                            // Start a session for the custom agent
+                                            addDebugLog(
+                                                "🤖 Delegating to custom " +
+                                                    "agent: " +
+                                                    customAgent.displayName +
+                                                    " (" +
+                                                    customAgent.name +
+                                                    ")"
+                                            )
                                             activeInvocationId = invocation.id
-                                            val childSessionId = startSession(customAgent.name, _currentSessionId.value, task, agentCtx)
-                                            AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
-                                                .attachInvocationSession(invocation.id, childSessionId)
-                                            pendingDelegations[childSessionId] = PendingAgentDelegation(
+                                            val childSessionId = startSession(
+                                                customAgent.name,
+                                                _currentSessionId.value,
+                                                task,
+                                                agentCtx
+                                            )
+                                            AppDatabase.getDatabase(
+                                                context.applicationContext
+                                            )
+                                                .agentWorkflowDao()
+                                                .attachInvocationSession(
+                                                    invocation.id,
+                                                    childSessionId
+                                                )
+                                            pendingDelegations[
+                                                childSessionId
+                                            ] = PendingAgentDelegation(
                                                 toolCall = toolCall,
-                                                parentSessionId = parentSessionId,
+                                                parentSessionId =
+                                                    parentSessionId,
                                                 parentAgent = parentAgent,
                                                 parentTask = parentTask,
-                                                parentCustomAgent = parentCustomAgent,
+                                                parentCustomAgent =
+                                                    parentCustomAgent,
                                                 agentLabel = agentClass,
-                                                invocationId = invocation.id,
-                                                resolvedDisplayName = "$agentClass - ${invocation.resolvedName}"
+                                                invocationId =
+                                                    invocation.id,
+                                                resolvedDisplayName =
+                                                    "$agentClass - " +
+                                                        invocation
+                                                            .resolvedName,
+                                                todoId = requestedTodoId
                                             )
                                             setCurrentTask(task)
-                                            // Set current agent to CODER as base (custom agents use the same tool set)
                                             setCurrentAgent(AgentRole.CODER)
-                                            // Store the custom agent info for system prompt override
-                                            _activeCustomAgent.value = customAgent
+                                            _activeCustomAgent.value =
+                                                customAgent
                                             toolHandlesContinuation = true
                                             enqueueAgentContinuation(
                                                 context = context,
-                                                ollamaService = ollamaService,
+                                                ollamaService =
+                                                    ollamaService,
                                                 settingsRepo = settingsRepo,
                                                 agentService = agentService,
-                                                reason = "delegation ${customAgent.name} started",
+                                                reason =
+                                                    "delegation " +
+                                                        customAgent.name +
+                                                        " started",
                                                 runEpoch = runEpoch
                                             )
                                             return@launch
-                                        } catch (e: Exception) {
-                                            addDebugLog("❌ Custom agent ${customAgent.name} failed: ${e.message}")
-                                            endSession("ERROR: Custom agent ${customAgent.name} failed: ${e.message}")
+                                        } catch (error: Exception) {
+                                            addDebugLog(
+                                                "❌ Custom agent " +
+                                                    customAgent.name +
+                                                    " failed: " +
+                                                    error.message
+                                            )
+                                            endSession(
+                                                "ERROR: Custom agent " +
+                                                    customAgent.name +
+                                                    " failed: " +
+                                                    error.message
+                                            )
                                             restoreParentAgentContext()
                                             activeInvocationId = null
-                                            AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
+                                            AppDatabase.getDatabase(
+                                                context.applicationContext
+                                            )
+                                                .agentWorkflowDao()
                                                 .finishInvocationExactlyOnce(
                                                     invocation.id,
                                                     "FAILED",
                                                     null,
-                                                    e.javaClass.simpleName,
-                                                    e.message?.take(240)
+                                                    error.javaClass
+                                                        .simpleName,
+                                                    error.message?.take(240)
                                                 )
-                                            delegationSummary = "ERROR: Custom agent ${customAgent.displayName} failed: ${e.message ?: e::class.java.simpleName}"
+                                            markFailedClaim(
+                                                requestedTodoId,
+                                                error.message
+                                                    ?: error.javaClass
+                                                        .simpleName
+                                            )
+                                            delegationSummary =
+                                                "ERROR: Custom agent " +
+                                                    customAgent.displayName +
+                                                    " failed: " +
+                                                    (
+                                                        error.message
+                                                            ?: error
+                                                                .javaClass
+                                                                .simpleName
+                                                        )
                                         }
                                     } else {
-                                        addDebugLog("⚠️ Unknown agent: $agentName")
+                                        throw IllegalArgumentException(
+                                            "Unknown or disabled agent: " +
+                                                agentName
+                                        )
                                     }
                                 }
 
-                                delegationSummary ?: "Delegated to $agentName"
+                                delegationSummary
+                                    ?: "Delegated to $agentName"
                             }
                             "propose_plan" -> {
                                 val plan = toolCall.arguments["plan"] ?: ""
@@ -9268,7 +9907,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 val summary = toolCall.arguments["summary"] ?: "Completed"
                                 runCatching { AgentRuntimeSupport.parseAgentResult(_currentAgent.value.name, summary) }
                                     .getOrElse { throw IllegalArgumentException(it.message ?: "finish_task summary is not schema-valid.") }
-                                if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) {
+                                if (_memoryDirty.value && roleRequiresMemoryGate(_currentAgent.value)) {
                                     throw IllegalStateException(context.getString(R.string.agent_memory_update_required_summary))
                                 }
                                 addDebugLog("✅ Task finished: $summary")
@@ -9405,22 +10044,135 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                     markMemoryDirty("Removed image background for $imagePath.")
                                 }
                             }
-                            "todo_write" -> {
+                            "todo_write", "todo_reconcile" -> {
                                 val conversationId = _activeConversationId.value
-                                    ?: throw IllegalStateException("No active project conversation is selected")
-                                val todoDao = AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
-                                val todos = parseTodoToolCall(conversationId, effectiveToolCall)
-                                todoDao.clearTodos(conversationId)
-                                if (todos.isNotEmpty()) todoDao.upsertTodos(todos)
+                                    ?: throw IllegalStateException(
+                                        "No active project conversation is selected"
+                                    )
+                                val incoming = parseTodoToolCall(
+                                    conversationId,
+                                    effectiveToolCall
+                                )
+                                val todos =
+                                    AgentProjectControlPlane.reconcileTodos(
+                                        context = context,
+                                        conversationId = conversationId,
+                                        incoming = incoming,
+                                        reason = effectiveToolCall.name
+                                    )
+                                agentService.rewriteMemory(
+                                    "todo.md",
+                                    AgentProjectControlPlane.renderTodoMarkdown(
+                                        todos
+                                    ),
+                                    countsAsMemoryUpdate = false
+                                )
                                 todoEntitiesJson(todos)
                             }
                             "todo_read" -> {
                                 val conversationId = _activeConversationId.value
-                                    ?: throw IllegalStateException("No active project conversation is selected")
+                                    ?: throw IllegalStateException(
+                                        "No active project conversation is selected"
+                                    )
                                 todoEntitiesJson(
-                                    AppDatabase.getDatabase(context.applicationContext)
+                                    AppDatabase.getDatabase(
+                                        context.applicationContext
+                                    )
                                         .agentWorkflowDao()
                                         .getTodos(conversationId)
+                                )
+                            }
+                            "todo_transition" -> {
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException(
+                                        "No active project conversation is selected"
+                                    )
+                                val updated =
+                                    AgentProjectControlPlane.transitionTodo(
+                                        context = context,
+                                        conversationId = conversationId,
+                                        todoId =
+                                            effectiveToolCall.arguments[
+                                                "todo_id"
+                                            ].orEmpty(),
+                                        expectedStatus =
+                                            effectiveToolCall.arguments[
+                                                "expected_status"
+                                            ],
+                                        requestedStatus =
+                                            effectiveToolCall.arguments[
+                                                "new_status"
+                                            ].orEmpty(),
+                                        resultSummary =
+                                            effectiveToolCall.arguments[
+                                                "result_summary"
+                                            ],
+                                        blockReason =
+                                            effectiveToolCall.arguments[
+                                                "block_reason"
+                                            ],
+                                        evidenceJson =
+                                            effectiveToolCall.arguments[
+                                                "evidence_json"
+                                            ]
+                                    )
+                                JSONObject().apply {
+                                    put("id", updated.id)
+                                    put("status", updated.status)
+                                    put("owner_role", updated.ownerRole)
+                                    put(
+                                        "assigned_invocation_id",
+                                        updated.assignedInvocationId
+                                    )
+                                    put("result_summary", updated.resultSummary)
+                                    put("block_reason", updated.blockReason)
+                                }.toString(2)
+                            }
+                            "project_state_read" -> {
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException(
+                                        "No active project conversation is selected"
+                                    )
+                                AgentProjectControlPlane.buildControlPacket(
+                                    context = context,
+                                    conversationId = conversationId,
+                                    initialOrder = initialOrderContent
+                                )
+                            }
+                            "project_order_read" -> {
+                                val order = agentService.readBrainFileRaw(
+                                    "initial_order.md"
+                                ).removePrefix("# Initial Order").trim()
+                                buildString {
+                                    appendLine("# Original Project Order")
+                                    appendLine()
+                                    append(order)
+                                }
+                            }
+                            "plan_read" -> {
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException(
+                                        "No active project conversation is selected"
+                                    )
+                                AgentProjectControlPlane.readPlan(
+                                    context = context,
+                                    conversationId = conversationId,
+                                    planId =
+                                        effectiveToolCall.arguments["plan_id"]
+                                )
+                            }
+                            "agent_report_read" -> {
+                                val conversationId = _activeConversationId.value
+                                    ?: throw IllegalStateException(
+                                        "No active project conversation is selected"
+                                    )
+                                AgentProjectControlPlane.readWorkReport(
+                                    context = context,
+                                    conversationId = conversationId,
+                                    reportId =
+                                        effectiveToolCall.arguments[
+                                            "report_id"
+                                        ].orEmpty()
                                 )
                             }
                             "skill" -> {
@@ -10405,14 +11157,28 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 retainedTokens += candidateTokens
             }
 
-            // Keep two recent user-led turns when possible, but move only the
-            // atomic-unit boundary; never split an assistant/tool exchange.
-            val secondLatestUserUnit = units.indices
+            // The current user-led turn is required. A preceding turn is only
+            // retained when the complete atomic-unit suffix still fits the
+            // declared tail budget.
+            val userUnitIndices = units.indices
                 .filter { units[it].containsUserMessage }
+            val latestUserUnit = userUnitIndices.lastOrNull()
+            if (latestUserUnit != null && latestUserUnit < splitIndex) {
+                splitIndex = latestUserUnit
+            }
+            val secondLatestUserUnit = userUnitIndices
                 .takeLast(2)
                 .firstOrNull()
-            if (secondLatestUserUnit != null) {
-                splitIndex = minOf(splitIndex, secondLatestUserUnit)
+            if (
+                secondLatestUserUnit != null &&
+                secondLatestUserUnit < splitIndex
+            ) {
+                val preferredTailTokens = unitTokenEstimates
+                    .drop(secondLatestUserUnit)
+                    .sum()
+                if (preferredTailTokens <= budget) {
+                    splitIndex = secondLatestUserUnit
+                }
             }
 
             val messagesToSummarize = units
@@ -10564,176 +11330,25 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             recentMessages: List<ChatMessage>,
             tailSelection: HardCompactionTailSelection
         ): String = withContext(Dispatchers.IO) {
-            val svc = activeInstance
-            val summaryContent = svc?.readBrainFileRaw("summary.md").orEmpty()
-            val planContent = svc?.readBrainFileRaw("plan.md").orEmpty()
-            val previousCompaction = svc?.readBrainFileRaw("context_compaction.md").orEmpty()
-                .takeIf { it.isNotBlank() && !it.contains("No hard compaction summary recorded yet.", ignoreCase = true) }
-            val changedFilesLines = svc?.readBrainFileRaw("changed_files.md").orEmpty()
-                .lines()
-                .filter { it.trim().startsWith("- ") }
-                .takeLast(8)
-            val decisionsLines = svc?.readBrainFileRaw("decisions.md").orEmpty()
-                .lines()
-                .filter { it.trim().startsWith("- ") }
-                .takeLast(6)
-            val timelineLines = svc?.readBrainFileRaw("timeline.md").orEmpty()
-                .lines()
-                .filter { it.trim().startsWith("- ") }
-                .takeLast(10)
-            val activeCommandLines = svc?.listCommands()?.getOrNull()
-                ?.lines()
-                ?.filter { it.isNotBlank() && !it.startsWith("No tracked commands") }
-                .orEmpty()
-            val summaryConversationId = _activeConversationId.value
+            val conversationId = _activeConversationId.value
                 ?: _preferredConversationId.value
-            val summaryWorkflowDao = summaryConversationId?.let {
-                AppDatabase.getDatabase(
-                    com.example.llamadroid.LlamaApplication.instance
-                ).agentWorkflowDao()
-            }
-            val durableTodos = if (
-                summaryWorkflowDao != null && summaryConversationId != null
-            ) {
-                summaryWorkflowDao.getTodos(summaryConversationId)
-            } else {
-                emptyList()
-            }
-            val durableInvocations = if (
-                summaryWorkflowDao != null && summaryConversationId != null
-            ) {
-                summaryWorkflowDao.getInvocations(summaryConversationId)
-            } else {
-                emptyList()
-            }
-            val durablePendingQuestions = if (
-                summaryWorkflowDao != null && summaryConversationId != null
-            ) {
-                summaryWorkflowDao.getPendingQuestions(summaryConversationId)
-            } else {
-                emptyList()
-            }
-            val durablePendingPlan = if (
-                summaryWorkflowDao != null && summaryConversationId != null
-            ) {
-                summaryWorkflowDao.getPendingPlan(summaryConversationId)
-            } else {
-                null
-            }
-            val completedTodoTexts = durableTodos
-                .filter {
-                    it.status.uppercase() in setOf(
-                        "COMPLETED",
-                        "DONE",
-                        "SUCCESS"
-                    )
-                }
-                .map { it.text }
-            val openTodoTexts = durableTodos
-                .filterNot {
-                    it.status.uppercase() in setOf(
-                        "COMPLETED",
-                        "DONE",
-                        "SUCCESS",
-                        "CANCELLED"
-                    )
-                }
-                .map { "${it.status}: ${it.text}" }
-            val activeInvocationLines = durableInvocations
-                .filter { it.status.equals("RUNNING", ignoreCase = true) }
-                .map {
-                    "${it.resolvedName} (${it.agentClass}): ${it.task}"
-                }
-            val pendingQuestionLines = durablePendingQuestions.map {
-                "Question awaiting user input: ${it.id.take(12)}"
-            }
-            val pendingPlanLines = listOfNotNull(
-                durablePendingPlan?.let {
-                    "Plan awaiting resolution (${it.state}): ${it.summary}"
-                }
-            )
-
-            val tasksDone = trimContextSummaryItems(
-                completedTodoTexts.map { "Todo completed: $it" } +
-                    messagesToSummarize.mapNotNull {
-                        summarizeMessageForDigest(it)
-                    } +
-                    changedFilesLines +
-                    timelineLines.takeLast(4) +
-                    previousCompaction.orEmpty().lines().filter { it.trim().startsWith("- ") }.takeLast(6),
-                8
-            )
-            val readFiles = trimContextSummaryItems(
-                extractWorkspaceFileReferences(messagesToSummarize, mutatingOnly = false),
-                10
-            )
-            val changedFiles = trimContextSummaryItems(
-                changedFilesLines + extractWorkspaceFileReferences(messagesToSummarize, mutatingOnly = true),
-                10
-            )
-            val importantFindings = trimContextSummaryItems(
-                decisionsLines +
-                    summaryContent.lines().takeLast(6) +
-                    previousCompaction.orEmpty().lines()
-                        .dropWhile { !it.contains("Important Findings", ignoreCase = true) }
-                        .take(6),
-                6
-            )
-            val evidenceBlocks = listOf(
-                summaryContent,
-                changedFiles.joinToString("\n"),
-                timelineLines.joinToString("\n"),
-                tasksDone.joinToString("\n")
-            )
-            val (completedPlanItems, missingPlanItems) =
-                if (durableTodos.isNotEmpty()) {
-                    completedTodoTexts to openTodoTexts
-                } else {
-                    coverageForPlan(planContent, evidenceBlocks)
-                }
-            val carryForward = trimContextSummaryItems(
-                openTodoTexts +
-                    activeInvocationLines +
-                    pendingQuestionLines +
-                    pendingPlanLines +
-                    recentMessages.mapNotNull {
-                        summarizeMessageForDigest(it)
-                    } +
-                    activeCommandLines,
-                10
-            )
-
-            buildHardCompactionSummaryDocument(
-                generatedAt = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date()),
+                ?: throw IllegalStateException(
+                    "No active project for deterministic compaction."
+                )
+            AgentProjectControlPlane.renderCompactionSummary(
+                context = com.example.llamadroid.LlamaApplication.instance,
+                conversationId = conversationId,
                 summarizedMessageCount = messagesToSummarize.size,
                 retainedRecentMessageCount = recentMessages.size,
-                retainedRecentTokenEstimate = tailSelection.recentTailEstimatedTokens,
-                retainedRecentTargetTokens = tailSelection.recentTailTargetTokens,
-                planCoverageLabel = planContent.takeIf { it.isNotBlank() }?.let {
-                    buildPlanCoverageLabel(completedPlanItems, missingPlanItems)
-                },
-                completedPlanItems = completedPlanItems.take(6),
-                missingPlanItems = missingPlanItems.take(6),
-                tasksDone = tasksDone,
-                readFiles = readFiles,
-                changedFiles = changedFiles,
-                importantFindings = importantFindings,
-                openRisks = trimContextSummaryItems(
-                    missingPlanItems +
-                        openTodoTexts +
-                        activeInvocationLines +
-                        pendingQuestionLines +
-                        pendingPlanLines +
-                        activeCommandLines.filter {
-                            it.contains("running", ignoreCase = true)
-                        } +
-                        listOfNotNull(_memoryDirtyReason.value),
-                    12
-                ),
-                activeCommands = activeCommandLines,
-                carryForward = carryForward
+                retainedRecentTokenEstimate =
+                    tailSelection.recentTailEstimatedTokens,
+                retainedRecentTargetTokens =
+                    tailSelection.recentTailTargetTokens,
+                maxChars = 8_000
             )
         }
+
+
 
         private suspend fun showCompactionStatusMessage(context: Context): String {
             val existingId = compactionStatusMessageId
@@ -10769,6 +11384,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     val workflowDao = AppDatabase
                         .getDatabase(com.example.llamadroid.LlamaApplication.instance)
                         .agentWorkflowDao()
+                    val controlState =
+                        AgentProjectControlPlane.ensureState(
+                            context =
+                                com.example.llamadroid.LlamaApplication.instance,
+                            conversationId = conversationId,
+                            goal = initialOrderContent,
+                            mode = if (_currentPlanningModeEnabled.value) {
+                                "PLAN"
+                            } else {
+                                "BUILD"
+                            }
+                        )
+                    AgentProjectControlPlane.cacheState(controlState)
                     val latest = workflowDao.getLatestCompaction(conversationId)
                     val cleanMessages = _messages.value
                         .filterNot(::isTransientCompactionStatusMessage)
@@ -10843,7 +11471,23 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             requiredPrimacyTokens = metadata?.requiredPrimacyTokens,
                             profileName = metadata?.profileName,
                             toolDefinitionsHash = metadata?.toolDefinitionsHash,
-                            metadataVersion = metadata?.version ?: 1
+                            metadataVersion = metadata?.version ?: 1,
+                            compactionId = latest.id,
+                            stateRevision = metadata?.stateRevision
+                                ?: controlState.revision,
+                            semanticEventCount = metadata?.semanticEventCount
+                                ?: controlState.semanticEventCount,
+                            compactionKey = metadata?.compactionKey
+                                ?: controlState.lastCompactionKey,
+                            compactionStatus = metadata?.status
+                                ?: controlState.lastCompactionStatus
+                                ?: AgentCompactionStatus.APPLIED,
+                            preCompactionTokens = metadata?.preCompactionTokens
+                                ?: controlState.lastCompactionPreTokens,
+                            postCompactionTokens = metadata?.postCompactionTokens
+                                ?: controlState.lastCompactionPostTokens,
+                            savedTokens = metadata?.savedTokens
+                                ?: controlState.lastCompactionSavedTokens
                         )
                         recordAgentEvent(
                             kind = "compaction_state_restored",
@@ -10926,6 +11570,29 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     ?: return@withContext Result.failure(
                         IllegalStateException("AgentService is not active.")
                     )
+                val compactionKey = pendingHardCompactionKey
+                    ?: listOf(
+                        conversationId,
+                        AgentProjectControlPlane.cachedState(conversationId)
+                            ?.revision
+                            ?: 0L,
+                        currentRootTurnStorageId(
+                            AgentRole.ORCHESTRATOR.name
+                        ),
+                        toolDefinitionsHash
+                    ).joinToString("|")
+                val preCompactionTokens =
+                    pendingHardCompactionPreTokens
+                        ?: hardCompactionState
+                            ?.lastPostCompactionPackedTokens
+                        ?: 0
+                val projectStateAtStart =
+                    AgentProjectControlPlane.markCompactionStarted(
+                        context = context,
+                        conversationId = conversationId,
+                        compactionKey = compactionKey,
+                        preTokens = preCompactionTokens
+                    )
                 showCompactionStatusMessage(context)
                 setStatusText(context.getString(R.string.agent_context_compacting_wait))
                 val result = withTimeoutOrNull(HARD_COMPACTION_TIMEOUT_MS) {
@@ -10983,15 +11650,23 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         requiredPrimacyTokens = requiredPrimacyTokens,
                         profileName = profileName,
                         toolDefinitionsHash = toolDefinitionsHash,
-                        summaryHash = agentPromptSha256(summaryContent)
+                        summaryHash = agentPromptSha256(summaryContent),
+                        stateRevision = projectStateAtStart.revision,
+                        semanticEventCount =
+                            projectStateAtStart.semanticEventCount,
+                        compactionKey = compactionKey,
+                        preCompactionTokens = preCompactionTokens,
+                        status = AgentCompactionStatus.RUNNING
                     )
                     val workflowDao = AppDatabase
                         .getDatabase(context.applicationContext)
                         .agentWorkflowDao()
                     val previous = workflowDao.getLatestCompaction(conversationId)
+                    val compactionId =
+                        java.util.UUID.randomUUID().toString()
                     workflowDao.insertCompaction(
                         com.example.llamadroid.data.db.AgentCompactionEntity(
-                            id = java.util.UUID.randomUUID().toString(),
+                            id = compactionId,
                             conversationId = conversationId,
                             rootTurnId = currentRootTurnStorageId(
                                 AgentRole.ORCHESTRATOR.name
@@ -11041,10 +11716,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         requiredPrimacyTokens = requiredPrimacyTokens,
                         profileName = profileName,
                         toolDefinitionsHash = toolDefinitionsHash,
-                        metadataVersion = AGENT_PROMPT_BUDGET_VERSION
+                        metadataVersion = AGENT_PROMPT_BUDGET_VERSION,
+                        compactionId = compactionId,
+                        stateRevision = projectStateAtStart.revision,
+                        semanticEventCount =
+                            projectStateAtStart.semanticEventCount,
+                        compactionKey = compactionKey,
+                        compactionStatus = AgentCompactionStatus.RUNNING,
+                        preCompactionTokens = preCompactionTokens
                     )
                     pendingHardCompaction = false
                     pendingHardCompactionConversationId = null
+            pendingHardCompactionKey = null
+            pendingHardCompactionPreTokens = null
                     recordAgentEvent(
                         kind = "hard_compaction",
                         summary = "Rewrote retained context state",
@@ -11064,6 +11748,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 } else {
                     pendingHardCompaction = false
                     pendingHardCompactionConversationId = null
+            pendingHardCompactionKey = null
+            pendingHardCompactionPreTokens = null
                     addDebugLog(
                         "⚠️ Hard compaction timed out after " +
                             "${HARD_COMPACTION_TIMEOUT_MS / 60000L} minutes"
@@ -11076,8 +11762,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     )
                 }
             } catch (error: Exception) {
+                if (conversationId != null) {
+                    AgentProjectControlPlane.markCompactionFailed(
+                        context = context,
+                        conversationId = conversationId,
+                        reason = error.message ?: error.javaClass.simpleName
+                    )
+                }
                 pendingHardCompaction = false
                 pendingHardCompactionConversationId = null
+                pendingHardCompactionKey = null
+                pendingHardCompactionPreTokens = null
                 Result.failure(error)
             } finally {
                 clearCompactionStatusMessage()
@@ -11087,8 +11782,10 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         private fun scheduleHardCompactionIfNeeded(
             contextSize: Int,
+            maximumInputTokens: Int,
             packedEstimatedTokens: Int,
-            actualPromptTokens: Int?
+            actualPromptTokens: Int?,
+            toolDefinitionsHash: String
         ) {
             if (
                 _currentAgent.value != AgentRole.ORCHESTRATOR ||
@@ -11100,43 +11797,41 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val usedTokens = actualPromptTokens ?: packedEstimatedTokens
             val percentUsed = (
                 usedTokens.toDouble() /
-                    contextSize.coerceAtLeast(1).toDouble() *
+                    maximumInputTokens.coerceAtLeast(1).toDouble() *
                     100.0
                 ).roundToInt()
-            val currentState = hardCompactionState
-            val newTurnGroups = countNewTurnGroupsSinceCompaction(
-                getCurrentSessionMessages(),
-                currentState
+            val decision = AgentProjectControlPlane.compactionDecision(
+                conversationId = conversationId,
+                percentUsed = percentUsed,
+                thresholdPercent =
+                    PROMPT_CONTEXT_AUTOCOMPACT_PERCENT,
+                emergencyThresholdPercent =
+                    PROMPT_CONTEXT_HARD_COMPACTION_EMERGENCY_PERCENT,
+                rootTurnId = currentRootTurnStorageId(
+                    AgentRole.ORCHESTRATOR.name
+                ),
+                toolDefinitionsHash = toolDefinitionsHash
             )
-            if (
-                shouldScheduleHardCompaction(
-                    percentUsed = percentUsed,
-                    thresholdPercent = PROMPT_CONTEXT_AUTOCOMPACT_PERCENT,
-                    emergencyThresholdPercent =
-                        PROMPT_CONTEXT_HARD_COMPACTION_EMERGENCY_PERCENT,
-                    hardCompactionActive = currentState != null,
-                    completedTurnGroupsSinceLastCompaction = newTurnGroups,
-                    minTurnGroupsBetweenCompactions =
-                        HARD_COMPACTION_MIN_NEW_TURN_GROUPS
-                )
-            ) {
+            if (decision.shouldCompact) {
                 pendingHardCompaction = true
                 pendingHardCompactionConversationId = conversationId
+                pendingHardCompactionKey = decision.compactionKey
+                pendingHardCompactionPreTokens = usedTokens
                 addDebugLog(
-                    "🧠 Hard compaction scheduled for next turn at " +
-                        "$percentUsed% context usage"
+                    "🧠 Hard compaction scheduled at $percentUsed% of " +
+                        "the maximum input budget; reason=${decision.reason}"
                 )
             } else if (
-                currentState != null &&
                 percentUsed >= PROMPT_CONTEXT_AUTOCOMPACT_PERCENT
             ) {
                 addDebugLog(
-                    "🧠 Hard compaction deferred at $percentUsed% because " +
-                        "only $newTurnGroups user-led turn groups have completed " +
-                        "since the last hard compaction"
+                    "🧠 Hard compaction skipped at $percentUsed%: " +
+                        decision.reason
                 )
             }
         }
+
+
 
         private suspend fun runReflectionTool(
             scope: String,
@@ -11168,7 +11863,40 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     sessionEvidence.toPromptBlock(),
                     recentToolSummaries.joinToString("\n")
                 )
-                val (completedItems, missingItems) = coverageForPlan(reflectionTarget, evidenceBlocks)
+                val rootProjectTodos = if (
+                    _currentAgent.value == AgentRole.ORCHESTRATOR &&
+                    _currentSessionId.value == null
+                ) {
+                    val conversationId = _activeConversationId.value
+                        ?: _preferredConversationId.value
+                    conversationId?.let {
+                        AppDatabase.getDatabase(
+                            com.example.llamadroid.LlamaApplication.instance
+                        )
+                            .agentWorkflowDao()
+                            .getTodos(it)
+                    }.orEmpty()
+                } else {
+                    emptyList()
+                }
+                val (completedItems, missingItems) = if (
+                    rootProjectTodos.isNotEmpty()
+                ) {
+                    rootProjectTodos
+                        .filter {
+                            it.status in AgentTodoStatus.terminal
+                        }
+                        .map { "${it.id}: ${it.text}" } to
+                        rootProjectTodos
+                            .filterNot {
+                                it.status in AgentTodoStatus.terminal
+                            }
+                            .map {
+                                "${it.id} [${it.status}]: ${it.text}"
+                            }
+                } else {
+                    coverageForPlan(reflectionTarget, evidenceBlocks)
+                }
                 val qualityRisks = buildList {
                     if (reflectionTarget.isBlank()) {
                         add(
@@ -11176,7 +11904,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             else "No approved plan source was available for reflection."
                         )
                     }
-                    if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) {
+                    if (_memoryDirty.value && roleRequiresMemoryGate(_currentAgent.value)) {
                         add(_memoryDirtyReason.value ?: "Project memory still needs updating before finalization.")
                     }
                     if (sessionEvidence.changedFiles.isEmpty() && _currentAgent.value == AgentRole.CODER) {
@@ -11200,7 +11928,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             add("Address the missing plan items before finalizing.")
                         }
                     }
-                    if (_memoryDirty.value && _currentAgent.value != AgentRole.SUMMARIZER && _currentAgent.value != AgentRole.VISUAL_TESTER) add("Update project memory and summary files.")
+                    if (_memoryDirty.value && roleRequiresMemoryGate(_currentAgent.value)) add("Update project memory and summary files.")
                     if (sessionEvidence.changedFiles.isNotEmpty() && _currentAgent.value != AgentRole.REVIEWER) add("Re-read or verify the touched files before completing.")
                     if (_currentAgent.value == AgentRole.ORCHESTRATOR && isBuiltInAgentEnabled("REVIEWER")) add("Delegate code quality review to REVIEWER before final completion.")
                     if (qualityRisks.none()) add("The work matches the plan evidence closely. Finalization is allowed.")
@@ -12294,8 +13022,16 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             normalizedArgs["include_neighbors"]?.takeIf { it !in setOf("true", "false") }?.let {
                 return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` argument `include_neighbors` must be `true` or `false`."))
             }
-            normalizedArgs["status"]?.takeIf { it.isNotBlank() && it !in setOf("SUCCESS", "FAILED") }?.let {
-                return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` argument `status` must be `SUCCESS` or `FAILED`."))
+            normalizedArgs["status"]?.takeIf {
+                it.isNotBlank() &&
+                    it !in setOf("SUCCESS", "FAILED", "BLOCKED")
+            }?.let {
+                return Result.failure(
+                    IllegalArgumentException(
+                        "Tool `${toolCall.name}` argument `status` must be " +
+                            "`SUCCESS`, `FAILED`, or `BLOCKED`."
+                    )
+                )
             }
 
             normalizedArgs.forEach { (key, value) ->
@@ -12870,8 +13606,10 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     ),
                     AgentTool(
                         name = "todo_write",
-                        description = "Replace the durable project todo list with structured items. Keep todos concise and update statuses as work progresses. The result reports overall progressPercent and the nextTodo so the orchestrator can continue from durable state.",
-                        parameters = mapOf("todos" to "Ordered todo array"),
+                        description = "Safely reconcile durable TODO text, priority, and non-regressive status. Existing completed progress is preserved. Approved-plan TODO IDs are stable; prefer todo_transition for workflow changes.",
+                        parameters = mapOf(
+                            "todos" to "Ordered TODO array. Preserve existing stable IDs when updating an item."
+                        ),
                         requiredParams = listOf("todos"),
                         schemaJson = """
                             {
@@ -12884,10 +13622,10 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                     "properties":{
                                       "id":{"type":"string"},
                                       "text":{"type":"string"},
-                                      "status":{"type":"string","enum":["PENDING","IN_PROGRESS","COMPLETED","CANCELLED"]},
+                                      "status":{"type":"string","enum":["PENDING","READY","IN_PROGRESS","READY_FOR_REVIEW","NEEDS_FIX","READY_FOR_VERIFICATION","VERIFIED","COMPLETED","BLOCKED","CANCELLED"]},
                                       "priority":{"type":"string","enum":["LOW","NORMAL","HIGH"]}
                                     },
-                                    "required":["text","status"],
+                                    "required":["id","text","status"],
                                     "additionalProperties":false
                                   }
                                 }
@@ -12898,10 +13636,59 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         """.trimIndent()
                     ),
                     AgentTool(
+                        name = "todo_reconcile",
+                        description = "Merge a bounded TODO update into durable state without deleting omitted items or regressing completed work. Prefer stable IDs from project_state.",
+                        parameters = mapOf(
+                            "todos" to "Ordered TODO updates with stable id, text, status, and priority"
+                        ),
+                        requiredParams = listOf("todos")
+                    ),
+                    AgentTool(
                         name = "todo_read",
-                        description = "Read the durable structured todo list for this project.",
+                        description = "Read the authoritative durable TODO list for this project.",
                         parameters = emptyMap(),
                         requiredParams = emptyList()
+                    ),
+                    AgentTool(
+                        name = "todo_transition",
+                        description = "Apply one compare-and-set TODO transition. Never replace the complete list. Reload project_state if the expected status changed.",
+                        parameters = mapOf(
+                            "todo_id" to "Stable TODO ID from project_state",
+                            "expected_status" to "Optional current status for optimistic concurrency",
+                            "new_status" to "Target status",
+                            "result_summary" to "Optional bounded result summary",
+                            "block_reason" to "Required explanation when blocking",
+                            "evidence_json" to "Optional JSON array/object containing evidence references"
+                        ),
+                        requiredParams = listOf("todo_id", "new_status")
+                    ),
+                    AgentTool(
+                        name = "project_state_read",
+                        description = "Read the canonical bounded Project Control Packet: state revision, approved plan reference, current TODO, active invocations, reports, blockers, and permitted next actions.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    ),
+                    AgentTool(
+                        name = "project_order_read",
+                        description = "Read the complete original project order when the compact control packet is insufficient.",
+                        parameters = emptyMap(),
+                        requiredParams = emptyList()
+                    ),
+                    AgentTool(
+                        name = "plan_read",
+                        description = "Read an approved plan version by ID, or the latest approved plan when plan_id is omitted.",
+                        parameters = mapOf(
+                            "plan_id" to "Optional approved plan version ID"
+                        ),
+                        requiredParams = emptyList()
+                    ),
+                    AgentTool(
+                        name = "agent_report_read",
+                        description = "Read one complete structured specialist report by report_id. Use only when the compact report envelope lacks necessary detail.",
+                        parameters = mapOf(
+                            "report_id" to "Structured work report ID"
+                        ),
+                        requiredParams = listOf("report_id")
                     ),
                     AgentTool(
                         name = "skill",
@@ -13072,10 +13859,15 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             if (role == AgentRole.ORCHESTRATOR) {
                 val disabled = _disabledBuiltInAgents.value
                 val builtInList = buildList {
+                    add("CODEBASE_SCOUT")
+                    if (webSearchEnabled || kiwixEnabled) add("RESEARCHER")
+                    add("PLANNER")
                     add("CODER")
                     add("REVIEWER")
                     add("EXECUTOR")
-                    if (repo.agentVisualTestingEnabled.value) add("VISUAL_TESTER")
+                    if (repo.agentVisualTestingEnabled.value) {
+                        add("VISUAL_TESTER")
+                    }
                     add("SUMMARIZER")
                 }
                 val enabledBuiltIn = builtInList.filter { it !in disabled }
@@ -13094,12 +13886,13 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 tools.add(
                     AgentTool(
                         name = "call_agent",
-                        description = "Orchestrator-only. Start one durable, sequential specialist invocation for exactly ONE atomic todo-sized task. Never assign the entire implementation plan or multiple todos to one call. Create a separate invocation for each todo. Provide a short human-readable name; repeated names are accepted and the app automatically adds 2, 3, and so on. Child agents must finish and return to the orchestrator instead of delegating. Available: $available.$disabledNote",
+                        description = "Orchestrator-only. Start one isolated specialist. In Plan mode use CODEBASE_SCOUT, RESEARCHER, or PLANNER without a TODO. In Build mode every Coder/Reviewer/Executor/Visual Tester/State Curator/custom invocation requires one stable todo_id and atomically claims it. Child agents return structured reports; they never delegate.",
                         parameters = mapOf(
                             "agent" to "Agent class to call ($available)",
-                            "name" to "Required invocation name, maximum 40 characters. Example: Darwin. Reusing it creates Darwin 2, Darwin 3, and so on",
-                            "task" to "One atomic todo-sized task with a clear completion boundary; never the whole plan or multiple todos",
-                            "context" to "Any relevant context or file paths"
+                            "name" to "Required invocation name, maximum 40 characters. Repeated names are automatically suffixed",
+                            "todo_id" to "Required for Build-mode worker/custom invocations; omit for Plan-mode discovery/research/planning",
+                            "task" to "Exactly one atomic task with a clear completion boundary",
+                            "context" to "Optional bounded handoff context. The runtime automatically includes the Project Control Packet"
                         ),
                         requiredParams = listOf("agent", "name", "task")
                     )
@@ -13189,11 +13982,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val filteredTools = if (activeCustom != null) {
                 tools
                     .filter { tool ->
-                        capabilityPolicy.allowedToolNames.isEmpty() || tool.name in capabilityPolicy.allowedToolNames
+                        capabilityPolicy.allowedToolNames.isEmpty() ||
+                            tool.name in capabilityPolicy.allowedToolNames
                     }
-                    .filterNot { it.name == "call_agent" && role != AgentRole.ORCHESTRATOR }
+                    .filterNot {
+                        it.name == "call_agent" &&
+                            role != AgentRole.ORCHESTRATOR
+                    }
             } else {
-                tools
+                val allowed = AgentProjectControlPlane.allowedToolsForRole(
+                    role = role.name,
+                    localBackend = localBackend
+                )
+                tools.filter { it.name in allowed }
             }
 
             val distinctTools = filteredTools

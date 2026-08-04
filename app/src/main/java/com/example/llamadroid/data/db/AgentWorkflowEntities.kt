@@ -242,6 +242,8 @@ data class AgentPendingPlanEntity(
     indices = [
         Index("conversationId"),
         Index("status"),
+        Index("planVersionId"),
+        Index("assignedInvocationId"),
         Index(value = ["conversationId", "position"])
     ]
 )
@@ -253,6 +255,18 @@ data class AgentTodoEntity(
     val priority: String = "NORMAL",
     val position: Int,
     val source: String = "AGENT",
+    val planVersionId: String? = null,
+    val planStepId: String? = null,
+    val phaseId: String? = null,
+    val ownerRole: String? = null,
+    val assignedInvocationId: String? = null,
+    val dependenciesJson: String = "[]",
+    val acceptanceCriteriaJson: String = "[]",
+    val evidenceJson: String = "[]",
+    val attemptCount: Int = 0,
+    val blockReason: String? = null,
+    val resultSummary: String? = null,
+    val completedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -299,6 +313,119 @@ data class AgentCompactionEntity(
  * so repeated small-model names remain distinct without rejecting the delegation.
  */
 @Entity(
+    tableName = "agent_project_states",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("mode"),
+        Index("updatedAt"),
+        Index("activePlanVersionId"),
+        Index("currentTodoId")
+    ]
+)
+data class AgentProjectStateEntity(
+    @PrimaryKey val conversationId: Long,
+    val revision: Long = 0L,
+    val mode: String = "PLAN",
+    val currentGoal: String = "",
+    val activePlanVersionId: String? = null,
+    val currentPhaseId: String? = null,
+    val currentTodoId: String? = null,
+    val semanticEventCount: Long = 0L,
+    val lastSemanticEvent: String? = null,
+    val lastCompactedRevision: Long? = null,
+    val lastCompactionSemanticEventCount: Long = 0L,
+    val lastCompactionKey: String? = null,
+    val lastCompactionStatus: String? = null,
+    val lastCompactionPreTokens: Int? = null,
+    val lastCompactionPostTokens: Int? = null,
+    val lastCompactionSavedTokens: Int? = null,
+    val lastCompactionSaturationReason: String? = null,
+    val lastCompactionAt: Long? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "agent_plan_versions",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("conversationId"),
+        Index("status"),
+        Index("approvedAt"),
+        Index(value = ["conversationId", "versionNumber"], unique = true),
+        Index(value = ["conversationId", "planHash"], unique = true)
+    ]
+)
+data class AgentPlanVersionEntity(
+    @PrimaryKey val id: String,
+    val conversationId: Long,
+    val sourcePendingPlanId: String? = null,
+    val versionNumber: Int,
+    val summary: String,
+    val planMarkdown: String,
+    val structuredJson: String,
+    val planHash: String,
+    val status: String = "APPROVED",
+    val createdAt: Long = System.currentTimeMillis(),
+    val approvedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "agent_work_reports",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentConversationEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["conversationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [
+        Index("conversationId"),
+        Index(value = ["invocationId"], unique = true),
+        Index("todoId"),
+        Index("agentRole"),
+        Index("status"),
+        Index("createdAt")
+    ]
+)
+data class AgentWorkReportEntity(
+    @PrimaryKey val id: String,
+    val conversationId: Long,
+    val invocationId: String,
+    val todoId: String? = null,
+    val agentRole: String,
+    val status: String,
+    val summary: String,
+    val structuredJson: String,
+    val evidenceJson: String = "{}",
+    val changedFilesJson: String = "[]",
+    val risksJson: String = "[]",
+    val recommendationsJson: String = "[]",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * One durable invocation for each successful call_agent handoff.
+ *
+ * todoId binds Build work to the authoritative TODO state machine.
+ * workReportId points at the complete structured specialist result.
+ */
+@Entity(
     tableName = "agent_invocations",
     foreignKeys = [
         ForeignKey(
@@ -313,6 +440,8 @@ data class AgentCompactionEntity(
         Index("status"),
         Index("startedAt"),
         Index("parentToolCallId"),
+        Index("todoId"),
+        Index("workReportId"),
         Index(value = ["conversationId", "resolvedNameKey"], unique = true)
     ]
 )
@@ -332,6 +461,8 @@ data class AgentInvocationEntity(
     val sessionId: String? = null,
     val task: String,
     val context: String? = null,
+    val todoId: String? = null,
+    val workReportId: String? = null,
     val status: String = "RUNNING",
     val resultSummary: String? = null,
     val errorClass: String? = null,
@@ -351,10 +482,6 @@ data class AgentInvocationEntity(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-/**
- * Durable FIFO input queue. A null targetInvocationId addresses the orchestrator;
- * a non-null target addresses exactly one running child invocation.
- */
 @Entity(
     tableName = "agent_pending_inputs",
     foreignKeys = [
