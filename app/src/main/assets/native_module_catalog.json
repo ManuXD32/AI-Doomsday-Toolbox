@@ -2,7 +2,7 @@
   "version": 2,
   "build": {
     "ndk": "android-ndk-r26d",
-    "buildCommits": "stable-diffusion.cpp: e31a86ce9110 (master-805-e31a86c)\nllama.cpp: de699957b92f (b10218)\nllama.cpp-sd-rpc: ded1561b4228\n",
+    "buildCommits": "FFmpeg: d4ff0020b40b (n6.1)\nwhisper.cpp: 8a9ad7844d6e (v1.7.4)\nstable-diffusion.cpp: db99efdd6d2a (master-810-db99efd)\nllama.cpp: 94bc47f28078\nllama.cpp-sd-rpc: ded1561b4228\nncnn: a4d2ea1d4422\nrealcugan-ncnn-vulkan: 395302c5c70f (20220728)\nrealsr-ncnn-vulkan: b7f890ee2704 (20220728)\nrife-ncnn-vulkan: a7532fc3f9f8 (20221029)\n",
     "pageAlignmentBytes": 16384,
     "catalogueFormat": 2
   },
@@ -23,42 +23,52 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 156264744,
+      "uncompressedNativeBytes": 273507712,
       "libraries": [
         {
           "name": "libffmpeg_baseline.so",
-          "sha256": "83bd6e0a35902e4f634c9b27f4cac7cf307de306ca393399886c40a7c680beaf",
-          "bytes": 18491120
+          "sha256": "4515d4ea4bab8c078a6a63d7c568fb8f0b52ea41cd05563da9670c81816376d9",
+          "bytes": 18483584
         },
         {
           "name": "libffprobe_baseline.so",
-          "sha256": "ccc51f194ccbfd6363d8c154da2816bad075ceb15c07be86f039d28ddd54ac4f",
-          "bytes": 18389464
+          "sha256": "59bc8aaf1b94f624db37147d18ba2dc20f817681d8f1df62a70d7567ac9a1891",
+          "bytes": 18381880
+        },
+        {
+          "name": "libkiwix-manage_baseline.so",
+          "sha256": "b2f3d09e4b2ea02b10690051d465e62b99d3eeca3732033f925c238933d34691",
+          "bytes": 54672312
+        },
+        {
+          "name": "libkiwix-serve_baseline.so",
+          "sha256": "eda56790d295d0078639247c19a13ddc2aea65e300dd4b6548f6e4f18cbb7cfa",
+          "bytes": 62084024
         },
         {
           "name": "libllama-bench_baseline.so",
-          "sha256": "72666e2a7e1b3f002ac8a46d5abd6e5be79b940e26eb477d32203b8182e6aa6a",
-          "bytes": 8004664
+          "sha256": "d2962645537dc53566d19da3e332ed7f6d7d854dd9afc3767f0812bac7629652",
+          "bytes": 8112632
         },
         {
           "name": "libllama_server_baseline.so",
-          "sha256": "bd58cf8eb3f095c19ecba0841db37eb82cde13b905e23a0491fc588eb5edac26",
-          "bytes": 13880688
+          "sha256": "bcf84c572bfe18b1c7d97e14b71d50ed55faaf0914b6b276dfbb69757926882c",
+          "bytes": 14007320
         },
         {
           "name": "libmtmd_baseline.so",
-          "sha256": "788e77f1a099c0c4297ba497021faa0b4870b454933dc35c74a30735db00a157",
-          "bytes": 8858600
+          "sha256": "f325681987468d6d08d77961cf7cc6c410c745d71a0268029b22161b833b612b",
+          "bytes": 8966584
         },
         {
           "name": "libquadtrix_trainer_baseline.so",
-          "sha256": "f240a84b61d8b9b41312e35f64607d4fe8334c6f953194670027940c53a09442",
-          "bytes": 25499752
+          "sha256": "5ef004b4c401a47c4a8ec857cd5e8fb617a91879c2f68656a9653b6b2df41337",
+          "bytes": 25635296
         },
         {
           "name": "librpc-server_baseline.so",
-          "sha256": "ba8d062077bcfeee32ea7a7d98873a404c53c94b384178d81c3ededb7af811be",
-          "bytes": 2342232
+          "sha256": "ae97c8f007ced15354e6a431e7b12517fd639a8f374a68718ba61aabfabc0bc7",
+          "bytes": 2342920
         },
         {
           "name": "libsd-rpc-server_baseline.so",
@@ -67,8 +77,8 @@
         },
         {
           "name": "libsd_baseline.so",
-          "sha256": "53b6d4d6550800210cffb87f25724d777b8159e65972b271256eeb99df971dc6",
-          "bytes": 56290560
+          "sha256": "fa729dc8535de31e767584942e2560d0361d573244e8d8d89e11a13eb58d47fa",
+          "bytes": 56313496
         },
         {
           "name": "libwhisper-cli_baseline.so",
@@ -93,42 +103,52 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 156360824,
+      "uncompressedNativeBytes": 273571248,
       "libraries": [
         {
           "name": "libffmpeg_dotprod.so",
-          "sha256": "061ec35babaa5a9dff52b553690737107b1c2184a71afcc2b8f7ea5c22181121",
-          "bytes": 18487312
+          "sha256": "ba1fd05029015359d1cd735c81fc86467f538d71a80f2b532cd88c1ec77117df",
+          "bytes": 18479776
         },
         {
           "name": "libffprobe_dotprod.so",
-          "sha256": "6d85e97561a39598b3f4defd879a757cde479fa9dd59247be2ff9e5895ba8a1d",
-          "bytes": 18385656
+          "sha256": "c977c2a0e202349285113c4dec98ea3f138119b1cdf63b77e63ce5193c742ae9",
+          "bytes": 18378088
+        },
+        {
+          "name": "libkiwix-manage_dotprod.so",
+          "sha256": "63cde36971b9f1853e8b7ad2dca1dd8b46f44155fd5c8a1e28e25e9b340cd235",
+          "bytes": 54655488
+        },
+        {
+          "name": "libkiwix-serve_dotprod.so",
+          "sha256": "20a9ee99b578b4190d918f1b4ad3c930d1634cb9699c8a1c8bebe1f3bed1d3d6",
+          "bytes": 62068064
         },
         {
           "name": "libllama-bench_dotprod.so",
-          "sha256": "a5eb3c9ac392f5ec58fc6f6655d738ce7c2be8157dbca20e0a4a72f188a7b8b7",
-          "bytes": 8017560
+          "sha256": "6fea3eb0c80e95d05ec8576ec18767624503f3a97a8628bb682958a07d091154",
+          "bytes": 8125448
         },
         {
           "name": "libllama_server_dotprod.so",
-          "sha256": "d0ff1d877d98255a26c7feceac60d4883756a4fcb8b4f593cfa1a8a7803aba58",
-          "bytes": 13892832
+          "sha256": "06d2d63a691a6af40553ce16976d27a7d01b22fb3705cb1b4d3cd6179d866920",
+          "bytes": 14019400
         },
         {
           "name": "libmtmd_dotprod.so",
-          "sha256": "3bff8d0bc2d2574fef02111b09748ac7529c48300af0a32417a75ba6b3bffaa5",
-          "bytes": 8871512
+          "sha256": "b5eac0afed4b60a1e36b79932b1f72ee25551c12c63b3e7a6fa9dfc1dbb6b78d",
+          "bytes": 8979496
         },
         {
           "name": "libquadtrix_trainer_dotprod.so",
-          "sha256": "61b02563e48827b7b89d3bda094f926ff1605047de0f596f9cdeb4e472b82e7f",
-          "bytes": 25500120
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
         },
         {
           "name": "librpc-server_dotprod.so",
-          "sha256": "6444ecd7b1ce7489406b150b6b2f25de1d5424eb672aaf65f1cf6535e05b1564",
-          "bytes": 2378056
+          "sha256": "bc83a187451cb2fe5eee1595a360bf8c100d058db530e90a2bead294085978da",
+          "bytes": 2378744
         },
         {
           "name": "libsd-rpc-server_dotprod.so",
@@ -137,8 +157,8 @@
         },
         {
           "name": "libsd_dotprod.so",
-          "sha256": "3e6a5b6346dfa1b78990bff2e33e2f1849572a3a3675c35f24ba67bdf076f6ed",
-          "bytes": 56282000
+          "sha256": "8040eb035b8bc8b9bfcefa62937a9f8ba6b1d951832f5ef16afc9ca8a62b8361",
+          "bytes": 56304856
         },
         {
           "name": "libwhisper-cli_dotprod.so",
@@ -163,42 +183,52 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 156144608,
+      "uncompressedNativeBytes": 273432288,
       "libraries": [
         {
           "name": "libffmpeg_armv9.so",
-          "sha256": "62be167521813e6ea28880ae242aba1bc8f09e0567bce18f4f7b39d484d99c74",
-          "bytes": 18488992
+          "sha256": "61c95fde3a52d4b930e9a557fe997a01ade13849075ec28f9f980c2d43f8b47a",
+          "bytes": 18481440
         },
         {
           "name": "libffprobe_armv9.so",
-          "sha256": "321730e7172f94f80b45297d7e641089bc98abf836f46108e7122ac27300bcb7",
-          "bytes": 18387352
+          "sha256": "d659141d117ed2a2f8c46354718e3200644a9ed058c5ce5ba0f794124a56f3b8",
+          "bytes": 18379784
+        },
+        {
+          "name": "libkiwix-manage_armv9.so",
+          "sha256": "f795e99e16b5d09da59a1d97bfaeef7e01256f37a228dff998aa51267fdb8517",
+          "bytes": 54693592
+        },
+        {
+          "name": "libkiwix-serve_armv9.so",
+          "sha256": "afea89c24df36b7403e832caa5f93387ccd7f5be3e125e565abf88d1f748dfce",
+          "bytes": 62109920
         },
         {
           "name": "libllama-bench_armv9.so",
-          "sha256": "f17c2fd68e42f896b1479d3773d45e9669b65e7ce47f99b770fedb903517cfd9",
-          "bytes": 7976544
+          "sha256": "a874c9f6e2e10c12455d4b6d6a9d5d5f3544385f610f137c4871dbe421f2a4c5",
+          "bytes": 8083840
         },
         {
           "name": "libllama_server_armv9.so",
-          "sha256": "d070b0ada651b305d3c3a7278ba16d46b0140f0c09867e12501f8a43686752c7",
-          "bytes": 13861144
+          "sha256": "101a77f11192c9f354eb59d91403c58163d781b380c3c9aa296e7f2707173aaf",
+          "bytes": 13987024
         },
         {
           "name": "libmtmd_armv9.so",
-          "sha256": "0b0136f089b8a6b45dd87167408cd98c244558f5af5a9e70a0e05aed486cdb4e",
-          "bytes": 8833696
+          "sha256": "e820de2ec921bb3becea1734696c52eb29316b4b3abb6b401c39cb34b64c2914",
+          "bytes": 8941040
         },
         {
           "name": "libquadtrix_trainer_armv9.so",
-          "sha256": "570743f6f6783b3691c492c48d17a957522fef7eaf967c93531a69ef4f5763b0",
-          "bytes": 25513240
+          "sha256": "3aba96692a0dbeab4cc9141ebc3ae829373e0dc192f4736f1954e80f40d1600f",
+          "bytes": 25648224
         },
         {
           "name": "librpc-server_armv9.so",
-          "sha256": "218fdf92c0f479a3386b96f32175e2613de8b20cc9e0fd9bf58d800dfdfda231",
-          "bytes": 2288720
+          "sha256": "00f5a8ac379dabce45e4f092fa3e1a5711936a31b27be5a31bfbf9f7635e1e61",
+          "bytes": 2289408
         },
         {
           "name": "libsd-rpc-server_armv9.so",
@@ -207,8 +237,8 @@
         },
         {
           "name": "libsd_armv9.so",
-          "sha256": "40dc2aeeb96ddcb3c74d3d5d537fde316d9e8b14f00213f6e28f19604bab831b",
-          "bytes": 56338376
+          "sha256": "1ef91a2c4e4c360bbab1c9f882a4a3d4d3f124cd4627f4a04b4073528967a817",
+          "bytes": 56361472
         },
         {
           "name": "libwhisper-cli_armv9.so",
@@ -233,37 +263,37 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 117614952,
+      "uncompressedNativeBytes": 118116864,
       "libraries": [
         {
           "name": "libllama-bench_i8mm.so",
-          "sha256": "6507bb1aede9ade866a7cc7109cd7e35221168f231da2035cffa0de03520a686",
-          "bytes": 8135144
+          "sha256": "0ce8675ad2476988002787bb091b283854daaac7e8b214b0e7501cd40c605406",
+          "bytes": 8243016
         },
         {
           "name": "libllama_server_i8mm.so",
-          "sha256": "61a2d739fd4981922174bce83bda223303e66740d175131f509ca2e8d245ca27",
-          "bytes": 14010448
+          "sha256": "b9360c4d02882285d6997bc74f523c1319407876bfee7c93ce80e1b9899d430e",
+          "bytes": 14137000
         },
         {
           "name": "libmtmd_i8mm.so",
-          "sha256": "ed2610643c2db7cb8c902f016c288f13c57d710299644b67cd11f35d9d0c0cc8",
-          "bytes": 8989096
+          "sha256": "d8f58ef6fb5e2d149acdf37b9a6d49a4fb829e4c65ed4b4b2ec3fe3b95bc6c2f",
+          "bytes": 9097064
         },
         {
           "name": "libquadtrix_trainer_i8mm.so",
-          "sha256": "a5e09a28692cc521388c06da48ed91d4835a21eac5be0552af91c7f028311ff7",
-          "bytes": 25500120
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
         },
         {
           "name": "librpc-server_i8mm.so",
-          "sha256": "29282ee19b9c590b5cf04b29f23520c879edabcac96415122dac0d8f0c7aa83c",
-          "bytes": 2302952
+          "sha256": "3cd40f39e38f0f10bb892880f76be79874a87aeecff8bee47e2c7c495966565b",
+          "bytes": 2303624
         },
         {
           "name": "libsd_i8mm.so",
-          "sha256": "5d81ebb5faf9ba1c52f7a8aa4b85283e378f61aba26ae9079ee044785a4741c5",
-          "bytes": 56486416
+          "sha256": "802099e44482ac08be5529bdc0479d13ee2a02fb880c030dcacdf7750293fbb0",
+          "bytes": 56509272
         },
         {
           "name": "libwhisper-cli_i8mm.so",
@@ -289,7 +319,7 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 87008320,
+      "uncompressedNativeBytes": 84779440,
       "libraries": [
         {
           "name": "libAIDOCL.so",
@@ -298,18 +328,18 @@
         },
         {
           "name": "libllama-bench_snapdragon_opencl.so",
-          "sha256": "cd4c0dfe9cc83d2bc8046984badbac1a40e8d20038cca1880fcd68321b48a9e5",
-          "bytes": 10278952
+          "sha256": "9ed3f8af375ac703f64997686632047196fc2524f442f6067725f76d5c56bebe",
+          "bytes": 10387000
         },
         {
           "name": "libllama_server_snapdragon_opencl.so",
-          "sha256": "22899577d03a5a37246015a44ad74a783af9012870935bf7af538d821cb54614",
-          "bytes": 16154032
+          "sha256": "5b156adb522d8203437d77218c76d104b71ff2cc57128e7f1743e37ee74ca2f7",
+          "bytes": 16280696
         },
         {
           "name": "libsd_snapdragon_opencl.so",
-          "sha256": "7fc3a2d4b6ceea89578b352957e822b4f6e5e5c49d724638d5bc80c4c39bd02e",
-          "bytes": 60558248
+          "sha256": "27db7495933394e61fbd8951c4a3a32cf983f98aea706fbe6113e00e289fba5c",
+          "bytes": 58094656
         }
       ]
     },
@@ -329,42 +359,52 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 156264744,
+      "uncompressedNativeBytes": 273507712,
       "libraries": [
         {
           "name": "libffmpeg_baseline.so",
-          "sha256": "83bd6e0a35902e4f634c9b27f4cac7cf307de306ca393399886c40a7c680beaf",
-          "bytes": 18491120
+          "sha256": "4515d4ea4bab8c078a6a63d7c568fb8f0b52ea41cd05563da9670c81816376d9",
+          "bytes": 18483584
         },
         {
           "name": "libffprobe_baseline.so",
-          "sha256": "ccc51f194ccbfd6363d8c154da2816bad075ceb15c07be86f039d28ddd54ac4f",
-          "bytes": 18389464
+          "sha256": "59bc8aaf1b94f624db37147d18ba2dc20f817681d8f1df62a70d7567ac9a1891",
+          "bytes": 18381880
+        },
+        {
+          "name": "libkiwix-manage_baseline.so",
+          "sha256": "b2f3d09e4b2ea02b10690051d465e62b99d3eeca3732033f925c238933d34691",
+          "bytes": 54672312
+        },
+        {
+          "name": "libkiwix-serve_baseline.so",
+          "sha256": "eda56790d295d0078639247c19a13ddc2aea65e300dd4b6548f6e4f18cbb7cfa",
+          "bytes": 62084024
         },
         {
           "name": "libllama-bench_baseline.so",
-          "sha256": "72666e2a7e1b3f002ac8a46d5abd6e5be79b940e26eb477d32203b8182e6aa6a",
-          "bytes": 8004664
+          "sha256": "d2962645537dc53566d19da3e332ed7f6d7d854dd9afc3767f0812bac7629652",
+          "bytes": 8112632
         },
         {
           "name": "libllama_server_baseline.so",
-          "sha256": "bd58cf8eb3f095c19ecba0841db37eb82cde13b905e23a0491fc588eb5edac26",
-          "bytes": 13880688
+          "sha256": "bcf84c572bfe18b1c7d97e14b71d50ed55faaf0914b6b276dfbb69757926882c",
+          "bytes": 14007320
         },
         {
           "name": "libmtmd_baseline.so",
-          "sha256": "788e77f1a099c0c4297ba497021faa0b4870b454933dc35c74a30735db00a157",
-          "bytes": 8858600
+          "sha256": "f325681987468d6d08d77961cf7cc6c410c745d71a0268029b22161b833b612b",
+          "bytes": 8966584
         },
         {
           "name": "libquadtrix_trainer_baseline.so",
-          "sha256": "f240a84b61d8b9b41312e35f64607d4fe8334c6f953194670027940c53a09442",
-          "bytes": 25499752
+          "sha256": "5ef004b4c401a47c4a8ec857cd5e8fb617a91879c2f68656a9653b6b2df41337",
+          "bytes": 25635296
         },
         {
           "name": "librpc-server_baseline.so",
-          "sha256": "ba8d062077bcfeee32ea7a7d98873a404c53c94b384178d81c3ededb7af811be",
-          "bytes": 2342232
+          "sha256": "ae97c8f007ced15354e6a431e7b12517fd639a8f374a68718ba61aabfabc0bc7",
+          "bytes": 2342920
         },
         {
           "name": "libsd-rpc-server_baseline.so",
@@ -373,8 +413,8 @@
         },
         {
           "name": "libsd_baseline.so",
-          "sha256": "53b6d4d6550800210cffb87f25724d777b8159e65972b271256eeb99df971dc6",
-          "bytes": 56290560
+          "sha256": "fa729dc8535de31e767584942e2560d0361d573244e8d8d89e11a13eb58d47fa",
+          "bytes": 56313496
         },
         {
           "name": "libwhisper-cli_baseline.so",
@@ -399,42 +439,52 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 156360824,
+      "uncompressedNativeBytes": 273571248,
       "libraries": [
         {
           "name": "libffmpeg_dotprod.so",
-          "sha256": "061ec35babaa5a9dff52b553690737107b1c2184a71afcc2b8f7ea5c22181121",
-          "bytes": 18487312
+          "sha256": "ba1fd05029015359d1cd735c81fc86467f538d71a80f2b532cd88c1ec77117df",
+          "bytes": 18479776
         },
         {
           "name": "libffprobe_dotprod.so",
-          "sha256": "6d85e97561a39598b3f4defd879a757cde479fa9dd59247be2ff9e5895ba8a1d",
-          "bytes": 18385656
+          "sha256": "c977c2a0e202349285113c4dec98ea3f138119b1cdf63b77e63ce5193c742ae9",
+          "bytes": 18378088
+        },
+        {
+          "name": "libkiwix-manage_dotprod.so",
+          "sha256": "63cde36971b9f1853e8b7ad2dca1dd8b46f44155fd5c8a1e28e25e9b340cd235",
+          "bytes": 54655488
+        },
+        {
+          "name": "libkiwix-serve_dotprod.so",
+          "sha256": "20a9ee99b578b4190d918f1b4ad3c930d1634cb9699c8a1c8bebe1f3bed1d3d6",
+          "bytes": 62068064
         },
         {
           "name": "libllama-bench_dotprod.so",
-          "sha256": "a5eb3c9ac392f5ec58fc6f6655d738ce7c2be8157dbca20e0a4a72f188a7b8b7",
-          "bytes": 8017560
+          "sha256": "6fea3eb0c80e95d05ec8576ec18767624503f3a97a8628bb682958a07d091154",
+          "bytes": 8125448
         },
         {
           "name": "libllama_server_dotprod.so",
-          "sha256": "d0ff1d877d98255a26c7feceac60d4883756a4fcb8b4f593cfa1a8a7803aba58",
-          "bytes": 13892832
+          "sha256": "06d2d63a691a6af40553ce16976d27a7d01b22fb3705cb1b4d3cd6179d866920",
+          "bytes": 14019400
         },
         {
           "name": "libmtmd_dotprod.so",
-          "sha256": "3bff8d0bc2d2574fef02111b09748ac7529c48300af0a32417a75ba6b3bffaa5",
-          "bytes": 8871512
+          "sha256": "b5eac0afed4b60a1e36b79932b1f72ee25551c12c63b3e7a6fa9dfc1dbb6b78d",
+          "bytes": 8979496
         },
         {
           "name": "libquadtrix_trainer_dotprod.so",
-          "sha256": "61b02563e48827b7b89d3bda094f926ff1605047de0f596f9cdeb4e472b82e7f",
-          "bytes": 25500120
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
         },
         {
           "name": "librpc-server_dotprod.so",
-          "sha256": "6444ecd7b1ce7489406b150b6b2f25de1d5424eb672aaf65f1cf6535e05b1564",
-          "bytes": 2378056
+          "sha256": "bc83a187451cb2fe5eee1595a360bf8c100d058db530e90a2bead294085978da",
+          "bytes": 2378744
         },
         {
           "name": "libsd-rpc-server_dotprod.so",
@@ -443,8 +493,8 @@
         },
         {
           "name": "libsd_dotprod.so",
-          "sha256": "3e6a5b6346dfa1b78990bff2e33e2f1849572a3a3675c35f24ba67bdf076f6ed",
-          "bytes": 56282000
+          "sha256": "8040eb035b8bc8b9bfcefa62937a9f8ba6b1d951832f5ef16afc9ca8a62b8361",
+          "bytes": 56304856
         },
         {
           "name": "libwhisper-cli_dotprod.so",
@@ -469,42 +519,52 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 156144608,
+      "uncompressedNativeBytes": 273432288,
       "libraries": [
         {
           "name": "libffmpeg_armv9.so",
-          "sha256": "62be167521813e6ea28880ae242aba1bc8f09e0567bce18f4f7b39d484d99c74",
-          "bytes": 18488992
+          "sha256": "61c95fde3a52d4b930e9a557fe997a01ade13849075ec28f9f980c2d43f8b47a",
+          "bytes": 18481440
         },
         {
           "name": "libffprobe_armv9.so",
-          "sha256": "321730e7172f94f80b45297d7e641089bc98abf836f46108e7122ac27300bcb7",
-          "bytes": 18387352
+          "sha256": "d659141d117ed2a2f8c46354718e3200644a9ed058c5ce5ba0f794124a56f3b8",
+          "bytes": 18379784
+        },
+        {
+          "name": "libkiwix-manage_armv9.so",
+          "sha256": "f795e99e16b5d09da59a1d97bfaeef7e01256f37a228dff998aa51267fdb8517",
+          "bytes": 54693592
+        },
+        {
+          "name": "libkiwix-serve_armv9.so",
+          "sha256": "afea89c24df36b7403e832caa5f93387ccd7f5be3e125e565abf88d1f748dfce",
+          "bytes": 62109920
         },
         {
           "name": "libllama-bench_armv9.so",
-          "sha256": "f17c2fd68e42f896b1479d3773d45e9669b65e7ce47f99b770fedb903517cfd9",
-          "bytes": 7976544
+          "sha256": "a874c9f6e2e10c12455d4b6d6a9d5d5f3544385f610f137c4871dbe421f2a4c5",
+          "bytes": 8083840
         },
         {
           "name": "libllama_server_armv9.so",
-          "sha256": "d070b0ada651b305d3c3a7278ba16d46b0140f0c09867e12501f8a43686752c7",
-          "bytes": 13861144
+          "sha256": "101a77f11192c9f354eb59d91403c58163d781b380c3c9aa296e7f2707173aaf",
+          "bytes": 13987024
         },
         {
           "name": "libmtmd_armv9.so",
-          "sha256": "0b0136f089b8a6b45dd87167408cd98c244558f5af5a9e70a0e05aed486cdb4e",
-          "bytes": 8833696
+          "sha256": "e820de2ec921bb3becea1734696c52eb29316b4b3abb6b401c39cb34b64c2914",
+          "bytes": 8941040
         },
         {
           "name": "libquadtrix_trainer_armv9.so",
-          "sha256": "570743f6f6783b3691c492c48d17a957522fef7eaf967c93531a69ef4f5763b0",
-          "bytes": 25513240
+          "sha256": "3aba96692a0dbeab4cc9141ebc3ae829373e0dc192f4736f1954e80f40d1600f",
+          "bytes": 25648224
         },
         {
           "name": "librpc-server_armv9.so",
-          "sha256": "218fdf92c0f479a3386b96f32175e2613de8b20cc9e0fd9bf58d800dfdfda231",
-          "bytes": 2288720
+          "sha256": "00f5a8ac379dabce45e4f092fa3e1a5711936a31b27be5a31bfbf9f7635e1e61",
+          "bytes": 2289408
         },
         {
           "name": "libsd-rpc-server_armv9.so",
@@ -513,8 +573,8 @@
         },
         {
           "name": "libsd_armv9.so",
-          "sha256": "40dc2aeeb96ddcb3c74d3d5d537fde316d9e8b14f00213f6e28f19604bab831b",
-          "bytes": 56338376
+          "sha256": "1ef91a2c4e4c360bbab1c9f882a4a3d4d3f124cd4627f4a04b4073528967a817",
+          "bytes": 56361472
         },
         {
           "name": "libwhisper-cli_armv9.so",
@@ -539,37 +599,37 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 117614952,
+      "uncompressedNativeBytes": 118116864,
       "libraries": [
         {
           "name": "libllama-bench_i8mm.so",
-          "sha256": "6507bb1aede9ade866a7cc7109cd7e35221168f231da2035cffa0de03520a686",
-          "bytes": 8135144
+          "sha256": "0ce8675ad2476988002787bb091b283854daaac7e8b214b0e7501cd40c605406",
+          "bytes": 8243016
         },
         {
           "name": "libllama_server_i8mm.so",
-          "sha256": "61a2d739fd4981922174bce83bda223303e66740d175131f509ca2e8d245ca27",
-          "bytes": 14010448
+          "sha256": "b9360c4d02882285d6997bc74f523c1319407876bfee7c93ce80e1b9899d430e",
+          "bytes": 14137000
         },
         {
           "name": "libmtmd_i8mm.so",
-          "sha256": "ed2610643c2db7cb8c902f016c288f13c57d710299644b67cd11f35d9d0c0cc8",
-          "bytes": 8989096
+          "sha256": "d8f58ef6fb5e2d149acdf37b9a6d49a4fb829e4c65ed4b4b2ec3fe3b95bc6c2f",
+          "bytes": 9097064
         },
         {
           "name": "libquadtrix_trainer_i8mm.so",
-          "sha256": "a5e09a28692cc521388c06da48ed91d4835a21eac5be0552af91c7f028311ff7",
-          "bytes": 25500120
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
         },
         {
           "name": "librpc-server_i8mm.so",
-          "sha256": "29282ee19b9c590b5cf04b29f23520c879edabcac96415122dac0d8f0c7aa83c",
-          "bytes": 2302952
+          "sha256": "3cd40f39e38f0f10bb892880f76be79874a87aeecff8bee47e2c7c495966565b",
+          "bytes": 2303624
         },
         {
           "name": "libsd_i8mm.so",
-          "sha256": "5d81ebb5faf9ba1c52f7a8aa4b85283e378f61aba26ae9079ee044785a4741c5",
-          "bytes": 56486416
+          "sha256": "802099e44482ac08be5529bdc0479d13ee2a02fb880c030dcacdf7750293fbb0",
+          "bytes": 56509272
         },
         {
           "name": "libwhisper-cli_i8mm.so",
@@ -595,7 +655,7 @@
         "libmediandk.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 87008320,
+      "uncompressedNativeBytes": 84779440,
       "libraries": [
         {
           "name": "libAIDOCL.so",
@@ -604,18 +664,18 @@
         },
         {
           "name": "libllama-bench_snapdragon_opencl.so",
-          "sha256": "cd4c0dfe9cc83d2bc8046984badbac1a40e8d20038cca1880fcd68321b48a9e5",
-          "bytes": 10278952
+          "sha256": "9ed3f8af375ac703f64997686632047196fc2524f442f6067725f76d5c56bebe",
+          "bytes": 10387000
         },
         {
           "name": "libllama_server_snapdragon_opencl.so",
-          "sha256": "22899577d03a5a37246015a44ad74a783af9012870935bf7af538d821cb54614",
-          "bytes": 16154032
+          "sha256": "5b156adb522d8203437d77218c76d104b71ff2cc57128e7f1743e37ee74ca2f7",
+          "bytes": 16280696
         },
         {
           "name": "libsd_snapdragon_opencl.so",
-          "sha256": "7fc3a2d4b6ceea89578b352957e822b4f6e5e5c49d724638d5bc80c4c39bd02e",
-          "bytes": 60558248
+          "sha256": "27db7495933394e61fbd8951c4a3a32cf983f98aea706fbe6113e00e289fba5c",
+          "bytes": 58094656
         }
       ]
     },
@@ -636,12 +696,12 @@
         "libvulkan.so",
         "libz.so"
       ],
-      "uncompressedNativeBytes": 108272480,
+      "uncompressedNativeBytes": 105517096,
       "libraries": [
         {
           "name": "libsd_snapdragon_vulkan.so",
-          "sha256": "d3a4bbef486f84adbd530aa08f1e0662c6304ccc3c7f9a04d3465141d18fc1f1",
-          "bytes": 108272480
+          "sha256": "7ee972deb7f55345e4c10c9b437604f5c8f433c1d580c900c5de8a968ed25fb8",
+          "bytes": 105517096
         }
       ]
     }

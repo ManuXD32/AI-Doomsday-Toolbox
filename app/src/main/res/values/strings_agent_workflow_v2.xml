@@ -9,4 +9,5 @@
     <string name="agent_plan_resolution_in_progress">This plan approval is already being processed.</string>
     <string name="agent_plan_resolution_failed">The approved plan could not be saved.</string>
     <string name="agent_plan_saving">Starting…</string>
+    <string name="agent_context_budget_breakdown">Budget: messages ~%1$d · tools/schema ~%2$d · request %3$d · input limit %4$d · output %5$d · reserve %6$d · %7$s</string>
 </resources>

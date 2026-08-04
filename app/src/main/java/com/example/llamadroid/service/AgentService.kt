@@ -94,6 +94,15 @@ data class PromptContextSnapshot(
     val actualTotalTokens: Int? = null,
     val actualPercentUsed: Int? = null,
     val calibrationFactor: Double? = null,
+    val rawToolSchemaTokens: Int = 0,
+    val rawSerializedRequestTokens: Int? = null,
+    val calibratedRequestTokens: Int? = null,
+    val maximumInputTokens: Int? = null,
+    val safetyReserveTokens: Int? = null,
+    val minimumGenerationReserveTokens: Int? = null,
+    val effectiveOutputTokens: Int? = null,
+    val countSource: String? = null,
+    val budgetVersion: Int = AGENT_PROMPT_BUDGET_VERSION,
     val recentCompactions: List<PromptCompactionEvent> = emptyList(),
     val isUsingHardCompactedBasis: Boolean = false,
     val agentRole: String = "ORCHESTRATOR"
@@ -141,7 +150,14 @@ private data class HardCompactionState(
     val recentTailEstimatedTokens: Int? = null,
     val summarizedMessageCount: Int? = null,
     val lastPostCompactionRawTokens: Int? = null,
-    val lastPostCompactionPackedTokens: Int? = null
+    val lastPostCompactionPackedTokens: Int? = null,
+    val conversationId: Long? = null,
+    val contextTokens: Int? = null,
+    val maximumInputTokens: Int? = null,
+    val requiredPrimacyTokens: Int? = null,
+    val profileName: String? = null,
+    val toolDefinitionsHash: String? = null,
+    val metadataVersion: Int = 1
 )
 
 data class AgentLlamaServerRuntimeState(
@@ -2505,7 +2521,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         private const val REFLECTION_MAX_CALLS = 2
         private const val REFLECTION_TURN_WINDOW = 6
         private const val LEGACY_COMPACTION_STATUS_TOOL = "context_compaction_status"
-        private const val HARD_COMPACTION_TIMEOUT_MS = 30L * 60L * 1000L
+        private const val HARD_COMPACTION_TIMEOUT_MS = 3L * 60L * 1000L
         const val RESUME_STATE_IDLE = "IDLE"
         const val RESUME_STATE_STOPPED_BY_USER = "STOPPED_BY_USER"
         const val RESUME_STATE_INTERRUPTED = "INTERRUPTED"
@@ -2596,14 +2612,14 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         @Volatile private var lastAutomaticProgressAt = 0L
         @Volatile private var lastProgressSignature = ""
         private val recentCompactionEvents = ArrayDeque<PromptCompactionEvent>(4)
-        private val promptTokenCalibrationByBackendModel = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        private val promptTokenCalibrationBySignature =
+            java.util.concurrent.ConcurrentHashMap<String, AgentPromptCalibration>()
+        @Volatile private var lastPromptCalibrationKey: String? = null
         private const val CONTEXT_OVERFLOW_MAX_RETRIES = 1
-        private const val PROMPT_SAFETY_RESERVE_MIN_TOKENS = 1_024
-        private const val PROMPT_SAFETY_RESERVE_PERCENT = 10
-        private val contextOverflowRetriesByEpoch =
-            java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
-        private val forceContextCompactionByEpoch =
-            java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicBoolean>()
+        private val contextOverflowRetriesByAttempt =
+            java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
+        private val forceContextCompactionByAttempt =
+            java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicBoolean>()
         private val llamaServerMetadataMutex = Mutex()
         @Volatile
         private var activePromptBackend: String = "ollama"
@@ -2615,6 +2631,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         private var initialOrderContent: String? = null
         @Volatile
         private var pendingHardCompaction: Boolean = false
+        @Volatile
+        private var pendingHardCompactionConversationId: Long? = null
         @Volatile
         private var hardCompactionState: HardCompactionState? = null
         @Volatile
@@ -2878,48 +2896,20 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             return ContextOverflowInfo(promptTokens, contextTokens)
         }
 
-        private fun promptSafetyReserve(contextSize: Int): Int =
-            maxOf(
-                PROMPT_SAFETY_RESERVE_MIN_TOKENS,
-                contextSize * PROMPT_SAFETY_RESERVE_PERCENT / 100
-            )
-
-        private fun safePromptTokenLimit(contextSize: Int): Int =
-            (contextSize - promptSafetyReserve(contextSize))
-                .coerceAtLeast(MIN_PROMPT_CONTEXT_TOKENS)
-
-        private fun conservativePackingContextSize(
-            contextSize: Int,
-            calibrationFactor: Double
-        ): Int {
-            val safeLimit = safePromptTokenLimit(contextSize)
-            val factor = maxOf(1.0, calibrationFactor)
-            return kotlin.math.floor(safeLimit / factor)
-                .toInt()
-                .coerceIn(MIN_PROMPT_CONTEXT_TOKENS, safeLimit)
-        }
-
-        private fun conservativePromptEstimate(
-            estimatedTokens: Int,
-            calibrationFactor: Double
-        ): Int =
-            kotlin.math.ceil(
-                estimatedTokens * maxOf(1.0, calibrationFactor)
-            ).toInt().coerceAtLeast(estimatedTokens)
-
         private fun requestContextOverflowRecovery(
             context: Context,
             ollamaService: OllamaService,
             settingsRepo: com.example.llamadroid.data.SettingsRepository,
             agentService: AgentService,
             runEpoch: Long,
+            attemptKey: String,
             estimatedPromptTokens: Int,
             actualPromptTokens: Int?,
             serverContextTokens: Int?,
             reason: String
         ): Boolean {
-            val retryNumber = contextOverflowRetriesByEpoch
-                .getOrPut(runEpoch) {
+            val retryNumber = contextOverflowRetriesByAttempt
+                .getOrPut(attemptKey) {
                     java.util.concurrent.atomic.AtomicInteger(0)
                 }
                 .incrementAndGet()
@@ -2928,7 +2918,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 kind = "context_overflow_detected",
                 summary = "Agent prompt exceeded the safe context budget",
                 details = buildString {
-                    append("retry=$retryNumber")
+                    append("attempt=${attemptKey.take(24)}")
+                    append(" retry=$retryNumber")
                     append(" estimated=$estimatedPromptTokens")
                     append(" actual=${actualPromptTokens ?: "unknown"}")
                     append(" serverContext=${serverContextTokens ?: "unknown"}")
@@ -2950,12 +2941,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                         "Increase the model context or run /compact, then ask the agent to continue from the current TODO."
                     )
                 }
-                addMessage(
-                    ChatMessage(
-                        role = "system",
-                        content = friendlyMessage
-                    )
-                )
+                addMessage(ChatMessage(role = "system", content = friendlyMessage))
                 updateActiveConversationResumeState(
                     RESUME_STATE_NEEDS_DIRECTION,
                     friendlyMessage
@@ -2965,13 +2951,17 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
             }
 
             pendingHardCompaction = true
-            forceContextCompactionByEpoch
-                .getOrPut(runEpoch) {
+            pendingHardCompactionConversationId =
+                _activeConversationId.value ?: _preferredConversationId.value
+            forceContextCompactionByAttempt
+                .getOrPut(attemptKey) {
                     java.util.concurrent.atomic.AtomicBoolean(false)
                 }
                 .set(true)
 
-            pendingContinuations.clear()
+            // Do not clear the global continuation queue here. Other queued user
+            // guidance, command completions, and child-agent returns are unrelated
+            // to this one prompt attempt and must survive recovery.
             allowAutomaticContinuations()
             updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
             setStatusText(
@@ -2983,7 +2973,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 ollamaService = ollamaService,
                 settingsRepo = settingsRepo,
                 agentService = agentService,
-                reason = "context overflow automatic compaction",
+                reason = "context overflow automatic compaction ${attemptKey.take(18)}",
                 recoveryInstruction =
                     "Resume the same unfinished turn after automatic context compaction. " +
                         "Preserve the current task, approved plan, durable TODO state, " +
@@ -3754,16 +3744,29 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         fun hydrateConversationDerivedState(messages: List<ChatMessage>) {
-            initialOrderContent = messages.firstOrNull { it.role == "user" && !isTransientCompactionStatusMessage(it) }
+            initialOrderContent = messages.firstOrNull {
+                it.role == "user" && !isTransientCompactionStatusMessage(it)
+            }
                 ?.content
                 ?.trim()
                 ?.takeIf { it.isNotBlank() }
             pendingHardCompaction = false
+            pendingHardCompactionConversationId = null
             hardCompactionState = null
             compactionStatusMessageId = null
         }
 
         fun setActiveConversationId(conversationId: Long?) {
+            if (_activeConversationId.value != conversationId) {
+                hardCompactionState = null
+                if (
+                    pendingHardCompactionConversationId != null &&
+                    pendingHardCompactionConversationId != conversationId
+                ) {
+                    pendingHardCompaction = false
+                    pendingHardCompactionConversationId = null
+                }
+            }
             _activeConversationId.value = conversationId
             if (conversationId != null && _preferredConversationId.value == null) {
                 _preferredConversationId.value = conversationId
@@ -3786,8 +3789,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             activeRootTurnStorageId = java.util.UUID.randomUUID().toString()
             remoteWorkerRootSessionId = AgentRemoteChatClient.newSessionId()
             noProgressContinuationsByEpoch.clear()
-            contextOverflowRetriesByEpoch.clear()
-            forceContextCompactionByEpoch.clear()
+            contextOverflowRetriesByAttempt.clear()
+            forceContextCompactionByAttempt.clear()
             frozenToolsByTurnBranch.clear()
             frozenSystemPromptByTurnBranch.clear()
             frozenOptionalPromptByTurnBranch.clear()
@@ -4892,6 +4895,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         fun requestManualCompaction(focus: String? = null) {
             pendingHardCompaction = true
+            pendingHardCompactionConversationId =
+                _activeConversationId.value ?: _preferredConversationId.value
             recordAgentEvent(
                 kind = "manual_compaction_requested",
                 summary = "Manual context compaction requested",
@@ -5294,8 +5299,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             continuationsByEpoch.clear()
             pendingContinuations.clear()
             pendingDelegations.clear()
-            contextOverflowRetriesByEpoch.clear()
-            forceContextCompactionByEpoch.clear()
+            contextOverflowRetriesByAttempt.clear()
+            forceContextCompactionByAttempt.clear()
             return next
         }
 
@@ -6826,8 +6831,17 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             val currentAgent = _currentAgent.value
             val activeCustom = _activeCustomAgent.value
             val runEpoch = currentRunEpoch()
+            val contextOverflowAttemptKey = buildString {
+                append(runEpoch)
+                append('|')
+                append(currentRootTurnStorageId(currentAgent.name))
+                append('|')
+                append(activeCustom?.name ?: currentAgent.name)
+                append('|')
+                append(activeInvocationId ?: "root")
+            }
             val forceContextCompaction =
-                forceContextCompactionByEpoch[runEpoch]
+                forceContextCompactionByAttempt[contextOverflowAttemptKey]
                     ?.getAndSet(false) == true
             if (recoveryMode) {
                 val recoveryCount = recoveryTurnsByEpoch
@@ -6976,25 +6990,155 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         activeCustomAgent = activeCustomAgent
                     )
                     val availableTools = frozenToolsByTurnBranch.getOrPut(activeTurnBranchKey) {
-                        getAgentTools(activeAgentRole, activeCustomAgent, settingsRepo)
+                        getAgentTools(
+                            activeAgentRole,
+                            activeCustomAgent,
+                            settingsRepo
+                        )
                             .distinctBy { it.name }
                             .sortedBy { it.name }
                     }
-
-                    runHardCompactionIfNeeded(context, contextSize)
+                    restoreHardCompactionStateFromBrain()
                         .onFailure {
                             addDebugLog(
-                                "⚠️ Hard compaction failed: ${it.message}"
+                                "⚠️ Failed to restore hard compaction state: ${it.message}"
                             )
                         }
+                    val thinkingEnabled = if (useLiteRtBackend) {
+                        settingsRepo.agentLiteRtThinkingEnabled.value
+                    } else {
+                        settingsRepo.getAgentThinkingEnabledForRole(
+                            activeCustomAgent?.name ?: activeAgentRole.name
+                        )
+                    }
+                    val configuredMaxOutputTokens = if (useLiteRtBackend) {
+                        settingsRepo.agentLiteRtMaxOutputTokens.value
+                    } else {
+                        settingsRepo.getAgentMaxOutputTokensForRole(
+                            activeCustomAgent?.name ?: activeAgentRole.name
+                        )
+                    }
+                    val modelClampedOutputTokens = if (
+                        useLiteRtBackend && liteRtModel != null
+                    ) {
+                        resolveAgentLiteRtMaxOutputTokens(
+                            savedMaxOutputTokens = configuredMaxOutputTokens,
+                            resolvedContextTokens = contextSize,
+                            model = liteRtModel
+                        )
+                    } else {
+                        configuredMaxOutputTokens
+                    }
+                    val canonicalToolSchema =
+                        canonicalAgentToolSchemaJson(availableTools)
+                    val toolDefinitionsHash =
+                        agentPromptSha256(canonicalToolSchema)
+                    val rawToolSchemaTokens =
+                        estimateRawPromptTextTokens(canonicalToolSchema)
+                    val calibrationEndpointGeneration = when {
+                        useLlamaServer -> settingsRepo.llamaServerUrl.value
+                        useLlamaSwap -> settingsRepo.agentLlamaSwapUrl.value
+                        else -> backend
+                    }
+                    val promptCalibrationKey = buildAgentPromptCalibrationKey(
+                        backend = backend,
+                        endpointGeneration = calibrationEndpointGeneration,
+                        model = model,
+                        toolDefinitionsHash = toolDefinitionsHash,
+                        thinkingEnabled = thinkingEnabled
+                    )
+                    lastPromptCalibrationKey = promptCalibrationKey
+                    promptTokenCalibrationBySignature.getOrPut(
+                        promptCalibrationKey
+                    ) {
+                        AgentPromptCalibrationStore.load(
+                            context,
+                            promptCalibrationKey
+                        )
+                    }
+                    val preliminaryCapacity = resolveAgentPromptCapacity(
+                        configuredContextTokens = contextSize,
+                        reportedContextTokens = reportedServerContextSize,
+                        exactCountingAvailable = useLlamaServer
+                    )
+                    val budgetPlanContent = hardCompactionState?.planContent
+                        ?: agentService.readBrainFileRaw("plan.md")
+                    val budgetCompactionSummary =
+                        hardCompactionState?.summaryContent.orEmpty()
+                    val preliminaryRequiredPrimacyTokens =
+                        estimateRawPromptTextTokens(
+                            activeCustom?.systemPrompt ?: currentAgent.systemPrompt
+                        ) +
+                            estimateRawPromptTextTokens(
+                                initialOrderContent.orEmpty()
+                            ) +
+                            estimateRawPromptTextTokens(budgetPlanContent) +
+                            estimateRawPromptTextTokens(
+                                budgetCompactionSummary
+                            ) +
+                            1_024
+                    val hardRecentTailBudget =
+                        resolveHardCompactionRecentTailBudget(
+                            maximumInputTokens =
+                                preliminaryCapacity.maximumInputTokens,
+                            requiredPrimacyTokens =
+                                preliminaryRequiredPrimacyTokens,
+                            toolSchemaTokens = rawToolSchemaTokens
+                        )
+                    val schemaPressurePercent = (
+                        rawToolSchemaTokens.toDouble() /
+                            preliminaryCapacity.contextCapacityTokens
+                                .coerceAtLeast(1).toDouble() *
+                            100.0
+                        ).roundToInt()
+                    if (schemaPressurePercent >= 20) {
+                        recordAgentEvent(
+                            kind = "tool_schema_pressure",
+                            summary = "Tool definitions consume significant context",
+                            details = "role=${activeCustomAgent?.name ?: activeAgentRole.name} tools=${availableTools.size} tokens=$rawToolSchemaTokens context=${preliminaryCapacity.contextCapacityTokens} percent=$schemaPressurePercent",
+                            persist = false
+                        )
+                    }
+
+                    val hardCompactionResult = runHardCompactionIfNeeded(
+                        context = context,
+                        contextSize = contextSize,
+                        recentTailBudgetTokens = hardRecentTailBudget,
+                        maximumInputTokens =
+                            preliminaryCapacity.maximumInputTokens,
+                        requiredPrimacyTokens =
+                            preliminaryRequiredPrimacyTokens,
+                        profileName = promptProfile.name,
+                        toolDefinitionsHash = toolDefinitionsHash
+                    )
+                    if (hardCompactionResult.isFailure) {
+                        val reason = hardCompactionResult.exceptionOrNull()
+                            ?.message
+                            ?: "Hard compaction failed"
+                        addDebugLog("⚠️ Hard compaction failed: $reason")
+                        if (forceContextCompaction) {
+                            pauseForNeedsDirection(context, reason)
+                            return@launch
+                        }
+                    }
                     agentService.ensureStructuredBrainFiles()
-                        .onFailure { addDebugLog("⚠️ Failed to ensure structured brain files: ${it.message}") }
+                        .onFailure {
+                            addDebugLog(
+                                "⚠️ Failed to ensure structured brain files: ${it.message}"
+                            )
+                        }
                     agentService.syncCurrentTaskMemory(_currentTask.value)
-                        .onFailure { addDebugLog("⚠️ Failed to sync current_task.md before prompting: ${it.message}") }
+                        .onFailure {
+                            addDebugLog(
+                                "⚠️ Failed to sync current_task.md before prompting: ${it.message}"
+                            )
+                        }
                     agentService.syncAgentStateMemory()
-                        .onFailure { addDebugLog("⚠️ Failed to sync agent_state.json before prompting: ${it.message}") }
-                    restoreHardCompactionStateFromBrain()
-                        .onFailure { addDebugLog("⚠️ Failed to restore hard compaction state: ${it.message}") }
+                        .onFailure {
+                            addDebugLog(
+                                "⚠️ Failed to sync agent_state.json before prompting: ${it.message}"
+                            )
+                        }
                     val hardCompactionMode = _currentSessionId.value == null &&
                         activeAgentRole == AgentRole.ORCHESTRATOR &&
                         hardCompactionState != null
@@ -7217,74 +7361,174 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
                     val rawEstimatedTokens =
                         estimatePromptTokens(promptAssembly.allMessages())
-                    val isAtomicToolContinuation =
-                        promptHistoryMessages.lastOrNull()?.role == "tool"
-                    val packingCalibration =
-                        currentPromptCalibrationFactor().coerceAtLeast(1.0)
-                    val promptPackingContextSize =
-                        conservativePackingContextSize(
-                            contextSize = contextSize,
-                            calibrationFactor = packingCalibration
-                        )
-                    var packedContext = packMessagesForContext(
-                        promptAssembly,
-                        promptPackingContextSize,
-                        if (recoveryMode) {
-                            promptProfile.forRecovery()
-                        } else {
-                            promptProfile
-                        },
-                        allowCompaction =
-                            forceContextCompaction ||
-                                !isAtomicToolContinuation
+                    val profileForPacking = if (recoveryMode) {
+                        promptProfile.forRecovery()
+                    } else {
+                        promptProfile
+                    }
+                    var activeCapacity = preliminaryCapacity
+                    var packingLimits = resolveAgentPromptPackingLimits(
+                        maximumInputTokens = activeCapacity.maximumInputTokens,
+                        softTargetRatio = profileForPacking.promptContextRatio,
+                        compactMode = hardCompactionMode
                     )
-                    var conservativePromptTokens =
-                        conservativePromptEstimate(
-                            packedContext.estimatedTokens,
-                            packingCalibration
-                        )
-                    val safePromptLimit =
-                        safePromptTokenLimit(contextSize)
+                    var messageTargetTokens = (
+                        packingLimits.targetTokens -
+                            rawToolSchemaTokens -
+                            128
+                        ).coerceAtLeast(256)
+                    if (forceContextCompaction) {
+                        messageTargetTokens = (
+                            messageTargetTokens * 0.75
+                            ).roundToInt().coerceAtLeast(256)
+                    }
+                    var messageTriggerTokens = (
+                        packingLimits.triggerTokens -
+                            rawToolSchemaTokens -
+                            128
+                        ).coerceAtLeast(messageTargetTokens)
+                    var messageMaximumTokens = (
+                        packingLimits.maximumCompactedTokens -
+                            rawToolSchemaTokens -
+                            128
+                        ).coerceAtLeast(messageTargetTokens)
+                    var packedContext = packMessagesForContext(
+                        assembly = promptAssembly,
+                        contextSize = activeCapacity.maximumInputTokens,
+                        profile = profileForPacking,
+                        allowCompaction = true,
+                        thresholdTokensOverride = messageTriggerTokens,
+                        targetTokensOverride = messageTargetTokens,
+                        maximumCompactedTokensOverride = messageMaximumTokens
+                    )
+                    var promptCount = resolvePreparedPromptCount(
+                        context = context,
+                        useLlamaServer = useLlamaServer,
+                        llamaBaseUrl = settingsRepo.llamaServerUrl.value,
+                        messages = packedContext.messages,
+                        tools = availableTools,
+                        model = model,
+                        thinkingEnabled = thinkingEnabled,
+                        calibrationKey = promptCalibrationKey
+                    )
+                    activeCapacity = resolveAgentPromptCapacity(
+                        configuredContextTokens = contextSize,
+                        reportedContextTokens = reportedServerContextSize,
+                        exactCountingAvailable =
+                            promptCount.countSource ==
+                                AgentPromptCountSource.LLAMA_SERVER_EXACT
+                    )
+                    packingLimits = resolveAgentPromptPackingLimits(
+                        maximumInputTokens = activeCapacity.maximumInputTokens,
+                        softTargetRatio = profileForPacking.promptContextRatio,
+                        compactMode = hardCompactionMode
+                    )
 
                     if (
-                        conservativePromptTokens > safePromptLimit &&
-                        isAtomicToolContinuation &&
-                        !forceContextCompaction
+                        promptCount.resolvedInputTokens >
+                        activeCapacity.maximumInputTokens
                     ) {
-                        packedContext = packMessagesForContext(
-                            promptAssembly,
-                            promptPackingContextSize,
-                            if (recoveryMode) {
-                                promptProfile.forRecovery()
-                            } else {
-                                promptProfile
-                            },
-                            allowCompaction = true
+                        val overflowBy =
+                            promptCount.resolvedInputTokens -
+                                activeCapacity.maximumInputTokens
+                        val capacityTarget = (
+                            packingLimits.targetTokens -
+                                rawToolSchemaTokens -
+                                128
+                            ).coerceAtLeast(256)
+                        messageTargetTokens = minOf(
+                            capacityTarget,
+                            (
+                                packedContext.estimatedTokens -
+                                    overflowBy -
+                                    256
+                                ).coerceAtLeast(256)
                         )
-                        conservativePromptTokens =
-                            conservativePromptEstimate(
-                                packedContext.estimatedTokens,
-                                packingCalibration
-                            )
+                        messageTriggerTokens = messageTargetTokens
+                        messageMaximumTokens = messageTargetTokens
+                        packedContext = packMessagesForContext(
+                            assembly = promptAssembly,
+                            contextSize = activeCapacity.maximumInputTokens,
+                            profile = profileForPacking.moreAggressive(),
+                            allowCompaction = true,
+                            thresholdTokensOverride = messageTriggerTokens,
+                            targetTokensOverride = messageTargetTokens,
+                            maximumCompactedTokensOverride =
+                                messageMaximumTokens
+                        )
+                        promptCount = resolvePreparedPromptCount(
+                            context = context,
+                            useLlamaServer = useLlamaServer,
+                            llamaBaseUrl = settingsRepo.llamaServerUrl.value,
+                            messages = packedContext.messages,
+                            tools = availableTools,
+                            model = model,
+                            thinkingEnabled = thinkingEnabled,
+                            calibrationKey = promptCalibrationKey
+                        )
+                        activeCapacity = resolveAgentPromptCapacity(
+                            configuredContextTokens = contextSize,
+                            reportedContextTokens = reportedServerContextSize,
+                            exactCountingAvailable =
+                                promptCount.countSource ==
+                                    AgentPromptCountSource.LLAMA_SERVER_EXACT
+                        )
                     }
 
-                    if (conservativePromptTokens > safePromptLimit) {
+                    if (
+                        promptCount.resolvedInputTokens >
+                        activeCapacity.maximumInputTokens
+                    ) {
                         requestContextOverflowRecovery(
                             context = context,
                             ollamaService = ollamaService,
                             settingsRepo = settingsRepo,
                             agentService = agentService,
                             runEpoch = runEpoch,
+                            attemptKey = contextOverflowAttemptKey,
                             estimatedPromptTokens =
-                                packedContext.estimatedTokens,
-                            actualPromptTokens = null,
+                                promptCount.rawSerializedRequestTokens,
+                            actualPromptTokens =
+                                promptCount.exactInputTokens,
                             serverContextTokens =
                                 reportedServerContextSize,
-                            reason = "preflight safety budget"
+                            reason = "preflight authoritative input budget"
                         )
                         return@launch
                     }
 
+                    val outputBudget = resolveAgentPromptOutputBudget(
+                        configuredMaxOutputTokens = modelClampedOutputTokens,
+                        capacity = activeCapacity,
+                        authoritativeInputTokens =
+                            promptCount.resolvedInputTokens
+                    )
+                    if (!outputBudget.canSend) {
+                        requestContextOverflowRecovery(
+                            context = context,
+                            ollamaService = ollamaService,
+                            settingsRepo = settingsRepo,
+                            agentService = agentService,
+                            runEpoch = runEpoch,
+                            attemptKey = contextOverflowAttemptKey,
+                            estimatedPromptTokens =
+                                promptCount.rawSerializedRequestTokens,
+                            actualPromptTokens =
+                                promptCount.exactInputTokens,
+                            serverContextTokens =
+                                reportedServerContextSize,
+                            reason = "minimum useful generation reserve unavailable"
+                        )
+                        return@launch
+                    }
+                    val effectiveMaxOutputTokens =
+                        outputBudget.effectiveMaxOutputTokens
+                    val packingThresholdPercent = (
+                        packingLimits.triggerTokens.toDouble() /
+                            activeCapacity.contextCapacityTokens
+                                .coerceAtLeast(1).toDouble() *
+                            100.0
+                        ).roundToInt().coerceIn(1, 99)
                     val exposePromptSnapshot =
                         _currentSessionId.value == null ||
                             currentAgent == AgentRole.ORCHESTRATOR
@@ -7295,12 +7539,18 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         profileName = promptProfile.name,
                         backend = backend,
                         model = model,
-                        calibrationFactor = currentPromptCalibrationFactor()
+                        calibrationFactor = promptCount.calibrationFactor,
+                        promptCount = promptCount,
+                        capacity = activeCapacity,
+                        effectiveOutputTokens = effectiveMaxOutputTokens,
+                        thresholdPercentOverride = packingThresholdPercent
                     )
                     addDebugLog(
                         "🧠 Packed context for ${if (exposePromptSnapshot) currentAgent.name else "background ${currentAgent.name}"}: " +
                             "raw=${promptAssembly.allMessages().size} packed=${packedContext.messages.size} " +
-                            "omitted=${packedContext.omittedCount} estTokens=${packedContext.estimatedTokens}/$contextSize " +
+                            "omitted=${packedContext.omittedCount} messages=${packedContext.estimatedTokens} " +
+                            "tools=$rawToolSchemaTokens request=${promptCount.resolvedInputTokens}/$contextSize " +
+                            "count=${promptCount.countSource.wireValue} " +
                             "mode=${if (hardCompactionMode) "hard-compacted" else if (packedContext.didCompactHistory) "compacted" else "normalized"} " +
                             "passes=${packedContext.compactionPasses} profile=${promptProfile.name}${if (recoveryMode) ":recovery" else ""}" +
                             if (packedContext.thresholdTriggered) " auto-compact@${PROMPT_CONTEXT_AUTOCOMPACT_PERCENT}%" else " below-threshold"
@@ -7312,7 +7562,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             model = model,
                             packedTokenEstimate = packedContext.estimatedTokens,
                             memorySnapshotVersion = Integer.toHexString(agentService.snapshotPersistentState().hashCode()),
-                            notes = "raw=${promptAssembly.allMessages().size} packed=${packedContext.messages.size} omitted=${packedContext.omittedCount}"
+                            notes = "raw=${promptAssembly.allMessages().size} packed=${packedContext.messages.size} omitted=${packedContext.omittedCount} request=${promptCount.resolvedInputTokens} tools=$rawToolSchemaTokens source=${promptCount.countSource.wireValue}"
                         )
                     )
 
@@ -7342,36 +7592,13 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         if (current.length >= maxChars || delta.isEmpty()) return current
                         return current + delta.take(maxChars - current.length)
                     }
-                    val thinkingEnabled = if (useLiteRtBackend) {
-                        settingsRepo.agentLiteRtThinkingEnabled.value
-                    } else {
-                        settingsRepo.getAgentThinkingEnabledForRole(activeCustomAgent?.name ?: activeAgentRole.name)
-                    }
-                    val configuredMaxOutputTokens = if (useLiteRtBackend) {
-                        settingsRepo.agentLiteRtMaxOutputTokens.value
-                    } else {
-                        settingsRepo.getAgentMaxOutputTokensForRole(activeCustomAgent?.name ?: activeAgentRole.name)
-                    }
-                    val modelClampedOutputTokens = if (useLiteRtBackend && liteRtModel != null) {
-                        resolveAgentLiteRtMaxOutputTokens(
-                            savedMaxOutputTokens = configuredMaxOutputTokens,
-                            resolvedContextTokens = contextSize,
-                            model = liteRtModel
-                        )
-                    } else {
-                        configuredMaxOutputTokens
-                    }
-                    val effectiveMaxOutputTokens = resolveAgentEffectiveMaxOutputTokens(
-                        configuredMaxOutputTokens = modelClampedOutputTokens,
-                        contextTokens = contextSize,
-                        estimatedPromptTokens = conservativePromptTokens
-                    )
                     recordAgentEvent(
                         kind = "output_budget",
                         summary = "Agent output budget resolved",
                         details = "backend=$backend role=${activeCustomAgent?.name ?: activeAgentRole.name} " +
                             "configured=$configuredMaxOutputTokens effective=$effectiveMaxOutputTokens " +
-                            "context=$contextSize promptEstimate=${packedContext.estimatedTokens}"
+                            "context=$contextSize input=${promptCount.resolvedInputTokens} " +
+                            "maxInput=${activeCapacity.maximumInputTokens} source=${promptCount.countSource.wireValue}"
                     )
                     recordFrozenTurnContextForRequest(
                         context = context,
@@ -7762,8 +7989,12 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
 
                     response.onSuccess { chatResponse ->
-                        contextOverflowRetriesByEpoch.remove(runEpoch)
-                        forceContextCompactionByEpoch.remove(runEpoch)
+                        contextOverflowRetriesByAttempt.remove(
+                            contextOverflowAttemptKey
+                        )
+                        forceContextCompactionByAttempt.remove(
+                            contextOverflowAttemptKey
+                        )
                         if (!isAgentRunActive(runEpoch)) {
                             throw CancellationException(
                                 "Agent run cancelled"
@@ -7782,14 +8013,20 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             details = "contentChars=${fullContent.length} thinkingChars=${fullThinking.length}"
                         )
                         val turnNumber = nextModelTurnNumber()
-                        val calibratedFactor = chatResponse.usage?.promptTokens?.takeIf { it > 0 }?.let { actualPromptTokens ->
-                            registerPromptTokenCalibration(
-                                backend = backend,
-                                model = model,
-                                estimatedPromptTokens = packedContext.estimatedTokens,
-                                actualPromptTokens = actualPromptTokens
+                        val calibratedFactor = chatResponse.usage
+                            ?.promptTokens
+                            ?.takeIf { it > 0 }
+                            ?.let { actualPromptTokens ->
+                                registerPromptTokenCalibration(
+                                    calibrationKey = promptCalibrationKey,
+                                    rawSerializedRequestTokens =
+                                        promptCount.rawSerializedRequestTokens,
+                                    actualPromptTokens = actualPromptTokens
+                                )
+                            }
+                            ?: currentPromptCalibrationFactor(
+                                promptCalibrationKey
                             )
-                        } ?: currentPromptCalibrationFactor()
                         updatePromptContextSnapshot(
                             rawEstimatedTokens = rawEstimatedTokens,
                             packedContext = packedContext,
@@ -7798,12 +8035,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             backend = backend,
                             model = model,
                             actualUsage = chatResponse.usage,
-                            calibrationFactor = calibratedFactor
+                            calibrationFactor = calibratedFactor,
+                            promptCount = promptCount,
+                            capacity = activeCapacity,
+                            effectiveOutputTokens = effectiveMaxOutputTokens,
+                            thresholdPercentOverride =
+                                packingThresholdPercent
                         )
                         scheduleHardCompactionIfNeeded(
                             contextSize = contextSize,
-                            packedEstimatedTokens = packedContext.estimatedTokens,
-                            actualPromptTokens = chatResponse.usage?.promptTokens
+                            packedEstimatedTokens =
+                                promptCount.resolvedInputTokens,
+                            actualPromptTokens =
+                                chatResponse.usage?.promptTokens
                         )
                         chatResponse.usage?.let { usage ->
                             agentService.appendAuditRecord(
@@ -8048,10 +8292,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 ?.takeIf { it > 0 }
                                 ?.let { actualPromptTokens ->
                                     registerPromptTokenCalibration(
-                                        backend = backend,
-                                        model = model,
-                                        estimatedPromptTokens =
-                                            packedContext.estimatedTokens,
+                                        calibrationKey = promptCalibrationKey,
+                                        rawSerializedRequestTokens =
+                                            promptCount.rawSerializedRequestTokens,
                                         actualPromptTokens =
                                             actualPromptTokens
                                     )
@@ -8069,8 +8312,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 settingsRepo = settingsRepo,
                                 agentService = agentService,
                                 runEpoch = runEpoch,
+                                attemptKey = contextOverflowAttemptKey,
                                 estimatedPromptTokens =
-                                    packedContext.estimatedTokens,
+                                    promptCount.rawSerializedRequestTokens,
                                 actualPromptTokens =
                                     contextOverflow.promptTokens,
                                 serverContextTokens =
@@ -10113,15 +10357,19 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
         private fun selectHardCompactionRecentTail(
             messages: List<ChatMessage>,
-            contextSize: Int
+            recentTailBudgetTokens: Int
         ): HardCompactionTailSelection {
-            val allCleanMessages = messages.filterNot(::isTransientCompactionStatusMessage)
+            val allCleanMessages = messages
+                .filterNot(::isTransientCompactionStatusMessage)
             val previousState = hardCompactionState
             val cleanMessages = if (previousState != null) {
                 val previousTailStart = previousState.recentTailStartSequence
                 allCleanMessages.filter { message ->
                     message.sequenceNumber > previousState.sourceMessageSequence ||
-                        (previousTailStart != null && message.sequenceNumber >= previousTailStart)
+                        (
+                            previousTailStart != null &&
+                                message.sequenceNumber >= previousTailStart
+                            )
                 }
             } else {
                 allCleanMessages
@@ -10136,38 +10384,51 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 )
             }
 
-            val budget = resolveContextCompactionBudget(
-                modelContextTokens = contextSize,
-                outputTokens = AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
-                pinnedPromptTokens = 0
-            )
-            val tokenEstimates = cleanMessages.map { estimatePromptTokens(listOf(it)) }
+            val units = buildAgentPromptAtomicUnits(cleanMessages)
+            val unitTokenEstimates = units.map { unit ->
+                estimatePromptTokens(unit.messages)
+            }
+            val budget = recentTailBudgetTokens.coerceAtLeast(0)
             var retainedTokens = 0
-            var splitIndex = cleanMessages.size
-            while (splitIndex > 0 && retainedTokens < budget.recentTailTargetTokens) {
-                splitIndex -= 1
-                retainedTokens += tokenEstimates[splitIndex]
-            }
-            val protectedSecondLatestUser = cleanMessages.indices
-                .filter { cleanMessages[it].role == "user" }
-                .takeLast(2)
-                .firstOrNull()
-            if (protectedSecondLatestUser != null) {
-                splitIndex = minOf(splitIndex, protectedSecondLatestUser)
-            }
-            if (splitIndex > 0 && splitIndex < cleanMessages.size && cleanMessages[splitIndex].role != "user") {
-                val boundary = (splitIndex downTo 1).firstOrNull { cleanMessages[it].role == "user" }
-                if (boundary != null) splitIndex = boundary
+            var splitIndex = units.size
+            while (splitIndex > 0) {
+                val candidateIndex = splitIndex - 1
+                val candidateTokens = unitTokenEstimates[candidateIndex]
+                val mustKeepAtLeastOne = splitIndex == units.size
+                if (
+                    !mustKeepAtLeastOne &&
+                    retainedTokens + candidateTokens > budget
+                ) {
+                    break
+                }
+                splitIndex = candidateIndex
+                retainedTokens += candidateTokens
             }
 
-            val messagesToSummarize = cleanMessages.take(splitIndex)
-            val recentMessages = cleanMessages.drop(splitIndex)
+            // Keep two recent user-led turns when possible, but move only the
+            // atomic-unit boundary; never split an assistant/tool exchange.
+            val secondLatestUserUnit = units.indices
+                .filter { units[it].containsUserMessage }
+                .takeLast(2)
+                .firstOrNull()
+            if (secondLatestUserUnit != null) {
+                splitIndex = minOf(splitIndex, secondLatestUserUnit)
+            }
+
+            val messagesToSummarize = units
+                .take(splitIndex)
+                .flatMap { it.messages }
+            val recentMessages = units
+                .drop(splitIndex)
+                .flatMap { it.messages }
             return HardCompactionTailSelection(
                 messagesToSummarize = messagesToSummarize,
                 recentMessages = recentMessages,
-                recentTailStartSequence = recentMessages.firstOrNull()?.sequenceNumber,
-                recentTailTargetTokens = budget.recentTailTargetTokens,
-                recentTailEstimatedTokens = estimatePromptTokens(recentMessages)
+                recentTailStartSequence =
+                    recentMessages.firstOrNull()?.sequenceNumber,
+                recentTailTargetTokens = budget,
+                recentTailEstimatedTokens =
+                    estimatePromptTokens(recentMessages)
             )
         }
 
@@ -10324,9 +10585,79 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 ?.lines()
                 ?.filter { it.isNotBlank() && !it.startsWith("No tracked commands") }
                 .orEmpty()
+            val summaryConversationId = _activeConversationId.value
+                ?: _preferredConversationId.value
+            val summaryWorkflowDao = summaryConversationId?.let {
+                AppDatabase.getDatabase(
+                    com.example.llamadroid.LlamaApplication.instance
+                ).agentWorkflowDao()
+            }
+            val durableTodos = if (
+                summaryWorkflowDao != null && summaryConversationId != null
+            ) {
+                summaryWorkflowDao.getTodos(summaryConversationId)
+            } else {
+                emptyList()
+            }
+            val durableInvocations = if (
+                summaryWorkflowDao != null && summaryConversationId != null
+            ) {
+                summaryWorkflowDao.getInvocations(summaryConversationId)
+            } else {
+                emptyList()
+            }
+            val durablePendingQuestions = if (
+                summaryWorkflowDao != null && summaryConversationId != null
+            ) {
+                summaryWorkflowDao.getPendingQuestions(summaryConversationId)
+            } else {
+                emptyList()
+            }
+            val durablePendingPlan = if (
+                summaryWorkflowDao != null && summaryConversationId != null
+            ) {
+                summaryWorkflowDao.getPendingPlan(summaryConversationId)
+            } else {
+                null
+            }
+            val completedTodoTexts = durableTodos
+                .filter {
+                    it.status.uppercase() in setOf(
+                        "COMPLETED",
+                        "DONE",
+                        "SUCCESS"
+                    )
+                }
+                .map { it.text }
+            val openTodoTexts = durableTodos
+                .filterNot {
+                    it.status.uppercase() in setOf(
+                        "COMPLETED",
+                        "DONE",
+                        "SUCCESS",
+                        "CANCELLED"
+                    )
+                }
+                .map { "${it.status}: ${it.text}" }
+            val activeInvocationLines = durableInvocations
+                .filter { it.status.equals("RUNNING", ignoreCase = true) }
+                .map {
+                    "${it.resolvedName} (${it.agentClass}): ${it.task}"
+                }
+            val pendingQuestionLines = durablePendingQuestions.map {
+                "Question awaiting user input: ${it.id.take(12)}"
+            }
+            val pendingPlanLines = listOfNotNull(
+                durablePendingPlan?.let {
+                    "Plan awaiting resolution (${it.state}): ${it.summary}"
+                }
+            )
 
             val tasksDone = trimContextSummaryItems(
-                messagesToSummarize.mapNotNull { summarizeMessageForDigest(it) } +
+                completedTodoTexts.map { "Todo completed: $it" } +
+                    messagesToSummarize.mapNotNull {
+                        summarizeMessageForDigest(it)
+                    } +
                     changedFilesLines +
                     timelineLines.takeLast(4) +
                     previousCompaction.orEmpty().lines().filter { it.trim().startsWith("- ") }.takeLast(6),
@@ -10354,11 +10685,22 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 timelineLines.joinToString("\n"),
                 tasksDone.joinToString("\n")
             )
-            val (completedPlanItems, missingPlanItems) = coverageForPlan(planContent, evidenceBlocks)
+            val (completedPlanItems, missingPlanItems) =
+                if (durableTodos.isNotEmpty()) {
+                    completedTodoTexts to openTodoTexts
+                } else {
+                    coverageForPlan(planContent, evidenceBlocks)
+                }
             val carryForward = trimContextSummaryItems(
-                recentMessages.mapNotNull { summarizeMessageForDigest(it) } +
+                openTodoTexts +
+                    activeInvocationLines +
+                    pendingQuestionLines +
+                    pendingPlanLines +
+                    recentMessages.mapNotNull {
+                        summarizeMessageForDigest(it)
+                    } +
                     activeCommandLines,
-                6
+                10
             )
 
             buildHardCompactionSummaryDocument(
@@ -10378,9 +10720,15 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                 importantFindings = importantFindings,
                 openRisks = trimContextSummaryItems(
                     missingPlanItems +
-                        activeCommandLines.filter { it.contains("running", ignoreCase = true) } +
+                        openTodoTexts +
+                        activeInvocationLines +
+                        pendingQuestionLines +
+                        pendingPlanLines +
+                        activeCommandLines.filter {
+                            it.contains("running", ignoreCase = true)
+                        } +
                         listOfNotNull(_memoryDirtyReason.value),
-                    8
+                    12
                 ),
                 activeCommands = activeCommandLines,
                 carryForward = carryForward
@@ -10404,58 +10752,201 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             compactionStatusMessageId = null
         }
 
-        suspend fun restoreHardCompactionStateFromBrain(): Result<Unit> = withContext(Dispatchers.IO) {
-            try {
-                val svc = activeInstance ?: return@withContext Result.failure(IllegalStateException("AgentService is not active."))
-                svc.ensureStructuredBrainFiles().getOrThrow()
-                val initial = svc.readBrainFileRaw("initial_order.md")
-                    .removePrefix("# Initial Order")
-                    .trim()
-                    .takeIf { it.isNotBlank() && !it.contains("No initial order captured yet.", ignoreCase = true) }
-                val plan = svc.readBrainFileRaw("plan.md").takeIf { it.isNotBlank() }
-                val summary = svc.readBrainFileRaw("context_compaction.md")
-                    .takeIf { it.isNotBlank() && !it.contains("No hard compaction summary recorded yet.", ignoreCase = true) }
-                initialOrderContent = initial ?: initialOrderContent
-                val turnGroupCount = extractUserLedTurnGroups(_messages.value).size
-                val fallbackTailStart = _messages.value
-                    .filterNot(::isTransientCompactionStatusMessage)
-                    .takeLast(6)
-                    .firstOrNull()
-                    ?.sequenceNumber
-                hardCompactionState = if (initial != null && summary != null) {
-                    HardCompactionState(
-                        initialOrder = initial,
-                        planContent = plan,
-                        summaryContent = summary,
-                        compactedAt = System.currentTimeMillis(),
-                        sourceMessageSequence = _messages.value.maxOfOrNull { it.sequenceNumber } ?: 0,
-                        sourceTurnGroupCount = turnGroupCount,
-                        recentTailStartSequence = fallbackTailStart
-                    )
-                } else {
-                    null
-                }
-                Result.success(Unit)
-            } catch (e: Exception) {
-                Result.failure(e)
-            }
-        }
+        suspend fun restoreHardCompactionStateFromBrain(): Result<Unit> =
+            withContext(Dispatchers.IO) {
+                try {
+                    val conversationId = _activeConversationId.value
+                        ?: _preferredConversationId.value
+                        ?: return@withContext Result.success(Unit)
+                    if (hardCompactionState?.conversationId == conversationId) {
+                        return@withContext Result.success(Unit)
+                    }
+                    val svc = activeInstance
+                        ?: return@withContext Result.failure(
+                            IllegalStateException("AgentService is not active.")
+                        )
+                    svc.ensureStructuredBrainFiles().getOrThrow()
+                    val workflowDao = AppDatabase
+                        .getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                        .agentWorkflowDao()
+                    val latest = workflowDao.getLatestCompaction(conversationId)
+                    val cleanMessages = _messages.value
+                        .filterNot(::isTransientCompactionStatusMessage)
+                    val initial = svc.readBrainFileRaw("initial_order.md")
+                        .removePrefix("# Initial Order")
+                        .trim()
+                        .takeIf {
+                            it.isNotBlank() &&
+                                !it.contains(
+                                    "No initial order captured yet.",
+                                    ignoreCase = true
+                                )
+                        }
+                        ?: cleanMessages.firstOrNull { it.role == "user" }
+                            ?.content
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() }
+                    val plan = svc.readBrainFileRaw("plan.md")
+                        .takeIf { it.isNotBlank() }
+                    initialOrderContent = initial ?: initialOrderContent
 
-        private suspend fun runHardCompactionIfNeeded(context: Context, contextSize: Int): Result<Boolean> = withContext(Dispatchers.IO) {
-            if (!pendingHardCompaction || _currentAgent.value != AgentRole.ORCHESTRATOR || _currentSessionId.value != null) {
+                    if (latest != null) {
+                        val metadata = AgentHardCompactionMetadata.fromJson(
+                            latest.focus
+                        )
+                        val sourceSnapshotEnd = metadata
+                            ?.sourceSnapshotEndSequence
+                            ?: cleanMessages
+                                .filter { it.timestamp <= latest.createdAt }
+                                .maxOfOrNull { it.sequenceNumber }
+                            ?: maxOf(
+                                latest.sourceEndSequence,
+                                latest.tailStartSequence ?: 0
+                            )
+                        val sourceTurnGroups = metadata
+                            ?.sourceTurnGroupCount
+                            ?: extractUserLedTurnGroups(
+                                cleanMessages.filter {
+                                    it.sequenceNumber <= sourceSnapshotEnd
+                                }
+                            ).size
+                        val summary = latest.summaryText
+                        val currentSummaryFile = svc.readBrainFileRaw(
+                            "context_compaction.md"
+                        )
+                        if (currentSummaryFile.trim() != summary.trim()) {
+                            svc.rewriteMemory(
+                                "context_compaction.md",
+                                summary,
+                                countsAsMemoryUpdate = false
+                            ).getOrThrow()
+                            recordAgentEvent(
+                                kind = "compaction_state_repaired",
+                                summary = "Restored compaction summary from Room",
+                                details = "conversation=$conversationId compaction=${latest.id.take(12)}"
+                            )
+                        }
+                        hardCompactionState = HardCompactionState(
+                            initialOrder = initial ?: "No initial order captured.",
+                            planContent = plan,
+                            summaryContent = summary,
+                            compactedAt = latest.createdAt,
+                            sourceMessageSequence = sourceSnapshotEnd,
+                            sourceTurnGroupCount = sourceTurnGroups,
+                            recentTailStartSequence = latest.tailStartSequence,
+                            recentTailTargetTokens = latest.targetTailTokens,
+                            recentTailEstimatedTokens = latest.retainedTailTokens,
+                            summarizedMessageCount = latest.summarizedMessageCount,
+                            conversationId = conversationId,
+                            contextTokens = metadata?.contextTokens,
+                            maximumInputTokens = metadata?.maximumInputTokens,
+                            requiredPrimacyTokens = metadata?.requiredPrimacyTokens,
+                            profileName = metadata?.profileName,
+                            toolDefinitionsHash = metadata?.toolDefinitionsHash,
+                            metadataVersion = metadata?.version ?: 1
+                        )
+                        recordAgentEvent(
+                            kind = "compaction_state_restored",
+                            summary = "Restored hard-compaction boundary from Room",
+                            details = "conversation=$conversationId sourceEnd=$sourceSnapshotEnd tailStart=${latest.tailStartSequence ?: "none"}",
+                            persist = false
+                        )
+                    } else {
+                        val legacySummary = svc.readBrainFileRaw(
+                            "context_compaction.md"
+                        ).takeIf {
+                            it.isNotBlank() &&
+                                !it.contains(
+                                    "No hard compaction summary recorded yet.",
+                                    ignoreCase = true
+                                )
+                        }
+                        hardCompactionState = if (
+                            initial != null && legacySummary != null
+                        ) {
+                            val legacyTail = cleanMessages.takeLast(6)
+                            val tailStart = legacyTail.firstOrNull()?.sequenceNumber
+                            val sourceEnd = cleanMessages
+                                .filter {
+                                    tailStart == null ||
+                                        it.sequenceNumber < tailStart
+                                }
+                                .maxOfOrNull { it.sequenceNumber }
+                                ?: 0
+                            HardCompactionState(
+                                initialOrder = initial,
+                                planContent = plan,
+                                summaryContent = legacySummary,
+                                compactedAt = System.currentTimeMillis(),
+                                sourceMessageSequence = sourceEnd,
+                                sourceTurnGroupCount = extractUserLedTurnGroups(
+                                    cleanMessages.filter {
+                                        it.sequenceNumber <= sourceEnd
+                                    }
+                                ).size,
+                                recentTailStartSequence = tailStart,
+                                conversationId = conversationId,
+                                metadataVersion = 0
+                            )
+                        } else {
+                            null
+                        }
+                    }
+                    Result.success(Unit)
+                } catch (error: Exception) {
+                    Result.failure(error)
+                }
+            }
+
+        private suspend fun runHardCompactionIfNeeded(
+            context: Context,
+            contextSize: Int,
+            recentTailBudgetTokens: Int,
+            maximumInputTokens: Int,
+            requiredPrimacyTokens: Int,
+            profileName: String,
+            toolDefinitionsHash: String
+        ): Result<Boolean> = withContext(Dispatchers.IO) {
+            val conversationId = _activeConversationId.value
+                ?: _preferredConversationId.value
+            if (
+                !pendingHardCompaction ||
+                conversationId == null ||
+                (
+                    pendingHardCompactionConversationId != null &&
+                        pendingHardCompactionConversationId != conversationId
+                    ) ||
+                _currentAgent.value != AgentRole.ORCHESTRATOR ||
+                _currentSessionId.value != null
+            ) {
                 return@withContext Result.success(false)
             }
             try {
-                val svc = activeInstance ?: return@withContext Result.failure(IllegalStateException("AgentService is not active."))
+                val svc = activeInstance
+                    ?: return@withContext Result.failure(
+                        IllegalStateException("AgentService is not active.")
+                    )
                 showCompactionStatusMessage(context)
                 setStatusText(context.getString(R.string.agent_context_compacting_wait))
                 val result = withTimeoutOrNull(HARD_COMPACTION_TIMEOUT_MS) {
                     svc.ensureStructuredBrainFiles().getOrThrow()
-                    val conversationMessages = _messages.value.filterNot(::isTransientCompactionStatusMessage)
+                    val conversationMessages = _messages.value
+                        .filterNot(::isTransientCompactionStatusMessage)
+                    val sourceSnapshotEndSequence = conversationMessages
+                        .maxOfOrNull { it.sequenceNumber }
+                        ?: 0
+                    val sourceTurnGroupCount =
+                        extractUserLedTurnGroups(conversationMessages).size
                     val resolvedInitialOrder = initialOrderContent
-                        ?: conversationMessages.firstOrNull { it.role == "user" }?.content?.trim()
-                        ?: svc.readBrainFileRaw("initial_order.md").removePrefix("# Initial Order").trim()
-                    initialOrderContent = resolvedInitialOrder.takeIf { it.isNotBlank() }
+                        ?: conversationMessages
+                            .firstOrNull { it.role == "user" }
+                            ?.content
+                            ?.trim()
+                        ?: svc.readBrainFileRaw("initial_order.md")
+                            .removePrefix("# Initial Order")
+                            .trim()
+                    initialOrderContent = resolvedInitialOrder
+                        .takeIf { it.isNotBlank() }
                     initialOrderContent?.let {
                         svc.rewriteMemory(
                             "initial_order.md",
@@ -10467,56 +10958,104 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                             countsAsMemoryUpdate = false
                         ).getOrThrow()
                     }
-                    val planContent = svc.readBrainFileRaw("plan.md").takeIf { it.isNotBlank() }
-                    val tailSelection = selectHardCompactionRecentTail(conversationMessages, contextSize)
+                    val planContent = svc.readBrainFileRaw("plan.md")
+                        .takeIf { it.isNotBlank() }
+                    val tailSelection = selectHardCompactionRecentTail(
+                        messages = conversationMessages,
+                        recentTailBudgetTokens = recentTailBudgetTokens
+                    )
                     val summaryContent = buildHardCompactionSummary(
                         messagesToSummarize = tailSelection.messagesToSummarize,
                         recentMessages = tailSelection.recentMessages,
                         tailSelection = tailSelection
                     )
-                    svc.rewriteMemory("context_compaction.md", summaryContent, countsAsMemoryUpdate = false).getOrThrow()
-                    _activeConversationId.value?.let { conversationId ->
-                        val workflowDao = AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
-                        val previous = workflowDao.getLatestCompaction(conversationId)
-                        workflowDao.insertCompaction(
-                            com.example.llamadroid.data.db.AgentCompactionEntity(
-                                id = java.util.UUID.randomUUID().toString(),
-                                conversationId = conversationId,
-                                rootTurnId = currentRootTurnStorageId(AgentRole.ORCHESTRATOR.name),
-                                summaryText = summaryContent,
-                                previousCompactionId = previous?.id,
-                                sourceStartSequence = tailSelection.messagesToSummarize
-                                    .minOfOrNull { it.sequenceNumber } ?: 0,
-                                sourceEndSequence = tailSelection.messagesToSummarize
-                                    .maxOfOrNull { it.sequenceNumber } ?: 0,
-                                tailStartSequence = tailSelection.recentTailStartSequence,
-                                summarizedMessageCount = tailSelection.messagesToSummarize.size,
-                                retainedTailTokens = tailSelection.recentTailEstimatedTokens,
-                                targetTailTokens = tailSelection.recentTailTargetTokens,
-                                modelLabel = friendlyBackendModelLabel(_selectedModel.value)
-                                    ?: _selectedModel.value,
-                                invocationId = activeInvocationId
-                            )
+                    svc.rewriteMemory(
+                        "context_compaction.md",
+                        summaryContent,
+                        countsAsMemoryUpdate = false
+                    ).getOrThrow()
+                    val metadata = AgentHardCompactionMetadata(
+                        conversationId = conversationId,
+                        sourceSnapshotEndSequence = sourceSnapshotEndSequence,
+                        sourceTurnGroupCount = sourceTurnGroupCount,
+                        contextTokens = contextSize,
+                        maximumInputTokens = maximumInputTokens,
+                        requiredPrimacyTokens = requiredPrimacyTokens,
+                        profileName = profileName,
+                        toolDefinitionsHash = toolDefinitionsHash,
+                        summaryHash = agentPromptSha256(summaryContent)
+                    )
+                    val workflowDao = AppDatabase
+                        .getDatabase(context.applicationContext)
+                        .agentWorkflowDao()
+                    val previous = workflowDao.getLatestCompaction(conversationId)
+                    workflowDao.insertCompaction(
+                        com.example.llamadroid.data.db.AgentCompactionEntity(
+                            id = java.util.UUID.randomUUID().toString(),
+                            conversationId = conversationId,
+                            rootTurnId = currentRootTurnStorageId(
+                                AgentRole.ORCHESTRATOR.name
+                            ),
+                            summaryText = summaryContent,
+                            focus = metadata.toJson(),
+                            previousCompactionId = previous?.id,
+                            sourceStartSequence = tailSelection.messagesToSummarize
+                                .minOfOrNull { it.sequenceNumber }
+                                ?: 0,
+                            sourceEndSequence = tailSelection.messagesToSummarize
+                                .maxOfOrNull { it.sequenceNumber }
+                                ?: 0,
+                            tailStartSequence =
+                                tailSelection.recentTailStartSequence,
+                            summarizedMessageCount =
+                                tailSelection.messagesToSummarize.size,
+                            retainedTailTokens =
+                                tailSelection.recentTailEstimatedTokens,
+                            targetTailTokens =
+                                tailSelection.recentTailTargetTokens,
+                            modelLabel = friendlyBackendModelLabel(
+                                _selectedModel.value
+                            ) ?: _selectedModel.value,
+                            invocationId = activeInvocationId
                         )
-                    }
-                    val retainedTurnGroupCount = extractUserLedTurnGroups(conversationMessages).size
+                    )
                     hardCompactionState = HardCompactionState(
-                        initialOrder = initialOrderContent ?: "No initial order captured.",
+                        initialOrder = initialOrderContent
+                            ?: "No initial order captured.",
                         planContent = planContent,
                         summaryContent = summaryContent,
-                        compactedAt = System.currentTimeMillis(),
-                        sourceMessageSequence = conversationMessages.maxOfOrNull { it.sequenceNumber } ?: 0,
-                        sourceTurnGroupCount = retainedTurnGroupCount,
-                        recentTailStartSequence = tailSelection.recentTailStartSequence,
-                        recentTailTargetTokens = tailSelection.recentTailTargetTokens,
-                        recentTailEstimatedTokens = tailSelection.recentTailEstimatedTokens,
-                        summarizedMessageCount = tailSelection.messagesToSummarize.size
+                        compactedAt = metadata.createdAt,
+                        sourceMessageSequence = sourceSnapshotEndSequence,
+                        sourceTurnGroupCount = sourceTurnGroupCount,
+                        recentTailStartSequence =
+                            tailSelection.recentTailStartSequence,
+                        recentTailTargetTokens =
+                            tailSelection.recentTailTargetTokens,
+                        recentTailEstimatedTokens =
+                            tailSelection.recentTailEstimatedTokens,
+                        summarizedMessageCount =
+                            tailSelection.messagesToSummarize.size,
+                        conversationId = conversationId,
+                        contextTokens = contextSize,
+                        maximumInputTokens = maximumInputTokens,
+                        requiredPrimacyTokens = requiredPrimacyTokens,
+                        profileName = profileName,
+                        toolDefinitionsHash = toolDefinitionsHash,
+                        metadataVersion = AGENT_PROMPT_BUDGET_VERSION
                     )
                     pendingHardCompaction = false
+                    pendingHardCompactionConversationId = null
                     recordAgentEvent(
-                        "hard_compaction",
-                        "Rewrote retained context state",
-                        "Retained basis: initial order + plan.md + context_compaction.md + token-budgeted recent tail (${tailSelection.recentMessages.size} messages)."
+                        kind = "hard_compaction",
+                        summary = "Rewrote retained context state",
+                        details = buildString {
+                            append("conversation=$conversationId")
+                            append(" summarized=${tailSelection.messagesToSummarize.size}")
+                            append(" retained=${tailSelection.recentMessages.size}")
+                            append(" tail=${tailSelection.recentTailEstimatedTokens}")
+                            append("/${tailSelection.recentTailTargetTokens}")
+                            append(" budgetVersion=$AGENT_PROMPT_BUDGET_VERSION")
+                        }
                     )
                     true
                 }
@@ -10524,12 +11063,22 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     Result.success(true)
                 } else {
                     pendingHardCompaction = false
-                    addDebugLog("⚠️ Hard compaction timed out after ${HARD_COMPACTION_TIMEOUT_MS / 60000L} minutes")
-                    Result.failure(IllegalStateException("Hard compaction timed out after ${HARD_COMPACTION_TIMEOUT_MS / 60000L} minutes."))
+                    pendingHardCompactionConversationId = null
+                    addDebugLog(
+                        "⚠️ Hard compaction timed out after " +
+                            "${HARD_COMPACTION_TIMEOUT_MS / 60000L} minutes"
+                    )
+                    Result.failure(
+                        IllegalStateException(
+                            "Hard compaction timed out after " +
+                                "${HARD_COMPACTION_TIMEOUT_MS / 60000L} minutes."
+                        )
+                    )
                 }
-            } catch (e: Exception) {
+            } catch (error: Exception) {
                 pendingHardCompaction = false
-                Result.failure(e)
+                pendingHardCompactionConversationId = null
+                Result.failure(error)
             } finally {
                 clearCompactionStatusMessage()
                 refreshIdleStatusIfNeeded()
@@ -10541,25 +11090,50 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             packedEstimatedTokens: Int,
             actualPromptTokens: Int?
         ) {
-            if (_currentAgent.value != AgentRole.ORCHESTRATOR || _currentSessionId.value != null) return
+            if (
+                _currentAgent.value != AgentRole.ORCHESTRATOR ||
+                _currentSessionId.value != null
+            ) return
+            val conversationId = _activeConversationId.value
+                ?: _preferredConversationId.value
+                ?: return
             val usedTokens = actualPromptTokens ?: packedEstimatedTokens
-            val percentUsed = ((usedTokens.toDouble() / contextSize.coerceAtLeast(1).toDouble()) * 100.0).roundToInt()
+            val percentUsed = (
+                usedTokens.toDouble() /
+                    contextSize.coerceAtLeast(1).toDouble() *
+                    100.0
+                ).roundToInt()
             val currentState = hardCompactionState
-            val newTurnGroups = countNewTurnGroupsSinceCompaction(getCurrentSessionMessages(), currentState)
-            if (shouldScheduleHardCompaction(
+            val newTurnGroups = countNewTurnGroupsSinceCompaction(
+                getCurrentSessionMessages(),
+                currentState
+            )
+            if (
+                shouldScheduleHardCompaction(
                     percentUsed = percentUsed,
                     thresholdPercent = PROMPT_CONTEXT_AUTOCOMPACT_PERCENT,
-                    emergencyThresholdPercent = PROMPT_CONTEXT_HARD_COMPACTION_EMERGENCY_PERCENT,
+                    emergencyThresholdPercent =
+                        PROMPT_CONTEXT_HARD_COMPACTION_EMERGENCY_PERCENT,
                     hardCompactionActive = currentState != null,
                     completedTurnGroupsSinceLastCompaction = newTurnGroups,
-                    minTurnGroupsBetweenCompactions = HARD_COMPACTION_MIN_NEW_TURN_GROUPS
+                    minTurnGroupsBetweenCompactions =
+                        HARD_COMPACTION_MIN_NEW_TURN_GROUPS
                 )
             ) {
                 pendingHardCompaction = true
-                addDebugLog("🧠 Hard compaction scheduled for next turn at ${percentUsed}% context usage")
-            } else if (currentState != null && percentUsed >= PROMPT_CONTEXT_AUTOCOMPACT_PERCENT) {
+                pendingHardCompactionConversationId = conversationId
                 addDebugLog(
-                    "🧠 Hard compaction deferred at ${percentUsed}% because only $newTurnGroups user-led turn groups have completed since the last hard compaction"
+                    "🧠 Hard compaction scheduled for next turn at " +
+                        "$percentUsed% context usage"
+                )
+            } else if (
+                currentState != null &&
+                percentUsed >= PROMPT_CONTEXT_AUTOCOMPACT_PERCENT
+            ) {
+                addDebugLog(
+                    "🧠 Hard compaction deferred at $percentUsed% because " +
+                        "only $newTurnGroups user-led turn groups have completed " +
+                        "since the last hard compaction"
                 )
             }
         }
@@ -10682,35 +11256,53 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             assembly: PromptAssembly,
             contextSize: Int,
             profile: PromptPackingProfile,
-            allowCompaction: Boolean = true
+            allowCompaction: Boolean = true,
+            thresholdTokensOverride: Int? = null,
+            targetTokensOverride: Int? = null,
+            maximumCompactedTokensOverride: Int? = null
         ): PackedPromptContext {
-            if (assembly.allMessages().isEmpty()) return PackedPromptContext(emptyList(), 0, 0)
+            if (assembly.allMessages().isEmpty()) {
+                return PackedPromptContext(emptyList(), 0, 0)
+            }
 
-            val thresholdTokens = (contextSize * PROMPT_CONTEXT_AUTOCOMPACT_RATIO).toInt()
-                .coerceAtLeast(MIN_PROMPT_CONTEXT_TOKENS)
-            val targetTokens = if (assembly.compactMode) {
-                (contextSize * PROMPT_CONTEXT_HARD_COMPACTION_TARGET_RATIO).toInt().coerceAtLeast(MIN_PROMPT_CONTEXT_TOKENS)
-            } else {
-                thresholdTokens
-            }
-            val maxCompactTokens = if (assembly.compactMode) {
-                (contextSize * PROMPT_CONTEXT_HARD_COMPACTION_MAX_RATIO).toInt().coerceAtLeast(targetTokens)
-            } else {
-                thresholdTokens
-            }
-            val normalizedRequiredPrimacy = normalizePrimacyMessages(assembly.requiredPrimacyMessages)
-            val normalizedOptionalPrimacy = normalizePrimacyMessages(assembly.optionalPrimacyMessages)
-            val normalizedHistory = normalizeMessagesBeforeThreshold(assembly.historyMessages)
+            val limits = resolveAgentPromptPackingLimits(
+                maximumInputTokens = contextSize,
+                softTargetRatio = profile.promptContextRatio,
+                compactMode = assembly.compactMode
+            )
+            val thresholdTokens = thresholdTokensOverride
+                ?.coerceAtLeast(256)
+                ?: limits.triggerTokens
+            val targetTokens = targetTokensOverride
+                ?.coerceAtLeast(256)
+                ?: limits.targetTokens
+            val maxCompactTokens = maximumCompactedTokensOverride
+                ?.coerceAtLeast(targetTokens)
+                ?: limits.maximumCompactedTokens
+            val normalizedRequiredPrimacy = normalizePrimacyMessages(
+                assembly.requiredPrimacyMessages
+            )
+            val normalizedOptionalPrimacy = normalizePrimacyMessages(
+                assembly.optionalPrimacyMessages
+            )
+            val normalizedHistory = normalizeMessagesBeforeThreshold(
+                assembly.historyMessages
+            )
             val normalizedEstimate = estimatePromptTokens(
-                normalizedRequiredPrimacy + normalizedOptionalPrimacy + normalizedHistory
+                normalizedRequiredPrimacy +
+                    normalizedOptionalPrimacy +
+                    normalizedHistory
             )
 
             if (!allowCompaction) {
                 return PackedPromptContext(
-                    messages = normalizedRequiredPrimacy + normalizedOptionalPrimacy + normalizedHistory,
+                    messages = normalizedRequiredPrimacy +
+                        normalizedOptionalPrimacy +
+                        normalizedHistory,
                     omittedCount = 0,
                     estimatedTokens = normalizedEstimate,
-                    thresholdTriggered = normalizedEstimate >= thresholdTokens,
+                    thresholdTriggered =
+                        normalizedEstimate >= thresholdTokens,
                     didCompactHistory = false,
                     compactionPasses = 0
                 )
@@ -10718,7 +11310,9 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
 
             if (!assembly.compactMode && normalizedEstimate < thresholdTokens) {
                 return PackedPromptContext(
-                    messages = normalizedRequiredPrimacy + normalizedOptionalPrimacy + normalizedHistory,
+                    messages = normalizedRequiredPrimacy +
+                        normalizedOptionalPrimacy +
+                        normalizedHistory,
                     omittedCount = 0,
                     estimatedTokens = normalizedEstimate,
                     thresholdTriggered = false,
@@ -10730,42 +11324,59 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             var workingProfile = profile
             var optionalPrimacyCount = normalizedOptionalPrimacy.size
             var packed = packMessagesForContextOnce(
-                normalizedRequiredPrimacy + normalizedOptionalPrimacy,
-                normalizedHistory,
-                targetTokens,
-                workingProfile
+                pinnedSystemMessages =
+                    normalizedRequiredPrimacy + normalizedOptionalPrimacy,
+                historyMessages = normalizedHistory,
+                targetTokens = targetTokens,
+                profile = workingProfile
             )
             var compactionPasses = 1
             while (true) {
-                if (assembly.compactMode && packed.estimatedTokens > maxCompactTokens && optionalPrimacyCount > 0) {
+                if (
+                    assembly.compactMode &&
+                    packed.estimatedTokens > maxCompactTokens &&
+                    optionalPrimacyCount > 0
+                ) {
                     optionalPrimacyCount -= 1
                     packed = packMessagesForContextOnce(
-                        normalizedRequiredPrimacy + normalizedOptionalPrimacy.take(optionalPrimacyCount),
-                        normalizedHistory,
-                        targetTokens,
-                        workingProfile
+                        pinnedSystemMessages =
+                            normalizedRequiredPrimacy +
+                                normalizedOptionalPrimacy.take(
+                                    optionalPrimacyCount
+                                ),
+                        historyMessages = normalizedHistory,
+                        targetTokens = targetTokens,
+                        profile = workingProfile
                     )
                     continue
                 }
 
-                if (packed.estimatedTokens <= targetTokens || compactionPasses >= 4) {
+                if (
+                    packed.estimatedTokens <= targetTokens ||
+                    compactionPasses >= 4
+                ) {
                     break
                 }
 
                 workingProfile = workingProfile.moreAggressive()
                 val moreCompact = packMessagesForContextOnce(
-                    normalizedRequiredPrimacy + normalizedOptionalPrimacy.take(optionalPrimacyCount),
-                    normalizedHistory,
-                    targetTokens,
-                    workingProfile
+                    pinnedSystemMessages =
+                        normalizedRequiredPrimacy +
+                            normalizedOptionalPrimacy.take(optionalPrimacyCount),
+                    historyMessages = normalizedHistory,
+                    targetTokens = targetTokens,
+                    profile = workingProfile
                 )
-                if (moreCompact.estimatedTokens >= packed.estimatedTokens) break
+                if (moreCompact.estimatedTokens >= packed.estimatedTokens) {
+                    break
+                }
                 packed = moreCompact
                 compactionPasses += 1
             }
 
             return packed.copy(
-                thresholdTriggered = normalizedEstimate >= thresholdTokens || assembly.compactMode,
+                thresholdTriggered =
+                    normalizedEstimate >= thresholdTokens || assembly.compactMode,
                 didCompactHistory = packed.didCompactHistory,
                 compactionPasses = compactionPasses
             )
@@ -10797,53 +11408,94 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             targetTokens: Int,
             profile: PromptPackingProfile
         ): PackedPromptContext {
-            val recentStart = (historyMessages.size - profile.recentMessages).coerceAtLeast(0)
-            val normalizedHistory = historyMessages.mapIndexedNotNull { index, message ->
-                normalizeMessageForPrompt(message, isRecent = index >= recentStart, profile = profile)
+            val sourceUnits = buildAgentPromptAtomicUnits(historyMessages)
+            val preferredRecentUnits =
+                (profile.recentMessages / 2).coerceAtLeast(2)
+            val recentStart = (
+                sourceUnits.size - preferredRecentUnits
+            ).coerceAtLeast(0)
+            val normalizedUnits = sourceUnits.mapIndexedNotNull { index, unit ->
+                val normalizedMessages = unit.messages.mapNotNull { message ->
+                    normalizeMessageForPrompt(
+                        message = message,
+                        isRecent = index >= recentStart,
+                        profile = profile
+                    )
+                }
+                if (normalizedMessages.isEmpty()) {
+                    null
+                } else {
+                    unit.copy(messages = normalizedMessages)
+                }
             }
 
-            if (normalizedHistory.isEmpty()) {
-                return PackedPromptContext(pinnedSystemMessages, 0, estimatePromptTokens(pinnedSystemMessages))
+            if (normalizedUnits.isEmpty()) {
+                return PackedPromptContext(
+                    pinnedSystemMessages,
+                    0,
+                    estimatePromptTokens(pinnedSystemMessages)
+                )
             }
 
             val pinnedBudget = estimatePromptTokens(pinnedSystemMessages)
-            val historyBudget = computeHistoryTokenBudget(targetTokens, pinnedBudget)
-            val keptNewestFirst = mutableListOf<ChatMessage>()
-            val omitted = mutableListOf<ChatMessage>()
+            val historyBudget = computeHistoryTokenBudget(
+                targetTokens,
+                pinnedBudget
+            )
+            val protectedUnitIds = buildSet {
+                normalizedUnits.lastOrNull()?.id?.let(::add)
+                normalizedUnits.indices
+                    .filter { normalizedUnits[it].containsUserMessage }
+                    .takeLast(2)
+                    .forEach { add(normalizedUnits[it].id) }
+            }
+            val keptNewestFirst = mutableListOf<AgentPromptAtomicUnit>()
+            val omitted = mutableListOf<AgentPromptAtomicUnit>()
             var usedTokens = 0
-            var keptUserMessage = false
 
-            for (message in normalizedHistory.asReversed()) {
-                val messageTokens = estimatePromptTokens(message.content)
-                val mustKeep = keptNewestFirst.size < profile.recentMessages || (!keptUserMessage && message.role == "user")
-                if (mustKeep || usedTokens + messageTokens <= historyBudget) {
-                    keptNewestFirst += message
-                    usedTokens += messageTokens
-                    if (message.role == "user") keptUserMessage = true
+            for (unit in normalizedUnits.asReversed()) {
+                val unitTokens = estimatePromptTokens(unit.messages)
+                val mustKeep = unit.id in protectedUnitIds
+                if (mustKeep || usedTokens + unitTokens <= historyBudget) {
+                    keptNewestFirst += unit
+                    usedTokens += unitTokens
                 } else {
-                    omitted += message
+                    omitted += unit
                 }
             }
 
             val kept = keptNewestFirst.asReversed().toMutableList()
-            var digest = buildContextDigest(omitted, profile)
-            while (digest != null && kept.size > 2 && usedTokens + estimatePromptTokens(digest.content) > historyBudget) {
-                val moved = kept.removeAt(0)
+            var omittedMessages = omitted.flatMap { it.messages }
+            var digest = buildContextDigest(omittedMessages, profile)
+            while (
+                digest != null &&
+                usedTokens + estimatePromptTokens(digest.content) >
+                    historyBudget
+            ) {
+                val removableIndex = kept.indexOfFirst {
+                    it.id !in protectedUnitIds
+                }
+                if (removableIndex < 0) break
+                val moved = kept.removeAt(removableIndex)
                 omitted += moved
-                usedTokens = kept.sumOf { estimatePromptTokens(it.content) }
-                digest = buildContextDigest(omitted, profile)
+                omittedMessages = omitted.flatMap { it.messages }
+                usedTokens = kept.sumOf {
+                    estimatePromptTokens(it.messages)
+                }
+                digest = buildContextDigest(omittedMessages, profile)
             }
 
             val packedMessages = buildList {
                 addAll(pinnedSystemMessages)
-                digest?.let { add(it) }
-                addAll(kept)
+                digest?.let(::add)
+                kept.forEach { addAll(it.messages) }
             }
             return PackedPromptContext(
                 messages = packedMessages,
-                omittedCount = omitted.size,
+                omittedCount = omittedMessages.size,
                 estimatedTokens = estimatePromptTokens(packedMessages),
-                didCompactHistory = omitted.isNotEmpty() || digest != null
+                didCompactHistory =
+                    omittedMessages.isNotEmpty() || digest != null
             )
         }
 
@@ -11088,29 +11740,146 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             }
         }
 
+        private suspend fun resolvePreparedPromptCount(
+            context: Context,
+            useLlamaServer: Boolean,
+            llamaBaseUrl: String,
+            messages: List<ChatMessage>,
+            tools: List<AgentTool>,
+            model: String,
+            thinkingEnabled: Boolean,
+            calibrationKey: String
+        ): AgentPromptCountResolution {
+            val ollamaMessages = messages.map {
+                it.toOllamaMessage(includeThinking = false)
+            }
+            val rawMessageTokens = estimateRawOllamaMessageTokens(ollamaMessages)
+            val rawToolSchemaTokens = estimateRawAgentToolSchemaTokens(tools)
+            val serializedRequest = if (useLlamaServer) {
+                JSONObject(
+                    buildLlamaServerChatRequestPayload(
+                        messages = ollamaMessages,
+                        tools = tools,
+                        model = model,
+                        thinkingEnabled = thinkingEnabled,
+                        maxTokens = null,
+                        requestOptions = LlamaServerRequestOptions(
+                            cachePrompt = false,
+                            slotId = null,
+                            returnPromptProgress = false
+                        )
+                    )
+                ).toString()
+            } else {
+                buildCanonicalAgentPromptRequestJson(
+                    model = model,
+                    messages = ollamaMessages,
+                    tools = tools,
+                    thinkingEnabled = thinkingEnabled
+                )
+            }
+            val rawSerializedRequestTokens =
+                estimateRawSerializedAgentRequestTokens(serializedRequest) +
+                    if (useLlamaServer) {
+                        0
+                    } else {
+                        estimateFallbackMultimodalPromptTokens(ollamaMessages)
+                    }
+            val calibration = promptTokenCalibrationBySignature
+                .getOrPut(calibrationKey) {
+                    AgentPromptCalibrationStore.load(context, calibrationKey)
+                }
+            val calibratedFallbackTokens = applyAgentPromptCalibration(
+                rawSerializedRequestTokens,
+                calibration
+            )
+
+            val exactResult = if (useLlamaServer) {
+                llamaServerChatService.countChatInputTokens(
+                    baseUrl = llamaBaseUrl,
+                    messages = ollamaMessages,
+                    tools = tools,
+                    modelLabel = model,
+                    thinkingEnabled = thinkingEnabled
+                )
+            } else {
+                null
+            }
+            val exactTokens = exactResult
+                ?.takeIf { it.status == LlamaInputTokenCountStatus.SUPPORTED }
+                ?.inputTokens
+            val source = when {
+                exactTokens != null -> AgentPromptCountSource.LLAMA_SERVER_EXACT
+                calibration.sampleCount > 0 ->
+                    AgentPromptCountSource.CALIBRATED_SERIALIZED_FALLBACK
+                else -> AgentPromptCountSource.UNCALIBRATED_SERIALIZED_FALLBACK
+            }
+            val resolvedTokens = exactTokens ?: calibratedFallbackTokens
+
+            recordAgentEvent(
+                kind = "prompt_count_completed",
+                summary = "Resolved model input size",
+                details = buildString {
+                    append("source=${source.wireValue}")
+                    append(" rawMessages=$rawMessageTokens")
+                    append(" rawTools=$rawToolSchemaTokens")
+                    append(" rawRequest=$rawSerializedRequestTokens")
+                    append(" resolved=$resolvedTokens")
+                    exactResult?.latencyMs?.let { append(" latencyMs=$it") }
+                    exactResult?.httpCode?.let { append(" http=$it") }
+                },
+                persist = false
+            )
+
+            return AgentPromptCountResolution(
+                rawMessageTokens = rawMessageTokens,
+                rawToolSchemaTokens = rawToolSchemaTokens,
+                rawSerializedRequestTokens = rawSerializedRequestTokens,
+                calibratedFallbackTokens = calibratedFallbackTokens,
+                resolvedInputTokens = resolvedTokens,
+                exactInputTokens = exactTokens,
+                countSource = source,
+                calibrationFactor = calibration.conservativeFactor,
+                countLatencyMs = exactResult?.latencyMs,
+                exactCountError = exactResult?.errorMessage
+            )
+        }
+
         private fun promptCalibrationKey(backend: String, model: String): String {
             return "${backend.trim().lowercase()}|${model.trim().lowercase()}"
         }
 
-        private fun currentPromptCalibrationFactor(): Double {
-            return promptTokenCalibrationByBackendModel[promptCalibrationKey(activePromptBackend, _selectedModel.value)] ?: 1.0
+        private fun currentPromptCalibrationFactor(
+            calibrationKey: String? = lastPromptCalibrationKey
+        ): Double {
+            val key = calibrationKey ?: return 1.0
+            return promptTokenCalibrationBySignature
+                .getOrPut(key) {
+                    AgentPromptCalibrationStore.load(
+                        com.example.llamadroid.LlamaApplication.instance,
+                        key
+                    )
+                }
+                .conservativeFactor
         }
 
         private fun registerPromptTokenCalibration(
-            backend: String,
-            model: String,
-            estimatedPromptTokens: Int,
+            calibrationKey: String,
+            rawSerializedRequestTokens: Int,
             actualPromptTokens: Int
         ): Double {
-            if (estimatedPromptTokens <= 0 || actualPromptTokens <= 0) {
-                return promptTokenCalibrationByBackendModel[promptCalibrationKey(backend, model)] ?: 1.0
+            if (rawSerializedRequestTokens <= 0 || actualPromptTokens <= 0) {
+                return currentPromptCalibrationFactor(calibrationKey)
             }
-            val ratio = (actualPromptTokens.toDouble() / estimatedPromptTokens.toDouble()).coerceIn(0.5, 2.25)
-            val key = promptCalibrationKey(backend, model)
-            val updated = promptTokenCalibrationByBackendModel.compute(key) { _, existing ->
-                if (existing == null) ratio else ((existing * 0.7) + (ratio * 0.3)).coerceIn(0.5, 2.25)
-            } ?: ratio
-            return updated
+            val updated = AgentPromptCalibrationStore.update(
+                context = com.example.llamadroid.LlamaApplication.instance,
+                key = calibrationKey,
+                rawSerializedRequestTokens = rawSerializedRequestTokens,
+                actualInputTokens = actualPromptTokens
+            )
+            promptTokenCalibrationBySignature[calibrationKey] = updated
+            lastPromptCalibrationKey = calibrationKey
+            return updated.conservativeFactor
         }
 
         private fun estimatePromptTokens(messages: List<ChatMessage>): Int {
@@ -11122,7 +11891,7 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
         }
 
         private fun estimatePromptTokens(text: String): Int {
-            return ((text.length.toDouble() / 4.0) * currentPromptCalibrationFactor()).roundToInt().coerceAtLeast(1)
+            return estimateRawPromptTextTokens(text)
         }
 
         private fun updatePromptContextSnapshot(
@@ -11133,18 +11902,35 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             backend: String? = null,
             model: String? = null,
             actualUsage: OllamaService.ChatUsage? = null,
-            calibrationFactor: Double? = null
+            calibrationFactor: Double? = null,
+            promptCount: AgentPromptCountResolution? = null,
+            capacity: AgentPromptCapacity? = null,
+            effectiveOutputTokens: Int? = null,
+            thresholdPercentOverride: Int? = null
         ) {
             val safeContextSize = contextSize.coerceAtLeast(1)
-            val actualPercentUsed = actualUsage?.promptTokens?.let {
-                ((it.toDouble() / safeContextSize.toDouble()) * 100).toInt().coerceIn(0, 999)
-            }
-            val percentUsed = ((packedContext.estimatedTokens.toDouble() / safeContextSize.toDouble()) * 100)
-                .toInt()
-                .coerceIn(0, 999)
-            val hardCompactionActive = hardCompactionState != null && _currentAgent.value == AgentRole.ORCHESTRATOR
+            val authoritativePromptTokens = actualUsage?.promptTokens
+                ?: promptCount?.exactInputTokens
+            val displayedPromptTokens = authoritativePromptTokens
+                ?: promptCount?.resolvedInputTokens
+                ?: packedContext.estimatedTokens
+            val displayedPercentUsed = (
+                displayedPromptTokens.toDouble() /
+                    safeContextSize.toDouble() *
+                    100.0
+                ).toInt().coerceIn(0, 999)
+            val estimatedPercentUsed = (
+                (promptCount?.resolvedInputTokens
+                    ?: packedContext.estimatedTokens).toDouble() /
+                    safeContextSize.toDouble() *
+                    100.0
+                ).toInt().coerceIn(0, 999)
+            val hardCompactionActive =
+                hardCompactionState != null &&
+                    _currentAgent.value == AgentRole.ORCHESTRATOR
             val recentCompactions = synchronized(recentCompactionEvents) {
-                if (shouldRecordPromptCompactionEvent(
+                if (
+                    shouldRecordPromptCompactionEvent(
                         rawEstimatedTokens = rawEstimatedTokens,
                         packedEstimatedTokens = packedContext.estimatedTokens,
                         omittedCount = packedContext.omittedCount,
@@ -11174,7 +11960,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                     }
                 }
                 val currentHardCompaction = hardCompactionState
-                if (hardCompactionActive &&
+                if (
+                    hardCompactionActive &&
                     currentHardCompaction != null &&
                     currentHardCompaction.lastPostCompactionPackedTokens == null
                 ) {
@@ -11182,7 +11969,8 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                         last.rawEstimatedTokens == rawEstimatedTokens &&
                             last.packedEstimatedTokens == packedContext.estimatedTokens &&
                             last.omittedCount == packedContext.omittedCount &&
-                            last.compactionPasses == packedContext.compactionPasses.coerceAtLeast(1)
+                            last.compactionPasses ==
+                                packedContext.compactionPasses.coerceAtLeast(1)
                     } == true
                     if (!matchesLast) {
                         if (recentCompactionEvents.size == 4) {
@@ -11194,13 +11982,15 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
                                 rawEstimatedTokens = rawEstimatedTokens,
                                 packedEstimatedTokens = packedContext.estimatedTokens,
                                 omittedCount = packedContext.omittedCount,
-                                compactionPasses = packedContext.compactionPasses.coerceAtLeast(1)
+                                compactionPasses =
+                                    packedContext.compactionPasses.coerceAtLeast(1)
                             )
                         )
                     }
                     hardCompactionState = currentHardCompaction.copy(
                         lastPostCompactionRawTokens = rawEstimatedTokens,
-                        lastPostCompactionPackedTokens = packedContext.estimatedTokens
+                        lastPostCompactionPackedTokens =
+                            packedContext.estimatedTokens
                     )
                 }
                 recentCompactionEvents.toList().asReversed()
@@ -11212,23 +12002,40 @@ THIS IS CRITICAL — without your updates, all progress context is lost between 
             } else {
                 0
             }
+            val thresholdPercent = thresholdPercentOverride
+                ?: PROMPT_CONTEXT_AUTOCOMPACT_PERCENT
             _promptContextSnapshot.value = PromptContextSnapshot(
                 rawEstimatedTokens = rawEstimatedTokens,
                 packedEstimatedTokens = packedContext.estimatedTokens,
                 contextSize = safeContextSize,
                 omittedCount = displayOmittedCount,
-                percentUsed = percentUsed,
-                thresholdPercent = PROMPT_CONTEXT_AUTOCOMPACT_PERCENT,
+                percentUsed = estimatedPercentUsed,
+                thresholdPercent = thresholdPercent,
                 thresholdTriggered = packedContext.thresholdTriggered,
                 didCompactHistory = packedContext.didCompactHistory,
                 profileName = profileName,
                 backend = backend,
                 model = model,
-                actualPromptTokens = actualUsage?.promptTokens,
+                actualPromptTokens = authoritativePromptTokens,
                 actualCompletionTokens = actualUsage?.completionTokens,
                 actualTotalTokens = actualUsage?.totalTokens,
-                actualPercentUsed = actualPercentUsed,
-                calibrationFactor = calibrationFactor,
+                actualPercentUsed = authoritativePromptTokens?.let {
+                    displayedPercentUsed
+                },
+                calibrationFactor = calibrationFactor
+                    ?: promptCount?.calibrationFactor,
+                rawToolSchemaTokens = promptCount?.rawToolSchemaTokens ?: 0,
+                rawSerializedRequestTokens =
+                    promptCount?.rawSerializedRequestTokens,
+                calibratedRequestTokens =
+                    promptCount?.resolvedInputTokens,
+                maximumInputTokens = capacity?.maximumInputTokens,
+                safetyReserveTokens = capacity?.safetyReserveTokens,
+                minimumGenerationReserveTokens =
+                    capacity?.minimumGenerationReserveTokens,
+                effectiveOutputTokens = effectiveOutputTokens,
+                countSource = promptCount?.countSource?.wireValue,
+                budgetVersion = AGENT_PROMPT_BUDGET_VERSION,
                 recentCompactions = recentCompactions,
                 isUsingHardCompactedBasis = hardCompactionActive,
                 agentRole = _currentAgent.value.name

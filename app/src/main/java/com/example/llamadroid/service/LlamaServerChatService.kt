@@ -57,6 +57,20 @@ data class LlamaPromptCacheDiagnostics(
     val toolCount: Int
 )
 
+enum class LlamaInputTokenCountStatus {
+    SUPPORTED,
+    UNSUPPORTED,
+    TRANSIENT_FAILURE
+}
+
+data class LlamaInputTokenCountResult(
+    val status: LlamaInputTokenCountStatus,
+    val inputTokens: Int? = null,
+    val latencyMs: Long = 0L,
+    val httpCode: Int? = null,
+    val errorMessage: String? = null
+)
+
 internal enum class SseProcessingFailureKind {
     CANCELLATION,
     MALFORMED_JSON,
@@ -84,6 +98,10 @@ class LlamaServerChatService {
 
     companion object {
         private const val TAG = "LlamaServerChat"
+        private const val INPUT_TOKEN_COUNT_TIMEOUT_MS = 5_000
+        private const val INPUT_TOKEN_UNSUPPORTED_TTL_MS = 10L * 60L * 1000L
+        private val unsupportedInputTokenEndpoints =
+            java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 
     @Volatile
@@ -109,6 +127,129 @@ class LlamaServerChatService {
                 isDaemon = true
                 start()
             }
+        }
+    }
+
+    internal suspend fun countChatInputTokens(
+        baseUrl: String,
+        messages: List<OllamaService.ChatMessage>,
+        tools: List<AgentTool> = emptyList(),
+        modelLabel: String? = null,
+        thinkingEnabled: Boolean = true
+    ): LlamaInputTokenCountResult = withContext(Dispatchers.IO) {
+        val normalizedBase = normalizeLlamaServerBaseUrlForHealth(baseUrl)
+            ?: return@withContext LlamaInputTokenCountResult(
+                status = LlamaInputTokenCountStatus.TRANSIENT_FAILURE,
+                errorMessage = "Invalid llama-server URL"
+            )
+        val capabilityKey = "$normalizedBase|${modelLabel.orEmpty()}"
+        val now = System.currentTimeMillis()
+        val unsupportedUntil = unsupportedInputTokenEndpoints[capabilityKey]
+        if (unsupportedUntil != null && unsupportedUntil > now) {
+            return@withContext LlamaInputTokenCountResult(
+                status = LlamaInputTokenCountStatus.UNSUPPORTED,
+                errorMessage = "input_tokens endpoint is temporarily cached as unsupported"
+            )
+        }
+        unsupportedInputTokenEndpoints.remove(capabilityKey, unsupportedUntil)
+
+        val startedAt = android.os.SystemClock.elapsedRealtime()
+        var conn: HttpURLConnection? = null
+        try {
+            val payload = buildLlamaServerChatRequestPayload(
+                messages = messages,
+                tools = tools,
+                model = modelLabel,
+                thinkingEnabled = thinkingEnabled,
+                maxTokens = null,
+                requestOptions = LlamaServerRequestOptions(
+                    cachePrompt = false,
+                    slotId = null,
+                    returnPromptProgress = false
+                )
+            ).toMutableMap().apply {
+                put("stream", false)
+                remove("stream_options")
+                remove("return_progress")
+                remove("sse_ping_interval")
+                remove("cache_prompt")
+                remove("id_slot")
+            }
+            conn = URL("$normalizedBase/v1/chat/completions/input_tokens")
+                .openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            conn.connectTimeout = INPUT_TOKEN_COUNT_TIMEOUT_MS
+            conn.readTimeout = INPUT_TOKEN_COUNT_TIMEOUT_MS
+            OutputStreamWriter(conn.outputStream).use { writer ->
+                writer.write(buildJsonObject(payload).toString())
+                writer.flush()
+            }
+
+            val code = conn.responseCode
+            val responseBody = runCatching {
+                val stream = if (code in 200..299) {
+                    conn.inputStream
+                } else {
+                    conn.errorStream
+                }
+                stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            }.getOrDefault("")
+            val latencyMs = (
+                android.os.SystemClock.elapsedRealtime() - startedAt
+            ).coerceAtLeast(0L)
+
+            when {
+                code in 200..299 -> {
+                    val inputTokens = parseLlamaInputTokenCountBody(responseBody)
+                    if (inputTokens != null && inputTokens >= 0) {
+                        unsupportedInputTokenEndpoints.remove(capabilityKey)
+                        LlamaInputTokenCountResult(
+                            status = LlamaInputTokenCountStatus.SUPPORTED,
+                            inputTokens = inputTokens,
+                            latencyMs = latencyMs,
+                            httpCode = code
+                        )
+                    } else {
+                        LlamaInputTokenCountResult(
+                            status = LlamaInputTokenCountStatus.TRANSIENT_FAILURE,
+                            latencyMs = latencyMs,
+                            httpCode = code,
+                            errorMessage = "Missing input token count in response"
+                        )
+                    }
+                }
+                code == 404 || code == 405 || code == 501 -> {
+                    unsupportedInputTokenEndpoints[capabilityKey] =
+                        now + INPUT_TOKEN_UNSUPPORTED_TTL_MS
+                    LlamaInputTokenCountResult(
+                        status = LlamaInputTokenCountStatus.UNSUPPORTED,
+                        latencyMs = latencyMs,
+                        httpCode = code,
+                        errorMessage = responseBody.take(240)
+                    )
+                }
+                else -> LlamaInputTokenCountResult(
+                    status = LlamaInputTokenCountStatus.TRANSIENT_FAILURE,
+                    latencyMs = latencyMs,
+                    httpCode = code,
+                    errorMessage = responseBody.take(240)
+                )
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            LlamaInputTokenCountResult(
+                status = LlamaInputTokenCountStatus.TRANSIENT_FAILURE,
+                latencyMs = (
+                    android.os.SystemClock.elapsedRealtime() - startedAt
+                ).coerceAtLeast(0L),
+                errorMessage = error.message?.take(240)
+                    ?: error.javaClass.simpleName
+            )
+        } finally {
+            runCatching { conn?.disconnect() }
         }
     }
 
@@ -677,6 +818,25 @@ internal fun buildLlamaServerChatRequestPayload(
     }
 
     return payload
+}
+
+internal fun parseLlamaInputTokenCountBody(body: String): Int? {
+    if (body.isBlank()) return null
+    return runCatching {
+        val json = JSONObject(body)
+        json.optInt("input_tokens", -1).takeIf { it >= 0 }
+            ?: json.optInt("prompt_tokens", -1).takeIf { it >= 0 }
+            ?: json.optInt("tokens_count", -1).takeIf { it >= 0 }
+            ?: json.optInt("n_tokens", -1).takeIf { it >= 0 }
+            ?: json.optJSONObject("usage")
+                ?.optInt("prompt_tokens", -1)
+                ?.takeIf { it >= 0 }
+            ?: when (val tokens = json.opt("tokens")) {
+                is JSONArray -> tokens.length()
+                is Number -> tokens.toInt().takeIf { it >= 0 }
+                else -> null
+            }
+    }.getOrNull()
 }
 
 internal fun parseLlamaPromptProcessingProgress(

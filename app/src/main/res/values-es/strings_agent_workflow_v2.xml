@@ -9,4 +9,5 @@
     <string name="agent_plan_resolution_in_progress">La aprobación de este plan ya se está procesando.</string>
     <string name="agent_plan_resolution_failed">No se pudo guardar el plan aprobado.</string>
     <string name="agent_plan_saving">Iniciando…</string>
+    <string name="agent_context_budget_breakdown">Presupuesto: mensajes ~%1$d · herramientas/esquema ~%2$d · solicitud %3$d · límite de entrada %4$d · salida %5$d · reserva %6$d · %7$s</string>
 </resources>

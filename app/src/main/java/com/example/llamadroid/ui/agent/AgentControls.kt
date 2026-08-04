@@ -257,7 +257,7 @@ fun AgentWorkspaceConsoleHeader(
         stringResource(R.string.agent_console_ready)
     }
     val contextLabel = contextSnapshot?.let { snapshot ->
-        val promptTokens = snapshot.actualPromptTokens ?: snapshot.packedEstimatedTokens
+        val promptTokens = snapshot.actualPromptTokens ?: snapshot.calibratedRequestTokens ?: snapshot.packedEstimatedTokens
         val percentUsed = snapshot.actualPercentUsed ?: snapshot.percentUsed
         stringResource(
             R.string.agent_console_context_value,
@@ -269,7 +269,7 @@ fun AgentWorkspaceConsoleHeader(
     val savedLabel = lastSavedAt?.let { timestamp ->
         stringResource(R.string.agent_console_last_saved_value, timeFormatter.format(Date(timestamp)))
     } ?: stringResource(R.string.agent_console_last_saved_unknown)
-    val displayedPromptTokens = contextSnapshot?.actualPromptTokens ?: contextSnapshot?.packedEstimatedTokens
+    val displayedPromptTokens = contextSnapshot?.actualPromptTokens ?: contextSnapshot?.calibratedRequestTokens ?: contextSnapshot?.packedEstimatedTokens
     val displayedPercentUsed = contextSnapshot?.actualPercentUsed ?: contextSnapshot?.percentUsed
     val contextProgress = displayedPercentUsed?.div(100f)?.coerceIn(0f, 1f)
     val contextTone = when {
@@ -633,6 +633,28 @@ private fun AgentContextDetails(
                 color = contentColor.copy(alpha = 0.88f)
             )
         }
+        if (
+            snapshot.maximumInputTokens != null &&
+            snapshot.safetyReserveTokens != null &&
+            snapshot.effectiveOutputTokens != null
+        ) {
+            Text(
+                text = stringResource(
+                    R.string.agent_context_budget_breakdown,
+                    snapshot.packedEstimatedTokens,
+                    snapshot.rawToolSchemaTokens,
+                    snapshot.actualPromptTokens
+                        ?: snapshot.calibratedRequestTokens
+                        ?: snapshot.packedEstimatedTokens,
+                    snapshot.maximumInputTokens,
+                    snapshot.effectiveOutputTokens,
+                    snapshot.safetyReserveTokens,
+                    snapshot.countSource ?: "estimate"
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = contentColor.copy(alpha = 0.88f)
+            )
+        }
         if (snapshot.recentCompactions.isNotEmpty()) {
             Text(
                 text = stringResource(R.string.agent_context_usage_history_title),
@@ -979,7 +1001,7 @@ fun AgentContextWindowBanner(
         SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     }
 
-    val displayedPromptTokens = snapshot.actualPromptTokens ?: snapshot.packedEstimatedTokens
+    val displayedPromptTokens = snapshot.actualPromptTokens ?: snapshot.calibratedRequestTokens ?: snapshot.packedEstimatedTokens
     val displayedPercentUsed = snapshot.actualPercentUsed ?: snapshot.percentUsed
     val progress = (displayedPromptTokens.toFloat() / snapshot.contextSize.toFloat()).coerceIn(0f, 1f)
     val containerColor = when {
@@ -1098,6 +1120,29 @@ fun AgentContextWindowBanner(
                             actualPromptTokens,
                             snapshot.actualCompletionTokens?.toString() ?: "?",
                             snapshot.actualTotalTokens?.toString() ?: "?"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor.copy(alpha = 0.88f)
+                    )
+                }
+                if (
+                    snapshot.maximumInputTokens != null &&
+                    snapshot.safetyReserveTokens != null &&
+                    snapshot.effectiveOutputTokens != null
+                ) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(
+                            R.string.agent_context_budget_breakdown,
+                            snapshot.packedEstimatedTokens,
+                            snapshot.rawToolSchemaTokens,
+                            snapshot.actualPromptTokens
+                                ?: snapshot.calibratedRequestTokens
+                                ?: snapshot.packedEstimatedTokens,
+                            snapshot.maximumInputTokens,
+                            snapshot.effectiveOutputTokens,
+                            snapshot.safetyReserveTokens,
+                            snapshot.countSource ?: "estimate"
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = contentColor.copy(alpha = 0.88f)
