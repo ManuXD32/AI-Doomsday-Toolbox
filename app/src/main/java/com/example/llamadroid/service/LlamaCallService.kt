@@ -323,7 +323,8 @@ class LlamaCallService : Service() {
                     audioPath = utterance.absolutePath,
                     language = server.whisperLanguage.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE },
                     outputFormats = setOf(WhisperOutputFormat.TXT),
-                    threads = settingsRepo.whisperThreads.value
+                    threads = settingsRepo.whisperThreads.value,
+                    purpose = WhisperInvocationPurpose.CALL_TRANSCRIPTION
                 )
             )
         }.getOrThrow().text

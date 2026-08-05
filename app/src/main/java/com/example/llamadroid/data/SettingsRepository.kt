@@ -11,6 +11,9 @@ import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.AgentPromptComparisonStore
+import com.example.llamadroid.service.WhisperOutputFormat
+import com.example.llamadroid.service.WhisperVadAssetStore
+import com.example.llamadroid.service.WhisperVadConfig
 import com.example.llamadroid.tama.data.TamaPicGenDefaults
 import com.example.llamadroid.util.AIConstants
 import com.example.llamadroid.util.PromptUtils
@@ -1439,6 +1442,162 @@ class SettingsRepository(private val context: Context) {
     fun setWhisperOutputFolder(uri: String?) {
         prefs.edit().putString("whisper_output_folder", uri).apply()
         _whisperOutputFolder.value = uri
+    }
+
+    private val _whisperVadConfig = MutableStateFlow(
+        WhisperVadConfig(
+            enabled = prefs.getBoolean("whisper_vad_enabled", false),
+            modelPath = prefs.getString("whisper_vad_model_path", null),
+            threshold = prefs.getFloat(
+                "whisper_vad_threshold",
+                WhisperVadConfig.DEFAULT_THRESHOLD
+            ),
+            minSpeechDurationMs = prefs.getInt(
+                "whisper_vad_min_speech_ms",
+                WhisperVadConfig.DEFAULT_MIN_SPEECH_MS
+            ),
+            minSilenceDurationMs = prefs.getInt(
+                "whisper_vad_min_silence_ms",
+                WhisperVadConfig.DEFAULT_MIN_SILENCE_MS
+            ),
+            maxSpeechDurationSeconds = if (prefs.contains("whisper_vad_max_speech_seconds")) {
+                prefs.getFloat("whisper_vad_max_speech_seconds", 0f)
+                    .takeIf { it.isFinite() && it > 0f }
+            } else {
+                null
+            },
+            speechPaddingMs = prefs.getInt(
+                "whisper_vad_speech_padding_ms",
+                WhisperVadConfig.DEFAULT_SPEECH_PADDING_MS
+            ),
+            samplesOverlap = prefs.getFloat(
+                "whisper_vad_samples_overlap",
+                WhisperVadConfig.DEFAULT_SAMPLES_OVERLAP
+            )
+        ).normalized()
+    )
+    val whisperVadConfig = _whisperVadConfig.asStateFlow()
+
+    fun setWhisperVadConfig(config: WhisperVadConfig) {
+        val normalized = config.normalized()
+        prefs.edit().apply {
+            putBoolean("whisper_vad_enabled", normalized.enabled)
+            if (normalized.modelPath == null) {
+                remove("whisper_vad_model_path")
+            } else {
+                putString("whisper_vad_model_path", normalized.modelPath)
+            }
+            putFloat("whisper_vad_threshold", normalized.threshold)
+            putInt("whisper_vad_min_speech_ms", normalized.minSpeechDurationMs)
+            putInt("whisper_vad_min_silence_ms", normalized.minSilenceDurationMs)
+            if (normalized.maxSpeechDurationSeconds == null) {
+                remove("whisper_vad_max_speech_seconds")
+            } else {
+                putFloat(
+                    "whisper_vad_max_speech_seconds",
+                    normalized.maxSpeechDurationSeconds
+                )
+            }
+            putInt("whisper_vad_speech_padding_ms", normalized.speechPaddingMs)
+            putFloat("whisper_vad_samples_overlap", normalized.samplesOverlap)
+        }.apply()
+        _whisperVadConfig.value = normalized
+    }
+
+    fun applyWhisperVadConfig(config: WhisperVadConfig) {
+        setWhisperVadConfig(config)
+    }
+
+    fun resetWhisperVadConfig(
+        keepEnabled: Boolean = whisperVadConfig.value.enabled,
+        keepModelPath: String? = whisperVadConfig.value.modelPath
+    ) {
+        setWhisperVadConfig(
+            WhisperVadConfig(
+                enabled = keepEnabled,
+                modelPath = keepModelPath
+            )
+        )
+    }
+
+    fun whisperVadConfigSnapshot(): WhisperVadConfig {
+        val stored = whisperVadConfig.value.normalized()
+        return stored.copy(
+            modelPath = WhisperVadAssetStore.resolvePath(context, stored.modelPath)
+        ).normalized()
+    }
+
+    private val _whisperLastModelPath = MutableStateFlow(
+        prefs.getString("whisper_last_model_path", null)
+    )
+    val whisperLastModelPath = _whisperLastModelPath.asStateFlow()
+    fun setWhisperLastModelPath(path: String?) {
+        val normalized = path?.trim()?.ifBlank { null }
+        prefs.edit().apply {
+            if (normalized == null) remove("whisper_last_model_path")
+            else putString("whisper_last_model_path", normalized)
+        }.apply()
+        _whisperLastModelPath.value = normalized
+    }
+
+    private val _whisperLastLanguage = MutableStateFlow(
+        prefs.getString("whisper_last_language", "auto")
+            ?.trim()
+            .orEmpty()
+            .ifBlank { "auto" }
+    )
+    val whisperLastLanguage = _whisperLastLanguage.asStateFlow()
+    fun setWhisperLastLanguage(language: String) {
+        val normalized = language.trim().ifBlank { "auto" }
+        prefs.edit().putString("whisper_last_language", normalized).apply()
+        _whisperLastLanguage.value = normalized
+    }
+
+    private val _whisperLastTranslate = MutableStateFlow(
+        prefs.getBoolean("whisper_last_translate", false)
+    )
+    val whisperLastTranslate = _whisperLastTranslate.asStateFlow()
+    fun setWhisperLastTranslate(enabled: Boolean) {
+        prefs.edit().putBoolean("whisper_last_translate", enabled).apply()
+        _whisperLastTranslate.value = enabled
+    }
+
+    private val _whisperLastOutputFormats = MutableStateFlow(
+        prefs.getStringSet(
+            "whisper_last_output_formats",
+            setOf(WhisperOutputFormat.TXT.name, WhisperOutputFormat.SRT.name)
+        ).orEmpty()
+            .mapNotNull { stored ->
+                WhisperOutputFormat.entries.firstOrNull {
+                    it.name.equals(stored, ignoreCase = true)
+                }
+            }
+            .toSet()
+            .ifEmpty { setOf(WhisperOutputFormat.TXT) }
+    )
+    val whisperLastOutputFormats = _whisperLastOutputFormats.asStateFlow()
+    fun setWhisperLastOutputFormats(formats: Set<WhisperOutputFormat>) {
+        val normalized = formats.ifEmpty { setOf(WhisperOutputFormat.TXT) }
+        prefs.edit()
+            .putStringSet(
+                "whisper_last_output_formats",
+                normalized.map { it.name }.toSet()
+            )
+            .apply()
+        _whisperLastOutputFormats.value = normalized
+    }
+
+    private val _videoSumupWhisperModelPath = MutableStateFlow(
+        prefs.getString("video_sumup_whisper_model_path", null)
+    )
+    val videoSumupWhisperModelPath = _videoSumupWhisperModelPath.asStateFlow()
+    fun setVideoSumupWhisperModelPath(path: String?) {
+        val normalized = path?.trim()?.ifBlank { null }
+        prefs.edit().apply {
+            if (normalized == null) remove("video_sumup_whisper_model_path")
+            else putString("video_sumup_whisper_model_path", normalized)
+        }.apply()
+        _videoSumupWhisperModelPath.value = normalized
     }
 
     private val _tamaWhisperModelPath = MutableStateFlow(prefs.getString("tama_whisper_model_path", null))

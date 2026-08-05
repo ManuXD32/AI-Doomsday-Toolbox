@@ -67,6 +67,7 @@ import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.WhisperVadInlineControl
 import com.example.llamadroid.ui.settings.PdfTranslationQualityModeSelector
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
@@ -846,6 +847,7 @@ fun WorkflowsScreen(navController: NavController) {
                                     whisperModelPath = whisperModelPath!!,
                                     language = whisperLanguage,
                                     threads = whisperThreads,
+                                    vadConfig = settingsRepo.whisperVadConfigSnapshot(),
                                     saveToNotes = true,  // Service handles note saving now
                                     noteType = com.example.llamadroid.data.db.NoteType.WORKFLOW,
                                     audioSourcePath = savedRecordingPath ?: audioPath  // Use saved recording if available
@@ -1101,6 +1103,7 @@ fun WorkflowsScreen(navController: NavController) {
                                         whisperModelPath = whisperModelPath!!,
                                         whisperLanguage = whisperLanguage,
                                         whisperThreads = whisperThreads,
+                                        whisperVad = settingsRepo.whisperVadConfigSnapshot(),
                                         targetLanguage = mediaTranslationTargetLanguage,
                                         ttsModelPath = ttsPath,
                                         ttsModelName = ttsName,
@@ -1269,6 +1272,7 @@ fun WorkflowsScreen(navController: NavController) {
                                         whisperModelPath = whisperModelPath,
                                         whisperLanguage = whisperLanguage,
                                         whisperThreads = whisperThreads,
+                                        whisperVad = settingsRepo.whisperVadConfigSnapshot(),
                                         targetLanguage = subtitleTranslationTargetLanguage,
                                         translateSubtitles = subtitleTranslationTranslateSubtitles,
                                         burnIntoVideo = subtitleTranslationBurnIntoVideo,
@@ -3937,6 +3941,8 @@ private fun SubtitleTranslationWorkflowContent(
                                             onWhisperModelChange(json.optString("whisperModel").takeIf { it.isNotBlank() })
                                             onWhisperLanguageChange(json.optString("whisperLanguage", whisperLanguage))
                                             onWhisperThreadsChange(json.optInt("whisperThreads", whisperThreads))
+                                            json.readWhisperVadConfigOrNull("whisperVad")
+                                                ?.let(settingsRepo::applyWhisperVadConfig)
                                             onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
                                             onTranslateSubtitlesChange(json.optBoolean("translateSubtitles", translateSubtitles))
                                             onTranslationContextEnabledChange(json.optBoolean("translationContextEnabled", translationContextEnabled))
@@ -3999,6 +4005,7 @@ private fun SubtitleTranslationWorkflowContent(
                                 put("whisperModel", whisperModelPath ?: "")
                                 put("whisperLanguage", whisperLanguage)
                                 put("whisperThreads", whisperThreads)
+                                putWhisperVadConfig("whisperVad", settingsRepo.whisperVadConfigSnapshot())
                                 put("targetLanguage", targetLanguage)
                                 put("translateSubtitles", translateSubtitles)
                                 put("translationContextEnabled", translationContextEnabled)
@@ -4044,6 +4051,7 @@ private fun SubtitleTranslationWorkflowContent(
 
         if (subtitlePath == null) {
             MediaTranslationWhisperCard(
+                settingsRepo = settingsRepo,
                 whisperModels = whisperModels,
                 whisperModelPath = whisperModelPath,
                 onWhisperModelChange = onWhisperModelChange,
@@ -4649,6 +4657,8 @@ private fun MediaDubbingTranslationWorkflowContent(
                                             onWhisperModelChange(json.optString("whisperModel").takeIf { it.isNotBlank() })
                                             onWhisperLanguageChange(json.optString("whisperLanguage", whisperLanguage))
                                             onWhisperThreadsChange(json.optInt("whisperThreads", whisperThreads))
+                                            json.readWhisperVadConfigOrNull("whisperVad")
+                                                ?.let(settingsRepo::applyWhisperVadConfig)
                                             onTargetLanguageChange(json.optString("targetLanguage", targetLanguage))
                                             onTranslationContextEnabledChange(json.optBoolean("translationContextEnabled", translationContextEnabled))
                                             onTranslationContextLinesChange(json.optInt("translationContextLines", translationContextLines).coerceIn(0, 10))
@@ -4717,6 +4727,7 @@ private fun MediaDubbingTranslationWorkflowContent(
                                 put("whisperModel", whisperModelPath ?: "")
                                 put("whisperLanguage", whisperLanguage)
                                 put("whisperThreads", whisperThreads)
+                                putWhisperVadConfig("whisperVad", settingsRepo.whisperVadConfigSnapshot())
                                 put("targetLanguage", targetLanguage)
                                 put("translationContextEnabled", translationContextEnabled)
                                 put("translationContextLines", translationContextLines)
@@ -4758,6 +4769,7 @@ private fun MediaDubbingTranslationWorkflowContent(
         )
 
         MediaTranslationWhisperCard(
+            settingsRepo = settingsRepo,
             whisperModels = whisperModels,
             whisperModelPath = whisperModelPath,
             onWhisperModelChange = onWhisperModelChange,
@@ -4955,6 +4967,7 @@ private fun MediaTranslationSourceCard(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MediaTranslationWhisperCard(
+    settingsRepo: SettingsRepository,
     whisperModels: List<ModelEntity>,
     whisperModelPath: String?,
     onWhisperModelChange: (String?) -> Unit,
@@ -5004,6 +5017,7 @@ private fun MediaTranslationWhisperCard(
                 valueRange = 1..16,
                 label = stringResource(R.string.label_threads)
             )
+            WhisperVadInlineControl(settingsRepo = settingsRepo)
         }
     }
 }
@@ -6567,6 +6581,8 @@ private fun TranscribeSummaryWorkflowContent(
                                         onWhisperModelChange(config.optString("whisperModel").takeIf { it.isNotEmpty() })
                                         onWhisperLanguageChange(config.optString("language", "auto"))
                                         onWhisperThreadsChange(config.optInt("whisperThreads", 4))
+                                        config.readWhisperVadConfigOrNull("whisperVad")
+                                            ?.let(settingsRepo::applyWhisperVadConfig)
                                         onSummaryBackendChange(config.optString("summaryBackend", SettingsRepository.PDF_BACKEND_OLLAMA))
                                         onSummaryOllamaUrlChange(config.optString("summaryOllamaUrl", summaryOllamaUrl))
                                         onSummaryLlamaUrlChange(config.optString("summaryLlamaUrl", summaryLlamaUrl))
@@ -6677,6 +6693,7 @@ private fun TranscribeSummaryWorkflowContent(
                                     put("whisperModel", whisperModelPath ?: "")
                                     put("language", whisperLanguage)
                                     put("whisperThreads", whisperThreads)
+                                    putWhisperVadConfig("whisperVad", settingsRepo.whisperVadConfigSnapshot())
                                     put("summaryBackend", summaryBackend)
                                     put("summaryOllamaUrl", summaryOllamaUrl)
                                     put("summaryLlamaUrl", summaryLlamaUrl)
@@ -6762,6 +6779,8 @@ private fun TranscribeSummaryWorkflowContent(
                     valueRange = 1..16,
                     label = stringResource(R.string.label_threads)
                 )
+                Spacer(modifier = Modifier.height(10.dp))
+                WhisperVadInlineControl(settingsRepo = settingsRepo)
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 

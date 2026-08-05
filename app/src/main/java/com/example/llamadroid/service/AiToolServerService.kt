@@ -1026,6 +1026,7 @@ class AiToolServerService : Service() {
                         whisperModelPath = body.optString("whisperModelPath"),
                         language = body.optString("whisperLanguage", "auto"),
                         threads = body.optInt("whisperThreads", 4),
+                        vadConfig = SettingsRepository(applicationContext).whisperVadConfigSnapshot(),
                         saveToNotes = true,
                         noteType = NoteType.WORKFLOW,
                         settingsOverride = settings
@@ -1050,6 +1051,7 @@ class AiToolServerService : Service() {
                             whisperModelPath = body.optString("whisperModelPath"),
                             whisperLanguage = body.optString("whisperLanguage", "auto"),
                             whisperThreads = body.optInt("whisperThreads", 4),
+                            whisperVad = SettingsRepository(applicationContext).whisperVadConfigSnapshot(),
                             targetLanguage = body.optString("targetLanguage", settings.targetLanguage),
                             ttsModelPath = ttsModelPath,
                             ttsModelName = File(ttsModelPath).name,
@@ -1082,6 +1084,7 @@ class AiToolServerService : Service() {
                             whisperModelPath = body.optString("whisperModelPath").ifBlank { null },
                             whisperLanguage = body.optString("whisperLanguage", "auto"),
                             whisperThreads = body.optInt("whisperThreads", 4),
+                            whisperVad = SettingsRepository(applicationContext).whisperVadConfigSnapshot(),
                             targetLanguage = body.optString("targetLanguage", settings.targetLanguage),
                             translateSubtitles = body.optBoolean("translateSubtitles", true),
                             burnIntoVideo = body.optBoolean("burnIntoVideo", true),
@@ -1137,6 +1140,7 @@ class AiToolServerService : Service() {
                         whisperModelPath = body.optString("whisperModelPath"),
                         language = body.optString("whisperLanguage", "auto"),
                         threads = body.optInt("whisperThreads", 4),
+                        vadConfig = SettingsRepository(applicationContext).whisperVadConfigSnapshot(),
                         saveToNotes = true,
                         noteType = NoteType.VIDEO_SUMMARY,
                         settingsOverride = settings

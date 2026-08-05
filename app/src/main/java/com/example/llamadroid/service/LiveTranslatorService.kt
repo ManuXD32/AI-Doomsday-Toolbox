@@ -518,7 +518,8 @@ class LiveTranslatorService : Service() {
                     audioPath = utterance.absolutePath,
                     language = LiveTranslatorLogic.WHISPER_LANGUAGE_AUTO,
                     outputFormats = setOf(WhisperOutputFormat.TXT),
-                    threads = template.whisperThreads.coerceIn(1, 16)
+                    threads = template.whisperThreads.coerceIn(1, 16),
+                    purpose = WhisperInvocationPurpose.LIVE_TRANSLATOR
                 )
             )
         }
@@ -542,7 +543,8 @@ class LiveTranslatorService : Service() {
                     audioPath = utterance.absolutePath,
                     language = LiveTranslatorLogic.WHISPER_LANGUAGE_AUTO,
                     outputFormats = setOf(WhisperOutputFormat.TXT),
-                    threads = whisperThreads.coerceIn(1, 16)
+                    threads = whisperThreads.coerceIn(1, 16),
+                    purpose = WhisperInvocationPurpose.LANGUAGE_SAMPLE
                 )
             )
         }

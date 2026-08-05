@@ -3565,7 +3565,9 @@ class LlamaClientService : Service() {
                 audioPath = audioPath,
                 language = server.whisperLanguage.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE },
                 outputFormats = setOf(WhisperOutputFormat.TXT),
-                threads = settingsRepo.whisperThreads.value
+                threads = settingsRepo.whisperThreads.value,
+                purpose = WhisperInvocationPurpose.AUDIO_ATTACHMENT,
+                vad = settingsRepo.whisperVadConfigSnapshot()
             )
         )
     }

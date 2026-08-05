@@ -10,7 +10,10 @@ data class WhisperConfig(
     val translate: Boolean = false, // Translate to English
     val outputFormats: Set<WhisperOutputFormat> = setOf(WhisperOutputFormat.TXT),
     val threads: Int = 4,
-    val outputDir: String? = null // Custom output directory
+    val outputDir: String? = null, // Custom output directory
+    val purpose: WhisperInvocationPurpose = WhisperInvocationPurpose.BATCH_TRANSCRIPTION,
+    // null means use the current persisted VAD profile at launch time.
+    val vad: WhisperVadConfig? = null
 )
 
 enum class WhisperOutputFormat(val cliFlag: String, val extension: String) {

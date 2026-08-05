@@ -75,13 +75,26 @@ fun AudioTranscriptionScreen(navController: NavController) {
     val whisperState by whisperService?.state?.collectAsState() ?: remember { mutableStateOf(WhisperState.Idle) }
     val whisperProgress by whisperService?.progress?.collectAsState() ?: remember { mutableStateOf("") }
     
+    val lastOutputFormats = settingsRepo.whisperLastOutputFormats.value
     var selectedAudioPath by remember { mutableStateOf<String?>(null) }
-    var selectedLanguage by remember { mutableStateOf("auto") }
-    var translateToEnglish by remember { mutableStateOf(false) }
-    var outputSrt by remember { mutableStateOf(true) }
-    var outputTxt by remember { mutableStateOf(true) }
-    var outputVtt by remember { mutableStateOf(false) }
-    var outputJson by remember { mutableStateOf(false) }
+    var selectedLanguage by remember {
+        mutableStateOf(settingsRepo.whisperLastLanguage.value)
+    }
+    var translateToEnglish by remember {
+        mutableStateOf(settingsRepo.whisperLastTranslate.value)
+    }
+    var outputSrt by remember {
+        mutableStateOf(WhisperOutputFormat.SRT in lastOutputFormats)
+    }
+    var outputTxt by remember {
+        mutableStateOf(WhisperOutputFormat.TXT in lastOutputFormats)
+    }
+    var outputVtt by remember {
+        mutableStateOf(WhisperOutputFormat.VTT in lastOutputFormats)
+    }
+    var outputJson by remember {
+        mutableStateOf(WhisperOutputFormat.JSON in lastOutputFormats)
+    }
     var transcriptionResult by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
@@ -117,11 +130,23 @@ fun AudioTranscriptionScreen(navController: NavController) {
     
     // Model selection
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
-    var selectedModelPath by remember { mutableStateOf<String?>(null) }
+    var selectedModelPath by remember {
+        mutableStateOf(settingsRepo.whisperLastModelPath.value)
+    }
     var showModelPicker by remember { mutableStateOf(false) }
-    
+
     // Settings
     val threads by settingsRepo.whisperThreads.collectAsState()
+    val vadConfig by settingsRepo.whisperVadConfig.collectAsState()
+    val effectiveVadPath = WhisperVadAssetStore.resolvePath(context, vadConfig.modelPath)
+
+    LaunchedEffect(whisperModels) {
+        val selectedStillExists = whisperModels.any { it.path == selectedModelPath }
+        if (!selectedStillExists) {
+            selectedModelPath = whisperModels.firstOrNull()?.path
+            settingsRepo.setWhisperLastModelPath(selectedModelPath)
+        }
+    }
     
     // State for video extraction
     var isExtractingAudio by remember { mutableStateOf(false) }
@@ -390,6 +415,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                                     text = { Text(name) },
                                     onClick = {
                                         selectedLanguage = code
+                                        settingsRepo.setWhisperLastLanguage(code)
                                         languageExpanded = false
                                     }
                                 )
@@ -408,7 +434,10 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         Text(stringResource(R.string.whisper_translate_label))
                         Switch(
                             checked = translateToEnglish,
-                            onCheckedChange = { translateToEnglish = it }
+                            onCheckedChange = { enabled ->
+                                translateToEnglish = enabled
+                                settingsRepo.setWhisperLastTranslate(enabled)
+                            }
                         )
                     }
                     
@@ -421,11 +450,44 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(selected = outputTxt, onClick = { outputTxt = !outputTxt }, label = { Text(stringResource(R.string.format_txt)) })
-                        FilterChip(selected = outputSrt, onClick = { outputSrt = !outputSrt }, label = { Text(stringResource(R.string.format_srt)) })
-                        FilterChip(selected = outputVtt, onClick = { outputVtt = !outputVtt }, label = { Text(stringResource(R.string.format_vtt)) })
-                        FilterChip(selected = outputJson, onClick = { outputJson = !outputJson }, label = { Text(stringResource(R.string.format_json)) })
+                        FilterChip(
+                            selected = outputTxt,
+                            onClick = { outputTxt = !outputTxt },
+                            label = { Text(stringResource(R.string.format_txt)) }
+                        )
+                        FilterChip(
+                            selected = outputSrt,
+                            onClick = { outputSrt = !outputSrt },
+                            label = { Text(stringResource(R.string.format_srt)) }
+                        )
+                        FilterChip(
+                            selected = outputVtt,
+                            onClick = { outputVtt = !outputVtt },
+                            label = { Text(stringResource(R.string.format_vtt)) }
+                        )
+                        FilterChip(
+                            selected = outputJson,
+                            onClick = { outputJson = !outputJson },
+                            label = { Text(stringResource(R.string.format_json)) }
+                        )
                     }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = stringResource(
+                            when {
+                                !vadConfig.enabled -> R.string.whisper_vad_status_disabled
+                                effectiveVadPath == null ->
+                                    R.string.whisper_vad_status_enabled_missing
+                                else -> R.string.whisper_vad_status_enabled
+                            }
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (vadConfig.enabled && effectiveVadPath == null) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
                 }
             }
             
@@ -452,26 +514,45 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         if (outputSrt) formats.add(WhisperOutputFormat.SRT)
                         if (outputVtt) formats.add(WhisperOutputFormat.VTT)
                         if (outputJson) formats.add(WhisperOutputFormat.JSON)
-                        
+                        if (formats.isEmpty()) formats.add(WhisperOutputFormat.TXT)
+
+                        val whisperVad = settingsRepo.whisperVadConfigSnapshot()
+                        if (whisperVad.enabled && whisperVad.modelPath.isNullOrBlank()) {
+                            errorMessage = context.getString(R.string.whisper_error_vad_model_missing)
+                            return@Button
+                        }
+                        settingsRepo.setWhisperLastModelPath(selectedModelPath)
+                        settingsRepo.setWhisperLastLanguage(selectedLanguage)
+                        settingsRepo.setWhisperLastTranslate(translateToEnglish)
+                        settingsRepo.setWhisperLastOutputFormats(formats)
+
                         val config = WhisperConfig(
                             modelPath = selectedModelPath!!,
                             audioPath = selectedAudioPath!!,
                             language = selectedLanguage,
                             translate = translateToEnglish,
                             outputFormats = formats,
-                            threads = threads
+                            threads = threads,
+                            purpose = WhisperInvocationPurpose.BATCH_TRANSCRIPTION,
+                            vad = whisperVad
                         )
                         
                         scope.launch {
                             val result = whisperService?.transcribe(config)
                             result?.fold(
                                 onSuccess = { transcriptionResult = it.text },
-                                onFailure = { errorMessage = it.message }
+                                onFailure = { error ->
+                                    if (error is kotlinx.coroutines.CancellationException) {
+                                        errorMessage = null
+                                    } else {
+                                        errorMessage = error.message
+                                    }
+                                }
                             )
                         }
                     },
                     modifier = Modifier.weight(1f),
-                    enabled = whisperState == WhisperState.Idle || whisperState == WhisperState.Completed || whisperState is WhisperState.Error
+                    enabled = whisperState == WhisperState.Idle || whisperState == WhisperState.Completed || whisperState == WhisperState.Cancelled || whisperState is WhisperState.Error
                 ) {
                     when (whisperState) {
                         is WhisperState.Converting -> {
@@ -563,6 +644,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         TextButton(
                             onClick = {
                                 selectedModelPath = model.path
+                                settingsRepo.setWhisperLastModelPath(model.path)
                                 showModelPicker = false
                             },
                             modifier = Modifier.fillMaxWidth()

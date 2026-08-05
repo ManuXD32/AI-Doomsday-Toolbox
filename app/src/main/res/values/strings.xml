@@ -8392,4 +8392,46 @@
     <string name="agent_progress_agent_cancelled">%1$s was cancelled</string>
     <string name="agent_progress_agent_interrupted">%1$s was interrupted</string>
 
+    <!-- Whisper VAD and remembered defaults -->
+    <string name="whisper_last_used_defaults_desc">Your last model, language and output choices are reused automatically.</string>
+    <string name="whisper_vad_title">Smart silence skipping</string>
+    <string name="whisper_vad_desc">Use Whisper voice activity detection to skip silent regions in long recordings.</string>
+    <string name="whisper_vad_model_label">VAD model</string>
+    <string name="whisper_vad_no_model">No VAD model installed</string>
+    <string name="whisper_vad_install_required">Install or import a VAD model in Whisper settings before enabling silence skipping.</string>
+    <string name="whisper_vad_batch_only_note">Used for batch transcription, video summaries, media workflows and voice attachments. Calls and Live Translator keep their low-latency detector.</string>
+    <string name="whisper_vad_manage_models">Manage VAD models</string>
+    <string name="action_show_advanced">Advanced tuning</string>
+    <string name="action_hide_advanced">Hide advanced tuning</string>
+    <string name="whisper_vad_status_disabled">Silence skipping is disabled.</string>
+    <string name="whisper_vad_status_enabled">Silence skipping is enabled.</string>
+    <string name="whisper_vad_status_enabled_missing">Silence skipping is enabled, but its model is missing.</string>
+    <string name="whisper_vad_threshold">Speech threshold</string>
+    <string name="whisper_vad_min_speech">Minimum speech</string>
+    <string name="whisper_vad_min_silence">Minimum silence</string>
+    <string name="whisper_vad_padding">Speech padding</string>
+    <string name="whisper_vad_overlap">Audio overlap</string>
+    <string name="whisper_vad_max_speech">Maximum speech length</string>
+    <string name="whisper_vad_max_speech_hint">Use 0 for no application limit.</string>
+    <string name="whisper_vad_milliseconds_suffix">ms</string>
+    <string name="whisper_vad_seconds_suffix">s</string>
+    <string name="whisper_vad_reset_defaults">Reset VAD tuning</string>
+    <string name="whisper_vad_enabled_for_batch">Smart silence skipping is enabled for this workflow.</string>
+    <string name="whisper_vad_workflow_toggle">Skip silent regions</string>
+    <string name="whisper_vad_workflow_toggle_desc">Uses the shared model and tuning from Whisper settings.</string>
+    <string name="whisper_vad_models_title">Voice activity detection models</string>
+    <string name="whisper_vad_selected">Selected</string>
+    <string name="whisper_vad_models_desc">Small converted Silero models used only to locate speech and silence.</string>
+    <string name="whisper_vad_download_failed">Could not download %1$s.</string>
+    <string name="whisper_vad_download_recommended">Download recommended VAD model</string>
+    <string name="whisper_vad_download_compatibility">Download compatibility VAD model</string>
+    <string name="whisper_vad_import">Import converted VAD model</string>
+    <string name="whisper_vad_import_success">Imported %1$s as a Whisper VAD model.</string>
+    <string name="whisper_vad_import_failed">Could not import VAD model: %1$s</string>
+    <string name="whisper_vad_delete_title">Delete VAD model?</string>
+    <string name="whisper_vad_delete_confirmation">Delete %1$s from app storage?</string>
+    <string name="whisper_error_no_output">Whisper completed without producing any requested output file.</string>
+    <string name="whisper_error_no_transcript">Whisper completed without producing a readable transcript.</string>
+    <string name="whisper_error_vad_model_missing">Silence skipping is enabled, but no readable Whisper VAD model is installed.</string>
+    <string name="whisper_error_vad_unsupported">This Whisper binary does not support the required VAD options: %1$s</string>
 </resources>

@@ -20,6 +20,7 @@ import com.example.llamadroid.service.RemoteSummaryRequest
 import com.example.llamadroid.service.fileToDataUrl
 import com.example.llamadroid.service.inferImageMimeType
 import com.example.llamadroid.service.WhisperConfig
+import com.example.llamadroid.service.WhisperInvocationPurpose
 import com.example.llamadroid.service.WhisperOutputFormat
 import com.example.llamadroid.service.WhisperService
 import com.example.llamadroid.tama.data.ActivityType
@@ -756,7 +757,9 @@ class TamaAgentService(
                     audioPath = audioPath,
                     language = settingsRepo.tamaWhisperLanguage.value,
                     outputFormats = setOf(WhisperOutputFormat.TXT),
-                    threads = settingsRepo.whisperThreads.value
+                    threads = settingsRepo.whisperThreads.value,
+                    purpose = WhisperInvocationPurpose.AUDIO_ATTACHMENT,
+                    vad = settingsRepo.whisperVadConfigSnapshot()
                 )
             )
         }
