@@ -1,5 +1,7 @@
 # Personal documentation (not for GitHub)
 ARCHITECTURE.md
+.gitignore
+.adt_patch_backups
 
 # Built application files
 *.apk
