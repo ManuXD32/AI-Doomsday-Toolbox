@@ -9208,21 +9208,21 @@ TODO status. Return via finish_task with JSON:
                         val effectiveToolCall = validatedToolCall.toolCall
                         val outputStr: String = when (effectiveToolCall.name) {
                             "read_file" -> {
-                                val path = toolCall.arguments["path"] ?: ""
-                                val startLine = toolCall.arguments["start_line"]?.toIntOrNull() ?: 1
-                                val maxLines = toolCall.arguments["max_lines"]?.toIntOrNull() ?: TOOL_READ_FILE_DEFAULT_LINES
+                                val path = effectiveToolCall.arguments["path"] ?: ""
+                                val startLine = effectiveToolCall.arguments["start_line"]?.toIntOrNull() ?: 1
+                                val maxLines = effectiveToolCall.arguments["max_lines"]?.toIntOrNull() ?: TOOL_READ_FILE_DEFAULT_LINES
                                 agentService.readFileForTool(path, startLine, maxLines).getOrThrow()
                             }
                             "write_file" -> {
-                                val path = toolCall.arguments["path"] ?: ""
-                                val content = toolCall.arguments["content"] ?: ""
+                                val path = effectiveToolCall.arguments["path"] ?: ""
+                                val content = effectiveToolCall.arguments["content"] ?: ""
 
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     addMessage(ChatMessage(
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_write, path),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9245,9 +9245,9 @@ TODO status. Return via finish_task with JSON:
                                 context.getString(R.string.agent_file_written, path) + "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "run_command" -> {
-                                val command = toolCall.arguments["command"] ?: ""
-                                val requestedLines = toolCall.arguments["lines"]?.toIntOrNull() ?: 10
-                                val workingDirectory = toolCall.arguments["working_directory"]?.trim().orEmpty()
+                                val command = effectiveToolCall.arguments["command"] ?: ""
+                                val requestedLines = effectiveToolCall.arguments["lines"]?.toIntOrNull() ?: 10
+                                val workingDirectory = effectiveToolCall.arguments["working_directory"]?.trim().orEmpty()
 
                                 // Only auto-run run_command if commandAutoAccept is enabled
                                 // or if isForced (user clicked individual approve button)
@@ -9256,7 +9256,7 @@ TODO status. Return via finish_task with JSON:
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_command, command),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9279,7 +9279,7 @@ TODO status. Return via finish_task with JSON:
                                     role = "assistant",
                                     content = context.getString(R.string.agent_executing_command, command),
                                     toolName = toolCall.name,
-                                    toolArgs = toolCall.arguments,
+                                    toolArgs = effectiveToolCall.arguments,
                                     toolCallId = toolCall.id,
                                     pendingToolCall = toolCall,
                                     isTerminalVisible = true,
@@ -9300,27 +9300,27 @@ TODO status. Return via finish_task with JSON:
                                 agentService.runInteractiveCommand(terminalId, safeCommand, requestedLines, toolCall.id).getOrThrow()
                             }
                             "check_command" -> {
-                                val commandId = toolCall.arguments["command_id"] ?: ""
-                                val requestedLines = toolCall.arguments["lines"]?.toIntOrNull() ?: 10
+                                val commandId = effectiveToolCall.arguments["command_id"] ?: ""
+                                val requestedLines = effectiveToolCall.arguments["lines"]?.toIntOrNull() ?: 10
                                 agentService.checkCommand(commandId, requestedLines).getOrThrow()
                             }
                             "wait_command" -> {
-                                val commandId = toolCall.arguments["command_id"] ?: ""
-                                val waitSeconds = toolCall.arguments["wait_seconds"]?.toIntOrNull() ?: 10
-                                val requestedLines = toolCall.arguments["lines"]?.toIntOrNull() ?: 10
+                                val commandId = effectiveToolCall.arguments["command_id"] ?: ""
+                                val waitSeconds = effectiveToolCall.arguments["wait_seconds"]?.toIntOrNull() ?: 10
+                                val requestedLines = effectiveToolCall.arguments["lines"]?.toIntOrNull() ?: 10
                                 agentService.waitCommand(commandId, waitSeconds, requestedLines).getOrThrow()
                             }
                             "command_list" -> {
                                 agentService.listCommands().getOrThrow()
                             }
                             "cancel_command" -> {
-                                val commandId = toolCall.arguments["command_id"] ?: ""
+                                val commandId = effectiveToolCall.arguments["command_id"] ?: ""
                                 agentService.cancelCommand(commandId).getOrThrow()
                             }
                             "send_command_input" -> {
-                                val commandId = toolCall.arguments["command_id"] ?: ""
-                                val input = toolCall.arguments["input"] ?: ""
-                                val appendNewline = toolCall.arguments["append_newline"]?.toBooleanStrictOrNull() ?: true
+                                val commandId = effectiveToolCall.arguments["command_id"] ?: ""
+                                val input = effectiveToolCall.arguments["input"] ?: ""
+                                val appendNewline = effectiveToolCall.arguments["append_newline"]?.toBooleanStrictOrNull() ?: true
                                 agentService.sendCommandInput(commandId, input, appendNewline).getOrThrow()
                             }
                             "run_project" -> {
@@ -9329,7 +9329,7 @@ TODO status. Return via finish_task with JSON:
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_local_run),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9353,7 +9353,7 @@ TODO status. Return via finish_task with JSON:
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_local_force_stop),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9366,14 +9366,14 @@ TODO status. Return via finish_task with JSON:
                                 agentService.stopLocalProjectRun(force = true).getOrThrow()
                             }
                             "install_python_dependency" -> {
-                                val packageName = toolCall.arguments["package"] ?: ""
-                                val wheelPath = toolCall.arguments["wheel_path"]
+                                val packageName = effectiveToolCall.arguments["package"] ?: ""
+                                val wheelPath = effectiveToolCall.arguments["wheel_path"]
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     addMessage(ChatMessage(
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_python_dependency, packageName),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9386,8 +9386,15 @@ TODO status. Return via finish_task with JSON:
                                 agentService.installLocalPythonDependency(packageName, wheelPath).getOrThrow()
                             }
                             "list_directory" -> {
-                                val files = agentService.listDirectory(toolCall.arguments["path"] ?: WORKSPACE_PATH).getOrThrow()
-                                files.joinToString("\n") { f -> "${if (f.isDirectory) "[dir]" else "[file]"} ${f.name}" }
+                                val files = agentService.listDirectory(
+                                    effectiveToolCall.arguments["path"]
+                                        ?: WORKSPACE_PATH
+                                ).getOrThrow()
+                                AgentRuntimeSupport.formatDirectoryListing(
+                                    files.map { file ->
+                                        "${if (file.isDirectory) "[dir]" else "[file]"} ${file.name}"
+                                    }
+                                )
                             }
                             "create_folder" -> {
                                 val path = effectiveToolCall.arguments["path"] ?: ""
@@ -9418,21 +9425,21 @@ TODO status. Return via finish_task with JSON:
                                 }
                             }
                             "search_code" -> {
-                                val results = agentService.searchCode(toolCall.arguments["query"] ?: "").getOrThrow()
+                                val results = agentService.searchCode(effectiveToolCall.arguments["query"] ?: "").getOrThrow()
                                 results.joinToString("\n") { r -> "${r.path}:${r.lineNumber}: ${r.content}" }
                             }
                             "edit_lines" -> {
-                                val path = toolCall.arguments["path"] ?: ""
-                                val startLine = toolCall.arguments["start_line"]?.toIntOrNull() ?: 0
-                                val endLine = toolCall.arguments["end_line"]?.toIntOrNull() ?: 0
-                                val newContent = toolCall.arguments["new_content"] ?: ""
+                                val path = effectiveToolCall.arguments["path"] ?: ""
+                                val startLine = effectiveToolCall.arguments["start_line"]?.toIntOrNull() ?: 0
+                                val endLine = effectiveToolCall.arguments["end_line"]?.toIntOrNull() ?: 0
+                                val newContent = effectiveToolCall.arguments["new_content"] ?: ""
 
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     addMessage(ChatMessage(
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_edit_lines, path, startLine, endLine),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9455,7 +9462,7 @@ TODO status. Return via finish_task with JSON:
                                 } + "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "apply_patch" -> {
-                                val patch = toolCall.arguments["patch"] ?: ""
+                                val patch = effectiveToolCall.arguments["patch"] ?: ""
 
                                 if (!settingsRepo.autoMode.value && !isForced) {
                                     val preview = patch.lineSequence().take(12).joinToString("\n").ifBlank { "[empty patch]" }
@@ -9463,7 +9470,7 @@ TODO status. Return via finish_task with JSON:
                                         role = "assistant",
                                         content = context.getString(R.string.agent_request_apply_patch, preview),
                                         toolName = toolCall.name,
-                                        toolArgs = toolCall.arguments,
+                                        toolArgs = effectiveToolCall.arguments,
                                         needsApproval = true,
                                         pendingToolCall = toolCall,
                                         agentRole = assistantAgentRole,
@@ -9486,7 +9493,7 @@ TODO status. Return via finish_task with JSON:
                                 } + "\nREMINDER: Append what you just did and why to memory using write_memory."
                             }
                             "call_agent" -> {
-                                val agentName = toolCall.arguments["agent"]
+                                val agentName = effectiveToolCall.arguments["agent"]
                                     ?.trim()
                                     ?.uppercase()
                                     ?: "CODEBASE_SCOUT"
@@ -9551,7 +9558,7 @@ TODO status. Return via finish_task with JSON:
                                 }
                                 val requestedInvocationName =
                                     normalizeAgentInvocationName(
-                                        toolCall.arguments["name"].orEmpty()
+                                        effectiveToolCall.arguments["name"].orEmpty()
                                     )
                                         ?: throw IllegalArgumentException(
                                             "call_agent requires a non-blank " +
@@ -9566,18 +9573,18 @@ TODO status. Return via finish_task with JSON:
                                     )
                                 }
 
-                                val task = toolCall.arguments["task"]
+                                val task = effectiveToolCall.arguments["task"]
                                     ?.trim()
                                     ?.takeIf { it.isNotBlank() }
                                     ?: throw IllegalArgumentException(
                                         "call_agent requires one atomic task."
                                     )
                                 val requestedTodoId =
-                                    toolCall.arguments["todo_id"]
+                                    effectiveToolCall.arguments["todo_id"]
                                         ?.trim()
                                         ?.takeIf { it.isNotBlank() }
                                 val suppliedContext =
-                                    toolCall.arguments["context"]
+                                    effectiveToolCall.arguments["context"]
                                         ?.trim()
                                         .orEmpty()
                                 val builtInRole = when (agentName) {
@@ -10028,8 +10035,8 @@ TODO status. Return via finish_task with JSON:
                                 "Delegated to $agentName"
                             }
                             "propose_plan" -> {
-                                val plan = toolCall.arguments["plan"] ?: ""
-                                val summary = toolCall.arguments["summary"] ?: "Implementation Plan"
+                                val plan = effectiveToolCall.arguments["plan"] ?: ""
+                                val summary = effectiveToolCall.arguments["summary"] ?: "Implementation Plan"
                                 val planToolCallId = toolCall.id?.takeIf { it.isNotBlank() }
                                     ?: throw IllegalArgumentException("propose_plan requires a stable tool-call ID")
                                 if (hasPendingPlanApproval()) {
@@ -10115,18 +10122,26 @@ TODO status. Return via finish_task with JSON:
                                 return@launch // Hard durable wait boundary.
                             }
                             "report_progress" -> {
-                                val phase = toolCall.arguments["phase"].orEmpty()
-                                val summary = toolCall.arguments["summary"].orEmpty()
+                                val phase = effectiveToolCall.arguments["phase"].orEmpty()
+                                val summary = effectiveToolCall.arguments["summary"].orEmpty()
                                 postOrchestratorProgressUpdate(context, phase, summary)
                                 context.getString(R.string.agent_progress_reported)
                             }
                             "finish_task" -> {
                                 val targetedInvocationId = activeInvocationId
-                                val queuedTargetedGuidance = if (targetedInvocationId != null) {
+                                val queuedTargetedGuidance = if (
+                                    targetedInvocationId != null
+                                ) {
                                     val conversationId = _activeConversationId.value
                                     if (conversationId != null) {
-                                        AppDatabase.getDatabase(context.applicationContext).agentWorkflowDao()
-                                            .getQueuedInputs(conversationId, targetedInvocationId)
+                                        AppDatabase.getDatabase(
+                                            context.applicationContext
+                                        )
+                                            .agentWorkflowDao()
+                                            .getQueuedInputs(
+                                                conversationId,
+                                                targetedInvocationId
+                                            )
                                     } else {
                                         emptyList()
                                     }
@@ -10134,29 +10149,72 @@ TODO status. Return via finish_task with JSON:
                                     emptyList()
                                 }
                                 if (queuedTargetedGuidance.isNotEmpty()) {
-                                    addDebugLog("↪️ Deferring finish_task because targeted user guidance is queued.")
-                                    "Completion deferred: new user guidance arrived for this agent. The current result remains committed; incorporate the guidance before calling finish_task again."
+                                    addDebugLog(
+                                        "↪️ Deferring finish_task because " +
+                                            "targeted user guidance is queued."
+                                    )
+                                    "Completion deferred: new user guidance " +
+                                        "arrived for this agent. The current " +
+                                        "result remains committed; incorporate " +
+                                        "the guidance before calling finish_task " +
+                                        "again."
                                 } else {
-                                val summary = toolCall.arguments["summary"] ?: "Completed"
-                                runCatching { AgentRuntimeSupport.parseAgentResult(_currentAgent.value.name, summary) }
-                                    .getOrElse { throw IllegalArgumentException(it.message ?: "finish_task summary is not schema-valid.") }
-                                if (_memoryDirty.value && roleRequiresMemoryGate(_currentAgent.value)) {
-                                    throw IllegalStateException(context.getString(R.string.agent_memory_update_required_summary))
-                                }
-                                addDebugLog("✅ Task finished: $summary")
-                                if (_currentAgent.value == AgentRole.SUMMARIZER) {
-                                    clearMemoryDirty("Summarizer finished after updating project memory.")
-                                }
-                                val completed = endSession(summary)
-                                if (completePendingDelegation(context, ollamaService, settingsRepo, agentService, completed, runEpoch)) {
+                                    val finishAgentLabel =
+                                        _activeCustomAgent.value?.name
+                                            ?: _currentAgent.value.name
+                                    val resolvedFinish =
+                                        AgentRuntimeSupport
+                                            .resolveFinishTaskPayload(
+                                                agentLabel = finishAgentLabel,
+                                                arguments =
+                                                    effectiveToolCall.arguments
+                                            )
+                                    val summary =
+                                        resolvedFinish.canonicalSummary
+                                    if (
+                                        _memoryDirty.value &&
+                                        roleRequiresMemoryGate(
+                                            _currentAgent.value
+                                        )
+                                    ) {
+                                        throw IllegalStateException(
+                                            context.getString(
+                                                R.string
+                                                    .agent_memory_update_required_summary
+                                            )
+                                        )
+                                    }
+                                    addDebugLog("✅ Task finished: $summary")
+                                    if (
+                                        _currentAgent.value ==
+                                            AgentRole.SUMMARIZER
+                                    ) {
+                                        clearMemoryDirty(
+                                            "Summarizer finished after updating " +
+                                                "project memory."
+                                        )
+                                    }
+                                    val completed = endSession(
+                                        summary,
+                                        forcedResult = resolvedFinish.result
+                                    )
+                                    if (
+                                        completePendingDelegation(
+                                            context,
+                                            ollamaService,
+                                            settingsRepo,
+                                            agentService,
+                                            completed,
+                                            runEpoch
+                                        )
+                                    ) {
+                                        toolHandlesContinuation = true
+                                        return@launch
+                                    }
+                                    setCurrentAgent(AgentRole.ORCHESTRATOR)
+                                    setCurrentTask(null)
                                     toolHandlesContinuation = true
-                                    return@launch
-                                }
-                                setCurrentAgent(AgentRole.ORCHESTRATOR)
-                                setCurrentTask(null)
-                                toolHandlesContinuation = true
-                                // Return summary so orchestrator sees what was accomplished
-                                "Task completed. Summary: $summary"
+                                    "Task completed. Summary: $summary"
                                 }
                             }
                             "reflection" -> {
@@ -10169,7 +10227,7 @@ TODO status. Return via finish_task with JSON:
                                 reflectionResult.toJson()
                             }
                             "fetch_url" -> {
-                                val url = toolCall.arguments["url"] ?: ""
+                                val url = effectiveToolCall.arguments["url"] ?: ""
                                 agentService.fetchUrl(url).getOrThrow()
                             }
                             "view_image" -> {
@@ -10467,20 +10525,20 @@ TODO status. Return via finish_task with JSON:
                                 java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                             }
                             "file_line_count" -> {
-                                agentService.fileLineCount(toolCall.arguments["path"] ?: "").getOrThrow()
+                                agentService.fileLineCount(effectiveToolCall.arguments["path"] ?: "").getOrThrow()
                             }
                             "read_file_lines" -> {
-                                val path = toolCall.arguments["path"] ?: ""
-                                val startLine = toolCall.arguments["start_line"]?.toIntOrNull() ?: 1
-                                val endLine = toolCall.arguments["end_line"]?.toIntOrNull() ?: startLine + 50
+                                val path = effectiveToolCall.arguments["path"] ?: ""
+                                val startLine = effectiveToolCall.arguments["start_line"]?.toIntOrNull() ?: 1
+                                val endLine = effectiveToolCall.arguments["end_line"]?.toIntOrNull() ?: startLine + 50
                                 agentService.readFileLines(path, startLine, endLine).getOrThrow()
                             }
                             "web_search" -> {
-                                val query = toolCall.arguments["query"] ?: ""
+                                val query = effectiveToolCall.arguments["query"] ?: ""
                                 agentService.webSearch(query, ollamaService, settingsRepo).getOrThrow()
                             }
                             "kiwix_search" -> {
-                                val query = toolCall.arguments["query"] ?: ""
+                                val query = effectiveToolCall.arguments["query"] ?: ""
                                 agentService.kiwixSearch(query, ollamaService, settingsRepo).getOrThrow()
                             }
                             "kb_search" -> {
@@ -10521,25 +10579,25 @@ TODO status. Return via finish_task with JSON:
                                 KnowledgeBaseRepository(context, AppDatabase.getDatabase(context)).listSources(selectedIds)
                             }
                             "read_memory" -> {
-                                agentService.readMemory(toolCall.arguments["filename"] ?: "").getOrThrow()
+                                agentService.readMemory(effectiveToolCall.arguments["filename"] ?: "").getOrThrow()
                             }
                             "write_memory" -> {
-                                agentService.writeMemory(toolCall.arguments["filename"] ?: "", toolCall.arguments["content"] ?: "").getOrThrow()
+                                agentService.writeMemory(effectiveToolCall.arguments["filename"] ?: "", effectiveToolCall.arguments["content"] ?: "").getOrThrow()
                             }
                             "rewrite_memory" -> {
-                                agentService.rewriteMemory(toolCall.arguments["filename"] ?: "", toolCall.arguments["content"] ?: "").getOrThrow()
+                                agentService.rewriteMemory(effectiveToolCall.arguments["filename"] ?: "", effectiveToolCall.arguments["content"] ?: "").getOrThrow()
                             }
                             "delete_memory" -> {
-                                val fn = toolCall.arguments["filename"] ?: ""
-                                val sl = toolCall.arguments["start_line"]?.toIntOrNull() ?: 1
-                                val el = toolCall.arguments["end_line"]?.toIntOrNull() ?: sl
+                                val fn = effectiveToolCall.arguments["filename"] ?: ""
+                                val sl = effectiveToolCall.arguments["start_line"]?.toIntOrNull() ?: 1
+                                val el = effectiveToolCall.arguments["end_line"]?.toIntOrNull() ?: sl
                                 agentService.deleteMemoryLines(fn, sl, el).getOrThrow()
                             }
                             "list_memory" -> {
                                 agentService.listMemory().getOrThrow()
                             }
                             "run_tools_sequential" -> {
-                                val toolsJson = toolCall.arguments["tools_json"] ?: "[]"
+                                val toolsJson = effectiveToolCall.arguments["tools_json"] ?: "[]"
                                 val results = StringBuilder()
                                 try {
                                     val toolsArray = org.json.JSONArray(toolsJson)
@@ -13426,13 +13484,17 @@ TODO status. Return via finish_task with JSON:
                 }
             }
             if (toolCall.name == "finish_task") {
-                val summary = normalizedArgs["summary"].orEmpty()
-                val expectedAgent = activeCustom?.let { _currentAgent.value.name } ?: role.name
-                val parsed = runCatching { AgentRuntimeSupport.parseAgentResult(expectedAgent, summary) }.getOrNull()
-                if (role != AgentRole.ORCHESTRATOR && parsed == null) {
+                val finishAgentLabel = activeCustom?.name ?: role.name
+                runCatching {
+                    AgentRuntimeSupport.resolveFinishTaskPayload(
+                        agentLabel = finishAgentLabel,
+                        arguments = normalizedArgs
+                    )
+                }.getOrElse { error ->
                     return Result.failure(
                         IllegalArgumentException(
-                            "finish_task.summary must be a valid JSON object for the current role schema. Use the declared FINISH TASK JSON schema exactly."
+                            error.message
+                                ?: "finish_task arguments are not schema-valid."
                         )
                     )
                 }
@@ -13651,10 +13713,10 @@ TODO status. Return via finish_task with JSON:
                 visualTools.add(
                     AgentTool(
                         name = "finish_task",
-                        description = "Return a JSON visual testing report to the Orchestrator. Include status, tested_url, actions, findings, screens_observed, and recommendations.",
+                        description = "Signal that your one assigned todo-sized task is complete and return control to the Orchestrator. Plain-text summary plus optional status is valid. Rich role-specific JSON may be supplied inside summary, but is not required. Update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, and call reflection for the assigned task before finishing.",
                         parameters = mapOf(
-                            "summary" to "JSON visual testing report",
-                            "status" to "SUCCESS, FAILED, or BLOCKED"
+                            "summary" to "Required terminal summary. Use plain text, or optionally a JSON object containing role-specific evidence.",
+                            "status" to "Optional terminal status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED. Defaults to SUCCESS."
                         ),
                         requiredParams = listOf("summary")
                     )
@@ -14261,10 +14323,10 @@ TODO status. Return via finish_task with JSON:
                 tools.add(
                     AgentTool(
                         name = "finish_task",
-                        description = "Signal that your one assigned todo-sized task is complete. ALWAYS update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, then call reflection to verify this assigned task itself (not the whole implementation plan), then call this to return control to the Orchestrator.",
+                        description = "Signal that your one assigned todo-sized task is complete and return control to the Orchestrator. Plain-text summary plus optional status is valid. Rich role-specific JSON may be supplied inside summary, but is not required. Update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, and call reflection for the assigned task before finishing.",
                         parameters = mapOf(
-                            "summary" to "Brief summary of what was accomplished",
-                            "status" to "SUCCESS, FAILED, or BLOCKED"
+                            "summary" to "Required terminal summary. Use plain text, or optionally a JSON object containing role-specific evidence.",
+                            "status" to "Optional terminal status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED. Defaults to SUCCESS."
                         ),
                         requiredParams = listOf("summary")
                     )

@@ -1476,6 +1476,131 @@ internal object AgentRuntimeSupport {
         }
     }
 
+
+
+    data class FinishTaskResolution(
+        val canonicalSummary: String,
+        val result: AgentResult
+    )
+
+    /**
+     * Resolves the public finish_task schema into one canonical terminal payload.
+     * Plain-text summary + optional status is valid. A structured role-specific
+     * JSON object remains supported for agents which provide richer evidence.
+     */
+    fun resolveFinishTaskPayload(
+        agentLabel: String,
+        arguments: Map<String, String>
+    ): FinishTaskResolution {
+        val rawSummary = arguments["summary"]?.trim().orEmpty()
+        require(rawSummary.isNotBlank()) {
+            "finish_task.summary must not be blank."
+        }
+
+        fun normalizeStatus(raw: String?): String {
+            val normalized = raw
+                ?.trim()
+                ?.uppercase(Locale.ROOT)
+                .orEmpty()
+                .ifBlank { "SUCCESS" }
+            require(
+                normalized in setOf(
+                    "SUCCESS",
+                    "FAILED",
+                    "BLOCKED",
+                    "CANCELLED",
+                    "INTERRUPTED"
+                )
+            ) {
+                "finish_task.status must be SUCCESS, FAILED, BLOCKED, " +
+                    "CANCELLED, or INTERRUPTED."
+            }
+            return normalized
+        }
+
+        val suppliedStatus = arguments["status"]
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::normalizeStatus)
+        val payload = if (rawSummary.startsWith("{")) {
+            runCatching { JSONObject(rawSummary) }
+                .getOrElse {
+                    throw IllegalArgumentException(
+                        "finish_task.summary starts with `{` but is not valid JSON: " +
+                            (it.message ?: "invalid object")
+                    )
+                }
+        } else {
+            JSONObject().put("summary", rawSummary)
+        }
+
+        val embeddedStatus = payload
+            .optString("status", "")
+            .takeIf { it.isNotBlank() }
+            ?.let(::normalizeStatus)
+        if (
+            suppliedStatus != null &&
+            embeddedStatus != null &&
+            suppliedStatus != embeddedStatus
+        ) {
+            throw IllegalArgumentException(
+                "finish_task.status conflicts with summary.status " +
+                    "($suppliedStatus vs $embeddedStatus)."
+            )
+        }
+        val status = suppliedStatus ?: embeddedStatus ?: "SUCCESS"
+        payload.put("status", status)
+
+        val summaryText = payload
+            .optString("summary", "")
+            .trim()
+            .ifBlank {
+                if (rawSummary.startsWith("{")) {
+                    "Structured terminal report supplied."
+                } else {
+                    rawSummary
+                }
+            }
+        payload.put("summary", summaryText)
+
+        val role = agentLabel.trim().uppercase(Locale.ROOT)
+        val hasRoleSpecificFields = when (role) {
+            "CODER" -> payload.has("changed_files")
+            "REVIEWER" -> payload.has("findings")
+            "EXECUTOR" -> payload.has("commands_run") || payload.has("final_status")
+            "SUMMARIZER" -> payload.has("memory_files_updated")
+            else -> false
+        }
+
+        val result = if (hasRoleSpecificFields) {
+            runCatching { parseAgentResult(role, payload.toString()) }
+                .getOrElse { error ->
+                    if (status == "SUCCESS") {
+                        throw IllegalArgumentException(
+                            error.message
+                                ?: "finish_task structured report is invalid for $role."
+                        )
+                    }
+                    AgentResult.GenericResult(status, summaryText)
+                }
+        } else {
+            AgentResult.GenericResult(status, summaryText)
+        }
+
+        return FinishTaskResolution(
+            canonicalSummary = payload.toString(),
+            result = result
+        )
+    }
+
+    fun formatDirectoryListing(lines: List<String>): String =
+        buildString {
+            if (lines.isNotEmpty()) {
+                append(lines.joinToString("\n"))
+                append('\n')
+            }
+            append("there is nothing else in here")
+        }
+
     fun parseAgentResult(agentLabel: String, summary: String): AgentResult {
         val trimmed = summary.trim()
         if (!trimmed.startsWith("{")) {
