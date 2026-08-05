@@ -164,7 +164,8 @@ internal object AgentProjectControlPlane {
             AgentTodoStatus.NEEDS_FIX,
             AgentTodoStatus.READY_FOR_VERIFICATION,
             AgentTodoStatus.COMPLETED,
-            AgentTodoStatus.BLOCKED
+            AgentTodoStatus.BLOCKED,
+            AgentTodoStatus.CANCELLED
         ),
         AgentTodoStatus.READY_FOR_REVIEW to setOf(
             AgentTodoStatus.IN_PROGRESS,
@@ -960,6 +961,84 @@ internal object AgentProjectControlPlane {
         result.first
     }
 
+    internal fun cancelledTodoRecoveryForRole(
+        role: String
+    ): Pair<String, String?> = when (role.uppercase(Locale.ROOT)) {
+        "REVIEWER" ->
+            AgentTodoStatus.READY_FOR_REVIEW to "REVIEWER"
+        "EXECUTOR" ->
+            AgentTodoStatus.READY_FOR_VERIFICATION to "EXECUTOR"
+        "VISUAL_TESTER" ->
+            AgentTodoStatus.READY_FOR_VERIFICATION to "VISUAL_TESTER"
+        "SUMMARIZER" ->
+            AgentTodoStatus.NEEDS_FIX to "SUMMARIZER"
+        else ->
+            AgentTodoStatus.NEEDS_FIX to "CODER"
+    }
+
+    suspend fun cancelInvocationAndReleaseTodo(
+        context: Context,
+        invocationId: String,
+        reason: String
+    ): AgentProjectStateEntity? = withContext(Dispatchers.IO) {
+        val db = AppDatabase.getDatabase(context.applicationContext)
+        val updatedState = db.withTransaction {
+            val dao = db.agentWorkflowDao()
+            val invocation = dao.getInvocation(invocationId)
+                ?: return@withTransaction null
+            val boundedReason = reason.trim().ifBlank {
+                "Invocation cancelled."
+            }.take(1_000)
+            dao.finishInvocationExactlyOnce(
+                id = invocation.id,
+                status = "CANCELLED",
+                resultSummary = "Cancelled: $boundedReason",
+                errorClass = "CancellationException",
+                errorMessage = boundedReason
+            )
+            invocation.todoId?.let { todoId ->
+                val todo = dao.getTodoById(todoId)
+                if (
+                    todo != null &&
+                    todo.status == AgentTodoStatus.IN_PROGRESS &&
+                    todo.assignedInvocationId == invocation.id
+                ) {
+                    val recovery = cancelledTodoRecoveryForRole(
+                        invocation.agentClass
+                    )
+                    dao.completeTodoInvocationExactlyOnce(
+                        id = todo.id,
+                        invocationId = invocation.id,
+                        expectedStatus = AgentTodoStatus.IN_PROGRESS,
+                        newStatus = recovery.first,
+                        ownerRole = recovery.second,
+                        resultSummary = "Invocation cancelled: $boundedReason",
+                        blockReason = null,
+                        evidenceJson = todo.evidenceJson,
+                        completedAt = null
+                    )
+                }
+            }
+            dao.cancelInvocationPendingInputs(invocation.id)
+            dao.bumpProjectStateRevision(
+                conversationId = invocation.conversationId,
+                semanticEvent =
+                    "invocation_cancelled:${invocation.agentClass}"
+            )
+            unlockDependencyReadyTodos(dao, invocation.conversationId)
+            val todos = dao.getTodos(invocation.conversationId)
+            val next = chooseNextTodo(todos)
+            dao.setProjectCurrentTodo(
+                invocation.conversationId,
+                next?.phaseId,
+                next?.id
+            )
+            dao.getProjectState(invocation.conversationId)
+        }
+        cacheState(updatedState)
+        updatedState
+    }
+
     suspend fun recordWorkReportAndTransition(
         context: Context,
         invocationId: String,
@@ -1644,10 +1723,16 @@ internal object AgentProjectControlPlane {
         result: AgentResult,
         reportStatus: String
     ): Pair<String, String?> {
-        if (reportStatus == "BLOCKED") {
-            return AgentTodoStatus.BLOCKED to role.uppercase(Locale.ROOT)
+        val normalizedStatus = reportStatus.uppercase(Locale.ROOT)
+        when (normalizedStatus) {
+            "BLOCKED" ->
+                return AgentTodoStatus.BLOCKED to role.uppercase(Locale.ROOT)
+            "CANCELLED" ->
+                return cancelledTodoRecoveryForRole(role)
+            "INTERRUPTED" ->
+                return AgentTodoStatus.BLOCKED to role.uppercase(Locale.ROOT)
         }
-        val success = reportStatus == "SUCCESS"
+        val success = normalizedStatus == "SUCCESS"
         return when (role.uppercase(Locale.ROOT)) {
             "CODER" -> if (success) {
                 AgentTodoStatus.READY_FOR_REVIEW to "REVIEWER"
@@ -1687,6 +1772,7 @@ internal object AgentProjectControlPlane {
         }
     }
 
+
     private fun ownerRoleForTodoStatus(
         status: String,
         previousOwner: String?
@@ -1719,25 +1805,43 @@ internal object AgentProjectControlPlane {
             )
         }
         if (state.mode == "PLAN") {
-            return listOf(
-                "delegate repository discovery to CODEBASE_SCOUT",
-                "delegate external research to RESEARCHER only when needed",
-                "delegate plan synthesis to PLANNER",
-                "ask any remaining blocking user question",
-                "submit one final propose_plan"
-            )
+            return buildList {
+                if (AgentService.isBuiltInAgentEnabled("CODEBASE_SCOUT")) {
+                    add("delegate repository discovery to CODEBASE_SCOUT")
+                }
+                if (AgentService.isBuiltInAgentEnabled("RESEARCHER")) {
+                    add("delegate external or knowledge research to RESEARCHER when needed")
+                }
+                if (AgentService.isBuiltInAgentEnabled("PLANNER")) {
+                    add("delegate plan synthesis to PLANNER")
+                }
+                add("ask any remaining blocking user question")
+                add("submit one final propose_plan")
+            }
         }
         return when (currentTodo?.status) {
             AgentTodoStatus.READY,
             AgentTodoStatus.NEEDS_FIX ->
-                listOf(
-                    "delegate ${currentTodo.id} to CODER",
-                    "include the TODO acceptance criteria and latest relevant report"
-                )
+                if (AgentService.isBuiltInAgentEnabled("CODER")) {
+                    listOf(
+                        "delegate ${currentTodo.id} to CODER",
+                        "include the TODO acceptance criteria and latest relevant report"
+                    )
+                } else {
+                    listOf("enable CODER in Agent settings or resolve the TODO manually")
+                }
             AgentTodoStatus.READY_FOR_REVIEW ->
-                listOf("delegate ${currentTodo.id} to REVIEWER")
+                if (AgentService.isBuiltInAgentEnabled("REVIEWER")) {
+                    listOf("delegate ${currentTodo.id} to REVIEWER")
+                } else {
+                    listOf("enable REVIEWER or explicitly accept review being disabled")
+                }
             AgentTodoStatus.READY_FOR_VERIFICATION ->
-                listOf("delegate ${currentTodo.id} to EXECUTOR")
+                if (AgentService.isBuiltInAgentEnabled("EXECUTOR")) {
+                    listOf("delegate ${currentTodo.id} to EXECUTOR")
+                } else {
+                    listOf("enable EXECUTOR or ask the user how to verify the TODO")
+                }
             AgentTodoStatus.BLOCKED ->
                 listOf(
                     "read the blocker evidence",
@@ -1754,6 +1858,7 @@ internal object AgentProjectControlPlane {
                 listOf("read project_state and follow the current TODO state")
         }
     }
+
 
     private fun boundedSections(
         sections: List<String>,
@@ -1845,6 +1950,8 @@ internal object AgentProjectControlPlane {
         when (status.uppercase(Locale.ROOT)) {
             "SUCCESS", "PASSED", "PASS", "COMPLETED" -> "SUCCESS"
             "BLOCKED" -> "BLOCKED"
+            "CANCELLED", "CANCELED" -> "CANCELLED"
+            "INTERRUPTED" -> "INTERRUPTED"
             else -> "FAILED"
         }
 

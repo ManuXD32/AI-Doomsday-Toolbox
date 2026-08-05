@@ -152,6 +152,22 @@ class AgentServiceToolVisibilityTest {
     }
 
     @Test
+    fun `researcher remains advertised when online research providers are disabled`() {
+        val callAgent = AgentService.getAgentTools(
+            role = AgentService.Companion.AgentRole.ORCHESTRATOR,
+            settingsRepo = mockAgentSettings(
+                webSearchEnabled = false,
+                kiwixEnabled = false,
+                imageGenerationEnabled = false,
+                backgroundRemovalEnabled = false,
+                visionEnabled = false
+            )
+        ).single { it.name == "call_agent" }
+
+        assertTrue(callAgent.parameters.getValue("agent").contains("RESEARCHER"))
+    }
+
+    @Test
     fun `LiteRT agent history preserves tool call and tool result roles`() {
         val call = OllamaService.ToolCall(
             name = "read_file",

@@ -106,6 +106,7 @@ fun AgentComposerHost(
 fun AgentTopBar(
     onShowDashboard: () -> Unit,
     onShowAgentSettings: () -> Unit,
+    onShowToolSettings: () -> Unit,
     onShowSettings: () -> Unit,
     onShowSetupInfo: () -> Unit,
     onShowProjectManagement: () -> Unit,
@@ -163,6 +164,11 @@ fun AgentTopBar(
                         text = { Text(stringResource(R.string.agent_settings_title)) },
                         onClick = { showMenu = false; onShowAgentSettings() },
                         leadingIcon = { Icon(Icons.Default.Person, null) }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.agent_tool_settings_title)) },
+                        onClick = { showMenu = false; onShowToolSettings() },
+                        leadingIcon = { Icon(Icons.Default.Tune, null) }
                     )
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.agent_custom_tools_title)) },

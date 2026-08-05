@@ -3495,6 +3495,10 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         val autoReflectionEnabled = _autoReflectionEnabled.asStateFlow()
 
         fun setBuiltInAgentEnabled(agentName: String, enabled: Boolean) {
+            if (agentName.equals("ORCHESTRATOR", ignoreCase = true)) {
+                return
+            }
+
             val current = _disabledBuiltInAgents.value.toMutableSet()
             if (enabled) current.remove(agentName.uppercase()) else current.add(agentName.uppercase())
             _disabledBuiltInAgents.value = current
@@ -3504,17 +3508,41 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         }
 
         fun loadDisabledAgents() {
-            val prefs = com.example.llamadroid.LlamaApplication.instance.getSharedPreferences("settings", 0)
-            _disabledBuiltInAgents.value = prefs.getStringSet("disabled_built_in_agents", emptySet()) ?: emptySet()
-            _disabledStandardAgentTools.value = prefs.getStringSet("disabled_standard_agent_tools", emptySet()) ?: emptySet()
-            _autoReflectionEnabled.value = prefs.getBoolean("agent_auto_reflection_enabled", true)
+            val prefs =
+                com.example.llamadroid.LlamaApplication.instance
+                    .getSharedPreferences("settings", 0)
+            _disabledBuiltInAgents.value =
+                prefs.getStringSet("disabled_built_in_agents", emptySet())
+                    .orEmpty()
+                    .map { it.uppercase(java.util.Locale.ROOT) }
+                    .filter { it != "ORCHESTRATOR" }
+                    .toSet()
+            _disabledStandardAgentTools.value =
+                prefs.getStringSet(
+                    "disabled_standard_agent_tools",
+                    emptySet()
+                )
+                    .orEmpty()
+                    .filterNot(::isCriticalAgentProtocolTool)
+                    .toSet()
+            _autoReflectionEnabled.value =
+                prefs.getBoolean("agent_auto_reflection_enabled", true)
         }
+
 
         fun isBuiltInAgentEnabled(agentName: String): Boolean {
             return agentName.uppercase() !in _disabledBuiltInAgents.value
         }
 
         fun setStandardAgentToolEnabled(toolName: String, enabled: Boolean) {
+            if (!enabled && isCriticalAgentProtocolTool(toolName)) {
+                addDebugLog(
+                    "🔒 Ignoring request to disable protocol-critical tool: " +
+                        toolName
+                )
+                return
+            }
+
             val normalized = toolName.trim()
             if (normalized.isBlank()) return
             val current = _disabledStandardAgentTools.value.toMutableSet()
@@ -4689,18 +4717,42 @@ TODO status. Return via finish_task with JSON:
          * End current session and return to parent
          * @param summary Summary of what was accomplished to pass to parent
          */
-        fun endSession(summary: String): CompletedAgentSession? {
+        fun endSession(
+            summary: String,
+            forcedResult: AgentResult? = null
+        ): CompletedAgentSession? {
             val currentId = _currentSessionId.value ?: return null
             val currentSession = _sessions.value[currentId] ?: return null
             val parentId = currentSession.parentSessionId
-            val parsedResult = runCatching {
-                AgentRuntimeSupport.parseAgentResult(currentSession.agentType, summary)
-            }.getOrElse {
+            val trimmedSummary = summary.trim()
+            val parsedResult = forcedResult ?: if (
+                !trimmedSummary.startsWith("{")
+            ) {
                 AgentResult.GenericResult(
-                    status = if (summary.startsWith("ERROR", ignoreCase = true)) "FAILED" else "SUCCESS",
-                    summary = summary
+                    status = "FAILED",
+                    summary = trimmedSummary.ifBlank {
+                        "Specialist ended without a structured finish_task " +
+                            "result."
+                    }
                 )
+            } else {
+                runCatching {
+                    AgentRuntimeSupport.parseAgentResult(
+                        currentSession.agentType,
+                        trimmedSummary
+                    )
+                }.getOrElse {
+                    AgentResult.GenericResult(
+                        status = inferAgentTerminalStatusFromSummary(
+                            trimmedSummary
+                        ),
+                        summary = trimmedSummary
+                    )
+                }
             }
+            val terminal = resolveAgentTerminalPresentation(
+                parsedResult.status
+            )
             val completed = CompletedAgentSession(
                 sessionId = currentId,
                 agentLabel = currentSession.agentType,
@@ -4710,27 +4762,46 @@ TODO status. Return via finish_task with JSON:
                 evidence = buildSessionEvidenceBundle(currentId)
             )
 
-            addDebugLog("📂 Ending session ${currentId.take(8)} (${currentSession.agentType})")
-
-            // Clean up ended session to save memory
+            addDebugLog(
+                "📂 Ending session ${currentId.take(8)} " +
+                    "(${currentSession.agentType}) status=" +
+                    terminal.invocationStatus
+            )
             _sessions.value = _sessions.value - currentId
             _currentSessionId.value = parentId
             rememberCompletedSession(completed)
 
             if (parentId != null) {
-                addDebugLog("📂 Returned to parent session ${parentId.take(8)}")
+                addDebugLog(
+                    "📂 Returned to parent session ${parentId.take(8)}"
+                )
             }
             when {
-                currentSession.agentType.equals("SUMMARIZER", ignoreCase = true) -> {
-                    clearMemoryDirty("Summarizer session completed and refreshed project memory.")
+                currentSession.agentType.equals(
+                    "SUMMARIZER",
+                    ignoreCase = true
+                ) && terminal.kind == AgentTerminalKind.SUCCESS -> {
+                    clearMemoryDirty(
+                        "Summarizer session completed and refreshed " +
+                            "project memory."
+                    )
                 }
-                summary.isNotBlank() && !summary.startsWith("ERROR", ignoreCase = true) -> {
-                    markMemoryDirty("${currentSession.agentType} completed work that should be recorded in memory.")
+                terminal.kind == AgentTerminalKind.SUCCESS -> {
+                    markMemoryDirty(
+                        "${currentSession.agentType} completed work that " +
+                            "should be recorded in memory."
+                    )
                 }
             }
-            recordAgentEvent("agent_session_end", "Finished ${currentSession.agentType} session", summary)
+            recordAgentEvent(
+                "agent_session_end",
+                "Ended ${currentSession.agentType} session: " +
+                    terminal.invocationStatus,
+                summary
+            )
             return completed
         }
+
 
         private fun completePendingDelegation(
             context: Context,
@@ -4756,18 +4827,12 @@ TODO status. Return via finish_task with JSON:
                             evidence = completed.evidence
                         )
                     val parentSummary = transition.compactEnvelope()
+                    val terminal = resolveAgentTerminalPresentation(
+                        completed.result.status
+                    )
                     val output = buildToolResultEnvelope(
                         toolName = "call_agent",
-                        status = if (
-                            completed.result.status.equals(
-                                "SUCCESS",
-                                ignoreCase = true
-                            )
-                        ) {
-                            "ok"
-                        } else {
-                            "error"
-                        },
+                        status = terminal.envelopeStatus,
                         summary = parentSummary,
                         nextHint =
                             "Read project_state. Follow the runtime-owned TODO " +
@@ -4787,28 +4852,36 @@ TODO status. Return via finish_task with JSON:
                         .agentWorkflowDao()
                         .finishInvocationExactlyOnce(
                             id = pending.invocationId,
-                            status = if (
-                                completed.result.status.equals(
-                                    "SUCCESS",
-                                    ignoreCase = true
-                                )
-                            ) {
-                                "COMPLETED"
-                            } else {
-                                "FAILED"
-                            },
+                            status = terminal.invocationStatus,
                             resultSummary = parentSummary.take(4_000)
                         )
 
-                    postOrchestratorProgressUpdate(
-                        context = context,
-                        phase = progressPhaseForAgent(
-                            pending.agentLabel
-                        ),
-                        summary = context.getString(
-                            R.string.agent_progress_agent_finished,
+                    val progressSummary = when (terminal.kind) {
+                        AgentTerminalKind.SUCCESS -> context.getString(
+                            R.string.agent_progress_agent_succeeded,
                             pending.agentLabel
                         )
+                        AgentTerminalKind.BLOCKED -> context.getString(
+                            R.string.agent_progress_agent_blocked,
+                            pending.agentLabel
+                        )
+                        AgentTerminalKind.CANCELLED -> context.getString(
+                            R.string.agent_progress_agent_cancelled,
+                            pending.agentLabel
+                        )
+                        AgentTerminalKind.INTERRUPTED -> context.getString(
+                            R.string.agent_progress_agent_interrupted,
+                            pending.agentLabel
+                        )
+                        AgentTerminalKind.FAILED -> context.getString(
+                            R.string.agent_progress_agent_failed,
+                            pending.agentLabel
+                        )
+                    }
+                    postOrchestratorProgressUpdate(
+                        context = context,
+                        phase = progressPhaseForAgent(pending.agentLabel),
+                        summary = progressSummary
                     )
                     val deliveredGuidance =
                         drainPendingUrgentUserGuidance(
@@ -4819,7 +4892,9 @@ TODO status. Return via finish_task with JSON:
                         agentService.persistVisibleRuntimeStateNow(
                             reason =
                                 "Committed structured delegation report: " +
-                                    pending.agentLabel
+                                    pending.agentLabel +
+                                    " status=" +
+                                    terminal.invocationStatus
                         )
                     if (checkpoint.isFailure) {
                         pauseForNeedsDirection(
@@ -4830,16 +4905,18 @@ TODO status. Return via finish_task with JSON:
                         )
                         return@launch
                     }
+                    val continuationReason =
+                        "delegation ${pending.agentLabel} " +
+                            terminal.continuationLabel
                     enqueueAgentContinuation(
                         context = context,
                         ollamaService = ollamaService,
                         settingsRepo = settingsRepo,
                         agentService = agentService,
                         reason = if (deliveredGuidance > 0) {
-                            "delegation ${pending.agentLabel} completed " +
-                                "with user guidance"
+                            "$continuationReason with user guidance"
                         } else {
-                            "delegation ${pending.agentLabel} completed"
+                            continuationReason
                         },
                         runEpoch = runEpoch
                     )
@@ -4882,6 +4959,7 @@ TODO status. Return via finish_task with JSON:
             }
             return true
         }
+
 
 
 
@@ -5730,14 +5808,18 @@ TODO status. Return via finish_task with JSON:
             val appContext = com.example.llamadroid.LlamaApplication.instance
             cancelledInvocationId?.let { invocationId ->
                 agentScope.launch(Dispatchers.IO) {
-                    val dao = AppDatabase.getDatabase(appContext).agentWorkflowDao()
-                    dao.finishInvocationExactlyOnce(
-                        id = invocationId,
-                        status = "CANCELLED",
-                        resultSummary = null,
-                        errorMessage = "Stopped by user."
-                    )
-                    dao.cancelInvocationPendingInputs(invocationId)
+                    runCatching {
+                        AgentProjectControlPlane.cancelInvocationAndReleaseTodo(
+                            context = appContext,
+                            invocationId = invocationId,
+                            reason = "Stopped by user."
+                        )
+                    }.onFailure { error ->
+                        addDebugLog(
+                            "⚠️ Failed to release cancelled invocation " +
+                                "$invocationId: ${error.message}"
+                        )
+                    }
                 }
             }
             setIsLoading(false, appContext.getString(R.string.agent_status_interrupted))
@@ -8782,12 +8864,43 @@ TODO status. Return via finish_task with JSON:
                                     agentRole = currentAgent.name
                                 ))
                             }
-                            // If sub-agent failed, return to orchestrator so user isn't stuck
+                            // Commit a real failed delegation result before returning to
+                            // the parent. The previous code ended the child session but
+                            // never completed the pending call_agent record.
                             if (currentAgent != AgentRole.ORCHESTRATOR) {
-                                addDebugLog("🔙 Sub-agent ${currentAgent.name} failed. Returning to Orchestrator.")
-                                endSession("ERROR: ${e.message}")
-                                setCurrentAgent(AgentRole.ORCHESTRATOR)
-                                setCurrentTask(null)
+                                addDebugLog(
+                                    "🔙 Sub-agent ${currentAgent.name} failed. " +
+                                        "Returning a failed report to the parent."
+                                )
+                                val failureSummary = JSONObject().apply {
+                                    put("status", "FAILED")
+                                    put(
+                                        "summary",
+                                        e.message ?: e.javaClass.simpleName
+                                    )
+                                }.toString()
+                                val completed = endSession(
+                                    failureSummary,
+                                    AgentResult.GenericResult(
+                                        status = "FAILED",
+                                        summary =
+                                            e.message
+                                                ?: e.javaClass.simpleName
+                                    )
+                                )
+                                if (
+                                    !completePendingDelegation(
+                                        context,
+                                        ollamaService,
+                                        settingsRepo,
+                                        agentService,
+                                        completed,
+                                        runEpoch
+                                    )
+                                ) {
+                                    setCurrentAgent(AgentRole.ORCHESTRATOR)
+                                    setCurrentTask(null)
+                                }
                             }
                         }
                     }
@@ -8857,6 +8970,63 @@ TODO status. Return via finish_task with JSON:
                     syncAssistantToolProgress(toolCall)
 
                     val validatedToolCall = validateToolCall(toolCall, _currentAgent.value, _activeCustomAgent.value, settingsRepo).getOrElse { error ->
+                        if (error is AgentToolPolicyException) {
+                            val policyMessage =
+                                error.message
+                                    ?: "The requested tool call is blocked by the current runtime policy."
+                            val policyFailureCount = noteRepeatedFailure(
+                                toolCall.name,
+                                toolCall.arguments,
+                                "policy:${error.policyCode}"
+                            )
+                            val policyOutput = buildToolResultEnvelope(
+                                toolName = toolCall.name,
+                                status = "blocked",
+                                summary = policyMessage,
+                                nextHint = error.recoveryHint
+                            )
+                            syncAssistantToolProgress(toolCall, policyOutput)
+                            addDebugLog(
+                                "🧭 Tool policy blocked ${toolCall.name}: " +
+                                    "${error.policyCode}"
+                            )
+                            recordAgentEvent(
+                                "tool_policy_blocked",
+                                "Runtime policy blocked ${toolCall.name}",
+                                "code=${error.policyCode} message=$policyMessage"
+                            )
+                            addMessage(
+                                ChatMessage(
+                                    role = "tool",
+                                    content = policyOutput,
+                                    toolName = toolCall.name,
+                                    toolCallId = toolCall.id,
+                                    toolOutput = policyMessage
+                                )
+                            )
+                            ensureAgentRunActive(runEpoch)
+                            if (policyFailureCount > 1) {
+                                pauseForNeedsDirection(
+                                    context,
+                                    "Repeated runtime-policy violation for " +
+                                        toolCall.name +
+                                        ". " +
+                                        error.recoveryHint
+                                )
+                                return@launch
+                            }
+                            enqueueAgentContinuation(
+                                context = context,
+                                ollamaService = ollamaService,
+                                settingsRepo = settingsRepo,
+                                agentService = agentService,
+                                reason = "tool policy blocked",
+                                recoveryInstruction = error.recoveryHint,
+                                recoveryMode = true,
+                                runEpoch = runEpoch
+                            )
+                            return@launch
+                        }
                         val validationError = error.message ?: "Invalid tool call."
                         val failureCount = noteRepeatedFailure(toolCall.name, toolCall.arguments, validationError)
                         addDebugLog("⚠️ Invalid tool call ${toolCall.name}: $validationError")
@@ -9320,6 +9490,65 @@ TODO status. Return via finish_task with JSON:
                                     ?.trim()
                                     ?.uppercase()
                                     ?: "CODEBASE_SCOUT"
+                                if (
+                                    validatedToolCall.approvalRequired &&
+                                    !settingsRepo.autoMode.value &&
+                                    !isForced
+                                ) {
+                                    addMessage(
+                                        ChatMessage(
+                                            role = "assistant",
+                                            content = if (
+                                                _currentPlanningModeEnabled.value
+                                            ) {
+                                                context.getString(
+                                                    R.string
+                                                        .agent_request_plan_delegation,
+                                                    agentName
+                                                )
+                                            } else {
+                                                agentService
+                                                    .buildApprovalRequestText(
+                                                        "call_agent",
+                                                        validatedToolCall
+                                                    )
+                                            },
+                                            toolName = toolCall.name,
+                                            toolArgs =
+                                                validatedToolCall
+                                                    .normalizedArguments,
+                                            needsApproval = true,
+                                            pendingToolCall =
+                                                validatedToolCall.toolCall,
+                                            agentRole = assistantAgentRole,
+                                            customAgentName =
+                                                assistantCustomAgentName
+                                        )
+                                    )
+                                    setStatusText(
+                                        context.getString(
+                                            R.string.agent_status_awaiting_approval
+                                        )
+                                    )
+                                    agentService.buildAttentionPreview(
+                                        "call_agent",
+                                        validatedToolCall
+                                    ).let { (title, body) ->
+                                        agentService.notifyAgentAttention(
+                                            UnifiedNotificationManager
+                                                .AgentAttentionReason
+                                                .APPROVAL_REQUIRED,
+                                            title,
+                                            body
+                                        )
+                                    }
+                                    agentService.persistVisibleRuntimeStateNow(
+                                        "Agent delegation approval requested for " +
+                                            agentName +
+                                            "."
+                                    )
+                                    return@launch
+                                }
                                 val requestedInvocationName =
                                     normalizeAgentInvocationName(
                                         toolCall.arguments["name"].orEmpty()
@@ -9518,7 +9747,6 @@ TODO status. Return via finish_task with JSON:
                                     }
                                 }
 
-                                var delegationSummary: String? = null
                                 postOrchestratorProgressUpdate(
                                     context = context,
                                     phase = progressPhaseForAgent(agentName),
@@ -9533,6 +9761,24 @@ TODO status. Return via finish_task with JSON:
                                         parentCustomAgent
                                     setCurrentAgent(parentAgent)
                                     setCurrentTask(parentTask)
+                                }
+
+                                fun discardFailedChildSession() {
+                                    val failedSessionId =
+                                        _currentSessionId.value
+                                    if (
+                                        failedSessionId != null &&
+                                        failedSessionId != parentSessionId
+                                    ) {
+                                        pendingDelegations.remove(
+                                            failedSessionId
+                                        )
+                                        buildSessionEvidenceBundle(
+                                            failedSessionId
+                                        )
+                                        _sessions.value =
+                                            _sessions.value - failedSessionId
+                                    }
                                 }
 
                                 suspend fun markFailedClaim(
@@ -9626,10 +9872,7 @@ TODO status. Return via finish_task with JSON:
                                                 "$agentName failed: " +
                                                 error.message
                                         )
-                                        endSession(
-                                            "ERROR: Agent $agentName failed: " +
-                                                error.message
-                                        )
+                                        discardFailedChildSession()
                                         restoreParentAgentContext()
                                         activeInvocationId = null
                                         AppDatabase.getDatabase(
@@ -9648,13 +9891,10 @@ TODO status. Return via finish_task with JSON:
                                             error.message
                                                 ?: error.javaClass.simpleName
                                         )
-                                        delegationSummary =
-                                            "ERROR: Agent $agentName failed: " +
-                                                (
-                                                    error.message
-                                                        ?: error.javaClass
-                                                            .simpleName
-                                                    )
+                                        throw AgentDelegationStartException(
+                                            agentLabel = agentName,
+                                            cause = error
+                                        )
                                     }
                                 } else {
                                     val customAgent =
@@ -9746,12 +9986,7 @@ TODO status. Return via finish_task with JSON:
                                                     " failed: " +
                                                     error.message
                                             )
-                                            endSession(
-                                                "ERROR: Custom agent " +
-                                                    customAgent.name +
-                                                    " failed: " +
-                                                    error.message
-                                            )
+                                            discardFailedChildSession()
                                             restoreParentAgentContext()
                                             activeInvocationId = null
                                             AppDatabase.getDatabase(
@@ -9772,16 +10007,15 @@ TODO status. Return via finish_task with JSON:
                                                     ?: error.javaClass
                                                         .simpleName
                                             )
-                                            delegationSummary =
-                                                "ERROR: Custom agent " +
-                                                    customAgent.displayName +
-                                                    " failed: " +
-                                                    (
-                                                        error.message
-                                                            ?: error
-                                                                .javaClass
-                                                                .simpleName
-                                                        )
+                                            throw AgentDelegationStartException(
+                                                agentLabel =
+                                                    customAgent.displayName
+                                                        .takeIf {
+                                                            it.isNotBlank()
+                                                        }
+                                                        ?: customAgent.name,
+                                                cause = error
+                                            )
                                         }
                                     } else {
                                         throw IllegalArgumentException(
@@ -9791,8 +10025,7 @@ TODO status. Return via finish_task with JSON:
                                     }
                                 }
 
-                                delegationSummary
-                                    ?: "Delegated to $agentName"
+                                "Delegated to $agentName"
                             }
                             "propose_plan" -> {
                                 val plan = toolCall.arguments["plan"] ?: ""
@@ -10762,9 +10995,39 @@ TODO status. Return via finish_task with JSON:
             }
         }
 
-        private fun mandatoryCustomAgentToolNames(): Set<String> {
-            return setOf("read_memory", "write_memory", "list_memory", "finish_task", "reflection")
+        private fun mandatoryCustomAgentToolNames(
+            activeCustom: com.example.llamadroid.data.db.CustomAgentEntity? =
+                _activeCustomAgent.value
+        ): Set<String> {
+            val configuredTools = activeCustom
+                ?.let {
+                    AgentRuntimeSupport.parseAllowedToolNames(
+                        it.allowedToolsJson
+                    )
+                }
+                .orEmpty()
+            return if (
+                _currentPlanningModeEnabled.value &&
+                configuredTools.isNotEmpty() &&
+                isPlanSafeCustomAgentToolSet(configuredTools)
+            ) {
+                setOf(
+                    "read_memory",
+                    "list_memory",
+                    "finish_task",
+                    "reflection"
+                )
+            } else {
+                setOf(
+                    "read_memory",
+                    "write_memory",
+                    "list_memory",
+                    "finish_task",
+                    "reflection"
+                )
+            }
         }
+
 
         private fun defaultCustomAgentToolNames(): Set<String> {
             return setOf(
@@ -10802,7 +11065,7 @@ TODO status. Return via finish_task with JSON:
             val allowedTools = if (configuredTools.isEmpty()) {
                 defaultCustomAgentToolNames()
             } else {
-                configuredTools + mandatoryCustomAgentToolNames()
+                configuredTools + mandatoryCustomAgentToolNames(activeCustom)
             }
             return ToolCapabilityPolicy(
                 agentLabel = role.name,
@@ -12973,17 +13236,30 @@ TODO status. Return via finish_task with JSON:
             activeCustom: com.example.llamadroid.data.db.CustomAgentEntity? = _activeCustomAgent.value,
             settingsRepo: com.example.llamadroid.data.SettingsRepository? = null
         ): Result<ValidatedToolCall> {
-            // Do this before resolving the advertised tool list. A model can
-            // emit a stale or hand-crafted build call after Plan mode hid it;
-            // the model must receive an actionable, localized repair result
-            // instead of a generic "not available" error.
-            if (isPlanModeToolBlocked(_currentPlanningModeEnabled.value, toolCall.name)) {
-                val appContext = com.example.llamadroid.LlamaApplication.instance
-                return Result.failure(
-                    IllegalStateException(
-                        appContext.getString(R.string.agent_plan_mode_build_tool_blocked, toolCall.name)
-                    )
-                )
+            // Evaluate Plan safety with the complete call arguments. In particular,
+            // call_agent is allowed for read-only planning specialists and must not
+            // be rejected merely because Build-mode workers share the same tool.
+            val planSafeCustomAgentNames = _loadedCustomAgents.value
+                .filter { custom ->
+                    custom.isEnabled &&
+                        isPlanSafeCustomAgentToolSet(
+                            AgentRuntimeSupport.parseAllowedToolNames(
+                                custom.allowedToolsJson
+                            )
+                        )
+                }
+                .flatMap { custom -> listOf(custom.name, custom.displayName) }
+                .map { it.trim().uppercase(java.util.Locale.ROOT) }
+                .filter { it.isNotBlank() }
+                .toSet()
+            val runtimePolicy = evaluatePlanModeToolPolicy(
+                isPlanMode = _currentPlanningModeEnabled.value,
+                toolName = toolCall.name,
+                arguments = toolCall.arguments,
+                planSafeCustomAgentNames = planSafeCustomAgentNames
+            )
+            if (!runtimePolicy.allowed) {
+                return Result.failure(AgentToolPolicyException(runtimePolicy))
             }
             val tool = getAgentTools(role, activeCustom, settingsRepo).find { it.name == toolCall.name }
                 ?: return Result.failure(IllegalArgumentException("Tool `${toolCall.name}` is not available to the current agent."))
@@ -13105,6 +13381,50 @@ TODO status. Return via finish_task with JSON:
             if (toolCall.name == "call_agent" && (_currentAgent.value != AgentRole.ORCHESTRATOR || activeCustom != null)) {
                 return Result.failure(IllegalArgumentException("Only the Orchestrator can call another agent."))
             }
+            if (toolCall.name == "call_agent") {
+                val requestedRole = when (
+                    normalizedArgs["agent"]
+                        ?.trim()
+                        ?.uppercase(java.util.Locale.ROOT)
+                ) {
+                    "CODEBASE_SCOUT", "SCOUT" -> "CODEBASE_SCOUT"
+                    "RESEARCHER", "RESEARCH" -> "RESEARCHER"
+                    "PLANNER" -> "PLANNER"
+                    "CODER" -> "CODER"
+                    "REVIEWER" -> "REVIEWER"
+                    "EXECUTOR" -> "EXECUTOR"
+                    "VISUAL_TESTER" -> "VISUAL_TESTER"
+                    "SUMMARIZER", "STATE_CURATOR" -> "SUMMARIZER"
+                    else -> null
+                }
+                if (
+                    requestedRole != null &&
+                    (
+                        !isBuiltInAgentEnabled(requestedRole) ||
+                            (
+                                requestedRole == "VISUAL_TESTER" &&
+                                    settingsRepo
+                                        ?.agentVisualTestingEnabled
+                                        ?.value != true
+                                )
+                        )
+                ) {
+                    return Result.failure(
+                        AgentToolPolicyException(
+                            AgentToolPolicyDecision(
+                                allowed = false,
+                                code = "AGENT_DISABLED",
+                                message =
+                                    "$requestedRole is disabled in Agent settings.",
+                                recoveryHint =
+                                    "Choose an enabled specialist or enable " +
+                                        "$requestedRole in Agent settings. " +
+                                        "Do not retry the disabled agent unchanged."
+                            )
+                        )
+                    )
+                }
+            }
             if (toolCall.name == "finish_task") {
                 val summary = normalizedArgs["summary"].orEmpty()
                 val expectedAgent = activeCustom?.let { _currentAgent.value.name } ?: role.name
@@ -13138,7 +13458,17 @@ TODO status. Return via finish_task with JSON:
             }
 
             val customMode = customTool?.let { AgentRuntimeSupport.inferCustomToolExecutionMode(it.commandTemplate) }
+            val readOnlyPlanDelegation =
+                _currentPlanningModeEnabled.value &&
+                    toolCall.name == "call_agent" &&
+                    runtimePolicy.allowed
+            val requireReadOnlyPlanDelegationApproval =
+                settingsRepo
+                    ?.agentPlanReadOnlyDelegationApprovalRequired
+                    ?.value
+                    ?: false
             val riskLevel = when {
+                readOnlyPlanDelegation -> ToolRiskLevel.MEDIUM
                 customTool != null && customMode == CustomToolExecutionMode.SHELL -> ToolRiskLevel.CRITICAL
                 toolCall.name in setOf("run_command", "cancel_command", "send_command_input", "force_stop_project_run") -> ToolRiskLevel.HIGH
                 toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder", "run_project", "install_python_dependency") -> ToolRiskLevel.HIGH
@@ -13147,6 +13477,8 @@ TODO status. Return via finish_task with JSON:
                 else -> ToolRiskLevel.LOW
             }
             val approvalRequired = when {
+                readOnlyPlanDelegation ->
+                    requireReadOnlyPlanDelegationApproval
                 customTool != null -> customTool.needsApproval || customMode == CustomToolExecutionMode.SHELL
                 toolCall.name == "run_command" -> true
                 toolCall.name in setOf("write_file", "edit_lines", "apply_patch", "call_agent", "propose_plan", "generate_image", "remove_image_background", "create_folder", "run_project", "force_stop_project_run", "install_python_dependency") -> true
@@ -13860,7 +14192,7 @@ TODO status. Return via finish_task with JSON:
                 val disabled = _disabledBuiltInAgents.value
                 val builtInList = buildList {
                     add("CODEBASE_SCOUT")
-                    if (webSearchEnabled || kiwixEnabled) add("RESEARCHER")
+                    add("RESEARCHER")
                     add("PLANNER")
                     add("CODER")
                     add("REVIEWER")
@@ -13932,7 +14264,7 @@ TODO status. Return via finish_task with JSON:
                         description = "Signal that your one assigned todo-sized task is complete. ALWAYS update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, then call reflection to verify this assigned task itself (not the whole implementation plan), then call this to return control to the Orchestrator.",
                         parameters = mapOf(
                             "summary" to "Brief summary of what was accomplished",
-                            "status" to "SUCCESS or FAILED"
+                            "status" to "SUCCESS, FAILED, or BLOCKED"
                         ),
                         requiredParams = listOf("summary")
                     )
@@ -13999,7 +14331,10 @@ TODO status. Return via finish_task with JSON:
 
             val distinctTools = filteredTools
                 .distinctBy { it.name }
-                .filter { it.name !in _disabledStandardAgentTools.value }
+                .filter {
+                    it.name !in _disabledStandardAgentTools.value ||
+                        isCriticalAgentProtocolTool(it.name)
+                }
             // Keep schemas frozen across Plan → Build so prompt caches survive approval.
             // validateToolCall still rejects every build mutation while Plan mode is active.
             return stableAgentToolSchemaAcrossModes(distinctTools, _currentPlanningModeEnabled.value)

@@ -76,16 +76,253 @@ internal fun selectMemoryRolloverLines(
 
 /** Kept outside the frozen prefix so Plan → Build preserves prompt-cache ownership. */
 internal fun buildAgentRuntimeModeControl(isPlanMode: Boolean, isOrchestrator: Boolean): String =
-    if (isPlanMode) {
-        "CURRENT RUNTIME MODE: PLAN. This is a strict read-only boundary: inspect, research, manage todos, ask at least one structured question and receive an answer, then propose_plan and wait. Build tools are runtime-blocked even though their schemas remain visible. Remember to ask questions to the user before doing the plan proposal and that the plan must contain several microsteps to be able to really delegate and guide the agents."
-    } else if (isOrchestrator) {
-        "CURRENT RUNTIME MODE: BUILD. Implement the approved plan. First call todo_write to create or update the durable todo list, then keep it current after each meaningful implementation, review, recovery, and verification checkpoint."
-    } else {
-        "CURRENT RUNTIME MODE: BUILD. Complete only the assigned work and return control to the Orchestrator."
+    when {
+        isPlanMode && isOrchestrator ->
+            "CURRENT RUNTIME MODE: PLAN. Keep the project read-only. Delegate work as bounded planning microsteps, one at a time, with call_agent to CODEBASE_SCOUT for repository inspection, RESEARCHER for external/Kiwix/knowledge-base research, or PLANNER for plan synthesis; omit todo_id. Build workers and mutation tools remain blocked. Ask at least one structured user question, then submit one propose_plan and wait."
+        isPlanMode ->
+            "CURRENT RUNTIME MODE: PLAN. Complete only the assigned read-only discovery, research, or planning task. Do not mutate files, memory, media, dependencies, commands, or project execution. Return a structured finish_task report to the Orchestrator."
+        isOrchestrator ->
+            "CURRENT RUNTIME MODE: BUILD. Follow the approved durable TODO state. First call todo_write to create or update the durable TODO list, then delegate exactly one current TODO at a time, reread project_state after each specialist report, and finalize only after required review and verification."
+        else ->
+            "CURRENT RUNTIME MODE: BUILD. Complete only the assigned TODO and return a structured report to the Orchestrator."
     }
 
 /** Tool schemas are prefix-stable across modes; Plan safety is enforced at execution time. */
 internal fun <T> stableAgentToolSchemaAcrossModes(tools: List<T>, @Suppress("UNUSED_PARAMETER") isPlanMode: Boolean): List<T> = tools
+
+
+internal enum class AgentTerminalKind {
+    SUCCESS,
+    BLOCKED,
+    CANCELLED,
+    INTERRUPTED,
+    FAILED
+}
+
+internal data class AgentTerminalPresentation(
+    val kind: AgentTerminalKind,
+    val invocationStatus: String,
+    val envelopeStatus: String,
+    val continuationLabel: String
+)
+
+internal fun resolveAgentTerminalPresentation(rawStatus: String?): AgentTerminalPresentation =
+    when (rawStatus?.trim()?.uppercase(Locale.ROOT)) {
+        "SUCCESS", "COMPLETED", "PASSED", "PASS" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.SUCCESS,
+            invocationStatus = "COMPLETED",
+            envelopeStatus = "ok",
+            continuationLabel = "completed successfully"
+        )
+        "BLOCKED" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.BLOCKED,
+            invocationStatus = "BLOCKED",
+            envelopeStatus = "blocked",
+            continuationLabel = "reported a blocker"
+        )
+        "CANCELLED", "CANCELED" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.CANCELLED,
+            invocationStatus = "CANCELLED",
+            envelopeStatus = "cancelled",
+            continuationLabel = "was cancelled"
+        )
+        "INTERRUPTED" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.INTERRUPTED,
+            invocationStatus = "INTERRUPTED",
+            envelopeStatus = "error",
+            continuationLabel = "was interrupted"
+        )
+        else -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.FAILED,
+            invocationStatus = "FAILED",
+            envelopeStatus = "error",
+            continuationLabel = "failed"
+        )
+    }
+
+/**
+ * A specialist may terminate because the backend stopped before it emitted the
+ * required finish_task JSON. Never infer success from ordinary prose or from a
+ * role parser rejecting an otherwise explicit FAILED/BLOCKED terminal object.
+ */
+internal fun inferAgentTerminalStatusFromSummary(rawSummary: String): String {
+    val trimmed = rawSummary.trim()
+    val explicit = if (trimmed.startsWith("{")) {
+        runCatching {
+            JSONObject(trimmed)
+                .optString("status", "")
+                .trim()
+                .uppercase(Locale.ROOT)
+        }.getOrNull()
+    } else {
+        null
+    }
+    return when (explicit) {
+        // This helper runs only after the role-specific parser rejected the
+        // payload. An explicit success that does not satisfy the role contract
+        // is therefore a failure, never a completed delegation.
+        "SUCCESS", "COMPLETED", "PASSED", "PASS" -> "FAILED"
+        "BLOCKED" -> "BLOCKED"
+        "CANCELLED", "CANCELED" -> "CANCELLED"
+        "INTERRUPTED" -> "INTERRUPTED"
+        "FAILED" -> "FAILED"
+        else -> "FAILED"
+    }
+}
+
+internal data class AgentToolPolicyDecision(
+    val allowed: Boolean,
+    val code: String,
+    val message: String = "",
+    val recoveryHint: String = ""
+)
+
+internal class AgentToolPolicyException(
+    val decision: AgentToolPolicyDecision
+) : IllegalStateException(decision.message) {
+    val policyCode: String get() = decision.code
+    val recoveryHint: String get() = decision.recoveryHint
+}
+
+internal class AgentDelegationStartException(
+    val agentLabel: String,
+    cause: Throwable
+) : IllegalStateException(
+    "Agent $agentLabel failed to start: " +
+        (cause.message ?: cause.javaClass.simpleName),
+    cause
+)
+
+private val PLAN_MODE_PLANNING_AGENT_ALIASES = mapOf(
+    "CODEBASE_SCOUT" to "CODEBASE_SCOUT",
+    "SCOUT" to "CODEBASE_SCOUT",
+    "RESEARCHER" to "RESEARCHER",
+    "RESEARCH" to "RESEARCHER",
+    "PLANNER" to "PLANNER"
+)
+
+private val PLAN_MODE_MUTATING_TOOLS = setOf(
+    "write_file",
+    "edit_lines",
+    "apply_patch",
+    "create_folder",
+    "run_command",
+    "cancel_command",
+    "send_command_input",
+    "generate_image",
+    "remove_image_background",
+    "run_project",
+    "stop_project_run",
+    "force_stop_project_run",
+    "install_python_dependency",
+    "write_memory",
+    "rewrite_memory",
+    "delete_memory",
+    "run_skill_script"
+)
+
+private val PLAN_SAFE_CUSTOM_AGENT_TOOLS = setOf(
+    "read_file",
+    "read_file_lines",
+    "file_line_count",
+    "list_directory",
+    "search_code",
+    "view_image",
+    "read_memory",
+    "list_memory",
+    "project_state_read",
+    "project_order_read",
+    "plan_read",
+    "agent_report_read",
+    "todo_read",
+    "reflection",
+    "get_datetime",
+    "web_search",
+    "fetch_url",
+    "kiwix_search",
+    "kb_search",
+    "kb_read_chunk",
+    "kb_list_sources",
+    "run_tools_sequential",
+    "skill",
+    "read_skill_resource",
+    "finish_task"
+)
+
+private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
+    "question",
+    "call_agent",
+    "propose_plan",
+    "finish_task",
+    "project_state_read",
+    "todo_read",
+    "todo_transition"
+)
+
+internal fun isCriticalAgentProtocolTool(toolName: String): Boolean =
+    toolName.trim().lowercase(Locale.ROOT) in CRITICAL_AGENT_PROTOCOL_TOOLS
+
+internal fun isPlanSafeCustomAgentToolSet(configuredTools: Set<String>): Boolean {
+    if (configuredTools.isEmpty()) return false
+    return configuredTools
+        .map { it.trim().lowercase(Locale.ROOT) }
+        .all { it in PLAN_SAFE_CUSTOM_AGENT_TOOLS }
+}
+
+internal fun evaluatePlanModeToolPolicy(
+    isPlanMode: Boolean,
+    toolName: String,
+    arguments: Map<String, String>,
+    planSafeCustomAgentNames: Set<String> = emptySet()
+): AgentToolPolicyDecision {
+    if (!isPlanMode) {
+        return AgentToolPolicyDecision(true, "ALLOWED_BUILD_MODE")
+    }
+
+    val normalizedTool = toolName.trim().lowercase(Locale.ROOT)
+    if (normalizedTool == "call_agent") {
+        val requested = arguments["agent"]
+            ?.trim()
+            ?.uppercase(Locale.ROOT)
+            .orEmpty()
+        if (requested.isBlank()) {
+            // Required-argument validation produces the precise schema error later.
+            return AgentToolPolicyDecision(true, "ALLOWED_PENDING_SCHEMA_VALIDATION")
+        }
+        if (!arguments["todo_id"].isNullOrBlank()) {
+            return AgentToolPolicyDecision(
+                allowed = false,
+                code = "PLAN_MODE_TODO_DELEGATION_BLOCKED",
+                message = "Plan-mode discovery and research delegations must not claim a Build TODO.",
+                recoveryHint = "Remove todo_id and delegate one bounded read-only task to CODEBASE_SCOUT, RESEARCHER, or PLANNER. Switch to Build mode before claiming a TODO."
+            )
+        }
+        val planningRole = PLAN_MODE_PLANNING_AGENT_ALIASES[requested]
+        val normalizedCustomNames = planSafeCustomAgentNames
+            .map { it.trim().uppercase(Locale.ROOT) }
+            .toSet()
+        if (planningRole != null || requested in normalizedCustomNames) {
+            return AgentToolPolicyDecision(true, "ALLOWED_PLAN_RESEARCH_DELEGATION")
+        }
+        return AgentToolPolicyDecision(
+            allowed = false,
+            code = "PLAN_MODE_AGENT_BLOCKED",
+            message = "Plan mode permits only read-only CODEBASE_SCOUT, RESEARCHER, PLANNER, or explicitly read-only custom-agent delegations. Requested agent: $requested.",
+            recoveryHint = "Choose CODEBASE_SCOUT for repository inspection, RESEARCHER for external or knowledge-base research, or PLANNER for plan synthesis. Do not retry the blocked worker unchanged."
+        )
+    }
+
+    if (normalizedTool in PLAN_MODE_MUTATING_TOOLS) {
+        return AgentToolPolicyDecision(
+            allowed = false,
+            code = "PLAN_MODE_MUTATION_BLOCKED",
+            message = "Plan mode is read-only. Tool `$toolName` cannot mutate files, memory, media, dependencies, commands, or project execution.",
+            recoveryHint = "Use a read-only inspection or research action, ask the user a structured question, or propose the plan. Switch to Build mode before mutation."
+        )
+    }
+
+    return AgentToolPolicyDecision(true, "ALLOWED_PLAN_READ_ONLY_TOOL")
+}
 
 internal data class PlanApprovalPromptCacheDecision(
     val summary: String,
@@ -1242,15 +1479,29 @@ internal object AgentRuntimeSupport {
     fun parseAgentResult(agentLabel: String, summary: String): AgentResult {
         val trimmed = summary.trim()
         if (!trimmed.startsWith("{")) {
-            return AgentResult.GenericResult(status = "SUCCESS", summary = trimmed)
+            return AgentResult.GenericResult(
+                status = "FAILED",
+                summary = trimmed.ifBlank {
+                    "Specialist ended without a structured finish_task result."
+                }
+            )
         }
 
         val json = JSONObject(trimmed)
         val status = json.optString("status", "SUCCESS")
             .ifBlank { "SUCCESS" }
             .uppercase()
-        require(status in setOf("SUCCESS", "FAILED", "BLOCKED")) {
-            "Agent result status must be SUCCESS, FAILED, or BLOCKED."
+        require(
+            status in setOf(
+                "SUCCESS",
+                "FAILED",
+                "BLOCKED",
+                "CANCELLED",
+                "INTERRUPTED"
+            )
+        ) {
+            "Agent result status must be SUCCESS, FAILED, BLOCKED, " +
+                "CANCELLED, or INTERRUPTED."
         }
         return when (agentLabel.uppercase()) {
             "CODER" -> AgentResult.CoderResult(

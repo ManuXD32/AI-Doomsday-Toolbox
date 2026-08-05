@@ -8352,4 +8352,44 @@
     <string name="agent_invocation_status_cancelled">Cancelled</string>
     <string name="agent_invocation_status_interrupted">Interrupted</string>
     <string name="agent_invocation_messages_empty">This agent has not produced visible messages yet.</string>
+
+    <!-- Agent runtime roles and separated Tool settings -->
+    <string name="agent_tool_settings_title">Tool settings</string>
+    <string name="agent_tool_settings_desc">Configure agent tools, approvals, research providers, image generation, and background removal separately from agent model settings.</string>
+    <string name="agent_codebase_scout_name">Codebase Scout</string>
+    <string name="agent_codebase_scout_desc">Read-only repository discovery for files, symbols, architecture, constraints, and risks.</string>
+    <string name="agent_researcher_name">Researcher</string>
+    <string name="agent_researcher_desc">Read-only external, Kiwix, and selected knowledge-base research for planning.</string>
+    <string name="agent_planner_name">Planner</string>
+    <string name="agent_planner_desc">Converts verified project findings and user requirements into a structured implementation plan.</string>
+    <string name="agent_runtime_contract_managed_note">ADT manages this built-in role contract. These controls change its effective runtime, not the compact role instructions.</string>
+    <string name="agent_server_effective_context">Server context: %1$s</string>
+    <string name="agent_plan_read_only_delegation_approval">Require approval for read-only Plan delegations</string>
+    <string name="agent_plan_read_only_delegation_approval_desc">When disabled, Codebase Scout, Researcher, Planner, and verified read-only custom agents can start automatically in Plan mode. Build-mode delegation approval is unchanged.</string>
+    <string name="agent_request_plan_delegation">Allow read-only Plan delegation to %1$s?</string>
+    <string name="agent_tool_search_label">Search tools</string>
+    <string name="agent_critical_tool_desc">Protocol-critical runtime tool. ADT keeps it enabled because disabling it could strand an agent or corrupt workflow state.</string>
+    <string name="agent_tool_category_workflow">Workflow and delegation</string>
+    <string name="agent_tool_category_inspection">Files and inspection</string>
+    <string name="agent_tool_category_mutation">File modification</string>
+    <string name="agent_tool_category_execution">Commands and execution</string>
+    <string name="agent_tool_category_memory">Project memory</string>
+    <string name="agent_tool_category_research">Research and knowledge</string>
+    <string name="agent_tool_category_media">Media and visual tools</string>
+    <string name="agent_tool_category_advanced">Advanced tools</string>
+    <string name="agent_workflow_readiness_title">Workflow readiness</string>
+    <string name="agent_workflow_plan_label">Plan workflow</string>
+    <string name="agent_workflow_build_label">Build workflow</string>
+    <string name="agent_workflow_quality_label">Review and verification</string>
+    <string name="agent_workflow_ready">Ready</string>
+    <string name="agent_workflow_plan_limited">Limited: enable Codebase Scout and Planner for complete discovery and planning.</string>
+    <string name="agent_workflow_build_limited">Unavailable: Coder is disabled.</string>
+    <string name="agent_workflow_quality_limited">Limited: Reviewer or Executor is disabled.</string>
+    <string name="agent_workflow_research_backend_note">Researcher is configurable, but online/Kiwix providers are disabled. Selected knowledge bases may still be available.</string>
+    <string name="agent_progress_agent_succeeded">%1$s completed successfully</string>
+    <string name="agent_progress_agent_failed">%1$s failed</string>
+    <string name="agent_progress_agent_blocked">%1$s reported a blocker</string>
+    <string name="agent_progress_agent_cancelled">%1$s was cancelled</string>
+    <string name="agent_progress_agent_interrupted">%1$s was interrupted</string>
+
 </resources>

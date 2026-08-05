@@ -228,6 +228,7 @@ fun AgentScreen(navController: NavController) {
     var showConnectionSettings by remember { mutableStateOf(false) }
     var showDebugPanel by remember { mutableStateOf(false) }
     var showAgentSettings by remember { mutableStateOf(false) }
+    var showToolSettings by remember { mutableStateOf(false) }
     val showAllOutputState by settingsRepository.showExtraOutput.collectAsStateWithLifecycle()
     var showAllOutput by remember { mutableStateOf(showAllOutputState) }
 
@@ -1552,6 +1553,7 @@ fun AgentScreen(navController: NavController) {
             AgentTopBar(
                 onShowDashboard = { returnToProjectDashboard() },
                 onShowAgentSettings = { showAgentSettings = true },
+                onShowToolSettings = { showToolSettings = true },
                 onShowSettings = { showConnectionSettings = true },
                 onShowSetupInfo = { showSetupInfo = true },
                 onShowProjectManagement = { showProjectManagement = true },
@@ -2135,10 +2137,44 @@ fun AgentScreen(navController: NavController) {
             availableBackgroundRemovalModels = availableBackgroundRemovalModels,
             onKnowledgeBaseSelectionChange = { updateActiveKnowledgeBases(it) },
             onManageKnowledgeBases = { navController.navigate(Screen.KnowledgeBase.route) },
+            section = AgentSettingsSection.AGENTS,
             onDismiss = { showAgentSettings = false }
         )
     }
     
+    if (showToolSettings) {
+        LaunchedEffect(Unit) {
+            if (isAgentOpenAiBackend) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true
+                )
+            } else if (!isAgentLiteRt) {
+                ollamaService.checkConnection()
+            }
+        }
+        AgentSettingsDialog(
+            settingsRepository = settingsRepository,
+            availableModels = if (isAgentLlamaSwap) {
+                llamaServerRuntimeState.availableModels
+            } else {
+                availableModels
+            },
+            knowledgeBases = knowledgeBases,
+            selectedKnowledgeBaseIds = selectedKnowledgeBaseIds,
+            availableImageGenerationModels = availableImageGenerationModels,
+            availableSdImageMainModels = availableSdImageMainModels,
+            availableSdImageSupportModels = availableSdImageSupportModels,
+            availableBackgroundRemovalModels = availableBackgroundRemovalModels,
+            onKnowledgeBaseSelectionChange = { updateActiveKnowledgeBases(it) },
+            onManageKnowledgeBases = {
+                navController.navigate(Screen.KnowledgeBase.route)
+            },
+            section = AgentSettingsSection.TOOLS,
+            onDismiss = { showToolSettings = false }
+        )
+    }
+
     // Custom Tools Screen (full screen)
     if (showCustomTools) {
         androidx.compose.ui.window.Dialog(

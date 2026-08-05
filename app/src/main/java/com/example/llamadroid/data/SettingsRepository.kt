@@ -810,6 +810,20 @@ class SettingsRepository(private val context: Context) {
         prefs.edit().putBoolean("agent_auto_mode", enabled).apply()
         _autoMode.value = enabled
     }
+
+
+    // Optional approval gate for read-only Plan-mode specialist delegation.
+    private val _agentPlanReadOnlyDelegationApprovalRequired = MutableStateFlow(
+        prefs.getBoolean("agent_plan_read_only_delegation_approval_required", false)
+    )
+    val agentPlanReadOnlyDelegationApprovalRequired =
+        _agentPlanReadOnlyDelegationApprovalRequired.asStateFlow()
+    fun setAgentPlanReadOnlyDelegationApprovalRequired(required: Boolean) {
+        prefs.edit()
+            .putBoolean("agent_plan_read_only_delegation_approval_required", required)
+            .apply()
+        _agentPlanReadOnlyDelegationApprovalRequired.value = required
+    }
     
     // Command Auto-Accept (Auto-approve run_command specifically)
     private val _commandAutoAccept = MutableStateFlow(prefs.getBoolean("agent_command_auto_accept", false))
@@ -2787,6 +2801,46 @@ class SettingsRepository(private val context: Context) {
         _agentOrchestratorModel.value = model
     }
     
+    // Planning-specialist models are independently configurable while
+    // retaining the former inheritance choices as migration-safe defaults.
+    private val _agentCodebaseScoutModel = MutableStateFlow(
+        prefs.getString("agent_codebase_scout_model", null)
+            ?.takeIf { it.isNotBlank() }
+            ?: _agentOrchestratorModel.value
+    )
+    val agentCodebaseScoutModel = _agentCodebaseScoutModel.asStateFlow()
+    fun setAgentCodebaseScoutModel(model: String) {
+        val normalized = model.trim().ifBlank { _agentOrchestratorModel.value }
+        prefs.edit().putString("agent_codebase_scout_model", normalized).apply()
+        _agentCodebaseScoutModel.value = normalized
+    }
+
+    private val _agentResearcherModel = MutableStateFlow(
+        prefs.getString("agent_researcher_model", null)
+            ?.takeIf { it.isNotBlank() }
+            ?: prefs.getString("agent_web_search_model", null)
+                ?.takeIf { it.isNotBlank() }
+            ?: _agentOrchestratorModel.value
+    )
+    val agentResearcherModel = _agentResearcherModel.asStateFlow()
+    fun setAgentResearcherModel(model: String) {
+        val normalized = model.trim().ifBlank { _agentOrchestratorModel.value }
+        prefs.edit().putString("agent_researcher_model", normalized).apply()
+        _agentResearcherModel.value = normalized
+    }
+
+    private val _agentPlannerModel = MutableStateFlow(
+        prefs.getString("agent_planner_model", null)
+            ?.takeIf { it.isNotBlank() }
+            ?: _agentOrchestratorModel.value
+    )
+    val agentPlannerModel = _agentPlannerModel.asStateFlow()
+    fun setAgentPlannerModel(model: String) {
+        val normalized = model.trim().ifBlank { _agentOrchestratorModel.value }
+        prefs.edit().putString("agent_planner_model", normalized).apply()
+        _agentPlannerModel.value = normalized
+    }
+
     // Coder agent model (writes/edits code)
     private val _agentCoderModel = MutableStateFlow(prefs.getString("agent_coder_model", "qwen3.5:9b") ?: "qwen3.5:9b")
     val agentCoderModel = _agentCoderModel.asStateFlow()
@@ -3421,10 +3475,9 @@ class SettingsRepository(private val context: Context) {
     fun getAgentModelForRole(role: String): String {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorModel.value
-            "CODEBASE_SCOUT", "PLANNER" -> _agentOrchestratorModel.value
-            "RESEARCHER" -> _agentWebSearchModel.value
-                .takeIf { it.isNotBlank() }
-                ?: _agentOrchestratorModel.value
+            "CODEBASE_SCOUT" -> _agentCodebaseScoutModel.value
+            "RESEARCHER" -> _agentResearcherModel.value
+            "PLANNER" -> _agentPlannerModel.value
             "CODER" -> _agentCoderModel.value
             "REVIEWER" -> _agentReviewerModel.value
             "EXECUTOR" -> _agentExecutorModel.value
@@ -3433,6 +3486,7 @@ class SettingsRepository(private val context: Context) {
             else -> _agentOrchestratorModel.value
         }
     }
+
     
     /**
      * Set model for a specific agent role
@@ -3440,8 +3494,9 @@ class SettingsRepository(private val context: Context) {
     fun setAgentModelForRole(role: String, model: String) {
         when (role.uppercase()) {
             "ORCHESTRATOR" -> setAgentOrchestratorModel(model)
-            "CODEBASE_SCOUT", "PLANNER" -> setAgentOrchestratorModel(model)
-            "RESEARCHER" -> setAgentWebSearchModel(model)
+            "CODEBASE_SCOUT" -> setAgentCodebaseScoutModel(model)
+            "RESEARCHER" -> setAgentResearcherModel(model)
+            "PLANNER" -> setAgentPlannerModel(model)
             "CODER" -> setAgentCoderModel(model)
             "REVIEWER" -> setAgentReviewerModel(model)
             "EXECUTOR" -> setAgentExecutorModel(model)
@@ -3450,24 +3505,27 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+
     /**
      * Get thinking enabled for a specific agent role
      */
     fun getAgentThinkingEnabledForRole(role: String): Boolean {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorThinkingEnabled.value
-            "CODEBASE_SCOUT", "PLANNER" -> _agentOrchestratorThinkingEnabled.value
-            "RESEARCHER" -> _agentWebSearchThinkingEnabled.value
+            "CODEBASE_SCOUT" -> _agentCodebaseScoutThinkingEnabled.value
+            "RESEARCHER" -> _agentResearcherThinkingEnabled.value
+            "PLANNER" -> _agentPlannerThinkingEnabled.value
             "CODER" -> _agentCoderThinkingEnabled.value
             "REVIEWER" -> _agentReviewerThinkingEnabled.value
             "EXECUTOR" -> _agentExecutorThinkingEnabled.value
             "SUMMARIZER" -> _agentSummarizerThinkingEnabled.value
-            "VISUAL_TESTER" -> false
+            "VISUAL_TESTER" -> _agentVisualTesterThinkingEnabled.value
             "WEB_SEARCH" -> _agentWebSearchThinkingEnabled.value
             "KIWIX" -> _agentKiwixThinkingEnabled.value
             else -> _agentOrchestratorThinkingEnabled.value
         }
     }
+
 
     /**
      * Set thinking enabled for a specific agent role
@@ -3475,17 +3533,19 @@ class SettingsRepository(private val context: Context) {
     fun setAgentThinkingEnabledForRole(role: String, enabled: Boolean) {
         when (role.uppercase()) {
             "ORCHESTRATOR" -> setAgentOrchestratorThinkingEnabled(enabled)
-            "CODEBASE_SCOUT", "PLANNER" -> setAgentOrchestratorThinkingEnabled(enabled)
-            "RESEARCHER" -> setAgentWebSearchThinkingEnabled(enabled)
+            "CODEBASE_SCOUT" -> setAgentCodebaseScoutThinkingEnabled(enabled)
+            "RESEARCHER" -> setAgentResearcherThinkingEnabled(enabled)
+            "PLANNER" -> setAgentPlannerThinkingEnabled(enabled)
             "CODER" -> setAgentCoderThinkingEnabled(enabled)
             "REVIEWER" -> setAgentReviewerThinkingEnabled(enabled)
             "EXECUTOR" -> setAgentExecutorThinkingEnabled(enabled)
             "SUMMARIZER" -> setAgentSummarizerThinkingEnabled(enabled)
-            "VISUAL_TESTER" -> Unit
+            "VISUAL_TESTER" -> setAgentVisualTesterThinkingEnabled(enabled)
             "WEB_SEARCH" -> setAgentWebSearchThinkingEnabled(enabled)
             "KIWIX" -> setAgentKiwixThinkingEnabled(enabled)
         }
     }
+
 
     fun getAgentVisionEnabledForRole(role: String): Boolean {
         return when (role.uppercase()) {
@@ -3654,6 +3714,168 @@ class SettingsRepository(private val context: Context) {
         _agentOrchestratorThinkingEnabled.value = enabled
     }
     
+    private val _agentCodebaseScoutCtx = MutableStateFlow(
+        prefs.getInt("agent_codebase_scout_ctx", _agentOrchestratorCtx.value)
+            .coerceAtLeast(1024)
+    )
+    val agentCodebaseScoutCtx = _agentCodebaseScoutCtx.asStateFlow()
+    fun setAgentCodebaseScoutCtx(size: Int) {
+        val normalized = size.coerceIn(1024, 1_048_576)
+        prefs.edit().putInt("agent_codebase_scout_ctx", normalized).apply()
+        _agentCodebaseScoutCtx.value = normalized
+    }
+
+    private val _agentCodebaseScoutMaxOutputTokens = MutableStateFlow(
+        prefs.getInt(
+            "agent_codebase_scout_max_output_tokens",
+            _agentOrchestratorMaxOutputTokens.value
+        ).coerceAtLeast(1)
+    )
+    val agentCodebaseScoutMaxOutputTokens =
+        _agentCodebaseScoutMaxOutputTokens.asStateFlow()
+    fun setAgentCodebaseScoutMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 1_048_576)
+        prefs.edit()
+            .putInt("agent_codebase_scout_max_output_tokens", normalized)
+            .apply()
+        _agentCodebaseScoutMaxOutputTokens.value = normalized
+    }
+
+    private val _agentCodebaseScoutThinkingEnabled = MutableStateFlow(
+        prefs.getBoolean(
+            "agent_codebase_scout_thinking_enabled",
+            _agentOrchestratorThinkingEnabled.value
+        )
+    )
+    val agentCodebaseScoutThinkingEnabled =
+        _agentCodebaseScoutThinkingEnabled.asStateFlow()
+    fun setAgentCodebaseScoutThinkingEnabled(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean("agent_codebase_scout_thinking_enabled", enabled)
+            .apply()
+        _agentCodebaseScoutThinkingEnabled.value = enabled
+    }
+
+    private val _agentResearcherCtx = MutableStateFlow(
+        prefs.getInt(
+            "agent_researcher_ctx",
+            prefs.getInt("agent_web_search_num_ctx", _agentOrchestratorCtx.value)
+        ).coerceAtLeast(1024)
+    )
+    val agentResearcherCtx = _agentResearcherCtx.asStateFlow()
+    fun setAgentResearcherCtx(size: Int) {
+        val normalized = size.coerceIn(1024, 1_048_576)
+        prefs.edit().putInt("agent_researcher_ctx", normalized).apply()
+        _agentResearcherCtx.value = normalized
+    }
+
+    private val _agentResearcherMaxOutputTokens = MutableStateFlow(
+        prefs.getInt(
+            "agent_researcher_max_output_tokens",
+            _agentOrchestratorMaxOutputTokens.value
+        ).coerceAtLeast(1)
+    )
+    val agentResearcherMaxOutputTokens =
+        _agentResearcherMaxOutputTokens.asStateFlow()
+    fun setAgentResearcherMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 1_048_576)
+        prefs.edit().putInt("agent_researcher_max_output_tokens", normalized).apply()
+        _agentResearcherMaxOutputTokens.value = normalized
+    }
+
+    private val _agentResearcherThinkingEnabled = MutableStateFlow(
+        prefs.getBoolean(
+            "agent_researcher_thinking_enabled",
+            prefs.getBoolean(
+                "agent_web_search_thinking_enabled",
+                _agentOrchestratorThinkingEnabled.value
+            )
+        )
+    )
+    val agentResearcherThinkingEnabled =
+        _agentResearcherThinkingEnabled.asStateFlow()
+    fun setAgentResearcherThinkingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_researcher_thinking_enabled", enabled).apply()
+        _agentResearcherThinkingEnabled.value = enabled
+    }
+
+    private val _agentPlannerCtx = MutableStateFlow(
+        prefs.getInt("agent_planner_ctx", _agentOrchestratorCtx.value)
+            .coerceAtLeast(1024)
+    )
+    val agentPlannerCtx = _agentPlannerCtx.asStateFlow()
+    fun setAgentPlannerCtx(size: Int) {
+        val normalized = size.coerceIn(1024, 1_048_576)
+        prefs.edit().putInt("agent_planner_ctx", normalized).apply()
+        _agentPlannerCtx.value = normalized
+    }
+
+    private val _agentPlannerMaxOutputTokens = MutableStateFlow(
+        prefs.getInt(
+            "agent_planner_max_output_tokens",
+            _agentOrchestratorMaxOutputTokens.value
+        ).coerceAtLeast(1)
+    )
+    val agentPlannerMaxOutputTokens = _agentPlannerMaxOutputTokens.asStateFlow()
+    fun setAgentPlannerMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 1_048_576)
+        prefs.edit().putInt("agent_planner_max_output_tokens", normalized).apply()
+        _agentPlannerMaxOutputTokens.value = normalized
+    }
+
+    private val _agentPlannerThinkingEnabled = MutableStateFlow(
+        prefs.getBoolean(
+            "agent_planner_thinking_enabled",
+            _agentOrchestratorThinkingEnabled.value
+        )
+    )
+    val agentPlannerThinkingEnabled = _agentPlannerThinkingEnabled.asStateFlow()
+    fun setAgentPlannerThinkingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("agent_planner_thinking_enabled", enabled).apply()
+        _agentPlannerThinkingEnabled.value = enabled
+    }
+
+    private val _agentVisualTesterCtx = MutableStateFlow(
+        prefs.getInt(
+            "agent_visual_tester_ctx",
+            prefs.getInt("agent_reviewer_ctx", 16384)
+        ).coerceAtLeast(1024)
+    )
+    val agentVisualTesterCtx = _agentVisualTesterCtx.asStateFlow()
+    fun setAgentVisualTesterCtx(size: Int) {
+        val normalized = size.coerceIn(1024, 1_048_576)
+        prefs.edit().putInt("agent_visual_tester_ctx", normalized).apply()
+        _agentVisualTesterCtx.value = normalized
+    }
+
+    private val _agentVisualTesterMaxOutputTokens = MutableStateFlow(
+        prefs.getInt(
+            "agent_visual_tester_max_output_tokens",
+            prefs.getInt("agent_reviewer_max_output_tokens", 8096)
+        ).coerceAtLeast(1)
+    )
+    val agentVisualTesterMaxOutputTokens =
+        _agentVisualTesterMaxOutputTokens.asStateFlow()
+    fun setAgentVisualTesterMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 1_048_576)
+        prefs.edit()
+            .putInt("agent_visual_tester_max_output_tokens", normalized)
+            .apply()
+        _agentVisualTesterMaxOutputTokens.value = normalized
+    }
+
+    private val _agentVisualTesterThinkingEnabled = MutableStateFlow(
+        prefs.getBoolean("agent_visual_tester_thinking_enabled", false)
+    )
+    val agentVisualTesterThinkingEnabled =
+        _agentVisualTesterThinkingEnabled.asStateFlow()
+    fun setAgentVisualTesterThinkingEnabled(enabled: Boolean) {
+        prefs.edit()
+            .putBoolean("agent_visual_tester_thinking_enabled", enabled)
+            .apply()
+        _agentVisualTesterThinkingEnabled.value = enabled
+    }
+
     private val _agentCoderCtx = MutableStateFlow(prefs.getInt("agent_coder_ctx", 16384))
     val agentCoderCtx = _agentCoderCtx.asStateFlow()
     fun setAgentCoderCtx(size: Int) {
@@ -3748,28 +3970,34 @@ class SettingsRepository(private val context: Context) {
     fun getAgentContextForRole(role: String): Int {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorCtx.value
-            "CODEBASE_SCOUT", "PLANNER" -> _agentOrchestratorCtx.value
-            "RESEARCHER" -> _agentWebSearchNumCtx.value
+            "CODEBASE_SCOUT" -> _agentCodebaseScoutCtx.value
+            "RESEARCHER" -> _agentResearcherCtx.value
+            "PLANNER" -> _agentPlannerCtx.value
             "CODER" -> _agentCoderCtx.value
             "REVIEWER" -> _agentReviewerCtx.value
             "EXECUTOR" -> _agentExecutorCtx.value
             "SUMMARIZER" -> _agentSummarizerCtx.value
+            "VISUAL_TESTER" -> _agentVisualTesterCtx.value
             else -> _agentOrchestratorCtx.value
         }
     }
 
+
     fun getAgentMaxOutputTokensForRole(role: String): Int {
         return when (role.uppercase()) {
             "ORCHESTRATOR" -> _agentOrchestratorMaxOutputTokens.value
-            "CODEBASE_SCOUT", "RESEARCHER", "PLANNER" ->
-                _agentOrchestratorMaxOutputTokens.value
+            "CODEBASE_SCOUT" -> _agentCodebaseScoutMaxOutputTokens.value
+            "RESEARCHER" -> _agentResearcherMaxOutputTokens.value
+            "PLANNER" -> _agentPlannerMaxOutputTokens.value
             "CODER" -> _agentCoderMaxOutputTokens.value
             "REVIEWER" -> _agentReviewerMaxOutputTokens.value
             "EXECUTOR" -> _agentExecutorMaxOutputTokens.value
             "SUMMARIZER" -> _agentSummarizerMaxOutputTokens.value
+            "VISUAL_TESTER" -> _agentVisualTesterMaxOutputTokens.value
             else -> _agentOrchestratorMaxOutputTokens.value
         }
     }
+
 
     // ========== AI Agent Per-Role System Prompts ==========
     
