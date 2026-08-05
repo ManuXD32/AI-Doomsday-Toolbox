@@ -3480,6 +3480,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
         private val sessionLineReferences = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
         private val sessionCommandIds = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
         private val sessionMemoryFiles = java.util.concurrent.ConcurrentHashMap<String, MutableSet<String>>()
+        private val sessionWorkingStates = java.util.concurrent.ConcurrentHashMap<String, AgentRuntimeSupport.AgentWorkingStateLedger>()
         private val completedSessionResults = java.util.concurrent.ConcurrentHashMap<String, CompletedAgentSession>()
         private val repeatedToolFailures = java.util.concurrent.ConcurrentHashMap<String, Int>()
         private val repeatedRecoveryLoops = java.util.concurrent.ConcurrentHashMap<String, Int>()
@@ -4626,13 +4627,14 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun buildMemoryGateRecoveryInstruction(): String {
-            val reason = _memoryDirtyReason.value ?: "Recent work changed project state."
+            val reason = _memoryDirtyReason.value
+                ?: "Recent work changed project state."
             return buildString {
                 appendLine("Your last step tried to finish without updating project memory.")
                 appendLine("Reason: $reason")
                 appendLine("Before finishing, call write_memory to record what changed and why, or use the SUMMARIZER to update the brain files.")
-                appendLine("If you need a reminder of the tool syntax, first emit this tool call: `{\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}`")
-                appendLine("Emit the next tool call as a real structured tool call outside <think>, markdown fences, and plain text.")
+                appendLine("If a memory-tool schema is unclear, call tool_help for write_memory or rewrite_memory only.")
+                appendLine("Emit one corrected structured tool call outside <think>, markdown fences, and plain text. Do not load the global tool reference.")
             }.trim()
         }
 
@@ -4640,19 +4642,24 @@ TODO status. Return via finish_task with JSON:
             suspectedToolName: String? = null,
             reason: String
         ): String {
-            return buildString {
-                appendLine("Your previous response attempted a tool call incorrectly.")
-                appendLine("Reason: $reason")
-                suspectedToolName
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { toolName ->
-                        appendLine()
-                        appendLine(buildSuspectedToolGuidance(toolName))
+            val available =
+                frozenToolsByTurnBranch[turnBranchKey()]
+                    ?: getAgentTools()
+            val selected = suspectedToolName
+                ?.takeIf { it.isNotBlank() }
+                ?.let { requested ->
+                    available.firstOrNull {
+                        it.name.equals(requested, ignoreCase = true)
                     }
-                appendLine()
-                appendLine("If you need a full syntax reminder, first emit this tool call: `{\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}`")
-                appendLine("Emit the next tool call as a real structured tool call outside <think>, markdown fences, and plain text.")
-            }.trim()
+                }
+            return AgentRuntimeSupport.buildBoundedToolRepairCard(
+                suspectedToolName = suspectedToolName,
+                reason = reason,
+                description = selected?.description,
+                requiredParams = selected?.requiredParams.orEmpty(),
+                parameters = selected?.parameters.orEmpty(),
+                availableToolNames = available.map { it.name }
+            )
         }
 
         private fun shouldGateCompletionForMemory(content: String): Boolean {
@@ -4706,6 +4713,12 @@ TODO status. Return via finish_task with JSON:
                 contract = buildAgentContract(agentType)
             )
             _sessions.value = _sessions.value + (session.id to session)
+            sessionWorkingStates[session.id] =
+                AgentRuntimeSupport.createAgentWorkingState(
+                    role = agentType,
+                    objective = input,
+                    context = context
+                )
             _currentSessionId.value = session.id
             addDebugLog("📂 Started session ${session.id.take(8)} for $agentType" +
                 (if (parentId != null) " (parent: ${parentId.take(8)})" else ""))
@@ -4799,6 +4812,7 @@ TODO status. Return via finish_task with JSON:
                     terminal.invocationStatus,
                 summary
             )
+            sessionWorkingStates.remove(currentId)
             return completed
         }
 
@@ -5009,6 +5023,8 @@ TODO status. Return via finish_task with JSON:
         fun clearAllSessions() {
             _sessions.value = emptyMap()
             _currentSessionId.value = null
+        
+            sessionWorkingStates.clear()
         }
 
         // Current project folder (for brain path)
@@ -5263,28 +5279,20 @@ TODO status. Return via finish_task with JSON:
             role: AgentRole,
             activeCustom: com.example.llamadroid.data.db.CustomAgentEntity?
         ): String? {
-            if (role == AgentRole.ORCHESTRATOR && activeCustom == null) {
+            if (
+                role == AgentRole.ORCHESTRATOR &&
+                activeCustom == null
+            ) {
                 return null
             }
-            return when (role) {
-                AgentRole.CODEBASE_SCOUT ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"relevant_files\":[\"path\"],\"architecture\":[\"fact\"],\"dependencies\":[\"dependency\"],\"constraints\":[\"constraint\"],\"risks\":[\"risk\"],\"open_questions\":[\"question\"],\"recommended_scope\":[\"scope\"]}"
-                AgentRole.RESEARCHER ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"research_question\":\"question\",\"sources\":[\"source + URL/reference\"],\"facts\":[\"fact\"],\"conflicts\":[\"conflict\"],\"uncertainties\":[\"uncertainty\"],\"recommendations\":[\"recommendation\"]}"
-                AgentRole.PLANNER ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"plan_markdown\":\"plan\",\"structured_plan\":{\"plan_version\":\"id\",\"summary\":\"summary\",\"phases\":[{\"id\":\"phase\",\"title\":\"title\",\"todos\":[{\"id\":\"todo\",\"text\":\"task\",\"owner_role\":\"CODER\",\"dependencies\":[],\"acceptance_criteria\":[],\"priority\":\"NORMAL\"}]}]},\"open_questions\":[],\"recommended_next_steps\":[]}"
-                AgentRole.CODER ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"changed_files\":[\"path\"],\"intent_per_file\":{\"path\":\"what and why\"},\"verification_reads\":[\"file:line\"],\"remaining_risks\":[\"risk\"]}"
-                AgentRole.REVIEWER ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"findings\":[{\"file\":\"path\",\"line\":123,\"severity\":\"HIGH|MEDIUM|LOW\",\"description\":\"issue\",\"recommendation\":\"fix\"}],\"remaining_risks\":[\"risk\"]}"
-                AgentRole.EXECUTOR ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"commands_run\":[\"command\"],\"command_ids\":[\"cmd\"],\"final_status\":\"passed|failed|blocked\",\"key_outputs\":[\"output\"],\"next_recommendation\":\"next\"}"
-                AgentRole.VISUAL_TESTER ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"tested_url\":\"url\",\"actions\":[\"action\"],\"findings\":[\"finding\"],\"screens_observed\":1,\"recommendations\":[\"next\"]}"
-                AgentRole.SUMMARIZER ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"memory_files_updated\":[\"summary.md\"],\"reason_per_file\":{\"summary.md\":\"why\"},\"carry_forward_notes\":[\"note\"]}"
-                AgentRole.ORCHESTRATOR ->
-                    "FINISH TASK JSON: {\"status\":\"SUCCESS|FAILED|BLOCKED\",\"summary\":\"summary\",\"evidence\":[],\"next_step\":\"next\"}"
+            return buildString {
+                appendLine("FINISH TASK CONTRACT:")
+                appendLine("- finish_task has no required arguments.")
+                appendLine("- Smallest valid call: {\"name\":\"finish_task\",\"arguments\":{}}")
+                appendLine("- Optional status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED.")
+                appendLine("- Optional summary: one short result sentence.")
+                appendLine("- Rich role-specific JSON remains accepted but is never required.")
+                append("- The runtime performs the final reflection gate automatically; do not call reflection merely to unlock finish_task.")
             }
         }
 
@@ -7011,25 +7019,24 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun buildSuspectedToolGuidance(toolName: String): String {
-            val tool = getAgentTools().find { it.name.equals(toolName, ignoreCase = true) }
-            if (tool == null) {
-                return "It looks like you were trying to call `$toolName`, but that tool is not available to the current agent. Refresh `brain/tools_reference.md` to see the valid tools."
+            val available =
+                frozenToolsByTurnBranch[turnBranchKey()]
+                    ?: getAgentTools()
+            val selected = available.firstOrNull {
+                it.name.equals(toolName, ignoreCase = true)
             }
-
-            val required = tool.requiredParams.joinToString(", ").ifBlank { "none" }
-            val optional = tool.parameters.keys.filterNot { it in tool.requiredParams }.joinToString(", ").ifBlank { "none" }
-            val extraNote = when (tool.name) {
-                "read_file" -> " `read_file` returns up to 160 lines by default and at most 400 lines per call. If `has_more: true`, call it again with `next_start_line`."
-                "run_command", "wait_command", "check_command" -> " These command tools are the ones whose LLM output is intentionally line-limited."
-                else -> ""
-            }
-
-            return buildString {
-                append("It looks like you were trying to call `${tool.name}`. ")
-                append("Required arguments: $required. Optional arguments: $optional. ")
-                append("Use it like this: `${toolExampleJson(tool.name, tool)}`.")
-                append(extraNote)
-            }.trim()
+            return AgentRuntimeSupport.buildBoundedToolRepairCard(
+                suspectedToolName = toolName,
+                reason = if (selected == null) {
+                    "The requested tool is not available to this agent."
+                } else {
+                    "The previous response did not emit a valid structured tool call."
+                },
+                description = selected?.description,
+                requiredParams = selected?.requiredParams.orEmpty(),
+                parameters = selected?.parameters.orEmpty(),
+                availableToolNames = available.map { it.name }
+            )
         }
 
         private suspend fun ensureToolsReference(
@@ -7070,13 +7077,9 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun buildRecoveryToolRefreshPrompt(): String {
-            return buildString {
-                appendLine("RECOVERY TOOL REFRESH:")
-                appendLine("Your last response malformed a tool call or failed to emit one.")
-                appendLine("Before retrying, read the tool reference file with a real structured tool call:")
-                appendLine("`{\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}`")
-                appendLine("After reading it, emit the next tool call as a real structured tool call outside `<think>`, markdown fences, and plain assistant text.")
-            }
+            return "RECOVERY TOOL HELP: correct only the rejected call. " +
+                "Use tool_help for one current tool only when the inline repair card is insufficient. " +
+                "Do not load a global tool reference and do not retry unchanged arguments."
         }
 
         /**
@@ -7499,6 +7502,7 @@ TODO status. Return via finish_task with JSON:
                     }
                     val canReadToolsReference = availableTools.any { it.name == "read_file" }
                     val recoveryToolRefresh = if (recoveryMode && canReadToolsReference) buildRecoveryToolRefreshPrompt() else null
+                    val workingStatePrompt = buildCurrentSessionWorkingStatePrompt()
 
                     // Build system prompt with specialized info
                     val standardToolNames = availableTools
@@ -7569,7 +7573,7 @@ TODO status. Return via finish_task with JSON:
                             append('\n')
                         }
                         if (currentAgent != AgentRole.ORCHESTRATOR) {
-                            append("Your current invocation is one assigned todo-sized task. Stay within that assignment. Before finish_task, use reflection to verify this assigned task itself is complete; do not judge or attempt the orchestrator's entire plan.\n")
+                            append("Your current invocation is one assigned todo-sized task. Stay within that assignment. The runtime performs the final reflection gate automatically before finish_task; do not call reflection merely to unlock completion and do not judge the orchestrator's entire plan.\n")
                         }
                     }
                     val fullSystemPrompt = frozenSystemPromptByTurnBranch.getOrPut(
@@ -7583,7 +7587,7 @@ TODO status. Return via finish_task with JSON:
                     // Inject compact reminders periodically to prevent model drift without resending large tool text
                     val userMsgCount = promptHistoryMessages.count { it.role == "user" }
                     val toolsRefReminder = if (canReadToolsReference && !hardCompactionMode && !recoveryMode && userMsgCount > 0 && userMsgCount % promptProfile.refreshReminderEvery == 0) {
-                        ChatMessage(role = "system", content = "REMINDER: Refresh tool syntax from brain/tools_reference.md and state from brain/summary.md plus brain/current_task.md when context feels stale. Use wait_command/check_command/command_list instead of rerunning active commands.")
+                        ChatMessage(role = "system", content = "REMINDER: Use tool_help for exactly one unclear tool. Use project_state_read/current task state for continuity, and wait_command/check_command/command_list instead of rerunning active commands.")
                     } else null
 
                     val messagesWithReminders = if (!hardCompactionMode && !recoveryMode && promptHistoryMessages.size > promptProfile.reminderInterval) {
@@ -7626,6 +7630,16 @@ TODO status. Return via finish_task with JSON:
                     val hardCompaction = hardCompactionState
                     val lateTurnMessages = buildList {
                         hiddenVisionMessage?.let(::add)
+                        workingStatePrompt
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let {
+                                add(
+                                    ChatMessage(
+                                        role = "system",
+                                        content = it
+                                    )
+                                )
+                            }
                         recoveryInstruction?.takeIf { it.isNotBlank() }?.let {
                             add(ChatMessage(role = "system", content = "RECOVERY MODE: $it"))
                         }
@@ -8328,6 +8342,34 @@ TODO status. Return via finish_task with JSON:
                             }
                         }
                         try {
+                            val agentCacheLane =
+                                AgentRuntimeSupport.stableAgentCacheLane(
+                                    agentRole = activeAgentRole.name,
+                                    customAgentName = activeCustomAgent?.name
+                                )
+                            // serverParallel is optional: null means the server's
+                            // normal single-slot default, so diagnostics must resolve
+                            // it before ordering/comparison operations.
+                            val effectiveServerParallel =
+                                settingsRepo.serverParallel.value ?: 1
+                            recordAgentEvent(
+                                kind = "llama_slot_affinity",
+                                summary = "Selected stable agent cache lane",
+                                details = "lane=$agentCacheLane parallel=$effectiveServerParallel cachePrompt=${settingsRepo.serverCachePrompt.value} role=${activeCustomAgent?.name ?: activeAgentRole.name}",
+                                persist = false
+                            )
+                            if (
+                                settingsRepo.serverCachePrompt.value &&
+                                effectiveServerParallel < 2 &&
+                                agentCacheLane == "specialist"
+                            ) {
+                                recordAgentEvent(
+                                    kind = "llama_slot_cache_limit",
+                                    summary = "One llama-server slot cannot preserve parent and specialist KV caches simultaneously",
+                                    details = "parallel=$effectiveServerParallel lane=$agentCacheLane",
+                                    persist = false
+                                )
+                            }
                             AgentRemoteChatClient(context).chat(
                                 request = AgentRemoteChatRequest(
                                     baseUrl = llamaUrl,
@@ -8344,7 +8386,7 @@ TODO status. Return via finish_task with JSON:
                                         endpointGeneration = "$llamaUrl|${settingsRepo.serverParallel.value}|${settingsRepo.contextSize.value}",
                                         modelConfiguration = "$model|$contextSize|$thinkingEnabled|${settingsRepo.speculativeMode.value}",
                                         conversationId = _activeConversationId.value?.toString() ?: "unsaved",
-                                        agentSessionId = _currentSessionId.value ?: (activeCustomAgent?.name ?: activeAgentRole.name)
+                                        agentSessionId = agentCacheLane
                                     ),
                                     slotAffinityMode = LlamaSlotAffinityMode.fromValue(
                                         settingsRepo.agentLlamaSlotAffinityMode.value
@@ -8954,6 +8996,7 @@ TODO status. Return via finish_task with JSON:
             setIsLoading(true, context.getString(R.string.agent_executing_tool, toolCall.name))
 
             val job = agentScope.launch {
+                val traceSessionId = _currentSessionId.value
                 try {
                     ensureAgentRunActive(runEpoch)
                     var toolHandlesContinuation = false
@@ -8970,6 +9013,19 @@ TODO status. Return via finish_task with JSON:
                     syncAssistantToolProgress(toolCall)
 
                     val validatedToolCall = validateToolCall(toolCall, _currentAgent.value, _activeCustomAgent.value, settingsRepo).getOrElse { error ->
+                        recordSessionToolTrace(
+                            sessionId = traceSessionId,
+                            toolName = toolCall.name,
+                            arguments = toolCall.arguments,
+                            status = "VALIDATION_ERROR",
+                            rawResult = error.message
+                                ?: error.javaClass.simpleName,
+                            nextHint = if (error is AgentToolPolicyException) {
+                                error.recoveryHint
+                            } else {
+                                "Correct only this tool call using the bounded inline repair card."
+                            }
+                        )
                         if (error is AgentToolPolicyException) {
                             val policyMessage =
                                 error.message
@@ -9048,9 +9104,12 @@ TODO status. Return via finish_task with JSON:
                             status = "error",
                             summary = validationError,
                             nextHint = if (failureCount >= LOOP_WAKEUP_TOOL_FAILURES) {
-                                "Repeated invalid tool call detected. Do not retry unchanged arguments. Read brain/tools_reference.md, correct the schema, and only retry once the arguments differ."
+                                "Repeated invalid tool call detected. Do not retry unchanged arguments. " +
+                                    "Use the inline repair card or call tool_help for `${toolCall.name}` only, " +
+                                    "then retry with changed arguments."
                             } else {
-                                "Retry with a declared tool name and all required string arguments. If you need a reminder, first emit {\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}, then emit the tool call outside <think>."
+                                "Correct `${toolCall.name}` using the inline repair card. " +
+                                    "Call tool_help for this exact tool only when more syntax detail is needed."
                             }
                         )
                         syncAssistantToolProgress(toolCall, invalidOutput)
@@ -9105,7 +9164,12 @@ TODO status. Return via finish_task with JSON:
                         return@launch
                     }
                     if (validatedToolCall.toolCall.name == "finish_task") {
-                        val candidateSummary = validatedToolCall.normalizedArguments["summary"].orEmpty()
+                        val candidateSummary =
+                            AgentRuntimeSupport.finishTaskReflectionCandidate(
+                                arguments = validatedToolCall.normalizedArguments,
+                                fallbackSummary =
+                                    buildCurrentSessionFinishFallbackSummary()
+                            )
                         val reflectionResult = runAutoReflectionGate(
                             scope = "${_currentAgent.value.name} finish_task",
                             candidateSummary = candidateSummary,
@@ -9386,14 +9450,16 @@ TODO status. Return via finish_task with JSON:
                                 agentService.installLocalPythonDependency(packageName, wheelPath).getOrThrow()
                             }
                             "list_directory" -> {
-                                val files = agentService.listDirectory(
+                                val requestedPath =
                                     effectiveToolCall.arguments["path"]
-                                        ?: WORKSPACE_PATH
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?: "."
+                                val files = agentService.listDirectory(
+                                    requestedPath
                                 ).getOrThrow()
-                                AgentRuntimeSupport.formatDirectoryListing(
-                                    files.map { file ->
-                                        "${if (file.isDirectory) "[dir]" else "[file]"} ${file.name}"
-                                    }
+                                formatDirectoryListingForCurrentRole(
+                                    requestedPath,
+                                    files
                                 )
                             }
                             "create_folder" -> {
@@ -9425,8 +9491,15 @@ TODO status. Return via finish_task with JSON:
                                 }
                             }
                             "search_code" -> {
-                                val results = agentService.searchCode(effectiveToolCall.arguments["query"] ?: "").getOrThrow()
-                                results.joinToString("\n") { r -> "${r.path}:${r.lineNumber}: ${r.content}" }
+                                val query =
+                                    effectiveToolCall.arguments["query"]
+                                        .orEmpty()
+                                val results = agentService.searchCode(query)
+                                    .getOrThrow()
+                                formatSearchResultsForCurrentRole(
+                                    results,
+                                    effectiveToolCall.arguments
+                                )
                             }
                             "edit_lines" -> {
                                 val path = effectiveToolCall.arguments["path"] ?: ""
@@ -10167,7 +10240,11 @@ TODO status. Return via finish_task with JSON:
                                             .resolveFinishTaskPayload(
                                                 agentLabel = finishAgentLabel,
                                                 arguments =
-                                                    effectiveToolCall.arguments
+                                                    AgentRuntimeSupport.normalizeFinishTaskArgumentsForExecution(
+                                                        effectiveToolCall.arguments
+                                                    ),
+                                                fallbackSummary =
+                                                    buildCurrentSessionFinishFallbackSummary()
                                             )
                                     val summary =
                                         resolvedFinish.canonicalSummary
@@ -10521,6 +10598,38 @@ TODO status. Return via finish_task with JSON:
                                 val script = skillRepository.resolveSkillScript(loaded.entity.id, path)
                                 agentService.runApprovedSkillScript(script, args).getOrThrow()
                             }
+                            "tool_help" -> {
+                                val requestedTool =
+                                    effectiveToolCall.arguments["tool_name"]
+                                        .orEmpty()
+                                val available =
+                                    frozenToolsByTurnBranch[turnBranchKey()]
+                                        ?: getAgentTools(
+                                            _currentAgent.value,
+                                            _activeCustomAgent.value,
+                                            settingsRepo
+                                        )
+                                val selected = available.firstOrNull {
+                                    it.name.equals(
+                                        requestedTool,
+                                        ignoreCase = true
+                                    )
+                                }
+                                if (selected == null) {
+                                    AgentRuntimeSupport.buildBoundedToolRepairCard(
+                                        suspectedToolName = requestedTool,
+                                        reason = "The requested tool is not available to the current agent.",
+                                        availableToolNames = available.map { it.name }
+                                    )
+                                } else {
+                                    AgentRuntimeSupport.buildToolHelpText(
+                                        toolName = selected.name,
+                                        description = selected.description,
+                                        requiredParams = selected.requiredParams,
+                                        parameters = selected.parameters
+                                    )
+                                }
+                            }
                             "get_datetime" -> {
                                 java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
                             }
@@ -10650,12 +10759,29 @@ TODO status. Return via finish_task with JSON:
                                                 "wait_command" -> agentService.waitCommand(nestedArgs["command_id"] ?: "", nestedArgs["wait_seconds"]?.toIntOrNull() ?: 10, nestedArgs["lines"]?.toIntOrNull() ?: 10).getOrThrow()
                                                 "command_list" -> agentService.listCommands().getOrThrow()
                                                 "list_directory" -> {
-                                                    val files = agentService.listDirectory(nestedArgs["path"] ?: WORKSPACE_PATH).getOrThrow()
-                                                    files.joinToString("\n") { f -> "${if (f.isDirectory) "📁" else "📄"} ${f.name}" }
+                                                    val requestedPath =
+                                                        nestedArgs["path"]
+                                                            ?.takeIf { it.isNotBlank() }
+                                                            ?: "."
+                                                    val files = agentService.listDirectory(
+                                                        requestedPath
+                                                    ).getOrThrow()
+                                                    formatDirectoryListingForCurrentRole(
+                                                        requestedPath,
+                                                        files
+                                                    )
                                                 }
                                                 "search_code" -> {
-                                                    val searchResults = agentService.searchCode(nestedArgs["query"] ?: "").getOrThrow()
-                                                    searchResults.joinToString("\n") { r -> "${r.path}:${r.lineNumber}: ${r.content}" }
+                                                    val results = agentService
+                                                        .searchCode(
+                                                            nestedArgs["query"]
+                                                                .orEmpty()
+                                                        )
+                                                        .getOrThrow()
+                                                    formatSearchResultsForCurrentRole(
+                                                        results,
+                                                        nestedArgs
+                                                    )
                                                 }
                                                 "file_line_count" -> agentService.fileLineCount(nestedArgs["path"] ?: "").getOrThrow()
                                                 "read_file_lines" -> {
@@ -10802,6 +10928,30 @@ TODO status. Return via finish_task with JSON:
                         result.getOrNull()
                     } else {
                         null
+                    }
+                    val tracedToolCall =
+                        validatedToolCall.toolCall
+                    if (tracedToolCall.name != "finish_task") {
+                        recordSessionToolTrace(
+                            sessionId = traceSessionId,
+                            toolName = tracedToolCall.name,
+                            arguments = validatedToolCall.normalizedArguments,
+                            status = if (result.isSuccess) "OK" else "ERROR",
+                            rawResult = result.fold(
+                                onSuccess = { it },
+                                onFailure = {
+                                    it.message ?: it.javaClass.simpleName
+                                }
+                            ),
+                            nextHint = if (result.isSuccess) {
+                                nextHintForTool(
+                                    tracedToolCall.name,
+                                    result.getOrNull().orEmpty()
+                                )
+                            } else {
+                                "Use the error envelope to correct this call or choose a narrower diagnostic step."
+                            }
+                        )
                     }
                     if (result.isSuccess) {
                         clearRepeatedFailure(toolCall.name, validatedToolCall.normalizedArguments)
@@ -10972,6 +11122,14 @@ TODO status. Return via finish_task with JSON:
                     } else {
                         ""
                     }
+                    recordSessionToolTrace(
+                        sessionId = traceSessionId,
+                        toolName = toolCall.name,
+                        arguments = toolCall.arguments,
+                        status = "CRASHED",
+                        rawResult = e.message ?: e.javaClass.simpleName,
+                        nextHint = "Choose a smaller recovery step and do not retry unchanged arguments."
+                    )
                     val crashOutput = buildToolResultEnvelope(
                         toolName = toolCall.name,
                         status = "error",
@@ -11073,7 +11231,8 @@ TODO status. Return via finish_task with JSON:
                     "read_memory",
                     "list_memory",
                     "finish_task",
-                    "reflection"
+                    "reflection",
+                    "tool_help"
                 )
             } else {
                 setOf(
@@ -11081,7 +11240,8 @@ TODO status. Return via finish_task with JSON:
                     "write_memory",
                     "list_memory",
                     "finish_task",
-                    "reflection"
+                    "reflection",
+                    "tool_help"
                 )
             }
         }
@@ -11101,7 +11261,8 @@ TODO status. Return via finish_task with JSON:
                 "write_memory",
                 "list_memory",
                 "finish_task",
-                "reflection"
+                "reflection",
+                "tool_help"
             )
         }
 
@@ -11132,6 +11293,121 @@ TODO status. Return via finish_task with JSON:
                 modelOverride = activeCustom.model?.takeIf { it.isNotBlank() },
                 customAgentName = activeCustom.name
             )
+        }
+
+
+        private fun workingStateForSession(
+            sessionId: String?
+        ): AgentRuntimeSupport.AgentWorkingStateLedger? {
+            val id = sessionId ?: return null
+            sessionWorkingStates[id]?.let { return it }
+            val session = _sessions.value[id] ?: return null
+            return AgentRuntimeSupport.createAgentWorkingState(
+                role = _activeCustomAgent.value?.name
+                    ?: session.agentType,
+                objective = session.inputFromParent
+                    ?: _currentTask.value,
+                context = session.contextFromParent
+            ).also { sessionWorkingStates[id] = it }
+        }
+
+        private fun currentSessionWorkingState(): AgentRuntimeSupport.AgentWorkingStateLedger? =
+            workingStateForSession(_currentSessionId.value)
+
+        private fun buildCurrentSessionWorkingStatePrompt(): String? =
+            currentSessionWorkingState()?.toPromptBlock()
+
+        private fun buildCurrentSessionFinishFallbackSummary(): String? =
+            currentSessionWorkingState()?.fallbackFinishSummary()
+
+        private fun recordSessionToolTrace(
+            sessionId: String?,
+            toolName: String,
+            arguments: Map<String, String>,
+            status: String,
+            rawResult: String,
+            nextHint: String? = null
+        ) {
+            val id = sessionId ?: return
+            val current = workingStateForSession(id) ?: return
+            sessionWorkingStates[id] = current.recordTool(
+                toolName = toolName,
+                arguments = arguments,
+                status = status,
+                rawResult = rawResult,
+                nextHint = nextHint
+            )
+        }
+
+        private fun formatDirectoryListingForCurrentRole(
+            requestedPath: String,
+            files: List<FileInfo>
+        ): String {
+            val isScout =
+                _currentAgent.value == AgentRole.CODEBASE_SCOUT &&
+                    _activeCustomAgent.value == null
+            val visible = if (isScout) {
+                files.filterNot { file ->
+                    AgentRuntimeSupport.isCodebaseScoutExcludedPath(
+                        AgentRuntimeSupport.joinProjectRelativePath(
+                            requestedPath,
+                            file.name
+                        )
+                    )
+                }
+            } else {
+                files
+            }
+            val excludedCount = files.size - visible.size
+            val notice = if (isScout && excludedCount > 0) {
+                "[excluded] $excludedCount runtime-metadata/generated entr" +
+                    if (excludedCount == 1) "y was not exposed as project source" else "ies were not exposed as project source"
+            } else {
+                null
+            }
+            return AgentRuntimeSupport.formatDirectoryListing(
+                lines = visible.map { file ->
+                    "${if (file.isDirectory) "[dir]" else "[file]"} ${file.name}"
+                },
+                excludedNotice = notice
+            )
+        }
+
+        private fun formatSearchResultsForCurrentRole(
+            results: List<SearchResult>,
+            arguments: Map<String, String>
+        ): String {
+            val isScout =
+                _currentAgent.value == AgentRole.CODEBASE_SCOUT &&
+                    _activeCustomAgent.value == null
+            val directory = arguments["directory"]
+            val pattern = arguments["file_pattern"]
+            val maxResults = arguments["max_results"]
+                ?.toIntOrNull()
+                ?.coerceIn(1, 500)
+                ?: 120
+            val filtered = results.asSequence()
+                .filter { result ->
+                    AgentRuntimeSupport.projectPathMatchesSearchScope(
+                        path = result.path,
+                        directory = directory,
+                        filePattern = pattern
+                    )
+                }
+                .filterNot { result ->
+                    isScout &&
+                        AgentRuntimeSupport.isCodebaseScoutExcludedPath(
+                            result.path
+                        )
+                }
+                .distinctBy { "${it.path}:${it.lineNumber}" }
+                .take(maxResults)
+                .toList()
+            return filtered.joinToString("\n") { result ->
+                "${result.path}:${result.lineNumber}: ${result.content}"
+            }.ifBlank {
+                "No matching code results were found in the requested source scope."
+            }
         }
 
         private fun recordSessionFileEvidence(path: String, lineReference: String? = null) {
@@ -13328,6 +13604,35 @@ TODO status. Return via finish_task with JSON:
                     else -> value.trim()
                 }
             }
+            if (
+                role == AgentRole.CODEBASE_SCOUT &&
+                activeCustom == null
+            ) {
+                val scopedPath = when (toolCall.name) {
+                    "read_file", "read_file_lines", "file_line_count",
+                    "list_directory" -> normalizedArgs["path"]
+                    "search_code" -> normalizedArgs["directory"]
+                    else -> null
+                }
+                if (scopedPath != null || toolCall.name == "search_code") {
+                    val decision = AgentRuntimeSupport.evaluateCodebaseScoutPath(
+                        toolName = toolCall.name,
+                        path = scopedPath.orEmpty().ifBlank { "." }
+                    )
+                    if (!decision.allowed) {
+                        return Result.failure(
+                            AgentToolPolicyException(
+                                AgentToolPolicyDecision(
+                                    allowed = false,
+                                    code = decision.code,
+                                    message = decision.message,
+                                    recoveryHint = decision.recoveryHint
+                                )
+                            )
+                        )
+                    }
+                }
+            }
             val missing = tool.requiredParams.filter { normalizedArgs[it].isNullOrBlank() }
             if (missing.isNotEmpty()) {
                 return Result.failure(
@@ -13358,12 +13663,24 @@ TODO status. Return via finish_task with JSON:
             }
             normalizedArgs["status"]?.takeIf {
                 it.isNotBlank() &&
-                    it !in setOf("SUCCESS", "FAILED", "BLOCKED")
+                    it.uppercase(java.util.Locale.ROOT) !in setOf(
+                        "SUCCESS",
+                        "COMPLETED",
+                        "PASSED",
+                        "PASS",
+                        "FAILED",
+                        "FAIL",
+                        "ERROR",
+                        "BLOCKED",
+                        "CANCELLED",
+                        "CANCELED",
+                        "INTERRUPTED"
+                    )
             }?.let {
                 return Result.failure(
                     IllegalArgumentException(
                         "Tool `${toolCall.name}` argument `status` must be " +
-                            "`SUCCESS`, `FAILED`, or `BLOCKED`."
+                            "SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED."
                     )
                 )
             }
@@ -13712,13 +14029,23 @@ TODO status. Return via finish_task with JSON:
                 }
                 visualTools.add(
                     AgentTool(
-                        name = "finish_task",
-                        description = "Signal that your one assigned todo-sized task is complete and return control to the Orchestrator. Plain-text summary plus optional status is valid. Rich role-specific JSON may be supplied inside summary, but is not required. Update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, and call reflection for the assigned task before finishing.",
+                        name = "tool_help",
+                        description = "Return compact help and one minimal example for exactly one tool available to the current visual tester.",
                         parameters = mapOf(
-                            "summary" to "Required terminal summary. Use plain text, or optionally a JSON object containing role-specific evidence.",
+                            "tool_name" to "Name of one currently available tool"
+                        ),
+                        requiredParams = listOf("tool_name")
+                    )
+                )
+                visualTools.add(
+                    AgentTool(
+                        name = "finish_task",
+                        description = "Return control to the Orchestrator for this one assigned task. No argument is required; the smallest valid call uses an empty arguments object. You may add an optional terminal status and one short summary. Rich role-specific JSON remains accepted for compatibility. The runtime performs the final reflection gate automatically.",
+                        parameters = mapOf(
+                            "summary" to "Optional short terminal summary, or optional rich role-specific JSON for compatibility.",
                             "status" to "Optional terminal status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED. Defaults to SUCCESS."
                         ),
-                        requiredParams = listOf("summary")
+                        requiredParams = emptyList()
                     )
                 )
                 return stableAgentToolSchemaAcrossModes(visualTools, _currentPlanningModeEnabled.value)
@@ -13815,11 +14142,12 @@ TODO status. Return via finish_task with JSON:
                 ),
                 AgentTool(
                     name = "search_code",
-                    description = "Search for a pattern in project files using ripgrep. Returns matching lines with file paths.",
+                    description = "Search project files for text or a regex. The returned results honor directory, file_pattern, and max_results. CODEBASE_SCOUT automatically excludes runtime metadata and generated/build directories.",
                     parameters = mapOf(
                         "query" to "Text or regex pattern to search for",
-                        "directory" to "Directory to search in (default: project root)",
-                        "file_pattern" to "Glob pattern for files, e.g., '*.py' or '*.js' (default: all files)"
+                        "directory" to "Optional project-relative directory scope (default: project root)",
+                        "file_pattern" to "Optional glob such as '*.kt', '*.js', or 'src/**/*.py'",
+                        "max_results" to "Optional maximum results to return (default: 120, max: 500)"
                     ),
                     requiredParams = listOf("query")
                 ),
@@ -13894,6 +14222,14 @@ TODO status. Return via finish_task with JSON:
                         "candidate_summary" to "Optional summary of the work being evaluated"
                     ),
                     requiredParams = listOf("scope")
+                ),
+                AgentTool(
+                    name = "tool_help",
+                    description = "Return a compact schema and one minimal example for exactly one tool available to the current agent. Use this instead of loading the global tools reference during recovery.",
+                    parameters = mapOf(
+                        "tool_name" to "Name of one currently available tool"
+                    ),
+                    requiredParams = listOf("tool_name")
                 ),
                 AgentTool(
                     name = "get_datetime",
@@ -14323,12 +14659,12 @@ TODO status. Return via finish_task with JSON:
                 tools.add(
                     AgentTool(
                         name = "finish_task",
-                        description = "Signal that your one assigned todo-sized task is complete and return control to the Orchestrator. Plain-text summary plus optional status is valid. Rich role-specific JSON may be supplied inside summary, but is not required. Update project memory first after meaningful changes, confirm LOCAL_SANDBOX projects have .adt/run.json, and call reflection for the assigned task before finishing.",
+                        description = "Return control to the Orchestrator for this one assigned task. No argument is required; the smallest valid call uses an empty arguments object. You may add an optional terminal status and one short summary. Rich role-specific JSON remains accepted for compatibility. The runtime performs the final reflection gate automatically.",
                         parameters = mapOf(
-                            "summary" to "Required terminal summary. Use plain text, or optionally a JSON object containing role-specific evidence.",
+                            "summary" to "Optional short terminal summary, or optional rich role-specific JSON for compatibility.",
                             "status" to "Optional terminal status: SUCCESS, FAILED, BLOCKED, CANCELLED, or INTERRUPTED. Defaults to SUCCESS."
                         ),
-                        requiredParams = listOf("summary")
+                        requiredParams = emptyList()
                     )
                 )
             }

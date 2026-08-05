@@ -87,17 +87,17 @@ internal data class AgentWorkReportTransition(
     val nextOwnerRole: String?,
     val stateRevision: Long
 ) {
-    fun compactEnvelope(): String = buildString {
-        appendLine("Specialist report committed.")
-        appendLine("- report_id: ${report.id}")
-        appendLine("- role: ${report.agentRole}")
-        appendLine("- status: ${report.status}")
-        report.todoId?.let { appendLine("- todo_id: $it") }
-        nextTodoStatus?.let { appendLine("- todo_status: $it") }
-        appendLine("- summary: ${report.summary.take(320)}")
-        appendLine("- full_report: call agent_report_read(report_id=\"${report.id}\")")
-        append("- next_action: ${recommendedAction()}")
-    }.trim()
+    fun compactEnvelope(): String {
+        return AgentRuntimeSupport.compactSpecialistReportReceipt(
+            reportId = report.id,
+            role = report.agentRole,
+            status = report.status,
+            summary = report.summary,
+            todoId = report.todoId,
+            todoStatus = nextTodoStatus,
+            nextAction = recommendedAction()
+        )
+    }
 
     private fun recommendedAction(): String = when (nextTodoStatus) {
         AgentTodoStatus.READY_FOR_REVIEW ->
@@ -278,7 +278,8 @@ internal object AgentProjectControlPlane {
             "agent_report_read",
             "todo_read",
             "reflection",
-            "get_datetime"
+            "get_datetime",
+            "tool_help"
         )
         val codeRead = setOf(
             "read_file",
@@ -305,7 +306,7 @@ internal object AgentProjectControlPlane {
                 "read_skill_resource"
             )
 
-            "CODEBASE_SCOUT" -> commonState + codeRead + memoryRead +
+            "CODEBASE_SCOUT" -> commonState + codeRead +
                 setOf("finish_task")
 
             "RESEARCHER" -> commonState + memoryRead + setOf(
@@ -367,7 +368,8 @@ internal object AgentProjectControlPlane {
             "VISUAL_TESTER" -> setOf(
                 "observe_preview",
                 "interact_preview",
-                "finish_task"
+                "finish_task",
+                "tool_help"
             )
 
             else -> emptySet()
