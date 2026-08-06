@@ -55,6 +55,8 @@ enum class SdComponentRole(val compatToken: String) {
     CONTROLNET("controlnet"),
     LORA("lora"),
     PHOTOMAKER("photomaker"),
+    CLIP_VISION("clip_vision"),
+    IP_ADAPTER("ip_adapter"),
     UPSCALER("upscaler");
 
     companion object {
@@ -67,6 +69,8 @@ enum class SdComponentRole(val compatToken: String) {
             ModelType.SD_CONTROLNET -> CONTROLNET
             ModelType.SD_LORA -> LORA
             ModelType.SD_PHOTOMAKER -> PHOTOMAKER
+            ModelType.SD_CLIP_VISION -> CLIP_VISION
+            ModelType.SD_IP_ADAPTER -> IP_ADAPTER
             ModelType.SD_UPSCALER -> UPSCALER
             ModelType.LLM -> LLM
             ModelType.VISION_PROJECTOR -> LLM_VISION
@@ -105,7 +109,8 @@ data class SdModelFamilySpec(
     val supportsVaeConvDirect: Boolean = false,
     val supportsLoraApplyMode: Boolean = false,
     val supportsQwenImageZeroCondT: Boolean = false,
-    val supportsChromaDisableDitMask: Boolean = false
+    val supportsChromaDisableDitMask: Boolean = false,
+    val supportsIpAdapter: Boolean = false
 )
 
 fun String?.parseSdCompatProfiles(): Set<String> =
@@ -138,7 +143,9 @@ fun ModelEntity.sdFamilyEnum(): SdModelFamily? = SdModelFamily.fromStoredValue(s
 fun ModelEntity.resolvedSdFamily(): Pair<SdModelFamily?, String?> {
     val explicitFamily = sdFamilyEnum()
     if (explicitFamily != null) {
-        return explicitFamily to sdVariantToken()
+        val explicitVariant = sdVariantToken()
+        if (explicitVariant != null) return explicitFamily to explicitVariant
+        return explicitFamily to inferSdFamily(type, repoId, filename).second
     }
     return inferSdFamily(type, repoId, filename)
 }
@@ -220,6 +227,11 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.CHECKPOINT.storedValue
     )
     ModelType.SD_PHOTOMAKER -> setOf("${SdModelFamily.CHECKPOINT.storedValue}:sdxl")
+    ModelType.SD_CLIP_VISION,
+    ModelType.SD_IP_ADAPTER -> setOf(
+        "${SdModelFamily.CHECKPOINT.storedValue}:sd1",
+        "${SdModelFamily.CHECKPOINT.storedValue}:sdxl"
+    )
     ModelType.SD_UPSCALER -> setOf(SdComponentRole.UPSCALER.compatToken)
     else -> emptySet()
 }
@@ -238,6 +250,11 @@ fun inferSdFamily(
                 SdModelFamily.CHECKPOINT to "sdxl"
             haystack.contains("sd2") || haystack.contains("2.1") ->
                 SdModelFamily.CHECKPOINT to "sd2"
+            else -> SdModelFamily.CHECKPOINT to "sd1"
+        }
+        ModelType.SD_CLIP_VISION,
+        ModelType.SD_IP_ADAPTER -> when {
+            haystack.contains("sdxl") -> SdModelFamily.CHECKPOINT to "sdxl"
             else -> SdModelFamily.CHECKPOINT to "sd1"
         }
         ModelType.SD_DIFFUSION -> when {
@@ -292,7 +309,10 @@ fun defaultCapabilitiesForFamily(
     family: SdModelFamily?,
     type: ModelType
 ): String? {
-    if (type == ModelType.SD_UPSCALER) return null
+    if (type == ModelType.SD_UPSCALER ||
+        type == ModelType.SD_CLIP_VISION ||
+        type == ModelType.SD_IP_ADAPTER
+    ) return null
     return when (family) {
         SdModelFamily.CHECKPOINT,
         SdModelFamily.SD3,
@@ -329,7 +349,8 @@ fun resolveSdFamilySpec(
         supportsMmap = true,
         supportsDiffusionFa = true,
         supportsVaeConvDirect = true,
-        supportsLoraApplyMode = true
+        supportsLoraApplyMode = true,
+        supportsIpAdapter = variant == "sd1" || variant == "sdxl"
     )
     SdModelFamily.SD3 -> SdModelFamilySpec(
         family = family,

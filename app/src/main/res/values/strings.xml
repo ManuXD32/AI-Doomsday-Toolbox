@@ -8434,4 +8434,41 @@
     <string name="whisper_error_no_transcript">Whisper completed without producing a readable transcript.</string>
     <string name="whisper_error_vad_model_missing">Silence skipping is enabled, but no readable Whisper VAD model is installed.</string>
     <string name="whisper_error_vad_unsupported">This Whisper binary does not support the required VAD options: %1$s</string>
+
+    <!-- IP-Adapter / CLIP-Vision -->
+    <string name="sd_type_clip_vision">CLIP-Vision</string>
+    <string name="sd_type_ip_adapter">IP-Adapter</string>
+    <string name="sd_models_clip_vision_label">CLIP-Vision encoders (%1$d)</string>
+    <string name="sd_models_ip_adapter_label">IP-Adapter models (%1$d)</string>
+    <string name="sd_models_ip_adapter_search_sd15">🖼️ IP-Adapter for SD 1.5</string>
+    <string name="sd_models_ip_adapter_search_sdxl">🖼️ IP-Adapter for SDXL</string>
+    <string name="sd_models_clip_vision_search">👁️ CLIP-Vision encoders</string>
+    <string name="imagegen_ip_adapter_title">IP-Adapter</string>
+    <string name="imagegen_ip_adapter_desc">Guide appearance from a separate reference image</string>
+    <string name="imagegen_ip_adapter_unsupported_summary">Available for SD 1.5 and SDXL checkpoints</string>
+    <string name="imagegen_ip_adapter_ready">Ready · reference image and models selected</string>
+    <string name="imagegen_ip_adapter_incomplete">Complete the adapter, CLIP-Vision, and reference-image fields</string>
+    <string name="imagegen_ip_adapter_compatibility_note">Classic and Plus adapters use the same controls. Select compatibility profiles carefully: SD 1.5 and SDXL adapter weights are not interchangeable.</string>
+    <string name="imagegen_ip_adapter_model_label">IP-Adapter weights</string>
+    <string name="imagegen_ip_adapter_clip_vision_label">CLIP-Vision encoder</string>
+    <string name="imagegen_ip_adapter_reference_label">Reference image</string>
+    <string name="imagegen_ip_adapter_no_adapter_models">No compatible IP-Adapter model installed</string>
+    <string name="imagegen_ip_adapter_no_clip_vision_models">No compatible CLIP-Vision encoder installed</string>
+    <string name="imagegen_ip_adapter_choose_reference">Choose image</string>
+    <string name="imagegen_ip_adapter_replace_reference">Replace image</string>
+    <string name="imagegen_ip_adapter_reference_import_failed">Could not prepare the reference image: %1$s</string>
+    <string name="imagegen_ip_adapter_strength">IP-Adapter strength</string>
+    <string name="imagegen_ip_adapter_strength_hint">0.6–0.8 is a good starting range; 1.0 is the upstream default.</string>
+    <string name="imagegen_ip_adapter_manage_models">Manage models</string>
+    <string name="imagegen_ip_adapter_clear">Reset</string>
+    <string name="imagegen_error_ip_adapter_unsupported">IP-Adapter is supported only by SD 1.5 and SDXL checkpoint models.</string>
+    <string name="imagegen_error_ip_adapter_missing_adapter">Choose an IP-Adapter weight file before generating.</string>
+    <string name="imagegen_error_ip_adapter_missing_clip_vision">Choose a CLIP-Vision encoder before generating.</string>
+    <string name="imagegen_error_ip_adapter_missing_reference">Choose an IP-Adapter reference image before generating.</string>
+    <string name="imagegen_error_ip_adapter_incompatible_adapter">The selected IP-Adapter weights do not match this checkpoint family.</string>
+    <string name="imagegen_error_ip_adapter_incompatible_clip_vision">The selected CLIP-Vision encoder does not match this checkpoint family.</string>
+    <string name="imagegen_error_ip_adapter_unreadable_adapter">The IP-Adapter model is missing or unreadable: %1$s</string>
+    <string name="imagegen_error_ip_adapter_unreadable_clip_vision">The CLIP-Vision model is missing or unreadable: %1$s</string>
+    <string name="imagegen_error_ip_adapter_unreadable_reference">The IP-Adapter reference image is missing or unreadable: %1$s</string>
+    <string name="imagegen_error_ip_adapter_invalid_strength">IP-Adapter strength must be a finite value of zero or greater.</string>
 </resources>

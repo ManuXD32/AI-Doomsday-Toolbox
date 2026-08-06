@@ -191,6 +191,10 @@ fun WorkflowsScreen(navController: NavController) {
     }
     
     // ===== txt2img+Upscale workflow state (persisted across tab changes) =====
+    val initialTxt2imgIpAdapter = remember {
+        settingsRepo.sdIpAdapterLastUsedDraft()?.readSdIpAdapterDraft()
+            ?: SdIpAdapterDraftState()
+    }
     var txt2imgModelPath by remember { mutableStateOf<String?>(null) }
     var txt2imgPrompt by remember { mutableStateOf("") }
     var txt2imgNegativePrompt by remember { mutableStateOf("") }
@@ -209,6 +213,20 @@ fun WorkflowsScreen(navController: NavController) {
     var txt2imgLlmPath by remember { mutableStateOf<String?>(null) }
     var txt2imgLlmVisionPath by remember { mutableStateOf<String?>(null) }
     var txt2imgPhotoMakerPath by remember { mutableStateOf<String?>(null) }
+    var txt2imgIpAdapterEnabled by remember { mutableStateOf(initialTxt2imgIpAdapter.enabled) }
+    var txt2imgIpAdapterPath by remember { mutableStateOf(initialTxt2imgIpAdapter.adapterPath) }
+    var txt2imgClipVisionPath by remember { mutableStateOf(initialTxt2imgIpAdapter.clipVisionPath) }
+    var txt2imgIpAdapterReferencePath by remember {
+        mutableStateOf(
+            SdIpAdapterReferenceStore.resolveOwnedImagePath(
+                context,
+                initialTxt2imgIpAdapter.imagePath
+            )
+        )
+    }
+    var txt2imgIpAdapterStrength by remember {
+        mutableFloatStateOf(initialTxt2imgIpAdapter.strength)
+    }
     var upscalerPath by remember { mutableStateOf<String?>(null) }
     var upscaleFactor by remember { mutableIntStateOf(2) }
     var upscaleRepeats by remember { mutableIntStateOf(1) }
@@ -219,6 +237,26 @@ fun WorkflowsScreen(navController: NavController) {
     var txt2imgResultPath by remember { mutableStateOf<String?>(null) }
     var txt2imgError by remember { mutableStateOf<String?>(null) }
     
+    LaunchedEffect(
+        txt2imgIpAdapterEnabled,
+        txt2imgIpAdapterPath,
+        txt2imgClipVisionPath,
+        txt2imgIpAdapterReferencePath,
+        txt2imgIpAdapterStrength
+    ) {
+        settingsRepo.setSdIpAdapterLastUsedDraft(
+            org.json.JSONObject().putSdIpAdapterDraft(
+                SdIpAdapterDraftState(
+                    enabled = txt2imgIpAdapterEnabled,
+                    adapterPath = txt2imgIpAdapterPath,
+                    clipVisionPath = txt2imgClipVisionPath,
+                    imagePath = txt2imgIpAdapterReferencePath,
+                    strength = txt2imgIpAdapterStrength
+                )
+            )
+        )
+    }
+
     // Observe workflow state holders at top level (persists across tab changes)
     val workflowTxt2imgState by SDModeStateHolder.workflowTxt2img.state.collectAsState()
     val workflowTxt2imgProgress by SDModeStateHolder.workflowTxt2img.progress.collectAsState()
@@ -921,6 +959,17 @@ fun WorkflowsScreen(navController: NavController) {
                         onLlmVisionChange = { txt2imgLlmVisionPath = it },
                         photoMakerPath = txt2imgPhotoMakerPath,
                         onPhotoMakerChange = { txt2imgPhotoMakerPath = it },
+                        ipAdapterEnabled = txt2imgIpAdapterEnabled,
+                        onIpAdapterEnabledChange = { txt2imgIpAdapterEnabled = it },
+                        ipAdapterPath = txt2imgIpAdapterPath,
+                        onIpAdapterPathChange = { txt2imgIpAdapterPath = it },
+                        clipVisionPath = txt2imgClipVisionPath,
+                        onClipVisionPathChange = { txt2imgClipVisionPath = it },
+                        ipAdapterReferencePath = txt2imgIpAdapterReferencePath,
+                        onIpAdapterReferencePathChange = { txt2imgIpAdapterReferencePath = it },
+                        ipAdapterStrength = txt2imgIpAdapterStrength,
+                        onIpAdapterStrengthChange = { txt2imgIpAdapterStrength = it },
+                        onOpenSdModels = { navController.navigate(Screen.SDModels.route) },
                         upscalerPath = upscalerPath,
                         onUpscalerChange = { upscalerPath = it },
                         upscaleFactor = upscaleFactor,
@@ -5548,6 +5597,17 @@ private fun Txt2ImgUpscaleWorkflowContent(
     onLlmVisionChange: (String?) -> Unit,
     photoMakerPath: String?,
     onPhotoMakerChange: (String?) -> Unit,
+    ipAdapterEnabled: Boolean,
+    onIpAdapterEnabledChange: (Boolean) -> Unit,
+    ipAdapterPath: String?,
+    onIpAdapterPathChange: (String?) -> Unit,
+    clipVisionPath: String?,
+    onClipVisionPathChange: (String?) -> Unit,
+    ipAdapterReferencePath: String?,
+    onIpAdapterReferencePathChange: (String?) -> Unit,
+    ipAdapterStrength: Float,
+    onIpAdapterStrengthChange: (Float) -> Unit,
+    onOpenSdModels: () -> Unit,
     upscalerPath: String?,
     onUpscalerChange: (String?) -> Unit,
     upscaleFactor: Int,
@@ -5582,6 +5642,8 @@ private fun Txt2ImgUpscaleWorkflowContent(
     val sdTaeModels by db.modelDao().getModelsByType(ModelType.SD_TAE).collectAsState(initial = emptyList())
     val sdVaeModels by db.modelDao().getModelsByType(ModelType.SD_VAE).collectAsState(initial = emptyList())
     val sdPhotoMakerModels by db.modelDao().getModelsByType(ModelType.SD_PHOTOMAKER).collectAsState(initial = emptyList())
+    val sdClipVisionModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_VISION).collectAsState(initial = emptyList())
+    val sdIpAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER).collectAsState(initial = emptyList())
     val sdImageSupportModels by db.modelDao()
         .getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
         .collectAsState(initial = emptyList())
@@ -5643,6 +5705,13 @@ private fun Txt2ImgUpscaleWorkflowContent(
     val compatiblePhotoMakerModels = remember(sdPhotoMakerModels, selectedGenerationFamilyEnum, selectedGenerationVariant) {
         filterWorkflowSdComponents(sdPhotoMakerModels, selectedGenerationFamilyEnum, selectedGenerationVariant)
     }
+    val compatibleClipVisionModels = remember(sdClipVisionModels, selectedGenerationFamilyEnum, selectedGenerationVariant) {
+        filterWorkflowSdComponents(sdClipVisionModels, selectedGenerationFamilyEnum, selectedGenerationVariant)
+    }
+    val compatibleIpAdapterModels = remember(sdIpAdapterModels, selectedGenerationFamilyEnum, selectedGenerationVariant) {
+        filterWorkflowSdComponents(sdIpAdapterModels, selectedGenerationFamilyEnum, selectedGenerationVariant)
+    }
+    val supportsIpAdapter = selectedGenerationSpec?.supportsIpAdapter == true
     val missingRequiredComponents = remember(
         selectedGenerationSpec,
         vaePath,
@@ -5684,6 +5753,30 @@ private fun Txt2ImgUpscaleWorkflowContent(
             )
             return@workflow
         }
+        val effectiveIpAdapter = if (ipAdapterEnabled) {
+            try {
+                validateSdIpAdapterConfig(
+                    config = SdIpAdapterConfig(
+                        adapterPath = ipAdapterPath.orEmpty(),
+                        clipVisionPath = clipVisionPath.orEmpty(),
+                        imagePath = ipAdapterReferencePath.orEmpty(),
+                        strength = ipAdapterStrength
+                    ),
+                    supportsIpAdapter = supportsIpAdapter,
+                    adapterCompatible = compatibleIpAdapterModels.any {
+                        it.path == ipAdapterPath
+                    },
+                    clipVisionCompatible = compatibleClipVisionModels.any {
+                        it.path == clipVisionPath
+                    }
+                )
+            } catch (error: SdIpAdapterConfigurationException) {
+                onErrorChange(sdIpAdapterErrorMessage(context, error))
+                return@workflow
+            }
+        } else {
+            null
+        }
         if (modelPath != null && upscalerPath != null && prompt.isNotBlank()) {
             onRunningChange(true)
             onErrorChange(null)
@@ -5718,6 +5811,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 llmPath = llmPath,
                 llmVisionPath = llmVisionPath,
                 photoMakerPath = photoMakerPath,
+                ipAdapter = effectiveIpAdapter,
                 sdParamsBackendMode = selectedGenerationModel?.sdParamsBackendMode ?: "auto",
                 sdRuntimeBackendMode = selectedGenerationModel?.sdRuntimeBackendMode ?: "auto",
                 maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
@@ -5806,6 +5900,17 @@ private fun Txt2ImgUpscaleWorkflowContent(
                                         onLlmChange(config.optString("llm").takeIf { it.isNotEmpty() })
                                         onLlmVisionChange(config.optString("llmVision").takeIf { it.isNotEmpty() })
                                         onPhotoMakerChange(config.optString("photoMaker").takeIf { it.isNotEmpty() })
+                                        val restoredIpAdapter = config.readSdIpAdapterDraft()
+                                        onIpAdapterEnabledChange(restoredIpAdapter.enabled)
+                                        onIpAdapterPathChange(restoredIpAdapter.adapterPath)
+                                        onClipVisionPathChange(restoredIpAdapter.clipVisionPath)
+                                        onIpAdapterReferencePathChange(
+                                            SdIpAdapterReferenceStore.resolveOwnedImagePath(
+                                                context,
+                                                restoredIpAdapter.imagePath
+                                            )
+                                        )
+                                        onIpAdapterStrengthChange(restoredIpAdapter.strength)
                                         onUpscalerChange(config.optString("upscaler").takeIf { it.isNotEmpty() })
                                         onUpscaleFactorChange(config.optInt("upscaleFactor", 2))
                                         onUpscaleRepeatsChange(config.optInt("upscaleRepeats", 1))
@@ -5922,6 +6027,15 @@ private fun Txt2ImgUpscaleWorkflowContent(
                                     put("upscaleFactor", upscaleFactor)
                                     put("upscaleRepeats", upscaleRepeats)
                                     put("upscaleThreads", upscaleThreads)
+                                    putSdIpAdapterDraft(
+                                        SdIpAdapterDraftState(
+                                            enabled = ipAdapterEnabled,
+                                            adapterPath = ipAdapterPath,
+                                            clipVisionPath = clipVisionPath,
+                                            imagePath = ipAdapterReferencePath,
+                                            strength = ipAdapterStrength
+                                        )
+                                    )
                                 }.toString()
                                 
                                 db.workflowTemplateDao().insert(
@@ -6172,6 +6286,32 @@ private fun Txt2ImgUpscaleWorkflowContent(
         
         Spacer(modifier = Modifier.height(12.dp))
         
+        SdIpAdapterCard(
+            supported = supportsIpAdapter,
+            enabled = ipAdapterEnabled,
+            onEnabledChange = onIpAdapterEnabledChange,
+            adapterModels = compatibleIpAdapterModels,
+            clipVisionModels = compatibleClipVisionModels,
+            selectedAdapterPath = ipAdapterPath,
+            onAdapterPathChange = onIpAdapterPathChange,
+            selectedClipVisionPath = clipVisionPath,
+            onClipVisionPathChange = onClipVisionPathChange,
+            referenceImagePath = ipAdapterReferencePath,
+            onReferenceImagePathChange = onIpAdapterReferencePathChange,
+            strength = ipAdapterStrength,
+            onStrengthChange = onIpAdapterStrengthChange,
+            onClearConfiguration = {
+                onIpAdapterEnabledChange(false)
+                onIpAdapterPathChange(null)
+                onClipVisionPathChange(null)
+                onIpAdapterReferencePathChange(null)
+                onIpAdapterStrengthChange(SdIpAdapterDraftState.DEFAULT_STRENGTH)
+            },
+            onOpenModels = onOpenSdModels
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Step 2: Upscale Settings
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -6350,6 +6490,8 @@ private fun workflowComponentRoleLabelRes(role: SdComponentRole): Int = when (ro
     SdComponentRole.CONTROLNET -> R.string.imagegen_component_controlnet
     SdComponentRole.LORA -> R.string.imagegen_component_lora
     SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    SdComponentRole.CLIP_VISION -> R.string.sd_type_clip_vision
+    SdComponentRole.IP_ADAPTER -> R.string.sd_type_ip_adapter
     SdComponentRole.UPSCALER -> R.string.imagegen_component_upscaler
 }
 

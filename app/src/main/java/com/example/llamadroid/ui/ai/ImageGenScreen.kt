@@ -123,6 +123,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
     val photoMakerModels by db.modelDao().getModelsByType(ModelType.SD_PHOTOMAKER)
         .collectAsState(initial = emptyList())
+    val clipVisionModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_VISION)
+        .collectAsState(initial = emptyList())
+    val ipAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER)
+        .collectAsState(initial = emptyList())
     val imageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
         .collectAsState(initial = emptyList())
 
@@ -153,6 +157,26 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var selectedLlmPath by remember { mutableStateOf(restoredDraft?.optString("llm").orEmpty().ifBlank { null }) }
     var selectedLlmVisionPath by remember { mutableStateOf(restoredDraft?.optString("llmVision").orEmpty().ifBlank { null }) }
     var selectedPhotoMakerPath by remember { mutableStateOf(restoredDraft?.optString("photoMaker").orEmpty().ifBlank { null }) }
+
+    val restoredIpAdapterDraft = remember(restoredDraft) {
+        restoredDraft
+            ?.takeIf { it.has("ipAdapter") }
+            ?.readSdIpAdapterDraft()
+            ?: settingsRepo.sdIpAdapterLastUsedDraft()?.readSdIpAdapterDraft()
+            ?: SdIpAdapterDraftState()
+    }
+    var ipAdapterEnabled by remember { mutableStateOf(restoredIpAdapterDraft.enabled) }
+    var selectedIpAdapterPath by remember { mutableStateOf(restoredIpAdapterDraft.adapterPath) }
+    var selectedClipVisionPath by remember { mutableStateOf(restoredIpAdapterDraft.clipVisionPath) }
+    var ipAdapterReferencePath by remember {
+        mutableStateOf(
+            SdIpAdapterReferenceStore.resolveOwnedImagePath(
+                context,
+                restoredIpAdapterDraft.imagePath
+            )
+        )
+    }
+    var ipAdapterStrength by remember { mutableFloatStateOf(restoredIpAdapterDraft.strength) }
 
     // ControlNet settings (optional)
     var controlNetEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("controlEnabled", false) ?: false) }
@@ -283,6 +307,18 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         selectedVariant
     )
     val compatiblePhotoMakerModels = filterSdComponents(photoMakerModels, selectedFamily, selectedVariant)
+    val compatibleClipVisionModels = filterSdComponents(
+        clipVisionModels,
+        selectedFamily,
+        selectedVariant
+    )
+    val compatibleIpAdapterModels = filterSdComponents(
+        ipAdapterModels,
+        selectedFamily,
+        selectedVariant
+    )
+    val supportsIpAdapter = selectedMode != 2 &&
+        selectedFamilySpec?.supportsIpAdapter == true
     val missingRequiredComponents = selectedFamilySpec?.requiredRoles?.filter { role ->
         when (role) {
             SdComponentRole.VAE -> selectedVaePath.isNullOrBlank()
@@ -382,9 +418,30 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
     var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
 
+    fun currentIpAdapterDraftState(): SdIpAdapterDraftState =
+        SdIpAdapterDraftState(
+            enabled = ipAdapterEnabled,
+            adapterPath = selectedIpAdapterPath,
+            clipVisionPath = selectedClipVisionPath,
+            imagePath = ipAdapterReferencePath,
+            strength = ipAdapterStrength
+        ).normalized()
+
+    LaunchedEffect(
+        ipAdapterEnabled,
+        selectedIpAdapterPath,
+        selectedClipVisionPath,
+        ipAdapterReferencePath,
+        ipAdapterStrength
+    ) {
+        settingsRepo.setSdIpAdapterLastUsedDraft(
+            org.json.JSONObject().putSdIpAdapterDraft(currentIpAdapterDraftState())
+        )
+    }
+
     DisposableEffect(Unit) {
         onDispose {
-            settingsRepo.setImageGenerationDraft(org.json.JSONObject().apply {
+            val imageDraft = org.json.JSONObject().apply {
                 put("mode", selectedMode); put("model", selectedGenerationModelPath); put("upscaler", selectedUpscalerModelPath)
                 put("prompt", prompt); put("negativePrompt", negativePrompt); put("advanced", showAdvanced)
                 put("vae", selectedVaePath); put("tae", selectedTaePath); put("clipL", selectedClipLPath); put("clipG", selectedClipGPath); put("t5", selectedT5xxlPath); put("llm", selectedLlmPath); put("llmVision", selectedLlmVisionPath); put("photoMaker", selectedPhotoMakerPath)
@@ -394,7 +451,12 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 put("input", selectedImagePath); put("strength", strength); put("quant", selectedQuantType); put("upscaleFactor", upscaleFactor); put("upscaleRepeats", upscaleRepeats); put("threads", threads)
                 put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
-            })
+                putSdIpAdapterDraft(currentIpAdapterDraftState())
+            }
+            settingsRepo.setImageGenerationDraft(imageDraft)
+            settingsRepo.setSdIpAdapterLastUsedDraft(
+                org.json.JSONObject().putSdIpAdapterDraft(currentIpAdapterDraftState())
+            )
         }
     }
 
@@ -628,6 +690,31 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             )
             return@generate
         }
+        val effectiveIpAdapter = if (selectedMode != 2 && ipAdapterEnabled) {
+            try {
+                validateSdIpAdapterConfig(
+                    config = SdIpAdapterConfig(
+                        adapterPath = selectedIpAdapterPath.orEmpty(),
+                        clipVisionPath = selectedClipVisionPath.orEmpty(),
+                        imagePath = ipAdapterReferencePath.orEmpty(),
+                        strength = ipAdapterStrength
+                    ),
+                    supportsIpAdapter = supportsIpAdapter,
+                    adapterCompatible = compatibleIpAdapterModels.any {
+                        it.path == selectedIpAdapterPath
+                    },
+                    clipVisionCompatible = compatibleClipVisionModels.any {
+                        it.path == selectedClipVisionPath
+                    }
+                )
+            } catch (error: SdIpAdapterConfigurationException) {
+                errorMessage = sdIpAdapterErrorMessage(context, error)
+                return@generate
+            }
+        } else {
+            null
+        }
+
         val modelFileExists = modelPath?.let { File(it).exists() } ?: false
         val inputImageExists = inputImagePath?.let { File(it).exists() } ?: false
         val canGenerate = when (selectedMode) {
@@ -755,6 +842,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         null
                     },
                     photoMakerPath = selectedPhotoMakerPath,
+                    ipAdapter = effectiveIpAdapter,
                     flowShift = flowShiftText.toFloatOrNull(),
                     diffusionFa = diffusionFaEnabled,
                     diffusionConvDirect = diffusionConvDirectEnabled,
@@ -1395,6 +1483,36 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }
             }
         }
+
+                if (selectedMode != 2) {
+                    item(key = "ip-adapter") {
+                        SdIpAdapterCard(
+                            supported = supportsIpAdapter,
+                            enabled = ipAdapterEnabled,
+                            onEnabledChange = { ipAdapterEnabled = it },
+                            adapterModels = compatibleIpAdapterModels,
+                            clipVisionModels = compatibleClipVisionModels,
+                            selectedAdapterPath = selectedIpAdapterPath,
+                            onAdapterPathChange = { selectedIpAdapterPath = it },
+                            selectedClipVisionPath = selectedClipVisionPath,
+                            onClipVisionPathChange = { selectedClipVisionPath = it },
+                            referenceImagePath = ipAdapterReferencePath,
+                            onReferenceImagePathChange = { ipAdapterReferencePath = it },
+                            strength = ipAdapterStrength,
+                            onStrengthChange = { ipAdapterStrength = it },
+                            onClearConfiguration = {
+                                ipAdapterEnabled = false
+                                selectedIpAdapterPath = null
+                                selectedClipVisionPath = null
+                                ipAdapterReferencePath = null
+                                ipAdapterStrength = SdIpAdapterDraftState.DEFAULT_STRENGTH
+                            },
+                            onOpenModels = {
+                                navController.navigate(Screen.SDModels.route)
+                            }
+                        )
+                    }
+                }
 
         if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) item(key = "tensor-types") {
             Spacer(modifier = Modifier.height(12.dp))
@@ -2525,6 +2643,8 @@ private fun componentRoleLabelRes(role: SdComponentRole): Int = when (role) {
     SdComponentRole.CONTROLNET -> R.string.imagegen_component_controlnet
     SdComponentRole.LORA -> R.string.imagegen_component_lora
     SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    SdComponentRole.CLIP_VISION -> R.string.sd_type_clip_vision
+    SdComponentRole.IP_ADAPTER -> R.string.sd_type_ip_adapter
     SdComponentRole.UPSCALER -> R.string.imagegen_component_upscaler
 }
 

@@ -113,5 +113,9 @@ enum class ModelType {
     // Whisper types
     WHISPER,          // WhisperCPP speech-to-text model
     // Quadtrix.cpp training checkpoints
-    QUADTRIX          // Native Quadtrix checkpoint; not compatible with llama.cpp/GGUF
+    QUADTRIX,         // Native Quadtrix checkpoint; not compatible with llama.cpp/GGUF
+    // Optional stable-diffusion.cpp image-conditioning components. Appended to
+    // preserve every existing persisted enum ordinal.
+    SD_CLIP_VISION,   // CLIP-Vision image encoder for IP-Adapter
+    SD_IP_ADAPTER     // Classic or Plus IP-Adapter weights
 }

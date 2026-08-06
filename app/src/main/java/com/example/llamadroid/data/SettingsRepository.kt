@@ -4994,6 +4994,9 @@ Keep it brief but capture essential details."""
     /** Durable local drafts for the native Stable Diffusion image and video forms. */
     fun imageGenerationDraft(): JSONObject? = readJsonDraft("sd_image_generation_draft")
     fun setImageGenerationDraft(draft: JSONObject) = saveJsonDraft("sd_image_generation_draft", draft)
+    fun sdIpAdapterLastUsedDraft(): JSONObject? = readJsonDraft("sd_ip_adapter_last_used")
+    fun setSdIpAdapterLastUsedDraft(draft: JSONObject) =
+        saveJsonDraft("sd_ip_adapter_last_used", draft)
     fun videoGenerationDraft(): JSONObject? = readJsonDraft("sd_video_generation_draft")
     fun setVideoGenerationDraft(draft: JSONObject) = saveJsonDraft("sd_video_generation_draft", draft)
 

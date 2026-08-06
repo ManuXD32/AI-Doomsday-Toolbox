@@ -4,6 +4,14 @@ import android.os.Parcelable
 import com.example.llamadroid.sd.SdLoraApplyMode
 import kotlinx.parcelize.Parcelize
 
+@Parcelize
+data class SdIpAdapterConfig(
+    val adapterPath: String,
+    val clipVisionPath: String,
+    val imagePath: String,
+    val strength: Float = 1.0f
+) : Parcelable
+
 /**
  * Configuration for stable-diffusion.cpp image generation
  */
@@ -65,6 +73,8 @@ data class SDConfig(
     val textualInversionPath: String? = null,
     // PhotoMaker (optional)
     val photoMakerPath: String? = null,
+    // IP-Adapter (classic and Plus share the same upstream CLI flags)
+    val ipAdapter: SdIpAdapterConfig? = null,
     // Family-specific runtime flags
     val flowShift: Float? = null,
     val diffusionFa: Boolean = false,

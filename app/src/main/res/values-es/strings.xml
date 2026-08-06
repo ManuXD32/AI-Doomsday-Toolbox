@@ -8391,4 +8391,41 @@
     <string name="whisper_error_no_transcript">Whisper terminó sin crear una transcripción legible.</string>
     <string name="whisper_error_vad_model_missing">La omisión de silencios está activada, pero no hay ningún modelo VAD de Whisper legible.</string>
     <string name="whisper_error_vad_unsupported">Este binario de Whisper no admite las opciones VAD necesarias: %1$s</string>
+
+    <!-- IP-Adapter / CLIP-Vision -->
+    <string name="sd_type_clip_vision">CLIP-Vision</string>
+    <string name="sd_type_ip_adapter">IP-Adapter</string>
+    <string name="sd_models_clip_vision_label">Codificadores CLIP-Vision (%1$d)</string>
+    <string name="sd_models_ip_adapter_label">Modelos IP-Adapter (%1$d)</string>
+    <string name="sd_models_ip_adapter_search_sd15">🖼️ IP-Adapter para SD 1.5</string>
+    <string name="sd_models_ip_adapter_search_sdxl">🖼️ IP-Adapter para SDXL</string>
+    <string name="sd_models_clip_vision_search">👁️ Codificadores CLIP-Vision</string>
+    <string name="imagegen_ip_adapter_title">IP-Adapter</string>
+    <string name="imagegen_ip_adapter_desc">Guía la apariencia con una imagen de referencia independiente</string>
+    <string name="imagegen_ip_adapter_unsupported_summary">Disponible para checkpoints SD 1.5 y SDXL</string>
+    <string name="imagegen_ip_adapter_ready">Listo · imagen de referencia y modelos seleccionados</string>
+    <string name="imagegen_ip_adapter_incomplete">Completa el adaptador, CLIP-Vision y la imagen de referencia</string>
+    <string name="imagegen_ip_adapter_compatibility_note">Los adaptadores clásicos y Plus usan los mismos controles. Elige bien los perfiles de compatibilidad: los pesos de SD 1.5 y SDXL no son intercambiables.</string>
+    <string name="imagegen_ip_adapter_model_label">Pesos de IP-Adapter</string>
+    <string name="imagegen_ip_adapter_clip_vision_label">Codificador CLIP-Vision</string>
+    <string name="imagegen_ip_adapter_reference_label">Imagen de referencia</string>
+    <string name="imagegen_ip_adapter_no_adapter_models">No hay un modelo IP-Adapter compatible instalado</string>
+    <string name="imagegen_ip_adapter_no_clip_vision_models">No hay un codificador CLIP-Vision compatible instalado</string>
+    <string name="imagegen_ip_adapter_choose_reference">Elegir imagen</string>
+    <string name="imagegen_ip_adapter_replace_reference">Cambiar imagen</string>
+    <string name="imagegen_ip_adapter_reference_import_failed">No se pudo preparar la imagen de referencia: %1$s</string>
+    <string name="imagegen_ip_adapter_strength">Intensidad de IP-Adapter</string>
+    <string name="imagegen_ip_adapter_strength_hint">0,6–0,8 es un buen punto de partida; 1,0 es el valor predeterminado de upstream.</string>
+    <string name="imagegen_ip_adapter_manage_models">Gestionar modelos</string>
+    <string name="imagegen_ip_adapter_clear">Restablecer</string>
+    <string name="imagegen_error_ip_adapter_unsupported">IP-Adapter solo es compatible con checkpoints SD 1.5 y SDXL.</string>
+    <string name="imagegen_error_ip_adapter_missing_adapter">Elige los pesos de IP-Adapter antes de generar.</string>
+    <string name="imagegen_error_ip_adapter_missing_clip_vision">Elige un codificador CLIP-Vision antes de generar.</string>
+    <string name="imagegen_error_ip_adapter_missing_reference">Elige una imagen de referencia de IP-Adapter antes de generar.</string>
+    <string name="imagegen_error_ip_adapter_incompatible_adapter">Los pesos de IP-Adapter seleccionados no son compatibles con esta familia de checkpoint.</string>
+    <string name="imagegen_error_ip_adapter_incompatible_clip_vision">El codificador CLIP-Vision seleccionado no es compatible con esta familia de checkpoint.</string>
+    <string name="imagegen_error_ip_adapter_unreadable_adapter">El modelo IP-Adapter no existe o no se puede leer: %1$s</string>
+    <string name="imagegen_error_ip_adapter_unreadable_clip_vision">El modelo CLIP-Vision no existe o no se puede leer: %1$s</string>
+    <string name="imagegen_error_ip_adapter_unreadable_reference">La imagen de referencia de IP-Adapter no existe o no se puede leer: %1$s</string>
+    <string name="imagegen_error_ip_adapter_invalid_strength">La intensidad de IP-Adapter debe ser un valor finito igual o mayor que cero.</string>
 </resources>

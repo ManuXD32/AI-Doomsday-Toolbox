@@ -3888,6 +3888,8 @@ private fun sdDistributedComponentRoleLabelRes(role: SdComponentRole): Int = whe
     SdComponentRole.CONTROLNET -> R.string.imagegen_component_controlnet
     SdComponentRole.LORA -> R.string.imagegen_component_lora
     SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    SdComponentRole.CLIP_VISION -> R.string.sd_type_clip_vision
+    SdComponentRole.IP_ADAPTER -> R.string.sd_type_ip_adapter
     SdComponentRole.UPSCALER -> R.string.imagegen_component_upscaler
 }
 
@@ -3902,6 +3904,8 @@ private fun sdDistributedEmptyComponentMessageRes(role: SdComponentRole): Int = 
     SdComponentRole.CONTROLNET -> R.string.imagegen_no_controlnet
     SdComponentRole.LORA -> R.string.imagegen_no_lora
     SdComponentRole.PHOTOMAKER -> R.string.imagegen_no_photomaker
+    SdComponentRole.CLIP_VISION -> R.string.imagegen_ip_adapter_no_clip_vision_models
+    SdComponentRole.IP_ADAPTER -> R.string.imagegen_ip_adapter_no_adapter_models
     SdComponentRole.MAIN_MODEL,
     SdComponentRole.UPSCALER -> R.string.sd_dist_no_models_available
 }

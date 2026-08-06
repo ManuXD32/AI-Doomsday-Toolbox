@@ -657,6 +657,8 @@ class StableDiffusionService : Service() {
                     binaryCapabilities = binaryCapabilities
                 )
             )
+        } catch (e: SdIpAdapterConfigurationException) {
+            throw SdConfigurationException(sdIpAdapterErrorMessage(this@StableDiffusionService, e))
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(
                 getString(
@@ -1688,6 +1690,8 @@ class StableDiffusionService : Service() {
         SdComponentRole.CONTROLNET -> getString(R.string.imagegen_component_controlnet)
         SdComponentRole.LORA -> getString(R.string.imagegen_component_lora)
         SdComponentRole.PHOTOMAKER -> getString(R.string.imagegen_component_photomaker)
+        SdComponentRole.CLIP_VISION -> getString(R.string.sd_type_clip_vision)
+        SdComponentRole.IP_ADAPTER -> getString(R.string.sd_type_ip_adapter)
         SdComponentRole.UPSCALER -> getString(R.string.imagegen_component_upscaler)
         SdComponentRole.MAIN_MODEL -> getString(R.string.imagegen_component_main_model)
     }

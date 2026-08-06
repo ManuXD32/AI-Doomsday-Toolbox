@@ -170,6 +170,25 @@ fun buildSdCommandArgs(
         requireFlag("--photo-maker")
         args.addAll(listOf("--photo-maker", it))
     }
+    config.ipAdapter?.let { rawAdapter ->
+        val adapter = validateSdIpAdapterConfig(
+            config = rawAdapter,
+            supportsIpAdapter = spec.supportsIpAdapter
+        ) ?: error("IP-Adapter validation returned no configuration")
+        requireFlag("--clip_vision")
+        requireFlag("--ip-adapter")
+        requireFlag("--ip-adapter-image")
+        requireFlag("--ip-adapter-strength")
+        args.addAll(listOf("--clip_vision", adapter.clipVisionPath))
+        args.addAll(listOf("--ip-adapter", adapter.adapterPath))
+        args.addAll(listOf("--ip-adapter-image", adapter.imagePath))
+        args.addAll(
+            listOf(
+                "--ip-adapter-strength",
+                formatSdIpAdapterStrength(adapter.strength)
+            )
+        )
+    }
 
     val promptAdapters = buildList {
         config.loraPath?.let { path ->

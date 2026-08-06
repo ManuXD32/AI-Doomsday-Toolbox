@@ -80,6 +80,8 @@ internal class SdToolGenerationRunner(
         )
         try {
             args.addAll(buildSdCommandArgs(effectiveConfig, binaryCapabilities))
+        } catch (e: SdIpAdapterConfigurationException) {
+            throw SdConfigurationException(sdIpAdapterErrorMessage(context, e))
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_missing_required_components, e.roles.joinToString(", ") { it.name }))
         } catch (e: SdUnsupportedFlagsException) {
@@ -148,6 +150,7 @@ internal fun shouldRetrySdGenerationOnCpu(
     distributedRuntime: SdDistributedRuntimeConfig,
     error: Throwable
 ): Boolean {
+    if (error is SdConfigurationException) return false
     if (!DeviceAcceleration.isAcceleratorBinary(sdBinary) ||
         cpuBinary == null ||
         !cpuBinary.exists() ||

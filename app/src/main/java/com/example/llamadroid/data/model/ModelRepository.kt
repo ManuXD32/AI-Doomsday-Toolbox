@@ -204,6 +204,8 @@ class ModelRepository(
             ModelType.SD_TEXTUAL_INVERSION -> "sd/embeddings"
             ModelType.SD_CONTROLNET -> "sd/controlnet"
             ModelType.SD_PHOTOMAKER -> "sd/photomaker"
+            ModelType.SD_CLIP_VISION -> "sd/clip_vision"
+            ModelType.SD_IP_ADAPTER -> "sd/ip_adapter"
             ModelType.ONNX_IMAGE_GEN,
             ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
@@ -785,7 +787,9 @@ class ModelRepository(
                 ModelType.SD_VAE,
                 ModelType.SD_LORA,
                 ModelType.SD_CONTROLNET,
-                ModelType.SD_PHOTOMAKER
+                ModelType.SD_PHOTOMAKER,
+                ModelType.SD_CLIP_VISION,
+                ModelType.SD_IP_ADAPTER
             )
             modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
                 runCatching {

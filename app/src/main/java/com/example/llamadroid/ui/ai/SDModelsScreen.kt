@@ -110,6 +110,8 @@ enum class SDModelSelectionType(
         R.string.sd_type_textual_inversion
     ),
     PHOTOMAKER(ModelType.SD_PHOTOMAKER, R.string.sd_type_photomaker),
+    CLIP_VISION(ModelType.SD_CLIP_VISION, R.string.sd_type_clip_vision),
+    IP_ADAPTER(ModelType.SD_IP_ADAPTER, R.string.sd_type_ip_adapter),
     IMAGE_LLM(ModelType.LLM, R.string.sd_type_image_llm),
     IMAGE_LLM_VISION(ModelType.VISION_PROJECTOR, R.string.sd_type_image_llm_vision),
     UPSCALER(ModelType.SD_UPSCALER, R.string.sd_type_upscaler)
@@ -155,6 +157,10 @@ fun SDModelsScreen(navController: NavController) {
         .collectAsState(initial = emptyList())
     val sdPhotoMakerModels by db.modelDao().getModelsByType(ModelType.SD_PHOTOMAKER)
         .collectAsState(initial = emptyList())
+    val sdClipVisionModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_VISION)
+        .collectAsState(initial = emptyList())
+    val sdIpAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER)
+        .collectAsState(initial = emptyList())
     val sdImageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
         .collectAsState(initial = emptyList())
     val imageLlmModels = sdImageSupportModels.filter { it.type == ModelType.LLM && it.isSdImageSupportModel() }
@@ -164,6 +170,7 @@ fun SDModelsScreen(navController: NavController) {
         sdDiffusionModels.size + sdClipLModels.size + sdClipGModels.size +
         sdT5xxlModels.size + sdTaeModels.size + sdVaeModels.size +
         sdControlNetModels.size + sdLoraModels.size + sdPhotoMakerModels.size +
+        sdClipVisionModels.size + sdIpAdapterModels.size +
         imageLlmModels.size + imageVisionModels.size
     
     // Download progress
@@ -208,6 +215,22 @@ fun SDModelsScreen(navController: NavController) {
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
             
+            SDSearchSuggestion(
+                context.getString(R.string.sd_models_ip_adapter_search_sd15),
+                "h94/IP-Adapter",
+                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
+            ),
+            SDSearchSuggestion(
+                context.getString(R.string.sd_models_ip_adapter_search_sdxl),
+                "h94/IP-Adapter SDXL",
+                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
+            ),
+            SDSearchSuggestion(
+                context.getString(R.string.sd_models_clip_vision_search),
+                "CLIP-Vision safetensors",
+                listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
+            ),
+
             // === FLUX Diffusion Models ===
             SDSearchSuggestion(
                 "⚡ FLUX Schnell Q4 (8GB+)",
@@ -626,6 +649,8 @@ fun SDModelsScreen(navController: NavController) {
                 controlNetModels = sdControlNetModels,
                 loraModels = sdLoraModels,
                 photoMakerModels = sdPhotoMakerModels,
+                clipVisionModels = sdClipVisionModels,
+                ipAdapterModels = sdIpAdapterModels,
                 imageLlmModels = imageLlmModels,
                 imageVisionModels = imageVisionModels,
                 onDelete = { model ->
@@ -674,6 +699,8 @@ private fun InstalledSDModelsTab(
     controlNetModels: List<ModelEntity>,
     loraModels: List<ModelEntity>,
     photoMakerModels: List<ModelEntity>,
+    clipVisionModels: List<ModelEntity>,
+    ipAdapterModels: List<ModelEntity>,
     imageLlmModels: List<ModelEntity>,
     imageVisionModels: List<ModelEntity>,
     onDelete: (ModelEntity) -> Unit,
@@ -1079,6 +1106,7 @@ private fun InstalledSDModelsTab(
             diffusionModels.isNotEmpty() || clipLModels.isNotEmpty() || clipGModels.isNotEmpty() ||
             t5xxlModels.isNotEmpty() || taeModels.isNotEmpty() || vaeModels.isNotEmpty() ||
             controlNetModels.isNotEmpty() || loraModels.isNotEmpty() || photoMakerModels.isNotEmpty() ||
+            clipVisionModels.isNotEmpty() || ipAdapterModels.isNotEmpty() ||
             imageLlmModels.isNotEmpty() || imageVisionModels.isNotEmpty()
         
         if (!hasAnyModels) {
@@ -1371,6 +1399,64 @@ private fun InstalledSDModelsTab(
                         )
                     }
                     items(photoMakerModels) { model ->
+                        InstalledModelCard(
+                            model = model,
+                            capabilities = installedCapabilitiesFor(model),
+                            onDelete = { onDelete(model) },
+                            onExport = { exportModel(model) },
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                                editSdFamily = model.sdFamilyEnum()
+                                editSdVariant = model.sdVariant.orEmpty()
+                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                            }
+                        )
+                    }
+                }
+
+                if (clipVisionModels.isNotEmpty()) {
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.sd_models_clip_vision_label, clipVisionModels.size),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                    items(clipVisionModels) { model ->
+                        InstalledModelCard(
+                            model = model,
+                            capabilities = installedCapabilitiesFor(model),
+                            onDelete = { onDelete(model) },
+                            onExport = { exportModel(model) },
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                                editSdFamily = model.sdFamilyEnum()
+                                editSdVariant = model.sdVariant.orEmpty()
+                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                            }
+                        )
+                    }
+                }
+
+                if (ipAdapterModels.isNotEmpty()) {
+                    item {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.sd_models_ip_adapter_label, ipAdapterModels.size),
+                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                    items(ipAdapterModels) { model ->
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
@@ -1769,6 +1855,8 @@ private fun requiresCompatProfiles(selectionType: SDModelSelectionType): Boolean
     SDModelSelectionType.CONTROLNET,
     SDModelSelectionType.LORA,
     SDModelSelectionType.PHOTOMAKER,
+    SDModelSelectionType.CLIP_VISION,
+    SDModelSelectionType.IP_ADAPTER,
     SDModelSelectionType.IMAGE_LLM,
     SDModelSelectionType.IMAGE_LLM_VISION,
     SDModelSelectionType.UPSCALER -> true
@@ -1835,6 +1923,8 @@ private fun selectionTypeForModel(model: ModelEntity): SDModelSelectionType = wh
     ModelType.SD_TEXTUAL_INVERSION ->
         SDModelSelectionType.TEXTUAL_INVERSION
     ModelType.SD_PHOTOMAKER -> SDModelSelectionType.PHOTOMAKER
+    ModelType.SD_CLIP_VISION -> SDModelSelectionType.CLIP_VISION
+    ModelType.SD_IP_ADAPTER -> SDModelSelectionType.IP_ADAPTER
     ModelType.LLM -> SDModelSelectionType.IMAGE_LLM
     ModelType.VISION_PROJECTOR -> SDModelSelectionType.IMAGE_LLM_VISION
     ModelType.SD_UPSCALER -> SDModelSelectionType.UPSCALER
@@ -1855,6 +1945,20 @@ private fun inferSelectionType(repoId: String, filename: String): SDModelSelecti
     filename.contains("mmproj") || repoId.contains("mmproj") ||
         filename.contains("vision", ignoreCase = true) && repoId.contains("qwen", ignoreCase = true) ->
         SDModelSelectionType.IMAGE_LLM_VISION
+    filename.contains("clip_vision", ignoreCase = true) ||
+        filename.contains("clip-vision", ignoreCase = true) ||
+        filename.contains("image_encoder", ignoreCase = true) ||
+        filename.contains("image-encoder", ignoreCase = true) ||
+        filename.contains("clip-vit", ignoreCase = true) ||
+        repoId.contains("clip_vision", ignoreCase = true) ||
+        repoId.contains("clip-vision", ignoreCase = true) ->
+        SDModelSelectionType.CLIP_VISION
+    filename.contains("ip-adapter", ignoreCase = true) ||
+        filename.contains("ip_adapter", ignoreCase = true) ||
+        filename.contains("ipadapter", ignoreCase = true) ||
+        repoId.contains("ip-adapter", ignoreCase = true) ||
+        repoId.contains("ip_adapter", ignoreCase = true) ->
+        SDModelSelectionType.IP_ADAPTER
     filename.contains("upscale") || filename.contains("esrgan") ||
         repoId.contains("esrgan") || repoId.contains("upscale") ->
         SDModelSelectionType.UPSCALER
@@ -2318,7 +2422,9 @@ private fun DownloadingTab(
         "sd_vae|",
         "sd_lora|",
         "sd_controlnet|",
-        "sd_photomaker|"
+        "sd_photomaker|",
+        "sd_clip_vision|",
+        "sd_ip_adapter|"
     )
     val activeDownloads = downloadProgress.filter { (key, value) ->
         sdProgressPrefixes.any { key.startsWith(it) } &&
@@ -2344,7 +2450,9 @@ private fun DownloadingTab(
                     ModelType.SD_LORA,
                     ModelType.SD_TEXTUAL_INVERSION,
                     ModelType.SD_CONTROLNET,
-                    ModelType.SD_PHOTOMAKER
+                    ModelType.SD_PHOTOMAKER,
+                    ModelType.SD_CLIP_VISION,
+                    ModelType.SD_IP_ADAPTER
                 )
             )
         }
