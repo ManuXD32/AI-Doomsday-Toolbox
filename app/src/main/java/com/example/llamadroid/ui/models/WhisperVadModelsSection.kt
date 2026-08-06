@@ -3,17 +3,43 @@ package com.example.llamadroid.ui.models
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -59,20 +85,31 @@ fun WhisperVadModelsSection(
 
     fun startDownload(spec: WhisperVadModelSpec) {
         val target = WhisperVadAssetStore.targetFile(context, spec.filename)
-        if (WhisperVadAssetStore.isReadableModel(target)) {
+        if (WhisperVadAssetStore.isVerifiedCatalogModel(target, spec)) {
             select(target)
             refresh += 1
             return
         }
+        if (target.exists()) target.delete()
         val id = whisperVadDownloadId(spec)
         DownloadProgressHolder.updateProgress(id, spec.filename, 0f)
         DownloadService.startDownload(
-            context,
-            spec.downloadUrl,
-            target.absolutePath,
-            spec.filename,
-            id
+            context = context,
+            url = spec.downloadUrl,
+            destPath = target.absolutePath,
+            filename = spec.filename,
+            downloadId = id
         )
+    }
+
+    fun cancelDownload(spec: WhisperVadModelSpec) {
+        val id = whisperVadDownloadId(spec)
+        DownloadService.cancelDownload(
+            context = context,
+            filename = spec.filename,
+            downloadId = id
+        )
+        DownloadProgressHolder.removeProgress(id)
     }
 
     val importLauncher = rememberLauncherForActivityResult(
@@ -152,10 +189,11 @@ fun WhisperVadModelsSection(
             when (progressMap[id]) {
                 1f -> {
                     val target = WhisperVadAssetStore.targetFile(context, spec.filename)
-                    if (WhisperVadAssetStore.isReadableModel(target)) {
+                    if (WhisperVadAssetStore.isVerifiedCatalogModel(target, spec)) {
                         if (selectedPath == null) select(target)
                         refresh += 1
                     } else {
+                        target.delete()
                         Toast.makeText(
                             context,
                             context.getString(
@@ -167,6 +205,7 @@ fun WhisperVadModelsSection(
                     }
                     DownloadProgressHolder.removeProgress(id)
                 }
+
                 -1f -> {
                     Toast.makeText(
                         context,
@@ -182,139 +221,65 @@ fun WhisperVadModelsSection(
         }
     }
 
-    val active = WhisperVadModelCatalog.models.firstNotNullOfOrNull { spec ->
-        val progress = progressMap[whisperVadDownloadId(spec)]
-            ?: return@firstNotNullOfOrNull null
-        if (progress < 1f && progress != -1f) spec to progress else null
-    }
-
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.24f)
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            stringResource(R.string.whisper_vad_models_title),
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
         )
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                stringResource(R.string.whisper_vad_models_title),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                stringResource(R.string.whisper_vad_models_desc),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        Text(
+            stringResource(R.string.whisper_vad_models_desc),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(8.dp))
 
-            active?.let { (spec, progress) ->
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(spec.displayName, style = MaterialTheme.typography.labelMedium)
-                Spacer(modifier = Modifier.height(4.dp))
-                if (progress == DownloadProgressHolder.INDETERMINATE) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-
-            if (installed.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                installed.forEach { file ->
-                    val catalog = WhisperVadModelCatalog.byFilename(file.name)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                catalog?.displayName ?: file.name,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
-                                FormatUtils.Display.formatBytes(context, file.length()),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        FilterChip(
-                            selected = selectedPath == file.absolutePath,
-                            onClick = { select(file) },
-                            label = {
-                                Text(
-                                    if (selectedPath == file.absolutePath) {
-                                        stringResource(R.string.whisper_vad_selected)
-                                    } else {
-                                        stringResource(R.string.action_select)
-                                    }
-                                )
-                            }
-                        )
-                        IconButton(
-                            onClick = {
-                                pendingExport = file
-                                exportLauncher.launch(file.name)
-                            }
-                        ) {
-                            Icon(
-                                Icons.Default.Share,
-                                contentDescription = stringResource(R.string.action_export)
-                            )
-                        }
-                        IconButton(onClick = { pendingDelete = file }) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = stringResource(R.string.action_delete),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
+        WhisperVadModelCatalog.models.forEach { spec ->
+            val file = installed.firstOrNull { it.name.equals(spec.filename, ignoreCase = true) }
+            val progress = progressMap[whisperVadDownloadId(spec)]
+            WhisperVadCatalogModelRow(
+                spec = spec,
+                installedFile = file,
+                selected = file?.absolutePath == selectedPath,
+                progress = progress,
+                onDownload = { startDownload(spec) },
+                onCancel = { cancelDownload(spec) },
+                onSelect = { file?.let(::select) },
+                onExport = {
+                    file?.let {
+                        pendingExport = it
+                        exportLauncher.launch(it.name)
                     }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            WhisperVadModelCatalog.models
-                .filter { spec -> installed.none { it.name.equals(spec.filename, true) } }
-                .forEach { spec ->
-                    OutlinedButton(
-                        onClick = { startDownload(spec) },
-                        enabled = active == null,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            stringResource(
-                                if (spec.recommended) {
-                                    R.string.whisper_vad_download_recommended
-                                } else {
-                                    R.string.whisper_vad_download_compatibility
-                                }
-                            )
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-
-            TextButton(
-                onClick = {
-                    importLauncher.launch(arrayOf("application/octet-stream", "*/*"))
                 },
-                enabled = !importing,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Default.Add, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.whisper_vad_import))
+                onDelete = { file?.let { pendingDelete = it } }
+            )
+        }
+
+        installed
+            .filter { file -> WhisperVadModelCatalog.byFilename(file.name) == null }
+            .forEach { file ->
+                WhisperVadImportedModelRow(
+                    file = file,
+                    selected = file.absolutePath == selectedPath,
+                    onSelect = { select(file) },
+                    onExport = {
+                        pendingExport = file
+                        exportLauncher.launch(file.name)
+                    },
+                    onDelete = { pendingDelete = file }
+                )
             }
+
+        TextButton(
+            onClick = {
+                importLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+            },
+            enabled = !importing,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(stringResource(R.string.whisper_vad_import))
         }
     }
 
@@ -362,6 +327,181 @@ fun WhisperVadModelsSection(
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun WhisperVadCatalogModelRow(
+    spec: WhisperVadModelSpec,
+    installedFile: File?,
+    selected: Boolean,
+    progress: Float?,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onSelect: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val downloading = progress != null && progress != 1f && progress != -1f
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    spec.displayName,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    FormatUtils.Display.formatBytes(context, spec.sizeBytes),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            when {
+                downloading -> {
+                    if (progress == DownloadProgressHolder.INDETERMINATE) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(32.dp),
+                            strokeWidth = 3.dp
+                        )
+                    } else {
+                        CircularProgressIndicator(
+                            progress = { progress?.coerceIn(0f, 1f) ?: 0f },
+                            modifier = Modifier.size(32.dp),
+                            strokeWidth = 3.dp
+                        )
+                    }
+                    IconButton(onClick = onCancel) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stringResource(R.string.action_cancel),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                installedFile != null -> {
+                    if (selected) {
+                        Icon(
+                            Icons.Default.Check,
+                            contentDescription = stringResource(R.string.whisper_vad_selected),
+                            tint = Color(0xFF4CAF50)
+                        )
+                    } else {
+                        IconButton(onClick = onSelect) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = stringResource(R.string.action_select)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(onClick = onExport) {
+                        Icon(
+                            Icons.Default.Share,
+                            contentDescription = stringResource(R.string.action_export),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = stringResource(R.string.action_delete),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                else -> {
+                    IconButton(onClick = onDownload) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.desc_download)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WhisperVadImportedModelRow(
+    file: File,
+    selected: Boolean,
+    onSelect: () -> Unit,
+    onExport: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    file.name,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    FormatUtils.Display.formatBytes(context, file.length()),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (selected) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = stringResource(R.string.whisper_vad_selected),
+                    tint = Color(0xFF4CAF50)
+                )
+            } else {
+                IconButton(onClick = onSelect) {
+                    Icon(
+                        Icons.Default.Check,
+                        contentDescription = stringResource(R.string.action_select)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            IconButton(onClick = onExport) {
+                Icon(
+                    Icons.Default.Share,
+                    contentDescription = stringResource(R.string.action_export),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            IconButton(onClick = onDelete) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.action_delete),
+                    tint = MaterialTheme.colorScheme.error
+                )
+            }
+        }
     }
 }
 

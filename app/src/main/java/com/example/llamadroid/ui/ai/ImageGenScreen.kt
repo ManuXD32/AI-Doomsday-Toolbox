@@ -599,15 +599,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     LaunchedEffect(allGenerationModels) {
-        selectedGenerationModelPath = selectedGenerationModelPath?.takeIf { selectedPath ->
-            allGenerationModels.any { it.path == selectedPath }
+        // Room-backed model flows start with an empty Compose value. Do not erase the
+        // restored selection before the first real database emission arrives.
+        if (allGenerationModels.isNotEmpty()) {
+            selectedGenerationModelPath = selectedGenerationModelPath?.takeIf { selectedPath ->
+                allGenerationModels.any { it.path == selectedPath }
+            }
         }
     }
 
     LaunchedEffect(upscalerModels) {
-        selectedUpscalerModelPath = selectedUpscalerModelPath?.takeIf { selectedPath ->
-            upscalerModels.any { it.path == selectedPath }
-        } ?: upscalerModels.firstOrNull()?.path
+        if (upscalerModels.isNotEmpty()) {
+            selectedUpscalerModelPath = selectedUpscalerModelPath?.takeIf { selectedPath ->
+                upscalerModels.any { it.path == selectedPath }
+            } ?: upscalerModels.firstOrNull()?.path
+        }
     }
 
     // Output directory for generated images

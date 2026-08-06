@@ -8428,4 +8428,44 @@
     <string name="imagegen_error_ip_adapter_unreadable_clip_vision">El modelo CLIP-Vision no existe o no se puede leer: %1$s</string>
     <string name="imagegen_error_ip_adapter_unreadable_reference">La imagen de referencia de IP-Adapter no existe o no se puede leer: %1$s</string>
     <string name="imagegen_error_ip_adapter_invalid_strength">La intensidad de IP-Adapter debe ser un valor finito igual o mayor que cero.</string>
+
+    <string name="sd_bundles_title">Paquetes seleccionados</string>
+    <string name="sd_bundles_desc">Conjuntos completos de modelos elegidos para un nivel de dispositivo o flujo concreto. Abre un paquete para revisar todas sus dependencias antes de descargarlas.</string>
+    <string name="sd_bundles_license_note">Cada modelo conserva la licencia de su repositorio de origen. El nombre del paquete se añade como prefijo para identificar fácilmente los archivos relacionados.</string>
+    <string name="sd_bundle_dialog_title">Paquete %1$s</string>
+    <string name="sd_bundle_prefix_note">Los nombres instalados comenzarán por %1$s-.</string>
+    <string name="sd_bundle_total">%1$s en total</string>
+    <string name="sd_bundle_total_approx">Unos %1$s en total</string>
+    <string name="sd_bundle_file_count">%1$d archivos</string>
+    <string name="sd_bundle_installed_progress">%1$d de %2$d archivos instalados</string>
+    <string name="sd_bundle_missing_storage">Descarga restante: %1$s</string>
+    <string name="sd_bundle_file_meta">%1$s · %2$s</string>
+    <string name="sd_bundle_source_repo">Origen: %1$s</string>
+    <string name="sd_bundle_license">Licencia: %1$s</string>
+    <string name="sd_bundle_download_missing">Descargar %1$d archivos pendientes</string>
+    <string name="sd_bundle_already_installed">Todos los archivos de este paquete ya están instalados.</string>
+    <string name="sd_bundle_installed">Paquete instalado</string>
+    <string name="sd_bundle_cancel">Cancelar descargas del paquete</string>
+    <string name="sd_bundle_download_progress">Descarga del paquete: %1$d%%</string>
+    <string name="sd_bundle_review_download">Revisar y descargar</string>
+
+    <string name="sd_bundle_ipa_title">Inicio con IP-Adapter</string>
+    <string name="sd_bundle_ipa_desc">SD 1.5 Q4, los pesos IP-Adapter compatibles y el codificador CLIP-Vision necesario.</string>
+    <string name="sd_bundle_low_title">Generación para gama baja</string>
+    <string name="sd_bundle_low_desc">Un checkpoint SD 1.5 Q4 compacto para dispositivos con CPU y RAM limitadas.</string>
+    <string name="sd_bundle_medium_title">Generación para gama media</string>
+    <string name="sd_bundle_medium_desc">SDXL Turbo Q4 para usar un modelo de imagen mayor con generación de pocos pasos.</string>
+    <string name="sd_bundle_high_title">FLUX local para gama alta</string>
+    <string name="sd_bundle_high_desc">FLUX.1 Schnell Q4 con CLIP-L, T5-XXL Q4 y su VAE compatible.</string>
+    <string name="sd_bundle_distributed_title">FLUX de calidad distribuido</string>
+    <string name="sd_bundle_distributed_desc">FLUX.1 Schnell Q6 con todos sus codificadores y VAE para inferencia distribuida.</string>
+    <string name="sd_bundle_video_title">Vídeo local con Wan 2.2</string>
+    <string name="sd_bundle_video_desc">Wan 2.2 TI2V 5B Q4 con UMT5 Q4 y el VAE de Wan 2.2 para generar vídeo localmente.</string>
+    <string name="sd_bundle_upscale_photo_2x_title">Escalado fotográfico 2×</string>
+    <string name="sd_bundle_upscale_photo_2x_desc">RealESRGAN x2plus para ampliar fotografías de forma moderada.</string>
+    <string name="sd_bundle_upscale_photo_4x_title">Escalado fotográfico 4×</string>
+    <string name="sd_bundle_upscale_photo_4x_desc">RealESRGAN x4plus para una ampliación fotográfica más intensa.</string>
+    <string name="sd_bundle_upscale_anime_title">Escalado de anime 4×</string>
+    <string name="sd_bundle_upscale_anime_desc">El modelo compacto RealESRGAN anime 6B para ilustraciones y fotogramas de animación.</string>
+<string name="sd_bundle_verifying">Verificando el archivo descargado del paquete…</string>
 </resources>

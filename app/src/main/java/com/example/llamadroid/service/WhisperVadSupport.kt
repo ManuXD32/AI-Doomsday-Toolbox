@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
+import java.security.MessageDigest
 import java.util.Locale
 
 /**
@@ -110,7 +111,8 @@ data class WhisperVadModelSpec(
     val displayName: String,
     val downloadUrl: String,
     val sizeBytes: Long,
-    val recommended: Boolean
+    val recommended: Boolean,
+    val sha256: String = ""
 )
 
 object WhisperVadModelCatalog {
@@ -121,15 +123,17 @@ object WhisperVadModelCatalog {
             displayName = "Silero VAD v6.2.0",
             downloadUrl = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin",
             sizeBytes = 885_098L,
-            recommended = true
+            recommended = true,
+            sha256 = "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
         ),
         WhisperVadModelSpec(
             id = "silero-v5.1.2",
             filename = "ggml-silero-v5.1.2.bin",
             displayName = "Silero VAD v5.1.2",
-            downloadUrl = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin",
+            downloadUrl = "https://huggingface.co/ggml-org/silero-v5.1.2/resolve/main/ggml-silero-v5.1.2.bin?download=true",
             sizeBytes = 885_098L,
-            recommended = false
+            recommended = false,
+            sha256 = "29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf"
         )
     )
 
@@ -162,11 +166,22 @@ object WhisperVadAssetStore {
             file.extension.equals("bin", ignoreCase = true) &&
             file.length() in MIN_MODEL_BYTES..MAX_MODEL_BYTES
 
+    fun isVerifiedCatalogModel(file: File, spec: WhisperVadModelSpec): Boolean =
+        isReadableModel(file) &&
+            spec.sha256.isNotBlank() &&
+            file.length() == spec.sizeBytes &&
+            sha256(file).equals(spec.sha256, ignoreCase = true)
+
+    fun isUsableModel(file: File): Boolean =
+        WhisperVadModelCatalog.byFilename(file.name)
+            ?.let { spec -> isVerifiedCatalogModel(file, spec) }
+            ?: isReadableModel(file)
+
     fun installedModels(context: Context): List<File> =
         directory(context)
             .listFiles()
             .orEmpty()
-            .filter(::isReadableModel)
+            .filter(::isUsableModel)
             .sortedWith(
                 compareByDescending<File> {
                     WhisperVadModelCatalog.byFilename(it.name)?.recommended == true
@@ -181,7 +196,7 @@ object WhisperVadAssetStore {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?.let(::File)
-            ?.takeIf(::isReadableModel)
+            ?.takeIf(::isUsableModel)
             ?.let { return it.absolutePath }
         return installedModels(context).firstOrNull()?.absolutePath
     }
@@ -248,6 +263,21 @@ object WhisperVadAssetStore {
             index += 1
         }
         return candidate
+    }
+
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            var count = input.read(buffer)
+            while (count >= 0) {
+                if (count > 0) digest.update(buffer, 0, count)
+                count = input.read(buffer)
+            }
+        }
+        return digest.digest().joinToString("") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
     }
 
     private fun sanitizeFilename(filename: String): String =

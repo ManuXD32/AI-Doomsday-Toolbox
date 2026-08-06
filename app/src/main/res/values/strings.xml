@@ -8471,4 +8471,44 @@
     <string name="imagegen_error_ip_adapter_unreadable_clip_vision">The CLIP-Vision model is missing or unreadable: %1$s</string>
     <string name="imagegen_error_ip_adapter_unreadable_reference">The IP-Adapter reference image is missing or unreadable: %1$s</string>
     <string name="imagegen_error_ip_adapter_invalid_strength">IP-Adapter strength must be a finite value of zero or greater.</string>
+
+    <string name="sd_bundles_title">Curated bundles</string>
+    <string name="sd_bundles_desc">Complete model sets selected for a specific device tier or workflow. Open a bundle to review every dependency before downloading.</string>
+    <string name="sd_bundles_license_note">Each model keeps the license of its upstream repository. Bundle names are added as filename prefixes so related files remain easy to identify.</string>
+    <string name="sd_bundle_dialog_title">%1$s bundle</string>
+    <string name="sd_bundle_prefix_note">Installed filenames will begin with %1$s-.</string>
+    <string name="sd_bundle_total">%1$s total</string>
+    <string name="sd_bundle_total_approx">About %1$s total</string>
+    <string name="sd_bundle_file_count">%1$d files</string>
+    <string name="sd_bundle_installed_progress">%1$d of %2$d files installed</string>
+    <string name="sd_bundle_missing_storage">Remaining download: %1$s</string>
+    <string name="sd_bundle_file_meta">%1$s · %2$s</string>
+    <string name="sd_bundle_source_repo">Source: %1$s</string>
+    <string name="sd_bundle_license">License: %1$s</string>
+    <string name="sd_bundle_download_missing">Download %1$d missing files</string>
+    <string name="sd_bundle_already_installed">Every file in this bundle is already installed.</string>
+    <string name="sd_bundle_installed">Bundle installed</string>
+    <string name="sd_bundle_cancel">Cancel bundle downloads</string>
+    <string name="sd_bundle_download_progress">Bundle download: %1$d%%</string>
+    <string name="sd_bundle_review_download">Review and download</string>
+
+    <string name="sd_bundle_ipa_title">IP-Adapter starter</string>
+    <string name="sd_bundle_ipa_desc">SD 1.5 Q4, matching IP-Adapter weights, and the required CLIP-Vision encoder.</string>
+    <string name="sd_bundle_low_title">Low-end image generation</string>
+    <string name="sd_bundle_low_desc">A compact SD 1.5 Q4 checkpoint for devices with limited CPU performance and RAM.</string>
+    <string name="sd_bundle_medium_title">Midrange image generation</string>
+    <string name="sd_bundle_medium_desc">SDXL Turbo Q4 for a larger image model with low-step generation on midrange devices.</string>
+    <string name="sd_bundle_high_title">High-end local FLUX</string>
+    <string name="sd_bundle_high_desc">FLUX.1 Schnell Q4 with CLIP-L, T5-XXL Q4, and the matching VAE.</string>
+    <string name="sd_bundle_distributed_title">Distributed FLUX quality</string>
+    <string name="sd_bundle_distributed_desc">FLUX.1 Schnell Q6 with the complete encoder and VAE stack for distributed inference.</string>
+    <string name="sd_bundle_video_title">Local Wan 2.2 video</string>
+    <string name="sd_bundle_video_desc">Wan 2.2 TI2V 5B Q4 with UMT5 Q4 and the Wan 2.2 VAE for local video generation.</string>
+    <string name="sd_bundle_upscale_photo_2x_title">Photo upscaling 2×</string>
+    <string name="sd_bundle_upscale_photo_2x_desc">RealESRGAN x2plus for moderate photo enlargement with lower output size.</string>
+    <string name="sd_bundle_upscale_photo_4x_title">Photo upscaling 4×</string>
+    <string name="sd_bundle_upscale_photo_4x_desc">RealESRGAN x4plus for stronger photographic enlargement.</string>
+    <string name="sd_bundle_upscale_anime_title">Anime upscaling 4×</string>
+    <string name="sd_bundle_upscale_anime_desc">The compact RealESRGAN anime 6B model for illustrations and animation frames.</string>
+<string name="sd_bundle_verifying">Verifying downloaded bundle file…</string>
 </resources>

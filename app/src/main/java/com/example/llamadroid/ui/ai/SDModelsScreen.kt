@@ -2606,29 +2606,13 @@ private fun DiscoverTab(
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Show suggestions if no search yet
+            // Curated bundles replace the old recommendation cards.
             if (searchResults.isEmpty() && !isSearching) {
                 item {
-                    Text(
-                        stringResource(R.string.sd_models_quick_search),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        stringResource(R.string.sd_models_tap_to_search),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                
-                items(suggestions) { suggestion ->
-                    SuggestionCard(
-                        suggestion = suggestion,
-                        onClick = { onSuggestionClick(suggestion.query) }
-                    )
+                    SdCuratedBundlesSection()
                 }
             }
-            
+
             // Show search results
             if (searchResults.isNotEmpty()) {
                 item {

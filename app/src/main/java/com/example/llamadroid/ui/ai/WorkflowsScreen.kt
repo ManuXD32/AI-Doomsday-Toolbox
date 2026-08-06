@@ -6654,7 +6654,7 @@ private fun TranscribeSummaryWorkflowContent(
     val scope = rememberCoroutineScope()
     
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let { 
             onAudioUriChange(it)
             // Copy to cache for native access
@@ -6663,6 +6663,10 @@ private fun TranscribeSummaryWorkflowContent(
                 // Determine file extension from MIME type
                 val mimeType = context.contentResolver.getType(it)
                 val extension = when {
+                    mimeType?.startsWith("video/") == true ->
+                        mimeType.substringAfter('/').substringBefore(';')
+                            .replace(Regex("[^A-Za-z0-9]+"), "_")
+                            .ifBlank { "video" }
                     mimeType?.contains("mp3") == true -> "mp3"
                     mimeType?.contains("wav") == true -> "wav"
                     mimeType?.contains("mp4") == true -> "mp4"
@@ -6929,7 +6933,7 @@ private fun TranscribeSummaryWorkflowContent(
                 // Audio file picker OR Record
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { filePicker.launch("audio/*") },
+                        onClick = { filePicker.launch(arrayOf("audio/*", "video/*")) },
                         modifier = Modifier.weight(1f),
                         enabled = !isRunning
                     ) {
