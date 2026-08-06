@@ -62,6 +62,16 @@ fun SettingsHubScreen(navController: NavController) {
             route = "settings_llm"
         ),
         SettingsItem(
+            emoji = "🎙️",
+            title = stringResource(R.string.whisper_settings_title),
+            description = stringResource(R.string.settings_whisper_desc),
+            gradientColors = listOf(
+                Color(0xFF00BCD4).copy(alpha = 0.15f),
+                Color(0xFF00838F).copy(alpha = 0.3f)
+            ),
+            route = "settings_whisper"
+        ),
+        SettingsItem(
             emoji = "📝",
             title = stringResource(R.string.settings_prompts),
             description = stringResource(R.string.settings_prompts_desc),

@@ -642,6 +642,7 @@ private fun ToolSettingsSheetContent(
                     )
                     ToolSettingsSheet.WHISPER -> WhisperSettingsContent(
                         settingsRepo = settingsRepo,
+                        onOpenModels = { onNavigate(Screen.WhisperModels.route) },
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = 20.dp, vertical = 12.dp)

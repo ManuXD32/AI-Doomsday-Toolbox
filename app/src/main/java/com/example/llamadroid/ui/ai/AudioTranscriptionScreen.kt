@@ -275,8 +275,11 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { navController.navigate(Screen.WhisperModels.route) }) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.nav_models))
+                    IconButton(onClick = { navController.navigate("settings_whisper") }) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = stringResource(R.string.whisper_settings_title)
+                        )
                     }
                 }
             )

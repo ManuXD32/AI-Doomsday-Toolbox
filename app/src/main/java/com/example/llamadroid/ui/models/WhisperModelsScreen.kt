@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelBackupPolicy
 import com.example.llamadroid.data.db.ModelEntity
@@ -53,6 +54,7 @@ fun WhisperModelsScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
+    val settingsRepo = remember { SettingsRepository(context) }
     
     // Downloaded models from database
     val downloadedModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
@@ -274,6 +276,12 @@ fun WhisperModelsScreen(navController: NavController) {
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
+
+            WhisperVadModelsSection(
+                settingsRepo = settingsRepo,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
 
             if (importedExtraModels.isNotEmpty()) {
                 ImportedWhisperModelsSection(
