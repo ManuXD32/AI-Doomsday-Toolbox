@@ -6166,6 +6166,28 @@ TODO status. Return via finish_task with JSON:
             val message: String
         )
 
+        private class PlanApprovalStageException(
+            val stage: String,
+            cause: Throwable
+        ) : IllegalStateException(
+            "Plan approval failed during $stage: " +
+                (cause.message ?: cause.javaClass.simpleName),
+            cause
+        )
+
+        private suspend fun <T> runPlanApprovalStage(
+            stage: String,
+            block: suspend () -> T
+        ): T {
+            return try {
+                block()
+            } catch (error: PlanApprovalStageException) {
+                throw error
+            } catch (error: Throwable) {
+                throw PlanApprovalStageException(stage, error)
+            }
+        }
+
         suspend fun approvePendingPlan(
             context: Context,
             agentService: AgentService,
@@ -6207,7 +6229,10 @@ TODO status. Return via finish_task with JSON:
                 }
                 var durablePlan = existingDurablePlan ?: run {
                     val conversationId = _activeConversationId.value
-                        ?: return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_missing))
+                        ?: return@withLock PlanApprovalResult(
+                            false,
+                            context.getString(R.string.agent_plan_resolution_missing)
+                        )
                     val created = AgentPendingPlanEntity(
                         id = java.util.UUID.randomUUID().toString(),
                         conversationId = conversationId,
@@ -6215,63 +6240,149 @@ TODO status. Return via finish_task with JSON:
                         agentSessionId = _currentSessionId.value.orEmpty(),
                         planMessageId = pendingMessage.id,
                         toolCallId = pendingMessage.toolCallId.orEmpty(),
-                        originalPlan = pendingMessage.content.substringAfter("\n\n", pendingMessage.content),
+                        originalPlan = pendingMessage.content.substringAfter(
+                            "\n\n",
+                            pendingMessage.content
+                        ),
                         editedPlan = pendingMessage.planModifiedContent,
-                        summary = pendingMessage.content.lineSequence().firstOrNull().orEmpty()
+                        summary = pendingMessage.content
+                            .lineSequence()
+                            .firstOrNull()
+                            .orEmpty()
                     )
                     workflowDao.upsertPendingPlan(created)
                     created
                 }
                 if (durablePlan.state == "BUILDING" || durablePlan.continuationEnqueued) {
-                    val effectivePlan = (
-                        durablePlan.editedPlan ?: durablePlan.originalPlan
-                    ).trim()
-                    val materialized =
-                        AgentProjectControlPlane.materializeApprovedPlan(
-                            context = context,
-                            conversationId = durablePlan.conversationId,
-                            pendingPlanId = durablePlan.id,
-                            summary = durablePlan.summary,
-                            approvedPlan = effectivePlan
+                    return@withLock try {
+                        val effectivePlan = (
+                            durablePlan.editedPlan ?: durablePlan.originalPlan
+                        ).trim()
+                        val materialized = runPlanApprovalStage(
+                            "restoring durable TODOs"
+                        ) {
+                            AgentProjectControlPlane.materializeApprovedPlan(
+                                context = context,
+                                conversationId = durablePlan.conversationId,
+                                pendingPlanId = durablePlan.id,
+                                summary = durablePlan.summary,
+                                approvedPlan = effectivePlan
+                            )
+                        }
+                        runPlanApprovalStage("restoring todo.md") {
+                            agentService.rewriteMemory(
+                                "todo.md",
+                                AgentProjectControlPlane.renderTodoMarkdown(
+                                    materialized.todos
+                                ),
+                                countsAsMemoryUpdate = false
+                            ).getOrThrow()
+                        }
+                        _pendingPlanApprovalId.value = null
+                        updateMessage(id) { it.copy(isPlanApproved = true) }
+                        PlanApprovalResult(
+                            true,
+                            context.getString(R.string.agent_plan_approved_msg)
                         )
-                    agentService.rewriteMemory(
-                        "todo.md",
-                        AgentProjectControlPlane.renderTodoMarkdown(
-                            materialized.todos
-                        ),
-                        countsAsMemoryUpdate = false
-                    )
-                    _pendingPlanApprovalId.value = null
-                    updateMessage(id) { it.copy(isPlanApproved = true) }
-                    return@withLock PlanApprovalResult(
-                        true,
-                        context.getString(R.string.agent_plan_approved_msg)
-                    )
-                }
-                val approvedPlan = (editedPlan ?: durablePlan.editedPlan ?: durablePlan.originalPlan).trim()
-                val approvalCacheDecision = planApprovalPromptCacheDecision(durablePlan.originalPlan, approvedPlan)
-                if (approvedPlan.isBlank()) {
-                    return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_blank))
-                }
-                val operationId = durablePlan.approvalOperationId ?: java.util.UUID.randomUUID().toString()
-                if (durablePlan.state == "AWAITING_APPROVAL") {
-                    if (workflowDao.beginPlanResolution(durablePlan.id, operationId, editedPlan) != 1) {
-                        return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_in_progress))
+                    } catch (error: Throwable) {
+                        _pendingPlanApprovalId.value = durablePlan.id
+                        blockAutomaticContinuations()
+                        recordAgentEvent(
+                            kind = "plan_approval_restore_failed",
+                            summary = "Approved plan restoration failed",
+                            details =
+                                "error=${error.javaClass.simpleName} " +
+                                    "plan=${durablePlan.id.take(12)}"
+                        )
+                        PlanApprovalResult(
+                            false,
+                            error.message
+                                ?: context.getString(
+                                    R.string.agent_plan_resolution_failed
+                                )
+                        )
                     }
-                    durablePlan = workflowDao.getPendingPlanById(durablePlan.id) ?: durablePlan
-                } else if (durablePlan.state == "APPROVING") {
-                    return@withLock PlanApprovalResult(false, context.getString(R.string.agent_plan_resolution_in_progress))
                 }
 
+                val approvedPlan = (
+                    editedPlan ?: durablePlan.editedPlan ?: durablePlan.originalPlan
+                ).trim()
+                if (approvedPlan.isBlank()) {
+                    return@withLock PlanApprovalResult(
+                        false,
+                        context.getString(R.string.agent_plan_resolution_blank)
+                    )
+                }
+                val operationId = durablePlan.approvalOperationId
+                    ?: java.util.UUID.randomUUID().toString()
+                var resolutionStarted = durablePlan.state in setOf(
+                    "APPROVING",
+                    "APPROVED",
+                    "STARTING_BUILD"
+                )
+
                 try {
-                    if (!durablePlan.planFileWritten) {
-                        agentService.rewriteMemory(
-                            "plan.md",
-                            approvedPlan,
-                            countsAsMemoryUpdate = false
-                        ).getOrThrow()
+                    // Validate before entering APPROVING. The parser is now
+                    // deterministic and regex-free on this path, so malformed
+                    // user Markdown cannot produce PatternSyntaxException.
+                    runPlanApprovalStage("validating the approved plan") {
+                        AgentProjectControlPlane.parseApprovedPlan(
+                            durablePlan.summary,
+                            approvedPlan
+                        )
                     }
-                    val materializedPlan =
+                    val approvalCacheDecision = runPlanApprovalStage(
+                        "preparing the prompt-cache transition"
+                    ) {
+                        planApprovalPromptCacheDecision(
+                            durablePlan.originalPlan,
+                            approvedPlan
+                        )
+                    }
+
+                    if (durablePlan.state == "AWAITING_APPROVAL") {
+                        val began = runPlanApprovalStage(
+                            "locking the pending plan"
+                        ) {
+                            workflowDao.beginPlanResolution(
+                                durablePlan.id,
+                                operationId,
+                                editedPlan
+                            )
+                        }
+                        if (began != 1) {
+                            return@withLock PlanApprovalResult(
+                                false,
+                                context.getString(
+                                    R.string.agent_plan_resolution_in_progress
+                                )
+                            )
+                        }
+                        resolutionStarted = true
+                        durablePlan = workflowDao.getPendingPlanById(
+                            durablePlan.id
+                        ) ?: durablePlan
+                    } else if (durablePlan.state == "APPROVING") {
+                        return@withLock PlanApprovalResult(
+                            false,
+                            context.getString(
+                                R.string.agent_plan_resolution_in_progress
+                            )
+                        )
+                    }
+
+                    if (!durablePlan.planFileWritten) {
+                        runPlanApprovalStage("writing plan.md") {
+                            agentService.rewriteMemory(
+                                "plan.md",
+                                approvedPlan,
+                                countsAsMemoryUpdate = false
+                            ).getOrThrow()
+                        }
+                    }
+                    val materializedPlan = runPlanApprovalStage(
+                        "materializing durable plan and TODOs"
+                    ) {
                         AgentProjectControlPlane.materializeApprovedPlan(
                             context = context,
                             conversationId = durablePlan.conversationId,
@@ -6279,44 +6390,48 @@ TODO status. Return via finish_task with JSON:
                             summary = durablePlan.summary,
                             approvedPlan = approvedPlan
                         )
-                    agentService.rewriteMemory(
-                        "todo.md",
-                        AgentProjectControlPlane.renderTodoMarkdown(
-                            materializedPlan.todos
-                        ),
-                        countsAsMemoryUpdate = false
-                    ).getOrThrow()
-                    workflowDao.checkpointPlanResolution(
-                        id = durablePlan.id,
-                        operationId = operationId,
-                        state = "APPROVING",
-                        planFileWritten = true,
-                        buildModeActivated = false,
-                        continuationEnqueued = false
-                    )
-                    database.agentChatDao().updatePlanningMode(durablePlan.conversationId, false)
-                    workflowDao.checkpointPlanResolution(
-                        id = durablePlan.id,
-                        operationId = operationId,
-                        state = "APPROVED",
-                        planFileWritten = true,
-                        buildModeActivated = true,
-                        continuationEnqueued = false,
-                        approvedAt = System.currentTimeMillis()
-                    )
+                    }
+                    runPlanApprovalStage("writing todo.md") {
+                        agentService.rewriteMemory(
+                            "todo.md",
+                            AgentProjectControlPlane.renderTodoMarkdown(
+                                materializedPlan.todos
+                            ),
+                            countsAsMemoryUpdate = false
+                        ).getOrThrow()
+                    }
+                    runPlanApprovalStage("checkpointing the plan files") {
+                        workflowDao.checkpointPlanResolution(
+                            id = durablePlan.id,
+                            operationId = operationId,
+                            state = "APPROVING",
+                            planFileWritten = true,
+                            buildModeActivated = false,
+                            continuationEnqueued = false
+                        )
+                    }
+                    runPlanApprovalStage("activating Build mode") {
+                        database.agentChatDao().updatePlanningMode(
+                            durablePlan.conversationId,
+                            false
+                        )
+                        workflowDao.checkpointPlanResolution(
+                            id = durablePlan.id,
+                            operationId = operationId,
+                            state = "APPROVED",
+                            planFileWritten = true,
+                            buildModeActivated = true,
+                            continuationEnqueued = false,
+                            approvedAt = System.currentTimeMillis()
+                        )
+                    }
 
                     updateMessage(id) {
                         it.copy(
-                            // The original endpoint proposal remains immutable;
-                            // edited text is an application-owned projection.
                             planModifiedContent = approvedPlan,
                             isPlanApproved = true
                         )
                     }
-                    // The proposal itself is an assistant message. Any prior tool
-                    // envelope for this call is stale until the user resolves it.
-                    // Replace it so the next prompt has one authoritative approval
-                    // result instead of silently retaining an awaiting-approval one.
                     val approvalResult = ChatMessage(
                         role = "tool",
                         toolName = "propose_plan",
@@ -6325,20 +6440,29 @@ TODO status. Return via finish_task with JSON:
                             toolName = "propose_plan",
                             status = "ok",
                             summary = approvalCacheDecision.summary,
-                            // The proposal already remains in prompt history. Repeating an
-                            // unchanged plan here destroys the stable cache prefix.
-                            importantOutput = approvalCacheDecision.modifiedPlanForToolResult,
-                            nextHint = "The user explicitly approved this plan. The runtime already materialized stable durable TODOs. Call project_state_read, then delegate exactly the current permitted TODO transition. Do not replace the complete TODO list."
+                            importantOutput =
+                                approvalCacheDecision.modifiedPlanForToolResult,
+                            nextHint =
+                                "The user explicitly approved this plan. " +
+                                    "The runtime already materialized stable " +
+                                    "durable TODOs. Call project_state_read, " +
+                                    "then delegate exactly the current permitted " +
+                                    "TODO transition. Do not replace the complete " +
+                                    "TODO list."
                         )
                     )
-                    _messages.update { current -> current.filterNot {
-                        it.role == "tool" && it.toolName == "propose_plan" &&
-                            it.toolCallId == durablePlan.toolCallId
-                    } }
+                    _messages.update { current ->
+                        current.filterNot {
+                            it.role == "tool" &&
+                                it.toolName == "propose_plan" &&
+                                it.toolCallId == durablePlan.toolCallId
+                        }
+                    }
                     getCurrentSession()?.let { session ->
                         synchronized(session.messages) {
                             session.messages.removeAll {
-                                it.role == "tool" && it.toolName == "propose_plan" &&
+                                it.role == "tool" &&
+                                    it.toolName == "propose_plan" &&
                                     it.toolCallId == durablePlan.toolCallId
                             }
                         }
@@ -6346,37 +6470,49 @@ TODO status. Return via finish_task with JSON:
                     addMessage(approvalResult)
                     _currentPlanningModeEnabled.value = false
                     updateActiveConversationResumeState(RESUME_STATE_IDLE, null)
-                    markMemoryDirty("An implementation plan was approved. Record the chosen direction in project memory before finishing.")
+                    markMemoryDirty(
+                        "An implementation plan was approved. Record the " +
+                            "chosen direction in project memory before finishing."
+                    )
                     addDebugLog(context.getString(R.string.agent_plan_approved))
                     recordAgentEvent(
                         kind = "plan_approved",
                         summary = "Implementation plan approved",
-                        details = "plan=${durablePlan.id.take(12)} message=${id.take(12)} toolCall=${durablePlan.toolCallId.take(12)}"
+                        details =
+                            "plan=${durablePlan.id.take(12)} " +
+                                "message=${id.take(12)} " +
+                                "toolCall=${durablePlan.toolCallId.take(12)}"
                     )
-                    agentService.persistVisibleRuntimeStateNow("Plan approved and switched to Build.")
-                        .onFailure { error ->
-                            recordAgentEvent(
-                                kind = "plan_approval_snapshot_deferred",
-                                summary = "Approved plan snapshot will be retried",
-                                details = "error=${error.javaClass.simpleName}"
-                            )
-                        }
-                    workflowDao.checkpointPlanResolution(
-                        id = durablePlan.id,
-                        operationId = operationId,
-                        state = "STARTING_BUILD",
-                        planFileWritten = true,
-                        buildModeActivated = true,
-                        continuationEnqueued = false,
-                        approvedAt = System.currentTimeMillis()
-                    )
+                    agentService.persistVisibleRuntimeStateNow(
+                        "Plan approved and switched to Build."
+                    ).onFailure { error ->
+                        recordAgentEvent(
+                            kind = "plan_approval_snapshot_deferred",
+                            summary = "Approved plan snapshot will be retried",
+                            details = "error=${error.javaClass.simpleName}"
+                        )
+                    }
+                    runPlanApprovalStage("starting the Build continuation") {
+                        workflowDao.checkpointPlanResolution(
+                            id = durablePlan.id,
+                            operationId = operationId,
+                            state = "STARTING_BUILD",
+                            planFileWritten = true,
+                            buildModeActivated = true,
+                            continuationEnqueued = false,
+                            approvedAt = System.currentTimeMillis()
+                        )
+                    }
                     _pendingPlanApprovalId.value = null
                     allowAutomaticContinuations()
                     recordAgentEvent(
                         kind = "plan_build_cache_epoch",
                         summary = "Plan approval retained Build cache epoch",
-                        details = "reason=plan_to_build retainedRoot=${activeRootTurnId.get()} " +
-                            "proposal=${durablePlan.planMessageId.take(12)} toolCall=${durablePlan.toolCallId.take(12)}"
+                        details =
+                            "reason=plan_to_build " +
+                                "retainedRoot=${activeRootTurnId.get()} " +
+                                "proposal=${durablePlan.planMessageId.take(12)} " +
+                                "toolCall=${durablePlan.toolCallId.take(12)}"
                     )
                     lastRuntimeRefs?.let { refs ->
                         enqueueAgentContinuation(
@@ -6388,30 +6524,68 @@ TODO status. Return via finish_task with JSON:
                             runEpoch = currentRunEpoch()
                         )
                     }
-                    workflowDao.checkpointPlanResolution(
-                        id = durablePlan.id,
-                        operationId = operationId,
-                        state = "BUILDING",
-                        planFileWritten = true,
-                        buildModeActivated = true,
-                        continuationEnqueued = true,
-                        approvedAt = System.currentTimeMillis()
-                    )
+                    runPlanApprovalStage("committing the Build continuation") {
+                        workflowDao.checkpointPlanResolution(
+                            id = durablePlan.id,
+                            operationId = operationId,
+                            state = "BUILDING",
+                            planFileWritten = true,
+                            buildModeActivated = true,
+                            continuationEnqueued = true,
+                            approvedAt = System.currentTimeMillis()
+                        )
+                    }
                     UnifiedNotificationManager.dismissAgentAttention()
-                    PlanApprovalResult(true, context.getString(R.string.agent_plan_approved_msg))
-                } catch (error: Throwable) {
-                    database.agentChatDao().updatePlanningMode(durablePlan.conversationId, true)
-                    _currentPlanningModeEnabled.value = true
-                    workflowDao.failPlanResolution(
-                        id = durablePlan.id,
-                        operationId = operationId,
-                        errorMessage = error.message ?: error.javaClass.simpleName
+                    PlanApprovalResult(
+                        true,
+                        context.getString(R.string.agent_plan_approved_msg)
                     )
+                } catch (error: Throwable) {
+                    try {
+                        database.agentChatDao().updatePlanningMode(
+                            durablePlan.conversationId,
+                            true
+                        )
+                    } catch (restoreError: Throwable) {
+                        addDebugLog(
+                            "⚠️ Failed to restore Plan mode after approval " +
+                                "failure: ${restoreError.javaClass.simpleName}"
+                        )
+                    }
+                    _currentPlanningModeEnabled.value = true
+                    if (resolutionStarted) {
+                        try {
+                            workflowDao.failPlanResolution(
+                                id = durablePlan.id,
+                                operationId = operationId,
+                                errorMessage =
+                                    error.message ?: error.javaClass.simpleName
+                            )
+                        } catch (restoreError: Throwable) {
+                            addDebugLog(
+                                "⚠️ Failed to reset pending plan after approval " +
+                                    "failure: ${restoreError.javaClass.simpleName}"
+                            )
+                        }
+                    }
                     _pendingPlanApprovalId.value = durablePlan.id
                     blockAutomaticContinuations()
+                    val stage = (error as? PlanApprovalStageException)?.stage
+                        ?: "an unclassified approval step"
+                    recordAgentEvent(
+                        kind = "plan_approval_failed",
+                        summary = "Plan approval transaction failed",
+                        details =
+                            "stage=$stage " +
+                                "error=${error.javaClass.simpleName} " +
+                                "plan=${durablePlan.id.take(12)}"
+                    )
                     PlanApprovalResult(
                         false,
-                        error.message ?: context.getString(R.string.agent_plan_resolution_failed)
+                        error.message
+                            ?: context.getString(
+                                R.string.agent_plan_resolution_failed
+                            )
                     )
                 }
             }

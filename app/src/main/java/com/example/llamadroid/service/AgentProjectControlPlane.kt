@@ -390,6 +390,108 @@ internal object AgentProjectControlPlane {
         }
     }
 
+    // ADT plan controls v6.2.0: parse user-authored plan Markdown without
+    // compiling regular expressions on the approval path. This avoids
+    // device/runtime-specific PatternSyntaxException failures while keeping
+    // the accepted heading, checklist, numbered-list, sentence, and fenced
+    // structured-plan forms deterministic.
+    private fun planHeadingTitle(line: String): String? {
+        val trimmed = line.trim()
+        val hashCount = trimmed.takeWhile { it == '#' }.length
+        if (hashCount !in 2..4 || hashCount >= trimmed.length) return null
+        if (!trimmed[hashCount].isWhitespace()) return null
+        return trimmed.drop(hashCount).trim().takeIf { it.isNotBlank() }
+    }
+
+    private fun planListItemText(line: String): String? {
+        val trimmed = line.trim()
+
+        fun stripCheckbox(value: String): String {
+            val candidate = value.trimStart()
+            return if (
+                candidate.length >= 3 &&
+                candidate[0] == '[' &&
+                candidate[2] == ']' &&
+                candidate[1] in setOf(' ', 'x', 'X')
+            ) {
+                candidate.drop(3).trimStart()
+            } else {
+                candidate
+            }
+        }
+
+        if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+            return stripCheckbox(trimmed.drop(2))
+                .trim()
+                .takeIf { it.length >= 8 }
+        }
+
+        val digitCount = trimmed.takeWhile(Char::isDigit).length
+        if (digitCount == 0 || digitCount >= trimmed.length) return null
+        val marker = trimmed[digitCount]
+        if (marker != '.' && marker != ')') return null
+        val remainder = trimmed.drop(digitCount + 1)
+        if (remainder.isEmpty() || !remainder.first().isWhitespace()) return null
+        return remainder.trim().takeIf { it.length >= 8 }
+    }
+
+    private fun splitPlanSentences(text: String): List<String> {
+        val sentences = mutableListOf<String>()
+        var start = 0
+        var index = 0
+        while (index < text.length) {
+            if (text[index] in setOf('.', '!', '?')) {
+                var next = index + 1
+                while (next < text.length && text[next].isWhitespace()) {
+                    next += 1
+                }
+                if (next > index + 1) {
+                    text.substring(start, next)
+                        .trim()
+                        .takeIf { it.isNotBlank() }
+                        ?.let(sentences::add)
+                    start = next
+                    index = next
+                    continue
+                }
+            }
+            index += 1
+        }
+        text.substring(start)
+            .trim()
+            .takeIf { it.isNotBlank() }
+            ?.let(sentences::add)
+        return sentences
+    }
+
+    private fun structuredPlanJsonCandidate(markdown: String): String? {
+        val trimmed = markdown.trim()
+        if (trimmed.startsWith("{")) return trimmed
+
+        var searchFrom = 0
+        while (searchFrom < markdown.length) {
+            val fenceStart = markdown.indexOf("```", searchFrom)
+            if (fenceStart < 0) return null
+            val headerEnd = markdown.indexOf('\n', fenceStart + 3)
+            if (headerEnd < 0) return null
+            val fenceEnd = markdown.indexOf("```", headerEnd + 1)
+            if (fenceEnd < 0) return null
+
+            val info = markdown.substring(fenceStart + 3, headerEnd).trim()
+            val body = markdown.substring(headerEnd + 1, fenceEnd).trim()
+            if (
+                (info.isBlank() || info.equals("json", ignoreCase = true)) &&
+                body.startsWith("{") &&
+                body.endsWith("}") &&
+                body.contains("\"phases\"")
+            ) {
+                return body
+            }
+            searchFrom = fenceEnd + 3
+        }
+        return null
+    }
+
     fun parseApprovedPlan(
         summary: String,
         markdown: String
@@ -403,34 +505,29 @@ internal object AgentProjectControlPlane {
         )
         if (structuredFromJson != null) return structuredFromJson
 
-        val headingRegex = Regex("""^#{2,4}\s+(.+)$""")
-        val todoRegex = Regex(
-            """^(?:[-*]\s+(?:\[[ xX]\]\s*)?|\d+[.)]\s+)(.+)$"""
-        )
         var phaseTitle = "Implementation"
         var phaseId = "phase-${planHash.take(8)}-1"
         var phaseIndex = 1
         val rawItems = mutableListOf<Triple<String, String, String>>()
 
         normalizedMarkdown.lineSequence().forEach { rawLine ->
-            val line = rawLine.trim()
-            headingRegex.matchEntire(line)?.let { match ->
-                phaseTitle = match.groupValues[1].trim().take(120)
+            planHeadingTitle(rawLine)?.let { heading ->
+                phaseTitle = heading.take(120)
                 phaseIndex += 1
                 phaseId = "phase-${planHash.take(8)}-$phaseIndex"
                 return@forEach
             }
-            todoRegex.matchEntire(line)?.groupValues?.getOrNull(1)
-                ?.trim()
-                ?.takeIf { it.length >= 8 }
-                ?.let { item ->
-                    rawItems += Triple(phaseId, phaseTitle, item.take(500))
-                }
+            planListItemText(rawLine)?.let { item ->
+                rawItems += Triple(
+                    phaseId,
+                    phaseTitle,
+                    item.take(500)
+                )
+            }
         }
 
         val fallbackItems = if (rawItems.isEmpty()) {
-            normalizedMarkdown
-                .split(Regex("""(?<=[.!?])\s+"""))
+            splitPlanSentences(normalizedMarkdown)
                 .map { it.trim() }
                 .filter { it.length >= 20 }
                 .take(20)
@@ -490,13 +587,7 @@ internal object AgentProjectControlPlane {
         markdown: String,
         planHash: String
     ): StructuredApprovedPlan? {
-        val candidate = when {
-            markdown.trimStart().startsWith("{") -> markdown.trim()
-            else -> Regex(
-                """```(?:json)?\s*(\{[\s\S]*?"phases"[\s\S]*?})\s*```""",
-                RegexOption.IGNORE_CASE
-            ).find(markdown)?.groupValues?.getOrNull(1)
-        } ?: return null
+        val candidate = structuredPlanJsonCandidate(markdown) ?: return null
 
         return runCatching {
             val root = JSONObject(candidate)

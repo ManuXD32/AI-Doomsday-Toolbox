@@ -101,6 +101,12 @@ import com.example.llamadroid.data.SettingsRepository
 
 // Removed AgentChatMessage data class as it is now in AgentService.ChatMessage
 
+private data class AgentPlanEditSession(
+    val messageId: String,
+    val conversationId: Long?,
+    val originalPlan: String
+)
+
 /**
  * AgentScreen - AI Coding Agent Chat Interface
  */
@@ -268,6 +274,7 @@ fun AgentScreen(navController: NavController) {
     var editingMessageId by remember { mutableStateOf<String?>(null) }
     var editingText by remember { mutableStateOf("") }
     var resolvingPlanMessageId by remember { mutableStateOf<String?>(null) }
+    var planEditSession by remember { mutableStateOf<AgentPlanEditSession?>(null) }
     var pendingDenyMessage by remember { mutableStateOf<AgentService.Companion.ChatMessage?>(null) }
     var pendingActiveUserMessage by remember { mutableStateOf<AgentService.Companion.ChatMessage?>(null) }
     var denyExplanation by remember { mutableStateOf("") }
@@ -807,6 +814,7 @@ fun AgentScreen(navController: NavController) {
         isConversationRestoring = false
         initialConversationRestorePending = false
         editingMessageId = null
+        planEditSession = null
         editingText = ""
         showConversations = false
         clearImageAttachment()
@@ -1062,13 +1070,87 @@ fun AgentScreen(navController: NavController) {
     fun editMessage(id: String, content: String) {
         val sourceMessage = messages.firstOrNull { it.id == id }
             ?: selectedConversationMessages.firstOrNull { it.id == id }
-        editingMessageId = id
-        editingText = if (sourceMessage?.isPlan == true) {
-            sourceMessage.planModifiedContent
+        if (sourceMessage?.isPlan == true) {
+            val editablePlan = sourceMessage.planModifiedContent
                 ?.takeIf { it.isNotBlank() }
-                ?: sourceMessage.content.substringAfter("\n\n", sourceMessage.content)
-        } else {
-            content
+                ?: sourceMessage.content.substringAfter(
+                    "\n\n",
+                    sourceMessage.content
+                )
+            planEditSession = AgentPlanEditSession(
+                messageId = id,
+                conversationId = AgentService.activeConversationId.value
+                    ?: selectedConversationId
+                    ?: runtimeConversationId,
+                originalPlan = editablePlan
+            )
+            editingMessageId = null
+            editingText = editablePlan
+            return
+        }
+        editingMessageId = id
+        editingText = content
+    }
+
+    fun cancelPlanEdit() {
+        planEditSession = null
+        editingText = ""
+    }
+
+    fun savePlanEdit() {
+        val session = planEditSession ?: return
+        if (resolvingPlanMessageId != null) return
+        val modifiedPlan = editingText.trim()
+        if (modifiedPlan.isBlank()) {
+            Toast.makeText(
+                context,
+                "The plan cannot be blank.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+        val activeConversationId = AgentService.activeConversationId.value
+        if (
+            session.conversationId != null &&
+            activeConversationId != null &&
+            session.conversationId != activeConversationId
+        ) {
+            Toast.makeText(
+                context,
+                "This plan belongs to another project. Reopen it before saving.",
+                Toast.LENGTH_LONG
+            ).show()
+            cancelPlanEdit()
+            return
+        }
+
+        resolvingPlanMessageId = session.messageId
+        scope.launch {
+            try {
+                val result = AgentService.handlePlanModified(
+                    context = context,
+                    agentService = agentService,
+                    id = session.messageId,
+                    newContent = modifiedPlan
+                )
+                Toast.makeText(
+                    context,
+                    if (result.approved) {
+                        result.message
+                    } else {
+                        context.getString(
+                            R.string.agent_workflow_plan_approval_failed,
+                            result.message
+                        )
+                    },
+                    Toast.LENGTH_LONG
+                ).show()
+                if (result.approved) {
+                    cancelPlanEdit()
+                }
+            } finally {
+                resolvingPlanMessageId = null
+            }
         }
     }
 
@@ -1084,16 +1166,19 @@ fun AgentScreen(navController: NavController) {
                 selectedConversationId = selectedConversationId,
                 runtimeConversationId = runtimeConversationId,
                 activeConversationId = runtimeActiveConversationId,
-                showConversationLoading = isConversationRestoring || initialConversationRestorePending,
+                showConversationLoading =
+                    isConversationRestoring || initialConversationRestorePending,
                 liveMessagesEmpty = messages.isEmpty()
             )
         ) {
             messages
-        } else if (shouldUseSelectedConversationPreview(
+        } else if (
+            shouldUseSelectedConversationPreview(
                 selectedConversationId = selectedConversationId,
                 runtimeConversationId = runtimeConversationId,
                 activeConversationId = activeUiConversationId,
-                showConversationLoading = isConversationRestoring || initialConversationRestorePending
+                showConversationLoading =
+                    isConversationRestoring || initialConversationRestorePending
             )
         ) {
             selectedConversationMessages
@@ -1103,43 +1188,26 @@ fun AgentScreen(navController: NavController) {
         val message = activeMessages.find { it.id == id }
             ?: messages.find { it.id == id }
             ?: selectedConversationMessages.find { it.id == id }
-        
+
         if (message?.isPlan == true) {
-            val modifiedPlan = editingText
-            if (resolvingPlanMessageId != null) return
-            resolvingPlanMessageId = id
+            val editablePlan = message.planModifiedContent
+                ?.takeIf { it.isNotBlank() }
+                ?: message.content.substringAfter("\n\n", message.content)
+            planEditSession = AgentPlanEditSession(
+                messageId = id,
+                conversationId = AgentService.activeConversationId.value
+                    ?: activeUiConversationId,
+                originalPlan = editablePlan
+            )
             editingMessageId = null
-            scope.launch {
-                try {
-                    val result = AgentService.handlePlanModified(
-                        context = context,
-                        agentService = agentService,
-                        id = id,
-                        newContent = modifiedPlan
-                    )
-                    Toast.makeText(
-                        context,
-                        if (result.approved) {
-                            result.message
-                        } else {
-                            context.getString(R.string.agent_workflow_plan_approval_failed, result.message)
-                        },
-                        Toast.LENGTH_LONG
-                    ).show()
-                    if (!result.approved) {
-                        editingMessageId = id
-                    }
-                } finally {
-                    resolvingPlanMessageId = null
-                }
-            }
-        } else {
-            AgentService.updateMessage(id) { it.copy(content = editingText) }
-            AgentService.truncateHistoryAt(id, inclusive = false)
-            triggerAgent()
+            editingText = editablePlan
+            return
         }
-        
-        if (message?.isPlan != true) editingMessageId = null
+
+        AgentService.updateMessage(id) { it.copy(content = editingText) }
+        AgentService.truncateHistoryAt(id, inclusive = false)
+        editingMessageId = null
+        triggerAgent()
     }
 
     fun handleImmediateViewCommand(rawCommand: String, clearDraft: Boolean): Boolean {
@@ -1932,6 +2000,70 @@ fun AgentScreen(navController: NavController) {
     }
 
     // Dialogs
+    planEditSession?.let { session ->
+        val savingPlan = resolvingPlanMessageId == session.messageId
+        AlertDialog(
+            onDismissRequest = {
+                if (!savingPlan) cancelPlanEdit()
+            },
+            title = { Text("Modify plan") },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Review the complete plan. Save approves the edited " +
+                            "version; Cancel discards the draft.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = editingText,
+                        onValueChange = { editingText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 280.dp, max = 520.dp),
+                        minLines = 12,
+                        maxLines = 24,
+                        enabled = !savingPlan,
+                        label = { Text("Implementation plan") }
+                    )
+                    if (editingText != session.originalPlan) {
+                        Text(
+                            "Edited draft",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { savePlanEdit() },
+                    enabled = !savingPlan && editingText.isNotBlank()
+                ) {
+                    if (savingPlan) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(if (savingPlan) "Saving…" else "Save and approve")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { cancelPlanEdit() },
+                    enabled = !savingPlan
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     pendingActiveUserMessage?.let { pendingMessage ->
         AlertDialog(
             onDismissRequest = { pendingActiveUserMessage = null },

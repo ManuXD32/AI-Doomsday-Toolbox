@@ -115,6 +115,27 @@ private fun LlmAdvancedToggle(
     }
 }
 
+internal data class LlamaParallelContextBreakdown(
+    val totalContext: Int,
+    val parallel: Int,
+    val contextPerSequence: Int,
+    val remainder: Int
+)
+
+internal fun calculateLlamaParallelContext(
+    totalContext: Int,
+    configuredParallel: Int?
+): LlamaParallelContextBreakdown {
+    val safeContext = totalContext.coerceAtLeast(0)
+    val effectiveParallel = (configuredParallel ?: 1).coerceAtLeast(1)
+    return LlamaParallelContextBreakdown(
+        totalContext = safeContext,
+        parallel = effectiveParallel,
+        contextPerSequence = safeContext / effectiveParallel,
+        remainder = safeContext % effectiveParallel
+    )
+}
+
 internal fun containsManagedLlamaFlag(customFlags: String): Boolean {
     val managed = setOf(
         "--parallel", "-np", "--cache-ram", "-cram", "--ctx-checkpoints", "-ctxcp",
@@ -276,6 +297,9 @@ fun LLMSettingsScreen(navController: NavController) {
     val serverBatchSize by settingsRepo.serverBatchSize.collectAsState()
     val serverPhysicalBatchSize by settingsRepo.serverPhysicalBatchSize.collectAsState()
     val serverParallel by settingsRepo.serverParallel.collectAsState()
+    val parallelContextBreakdown = remember(ctxSize, serverParallel) {
+        calculateLlamaParallelContext(ctxSize, serverParallel)
+    }
     val serverCacheRam by settingsRepo.serverCacheRam.collectAsState()
     val serverContextCheckpoints by settingsRepo.serverContextCheckpoints.collectAsState()
     val serverCheckpointMinStep by settingsRepo.serverCheckpointMinStep.collectAsState()
@@ -627,6 +651,33 @@ fun LLMSettingsScreen(navController: NavController) {
                                 )
                                 Text(
                                     stringResource(R.string.llm_parallel_slot_explanation),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "Max context per sequence: " +
+                                        "${parallelContextBreakdown.contextPerSequence} tokens",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    text = buildString {
+                                        append(parallelContextBreakdown.totalContext)
+                                        append(" total ÷ ")
+                                        append(parallelContextBreakdown.parallel)
+                                        append(
+                                            if (parallelContextBreakdown.parallel == 1) {
+                                                " sequence"
+                                            } else {
+                                                " sequences"
+                                            }
+                                        )
+                                        if (parallelContextBreakdown.remainder > 0) {
+                                            append(" · remainder ")
+                                            append(parallelContextBreakdown.remainder)
+                                        }
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
