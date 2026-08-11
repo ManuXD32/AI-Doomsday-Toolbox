@@ -308,18 +308,28 @@ class DownloadService : Service() {
             if (downloadSuccess) {
                 if (pending != null) {
                     try {
-                        val curatedFile =
+                        val genericCurated =
+                            com.example.llamadroid.data.model.CuratedModelBundleRegistry
+                                .fileForInstalledFilename(finalFilename)
+                        val sdCurated =
                             com.example.llamadroid.data.model.SdCuratedBundleCatalog
                                 .fileForLocalFilename(finalFilename)
-                        if (curatedFile != null) {
+                        if (genericCurated != null || sdCurated != null) {
                             val verifyingLabel = getString(R.string.sd_bundle_verifying)
                             DownloadProgressHolder.updateProgress(progressKey, 0.999f)
                             DownloadProgressHolder.updateStatus(progressKey, verifyingLabel)
                             updateNotification(verifyingLabel, 99)
-                            com.example.llamadroid.data.model.verifySdCuratedDownload(
-                                localFilename = finalFilename,
-                                downloadedFile = destFile
-                            )
+                            if (genericCurated != null) {
+                                com.example.llamadroid.data.model.verifyCuratedModelDownload(
+                                    localFilename = finalFilename,
+                                    downloadedFile = destFile
+                                )
+                            } else {
+                                com.example.llamadroid.data.model.verifySdCuratedDownload(
+                                    localFilename = finalFilename,
+                                    downloadedFile = destFile
+                                )
+                            }
                         }
                         val db = AppDatabase.getDatabase(this@DownloadService)
                         var lastFinalizePercent = -1

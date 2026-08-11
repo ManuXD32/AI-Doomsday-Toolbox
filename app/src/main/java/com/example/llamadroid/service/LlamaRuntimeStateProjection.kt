@@ -82,6 +82,19 @@ internal object LlamaRuntimeStateProjection {
         scheduleLogFlush()
     }
 
+    /** A service-side bounded buffer has already applied rate limiting and coalescing. */
+    fun publishLogBatch(context: Context, generation: Long, messages: List<String>) {
+        if (messages.isEmpty()) return
+        runtimeContextForProjection = context.applicationContext
+        publish(
+            context,
+            generation,
+            KIND_LOG_BATCH,
+            messages.joinToString("\n") { sanitize(it) },
+            ""
+        )
+    }
+
     fun publishClearLogs(context: Context, generation: Long) {
         pendingLogs.clear()
         logHandler.removeCallbacks(logFlushRunnable)

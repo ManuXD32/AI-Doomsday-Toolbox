@@ -8,6 +8,61 @@ import com.example.llamadroid.ui.ai.AiJobStartupDiagnostics
 import com.example.llamadroid.util.DebugLog
 
 object LlamaServerLauncher {
+    private val ownedServiceActions = setOf(
+        LlamaService.ACTION_START,
+        LlamaService.ACTION_RECONFIGURE,
+        LlamaService.ACTION_SWITCH_MODEL,
+        LlamaService.ACTION_STOP,
+        LlamaService.ACTION_RECOVER
+    )
+
+    /** Pure action gate kept separate so service-boundary policy can be unit-tested. */
+    internal fun isOwnedServiceAction(action: String?): Boolean = action in ownedServiceActions
+
+    /**
+     * Sends only an explicit, app-local command to [LlamaService]. This keeps the launcher from
+     * becoming a generic intent forwarder while preserving one diagnostic path for every local
+     * start, reconfigure, switch, stop, and recorded-owner recovery request.
+     */
+    fun dispatchOwnedCommand(context: Context, intent: Intent): Result<Unit> = runCatching {
+        val appContext = context.applicationContext
+        val action = requireNotNull(intent.action) { "Missing llama-server service action" }
+        require(isOwnedServiceAction(action)) { "Unsupported llama-server service action: $action" }
+        val component = intent.component
+        require(
+            component?.packageName == appContext.packageName &&
+                component?.className == LlamaService::class.java.name
+        ) { "Command must explicitly target the local LlamaService" }
+
+        AiJobStartupDiagnostics.record(
+            appContext,
+            "llama_server_owned_command",
+            "dispatch_requested",
+            "action=$action"
+        )
+        val ownedIntent = Intent(intent).setPackage(appContext.packageName)
+        if (action == LlamaService.ACTION_STOP) {
+            appContext.startService(ownedIntent)
+        } else {
+            appContext.startForegroundService(ownedIntent)
+        }
+        AiJobStartupDiagnostics.record(
+            appContext,
+            "llama_server_owned_command",
+            "dispatch_sent",
+            "action=$action"
+        )
+        DebugLog.log("LlamaServerLauncher: dispatched owned action=$action")
+    }.onFailure { error ->
+        AiJobStartupDiagnostics.record(
+            context.applicationContext,
+            "llama_server_owned_command",
+            "dispatch_rejected",
+            "error=${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+        )
+        DebugLog.log("LlamaServerLauncher: rejected owned command: ${error.message}")
+    }
+
     private fun Intent.putOcrSettings(settings: LlamaOcrSettingsSnapshot, modelPath: String, mmprojPath: String) {
         val flags = composeLlamaOcrFlags(
             recommendedFlags = settings.promptPreset.recommendedFlags,
@@ -126,7 +181,7 @@ object LlamaServerLauncher {
             putExtra(LlamaService.EXTRA_CUSTOM_FLAGS, settingsRepo.customFlags.value)
             putExtra(LlamaService.EXTRA_COMMAND_TEMPLATE, settingsRepo.customCommandTemplate.value)
         }
-        appContext.startForegroundService(intent)
+        dispatchOwnedCommand(appContext, intent).getOrThrow()
         AiJobStartupDiagnostics.record(appContext, "llama_server_start", "post_launch_state")
         DebugLog.log("LlamaServerLauncher: start intent sent")
     }.onFailure { error ->
@@ -153,7 +208,7 @@ object LlamaServerLauncher {
             action = LlamaService.ACTION_START
             putOcrSettings(settings, modelPath, mmprojPath)
         }
-        appContext.startForegroundService(intent)
+        dispatchOwnedCommand(appContext, intent).getOrThrow()
         AiJobStartupDiagnostics.record(appContext, "llama_ocr_server_start", "post_launch_state")
     }.onFailure { error ->
         AiJobStartupDiagnostics.record(
@@ -169,16 +224,16 @@ object LlamaServerLauncher {
         val appContext = context.applicationContext
         val modelPath = requireNotNull(settings.modelPath?.takeIf { it.isNotBlank() })
         val mmprojPath = requireNotNull(settings.mmprojPath?.takeIf { it.isNotBlank() })
-        appContext.startForegroundService(Intent(appContext, LlamaService::class.java).apply {
+        dispatchOwnedCommand(appContext, Intent(appContext, LlamaService::class.java).apply {
             action = LlamaService.ACTION_RECONFIGURE
             putOcrSettings(settings, modelPath, mmprojPath)
-        })
+        }).getOrThrow()
     }
 
     fun reconfigureGeneral(context: Context, modelPath: String): Result<Unit> = runCatching {
         val appContext = context.applicationContext
         val settingsRepo = SettingsRepository(appContext)
-        appContext.startForegroundService(Intent(appContext, LlamaService::class.java).apply {
+        dispatchOwnedCommand(appContext, Intent(appContext, LlamaService::class.java).apply {
             action = LlamaService.ACTION_RECONFIGURE
             putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
             putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
@@ -187,12 +242,36 @@ object LlamaServerLauncher {
             putExtra(LlamaService.EXTRA_FLASH_ATTENTION, settingsRepo.flashAttentionEnabled.value)
             putExtra(LlamaService.EXTRA_CUSTOM_FLAGS, settingsRepo.customFlags.value)
             putExtra(LlamaService.EXTRA_COMMAND_TEMPLATE, settingsRepo.customCommandTemplate.value)
-        })
+        }).getOrThrow()
+    }
+
+    /**
+     * Local chat has a saved per-server profile, so it cannot use [start]'s global settings
+     * shortcut. Keep its command dispatch here nevertheless, so every local launch shares the
+     * same diagnostics and service lifecycle entry point.
+     */
+    fun startLocalChat(context: Context, startIntent: Intent): Result<Unit> = runCatching {
+        val appContext = context.applicationContext
+        AiJobStartupDiagnostics.record(appContext, "llama_local_chat_start", "pre_launch_state")
+        dispatchOwnedCommand(appContext, startIntent).getOrThrow()
+        AiJobStartupDiagnostics.record(appContext, "llama_local_chat_start", "post_launch_state")
+    }.onFailure { error ->
+        AiJobStartupDiagnostics.record(
+            context.applicationContext,
+            "llama_local_chat_start",
+            "launch_failed",
+            "error=${error.javaClass.simpleName}: ${error.message.orEmpty()}"
+        )
     }
 
     fun stop(context: Context): Result<Unit> = runCatching {
-        context.applicationContext.startService(Intent(context.applicationContext, LlamaService::class.java).apply {
+        dispatchOwnedCommand(context.applicationContext, Intent(context.applicationContext, LlamaService::class.java).apply {
             action = LlamaService.ACTION_STOP
-        })
+        }).getOrThrow()
     }
+
+    fun recover(context: Context): Result<Unit> =
+        dispatchOwnedCommand(context.applicationContext, Intent(context.applicationContext, LlamaService::class.java).apply {
+            action = LlamaService.ACTION_RECOVER
+        })
 }

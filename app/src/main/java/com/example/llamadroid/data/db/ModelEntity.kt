@@ -117,5 +117,7 @@ enum class ModelType {
     // Optional stable-diffusion.cpp image-conditioning components. Appended to
     // preserve every existing persisted enum ordinal.
     SD_CLIP_VISION,   // CLIP-Vision image encoder for IP-Adapter
-    SD_IP_ADAPTER     // Classic or Plus IP-Adapter weights
+    SD_IP_ADAPTER,     // Classic or Plus IP-Adapter weights
+    LLM_DRAFT,
+    SD_ADETAILER
 }

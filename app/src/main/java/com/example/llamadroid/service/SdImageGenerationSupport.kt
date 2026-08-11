@@ -30,7 +30,9 @@ internal fun validateSdLaunchInputs(
     if (!isReadableRegularFile(modelPath)) {
         return SdLaunchIssue.UNREADABLE_MODEL
     }
-    if (mode == SDMode.IMG2IMG || mode == SDMode.UPSCALE) {
+    if (mode == SDMode.IMG2IMG || mode == SDMode.UPSCALE ||
+        (mode == SDMode.ADETAILER && !inputImagePath.isNullOrBlank())
+    ) {
         if (inputImagePath.isNullOrBlank()) {
             return SdLaunchIssue.MISSING_INPUT_IMAGE
         }

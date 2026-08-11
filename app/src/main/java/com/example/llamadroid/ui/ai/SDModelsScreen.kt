@@ -183,6 +183,16 @@ fun SDModelsScreen(navController: NavController) {
     var searchQuery by remember { mutableStateOf("") }
     var searchResults by remember { mutableStateOf<List<HfModelDto>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
+    var searchRequestId by remember { mutableIntStateOf(0) }
+
+    val updateSearchQuery: (String) -> Unit = { value ->
+        if (value != searchQuery) {
+            searchRequestId += 1
+            searchQuery = value
+            searchResults = emptyList()
+            isSearching = false
+        }
+    }
     
     // File selection state
     var selectedRepoId by remember { mutableStateOf<String?>(null) }
@@ -300,21 +310,29 @@ fun SDModelsScreen(navController: NavController) {
         )
     }
     
-    // Search function
-    val doSearch: () -> Unit = {
-        if (searchQuery.isNotBlank()) {
+    // Search function. Accept the requested text explicitly so tapping a suggestion does not
+    // race Compose state propagation and accidentally submit the previous field value.
+    val launchSearch: (String) -> Unit = { rawQuery ->
+        val requestedQuery = rawQuery.trim()
+        if (requestedQuery.isNotBlank()) {
+            val requestId = searchRequestId + 1
+            searchRequestId = requestId
             isSearching = true
             keyboardController?.hide()
             scope.launch {
-                try {
-                    searchResults = repository.searchModels(searchQuery)
+                val results = try {
+                    repository.searchModels(requestedQuery)
                 } catch (e: Exception) {
-                    searchResults = emptyList()
+                    emptyList()
                 }
-                isSearching = false
+                if (requestId == searchRequestId && requestedQuery == searchQuery.trim()) {
+                    searchResults = results
+                    isSearching = false
+                }
             }
         }
     }
+    val doSearch: () -> Unit = { launchSearch(searchQuery) }
     
     // Load files for a repo
     val loadRepoFiles: (String) -> Unit = { repoId ->
@@ -671,14 +689,14 @@ fun SDModelsScreen(navController: NavController) {
             )
             2 -> DiscoverTab(
                 searchQuery = searchQuery,
-                onQueryChange = { searchQuery = it },
+                onQueryChange = updateSearchQuery,
                 onSearch = doSearch,
                 isSearching = isSearching,
                 searchResults = searchResults,
                 suggestions = suggestions,
                 onSuggestionClick = { query ->
-                    searchQuery = query
-                    doSearch()
+                    updateSearchQuery(query)
+                    launchSearch(query)
                 },
                 onRepoClick = loadRepoFiles
             )
@@ -2606,8 +2624,14 @@ private fun DiscoverTab(
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Curated bundles replace the old recommendation cards.
-            if (searchResults.isEmpty() && !isSearching) {
+            if (com.example.llamadroid.ui.components.isCuratedCatalogBrowseMode(searchQuery)) {
+                item(key = "phase_c_adetailer_curated_bundles") {
+                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
+                        title = stringResource(R.string.phase_c_adetailer_bundles_title),
+                        description = stringResource(R.string.adetailer_bundles_desc),
+                        bundles = com.example.llamadroid.data.model.AdetailerCuratedBundleCatalog.bundles
+                    )
+                }
                 item {
                     SdCuratedBundlesSection()
                 }

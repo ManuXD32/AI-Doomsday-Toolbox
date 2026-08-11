@@ -7,8 +7,11 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +21,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.util.concurrent.atomic.AtomicBoolean
 import com.example.llamadroid.R
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
@@ -34,6 +38,9 @@ class LlamaService : Service() {
     
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val processController = ProcessController()
+    private val lifecycleLock = Any()
+    @Volatile private var lifecycleGeneration = 0L
+    private var lifecycleCommand: Job? = null
     private var notificationTaskId: Int? = null
     @Volatile private var currentServerPort: Int? = null
     override fun onCreate() {
@@ -47,6 +54,145 @@ class LlamaService : Service() {
         }
     }
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * The service receives commands from the dashboard, chat, OCR, remote control and Wear.
+     * Keep exactly one launch/stop transition in flight so an old child can never tear down a
+     * replacement server after it has been superseded.
+     */
+    private fun scheduleLaunch(
+        reason: String,
+        restartDelayMs: Long = 0L,
+        launch: (Long) -> Job
+    ) {
+        var generation = 0L
+        var previous: Job? = null
+        val command = serviceScope.launch(start = CoroutineStart.LAZY) {
+            // Closing the native child unblocks its line reader before waiting for the
+            // superseded coroutine. Cancelling alone cannot interrupt BufferedReader.readLine().
+            processController.stop()
+            previous?.cancelAndJoin()
+            if (!isCurrentGeneration(generation)) return@launch
+            if (restartDelayMs > 0L) delay(restartDelayMs)
+            if (!isCurrentGeneration(generation)) return@launch
+            launch(generation).join()
+        }
+        synchronized(lifecycleLock) {
+            generation = ++lifecycleGeneration
+            previous = lifecycleCommand
+            lifecycleCommand = command
+        }
+        DebugLog.log("LlamaService: queued $reason generation=$generation")
+        previous?.cancel()
+        command.start()
+    }
+
+    private fun scheduleStop(startId: Int) {
+        var generation = 0L
+        var previous: Job? = null
+        val command = serviceScope.launch(start = CoroutineStart.LAZY) {
+            processController.stop()
+            previous?.cancelAndJoin()
+            if (!isCurrentGeneration(generation)) return@launch
+            stopServer(startId = startId, generation = generation)
+        }
+        synchronized(lifecycleLock) {
+            generation = ++lifecycleGeneration
+            previous = lifecycleCommand
+            lifecycleCommand = command
+        }
+        DebugLog.log("LlamaService: queued stop generation=$generation")
+        previous?.cancel()
+        command.start()
+    }
+
+    private fun scheduleRecovery(startId: Int) {
+        var generation = 0L
+        var previous: Job? = null
+        val command = serviceScope.launch(start = CoroutineStart.LAZY) {
+            val recovery = Companion.recoverRecordedOwner(applicationContext)
+            if (recovery.matchedRecordedOwner) {
+                // The recorded root/tree was verified and terminated before we release local
+                // handles, which unblocks its reader without broad same-UID cleanup.
+                processController.releaseExternallyStoppedProcess()
+                previous?.cancelAndJoin()
+            }
+            if (!isCurrentGeneration(generation)) return@launch
+            processController.clearTransientLogs()
+            clearServerLogsForGeneration(generation)
+            Companion.clearRecentStartupFailure()
+            DistributedService.setInferenceRunning(false)
+            DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
+            val recoveredPortReleased = recovery.recordedPort?.let { recordedPort ->
+                checkServerPortBind("127.0.0.1", recordedPort).available
+            } ?: true
+            if (recoveredPortReleased) {
+                Companion.clearRecordedOwner(applicationContext)
+                updateStateForGeneration(generation, ServerState.Stopped)
+            } else {
+                updateStateForGeneration(
+                    generation,
+                    ServerState.Error(
+                        getString(R.string.llama_server_cleanup_port_busy, recovery.recordedPort)
+                    )
+                )
+            }
+            DebugLog.log(
+                "LlamaService: recovery completed recordedPid=${recovery.recordedPid} " +
+                    "cleaned=${recovery.cleanedProcessCount} matched=${recovery.matchedRecordedOwner}"
+            )
+            WakeLockManager.release("LlamaService")
+            WakeLockManager.releaseWifiLock("LlamaService")
+            notificationTaskId?.let { taskId -> UnifiedNotificationManager.dismissTask(taskId) }
+            notificationTaskId = null
+            currentServerPort = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelfResult(startId)
+        }
+        synchronized(lifecycleLock) {
+            generation = ++lifecycleGeneration
+            previous = lifecycleCommand
+            lifecycleCommand = command
+        }
+        DebugLog.log("LlamaService: queued recorded-owner recovery generation=$generation")
+        previous?.cancel()
+        command.start()
+    }
+
+    private fun isCurrentGeneration(generation: Long?): Boolean =
+        generation == null || generation == lifecycleGeneration
+
+    private fun updateStateForGeneration(generation: Long?, state: ServerState) {
+        if (isCurrentGeneration(generation)) Companion.updateState(state)
+    }
+
+    private fun appendServerLogForGeneration(generation: Long?, message: String) {
+        if (isCurrentGeneration(generation)) Companion.addServerLog(message, lifecycleGeneration = generation)
+    }
+
+    private fun clearServerLogsForGeneration(generation: Long?) {
+        if (isCurrentGeneration(generation)) Companion.clearServerLogs(lifecycleGeneration = generation)
+    }
+
+    private fun recordOwnedRuntimeForGeneration(
+        generation: Long?,
+        pid: Int,
+        port: Int,
+        processStartTimeTicks: Long?
+    ) {
+        if (!isCurrentGeneration(generation) || processStartTimeTicks == null) return
+        Companion.recordOwnedRuntime(
+            applicationContext,
+            LlamaRuntimeOwnerRecord(
+                pid = pid,
+                port = port,
+                lifecycleGeneration = generation ?: lifecycleGeneration,
+                processStartTimeTicks = processStartTimeTicks
+            )
+        )
+    }
+
+    private fun completedJob(): Job = Job().apply { complete() }
 
     private fun Intent.rpcWorkersOverride(): List<String>? =
         takeIf { hasExtra(EXTRA_RPC_WORKERS) }
@@ -152,7 +298,8 @@ class LlamaService : Service() {
                         Companion.updateState(ServerState.Error("No model selected"))
                         stopSelf()
                     } else {
-                        startServer(modelPath, isEmbedding, mmprojPath, 
+                        scheduleLaunch("start") { generation ->
+                        startServer(modelPath, isEmbedding, mmprojPath,
                             threadsOverride, contextSizeOverride, temperatureOverride, hostOverride, portOverride,
                             draftModelPath = draftModelPath, draftMax = draftMax, draftMin = draftMin, draftPMin = draftPMin,
                             draftThreads = draftThreads, draftThreadsBatch = draftThreadsBatch,
@@ -172,28 +319,26 @@ class LlamaService : Service() {
                             rpcWorkersOverride = intent.rpcWorkersOverride(),
                             rpcWorkerRamOverride = intent.rpcWorkerRamOverride(),
                             masterRamOverride = intent.takeIf { it.hasExtra(EXTRA_MASTER_RAM_MB) }
-                                ?.getIntExtra(EXTRA_MASTER_RAM_MB, 0))
+                                ?.getIntExtra(EXTRA_MASTER_RAM_MB, 0),
+                            generation = generation)
+                        }
                     }
                 }
                 ACTION_STOP -> {
                     Companion.clearRecentStartupFailure()
-                    stopServer(startId = startId)
+                    scheduleStop(startId)
+                }
+                ACTION_RECOVER -> {
+                    ensureForegroundNotification()
+                    scheduleRecovery(startId)
                 }
                 ACTION_SWITCH_MODEL -> {
                     val newModelPath = intent.getStringExtra(EXTRA_MODEL_PATH)
                     if (newModelPath.isNullOrEmpty()) {
                         DebugLog.log("LlamaService: SWITCH_MODEL - No model path provided!")
                     } else {
-                        restartMode = START_REDELIVER_INTENT
                         DebugLog.log("LlamaService: SWITCH_MODEL to $newModelPath")
-                        // Stop current server process without stopping the foreground service
-                        processController.stop()
-                        DistributedService.setInferenceRunning(false)
-                        
-                        serviceScope.launch(Dispatchers.IO) {
-                            // Wait briefly to ensure the port is freed
-                            kotlinx.coroutines.delay(1000)
-                            
+                        scheduleLaunch("switch_model", restartDelayMs = 1_000L) { generation ->
                             val params = DistributedService.lastRunParams.value
                             startServer(
                                 modelPath = newModelPath,
@@ -221,7 +366,8 @@ class LlamaService : Service() {
                                 customFlagsOverride = params["customFlags"] as? String,
                                 flashAttentionOverride = params["flashAttention"] as? Boolean,
                                 commandTemplateOverride = params["commandTemplate"] as? String,
-                                settingsProfile = params["settingsProfile"] as? String ?: SETTINGS_PROFILE_GENERAL
+                                settingsProfile = params["settingsProfile"] as? String ?: SETTINGS_PROFILE_GENERAL,
+                                generation = generation
                             )
                         }
                     }
@@ -233,13 +379,9 @@ class LlamaService : Service() {
                     if (newModelPath.isNullOrBlank()) {
                         DebugLog.log("LlamaService: RECONFIGURE - No model path provided")
                     } else {
-                        restartMode = START_REDELIVER_INTENT
                         val mmprojPath = intent.getStringExtra(EXTRA_MMPROJ_PATH)
                         val allowSettingsMmproj = intent.getBooleanExtra(EXTRA_ALLOW_SETTINGS_MMPROJ, true)
-                        processController.stop()
-                        DistributedService.setInferenceRunning(false)
-                        serviceScope.launch(Dispatchers.IO) {
-                            delay(750L)
+                        scheduleLaunch("reconfigure", restartDelayMs = 750L) { generation ->
                             startServer(
                                 modelPath = newModelPath,
                                 isEmbedding = intent.getBooleanExtra(EXTRA_IS_EMBEDDING, false),
@@ -273,7 +415,8 @@ class LlamaService : Service() {
                                 commandTemplateOverride = intent.getStringExtra(EXTRA_COMMAND_TEMPLATE),
                                 settingsProfile = intent.getStringExtra(EXTRA_SETTINGS_PROFILE)
                                     ?: SETTINGS_PROFILE_GENERAL,
-                                allowSettingsMmproj = allowSettingsMmproj
+                                allowSettingsMmproj = allowSettingsMmproj,
+                                generation = generation
                             )
                         }
                     }
@@ -385,8 +528,9 @@ class LlamaService : Service() {
         distributedLaunchProfile: DistributedLlamaLaunchProfile? = null,
         rpcWorkersOverride: List<String>? = null,
         rpcWorkerRamOverride: IntArray? = null,
-        masterRamOverride: Int? = null
-    ) {
+        masterRamOverride: Int? = null,
+        generation: Long? = null
+    ): Job {
         if (!previewMode) {
             ensureForegroundNotification()
             
@@ -394,7 +538,7 @@ class LlamaService : Service() {
             WakeLockManager.acquire(applicationContext, "LlamaService")
             WakeLockManager.acquireWifiLock(applicationContext, "LlamaService")
             
-            Companion.updateState(ServerState.Starting)
+            updateStateForGeneration(generation, ServerState.Starting)
             DebugLog.log("LlamaService: Starting server for model: $modelPath")
         } else {
             DebugLog.log("LlamaService: Generating PREVIEW command for model: $modelPath")
@@ -538,15 +682,16 @@ class LlamaService : Service() {
         if (speculativeMode?.requiresDraftModel == true && effectiveDraftModelPath.isNullOrBlank()) {
             handlePreLaunchStartFailure(
                 getString(R.string.dist_speculative_missing_required_draft),
-                previewMode = previewMode
+                previewMode = previewMode,
+                generation = generation
             )
-            return
+            return completedJob()
         }
         if (speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH && !effectiveDraftModelPath.isNullOrBlank()) {
-            val dflashDraftError = validateDflashDraftArchitecture(effectiveDraftModelPath)
+            val dflashDraftError = validateDflashDraftArchitecture(effectiveDraftModelPath, generation)
             if (dflashDraftError != null) {
-                handlePreLaunchStartFailure(dflashDraftError, previewMode = previewMode)
-                return
+                handlePreLaunchStartFailure(dflashDraftError, previewMode = previewMode, generation = generation)
+                return completedJob()
             }
         }
         val mtpDraftMax = distributedConfig?.mtpDraftMax ?: localLaunchProfile?.mtpDraftMax ?: if (isMasterProfile) DistributedService.masterMtpDraftMax.value else if (isOcrProfile) 3 else settingsRepo.mtpDraftMaxTokens.value
@@ -708,12 +853,12 @@ class LlamaService : Service() {
                     tensorSplit = null
                 )
             }.onFailure { error ->
-                handlePreLaunchStartFailure(error.message ?: getString(R.string.dist_fit_invalid), previewMode)
-                return
+                handlePreLaunchStartFailure(error.message ?: getString(R.string.dist_fit_invalid), previewMode, generation)
+                return completedJob()
             }
         }
         
-        serviceScope.launch {
+        return serviceScope.launch {
             try {
                 // Get binary from BinaryRepository
                 val binaryRepo = BinaryRepository(applicationContext)
@@ -729,7 +874,8 @@ class LlamaService : Service() {
                     if (!isMasterProfile && !isOcrProfile && processController.containsDistributedOnlyArgument(args)) {
                         handlePreLaunchStartFailure(
                             getString(R.string.llama_local_distributed_args_rejected),
-                            previewMode
+                            previewMode,
+                            generation
                         )
                         return@launch
                     }
@@ -742,15 +888,25 @@ class LlamaService : Service() {
                     }
 
                     DebugLog.log("LlamaService: Using CUSTOM command override")
-                    Companion.updateState(ServerState.Starting)
+                    updateStateForGeneration(generation, ServerState.Starting)
                     updateNotification("Starting custom command...")
                     currentServerPort = port
-                    processController.start(
+                    val customResult = processController.start(
                         binary,
                         LlamaConfig(modelPath = modelPath),
                         filesDir,
                         customArgs = args,
-                        runtimeGenerationId = Companion.runtimeGenerationId()
+                        runtimeGenerationId = Companion.runtimeGenerationId(),
+                        onState = { updateStateForGeneration(generation, it) },
+                        onClearServerLogs = { clearServerLogsForGeneration(generation) },
+                        onServerLog = { appendServerLogForGeneration(generation, it) },
+                        onOwnedProcessStarted = { pid, startTimeTicks ->
+                            recordOwnedRuntimeForGeneration(generation, pid, port, startTimeTicks)
+                        }
+                    )
+                    stopServer(
+                        finalError = customResult.startupFailureMessage?.takeIf { !customResult.becameReady },
+                        generation = generation
                     )
                     return@launch
                 }
@@ -1017,12 +1173,12 @@ class LlamaService : Service() {
                             cpuBinaryFile.name
                         )
                         DebugLog.log("LlamaService: $warning")
-                        Companion.addServerLog(warning)
+                        appendServerLogForGeneration(generation, warning)
                         primaryBinaryFile = cpuBinaryFile
                     } else {
                         val warning = getString(R.string.llama_server_mtp_disabled, binaryFile.name)
                         DebugLog.log("LlamaService: $warning")
-                        Companion.addServerLog(warning)
+                        appendServerLogForGeneration(generation, warning)
                         launchConfig = config.copy(speculativeMode = null)
                     }
                 }
@@ -1040,7 +1196,7 @@ class LlamaService : Service() {
                             cpuBinaryFile.name
                         )
                         DebugLog.log("LlamaService: $warning")
-                        Companion.addServerLog(warning)
+                        appendServerLogForGeneration(generation, warning)
                         primaryBinaryFile = cpuBinaryFile
                     } else {
                         throw IllegalStateException(
@@ -1097,7 +1253,7 @@ class LlamaService : Service() {
                 DebugLog.log("LlamaService: Starting on port ${config.port}")
                 
                 // Show loading state while model loads
-                Companion.updateState(ServerState.Loading(0f, "Loading model..."))
+                updateStateForGeneration(generation, ServerState.Loading(0f, "Loading model..."))
                 updateNotification("Loading model...")
                 updateNotification("Llama Server Running on port ${config.port}")
 
@@ -1156,6 +1312,12 @@ class LlamaService : Service() {
                         nativeToolsWorkspaceDir = nativeToolsWorkspaceDir,
                         customArgs = args,
                         runtimeGenerationId = Companion.runtimeGenerationId(),
+                        onState = { updateStateForGeneration(generation, it) },
+                        onClearServerLogs = { clearServerLogsForGeneration(generation) },
+                        onServerLog = { appendServerLogForGeneration(generation, it) },
+                        onOwnedProcessStarted = { pid, startTimeTicks ->
+                            recordOwnedRuntimeForGeneration(generation, pid, candidateConfig.port, startTimeTicks)
+                        },
                         onLog = { line ->
                             handleServerLog(line)
                             val speculativeModeForMetrics = candidateConfig.speculativeMode
@@ -1178,7 +1340,7 @@ class LlamaService : Service() {
                                 line.contains("unknown model architecture: 'dflash-draft'")
                             ) {
                                 DebugLog.log("LlamaService: DFlash draft GGUF architecture rejected by ${candidateFile.name}; stopping process")
-                                Companion.addServerLog(getString(R.string.llama_server_dflash_runtime_rejected, candidateFile.name))
+                                appendServerLogForGeneration(generation, getString(R.string.llama_server_dflash_runtime_rejected, candidateFile.name))
                                 processController.stop()
                             }
                             if (DeviceAcceleration.isAcceleratorBinary(candidateFile) &&
@@ -1205,7 +1367,7 @@ class LlamaService : Service() {
                                     if (reportedOpenClMtpDiagnostics.add(warningRes)) {
                                         val warning = getString(warningRes)
                                         DebugLog.log("LlamaService: $warning")
-                                        Companion.addServerLog(warning)
+                                        appendServerLogForGeneration(generation, warning)
                                     }
                                 }
                             }
@@ -1231,7 +1393,7 @@ class LlamaService : Service() {
                     )
                     if (cpuBinaryFiles.isEmpty()) return null
                     val fallbackStatus = getString(R.string.llama_server_cpu_fallback_retry)
-                    Companion.updateState(ServerState.Loading(0f, fallbackStatus))
+                    updateStateForGeneration(generation, ServerState.Loading(0f, fallbackStatus))
                     updateNotification(fallbackStatus)
                     for (cpuBinaryFile in cpuBinaryFiles) {
                         DebugLog.log("LlamaService: $reason; retrying CPU fallback at ${cpuBinaryFile.absolutePath}")
@@ -1240,21 +1402,21 @@ class LlamaService : Service() {
                         ) {
                             val warning = getString(R.string.llama_server_mtp_disabled, cpuBinaryFile.name)
                             DebugLog.log("LlamaService: $warning")
-                            Companion.addServerLog(warning)
+                            appendServerLogForGeneration(generation, warning)
                             launchConfig.copy(speculativeMode = null)
                         } else if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DFLASH &&
                             !processController.binarySupportsDflashSpeculative(cpuBinaryFile)
                         ) {
                             val warning = getString(R.string.llama_server_dflash_unsupported, cpuBinaryFile.name)
                             DebugLog.log("LlamaService: $warning")
-                            Companion.addServerLog(warning)
+                            appendServerLogForGeneration(generation, warning)
                             continue
                         } else if (launchConfig.speculativeMode == LlamaSpeculativeMode.DRAFT_DSPARK &&
                             !processController.binarySupportsDsparkSpeculative(cpuBinaryFile)
                         ) {
                             val warning = getString(R.string.llama_server_dspark_unsupported, cpuBinaryFile.name)
                             DebugLog.log("LlamaService: $warning")
-                            Companion.addServerLog(warning)
+                            appendServerLogForGeneration(generation, warning)
                             continue
                         } else {
                             launchConfig
@@ -1385,46 +1547,64 @@ class LlamaService : Service() {
                     DebugLog.log("LlamaService: Process terminated unexpectedly")
                     Companion.recordRecentStartupFailure()
                 }
-                stopServer(finalError = finalRunResult.startupFailureMessage?.takeIf { !finalRunResult.becameReady })
+                stopServer(
+                    finalError = finalRunResult.startupFailureMessage?.takeIf { !finalRunResult.becameReady },
+                    generation = generation
+                )
             } catch (e: Exception) {
+                if (!isCurrentGeneration(generation)) return@launch
                 // Only show error if not intentionally stopped
                 if (!processController.stoppedIntentionally) {
                     DebugLog.log("LlamaService ERROR: ${e.message}")
-                    Companion.updateState(ServerState.Error(e.message ?: "Unknown error"))
+                    updateStateForGeneration(generation, ServerState.Error(e.message ?: "Unknown error"))
                     Companion.recordRecentStartupFailure()
                 } else {
                     DebugLog.log("LlamaService: Stopped by user")
-                    Companion.updateState(ServerState.Stopped)
+                    updateStateForGeneration(generation, ServerState.Stopped)
                 }
-                stopSelf()
+                stopServer(generation = generation)
             }
         }
     }
     
-    private fun stopServer(finalError: String? = null, startId: Int? = null) {
+    private fun stopServer(
+        finalError: String? = null,
+        startId: Int? = null,
+        generation: Long? = null
+    ) {
+        if (!isCurrentGeneration(generation)) {
+            DebugLog.log("LlamaService: ignored stale cleanup generation=$generation")
+            return
+        }
         val portToClean = currentServerPort ?: 8080
         val openClWasActive = processController.activeProcessWasOpenCl()
+        val ownedChildPid = processController.ownedChildPid()
         processController.stop()
-        val sweptProcesses = if (openClWasActive) {
-            NativeProcessCleanup.cleanupSameUidLlamaServersSync("LlamaService OpenCL stop")
-        } else {
-            NativeProcessCleanup.cleanupSameUidLlamaServersSync("LlamaService stop", port = portToClean)
-        }
         DebugLog.log(
-            "LlamaService: native shutdown sweep complete openCl=$openClWasActive " +
-                "candidates=$sweptProcesses port=$portToClean"
+            "LlamaService: owned native shutdown complete openCl=$openClWasActive " +
+                "childPid=$ownedChildPid port=$portToClean"
         )
-        if (!checkServerPortBind("127.0.0.1", portToClean).available) {
-            DebugLog.log("LlamaService: port $portToClean is still occupied immediately after shutdown; the next launch will run the stale-owner diagnostics")
+        val portReleased = checkServerPortBind("127.0.0.1", portToClean).available
+        if (portReleased) {
+            Companion.clearRecordedOwner(applicationContext)
+        } else {
+            DebugLog.log(
+                "LlamaService: port $portToClean is still occupied after owned shutdown; " +
+                    "preserving the exact owner record for Recover"
+            )
         }
-        Companion.clearServerLogs()
-        serviceScope.coroutineContext.cancelChildren()
+        Companion.clearServerLogs(lifecycleGeneration = generation)
         DistributedService.setInferenceRunning(false)
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
-        if (finalError != null) {
-            Companion.updateState(ServerState.Error(finalError))
+        val effectiveError = finalError ?: if (!portReleased) {
+            getString(R.string.llama_server_cleanup_port_busy, portToClean)
         } else {
-            Companion.updateState(ServerState.Stopped)
+            null
+        }
+        if (effectiveError != null) {
+            updateStateForGeneration(generation, ServerState.Error(effectiveError))
+        } else {
+            updateStateForGeneration(generation, ServerState.Stopped)
         }
         WakeLockManager.release("LlamaService")
         WakeLockManager.releaseWifiLock("LlamaService")
@@ -1455,9 +1635,21 @@ class LlamaService : Service() {
     }
 
     override fun onDestroy() {
-        val portToClean = currentServerPort ?: 8080
+        val recordedOwner = LlamaRuntimeOwnerStore.load(applicationContext)
+        val portToClean = currentServerPort ?: recordedOwner?.port ?: 8080
+        val ownedChildPid = processController.ownedChildPid()
         processController.stop()
-        NativeProcessCleanup.cleanupSameUidLlamaServersSync("LlamaService destroy", graceMs = 500L, forceMs = 500L, port = portToClean)
+        DebugLog.log(
+            "LlamaService: destroy cleaned only owned native tree childPid=$ownedChildPid port=$portToClean"
+        )
+        if (checkServerPortBind("127.0.0.1", portToClean).available) {
+            Companion.clearRecordedOwner(applicationContext)
+        } else {
+            DebugLog.log(
+                "LlamaService: destroy left port $portToClean occupied; preserving the exact owner record"
+            )
+        }
+        Companion.clearServerLogs(lifecycleGeneration = lifecycleGeneration)
         serviceScope.coroutineContext.cancelChildren()
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.dismissTask(taskId)
@@ -1548,14 +1740,22 @@ class LlamaService : Service() {
             )
         }
     
-    private fun handlePreLaunchStartFailure(message: String, previewMode: Boolean) {
+    private fun handlePreLaunchStartFailure(
+        message: String,
+        previewMode: Boolean,
+        generation: Long? = null
+    ) {
+        if (!isCurrentGeneration(generation)) {
+            DebugLog.log("LlamaService: ignored stale pre-launch failure generation=$generation")
+            return
+        }
         DebugLog.log("LlamaService ERROR: $message")
-        Companion.addServerLog(message)
+        appendServerLogForGeneration(generation, message)
         if (previewMode) return
 
         DistributedService.setInferenceRunning(false)
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
-        Companion.updateState(ServerState.Error(message))
+        updateStateForGeneration(generation, ServerState.Error(message))
         Companion.recordRecentStartupFailure()
         WakeLockManager.release("LlamaService")
         WakeLockManager.releaseWifiLock("LlamaService")
@@ -1567,7 +1767,7 @@ class LlamaService : Service() {
         stopSelf()
     }
 
-    private fun validateDflashDraftArchitecture(draftModelPath: String): String? {
+    private fun validateDflashDraftArchitecture(draftModelPath: String, generation: Long? = null): String? {
         val architecture = GGUFParser.parse(draftModelPath)?.architecture?.trim()?.lowercase()
         return when {
             architecture.isNullOrBlank() || architecture == "unknown" -> {
@@ -1588,7 +1788,7 @@ class LlamaService : Service() {
                     architecture
                 )
                 DebugLog.log("LlamaService: $warning")
-                Companion.addServerLog(warning)
+                appendServerLogForGeneration(generation, warning)
                 null
             }
             else -> null
@@ -1607,6 +1807,7 @@ class LlamaService : Service() {
         const val ACTION_STOP = "STOP"
         const val ACTION_SWITCH_MODEL = "SWITCH_MODEL"
         const val ACTION_RECONFIGURE = "RECONFIGURE"
+        const val ACTION_RECOVER = "RECOVER"
         const val ACTION_PREVIEW_COMMAND = "PREVIEW_COMMAND"
         const val EXTRA_MODEL_PATH = "MODEL_PATH"
         const val EXTRA_IS_EMBEDDING = "IS_EMBEDDING"
@@ -1671,9 +1872,47 @@ class LlamaService : Service() {
         internal fun attachRuntimeProcess(context: android.content.Context) {
             runtimeContext = context.applicationContext
             runtimeGeneration = LlamaRuntimeStateProjection.beginRuntimeGeneration(context)
+            clearServerLogs()
         }
 
         internal fun runtimeGenerationId(): Long = runtimeGeneration
+
+        internal fun recordOwnedRuntime(context: android.content.Context, record: LlamaRuntimeOwnerRecord) {
+            if (!llamaRuntimeOwnerRecordIsValid(record)) return
+            LlamaRuntimeOwnerStore.save(context, record)
+            DebugLog.log(
+                "LlamaService: recorded owned native child pid=${record.pid} " +
+                    "port=${record.port} lifecycleGeneration=${record.lifecycleGeneration}"
+            )
+        }
+
+        internal fun clearRecordedOwner(context: android.content.Context) {
+            LlamaRuntimeOwnerStore.clear(context)
+        }
+
+        internal fun recoverRecordedOwner(context: android.content.Context): LlamaRuntimeOwnerRecovery {
+            val record = LlamaRuntimeOwnerStore.load(context)
+            if (record == null) {
+                return LlamaRuntimeOwnerRecovery(
+                    recordedPid = null,
+                    recordedPort = null,
+                    matchedRecordedOwner = false,
+                    cleanedProcessCount = 0
+                )
+            }
+            val cleaned = NativeProcessCleanup.cleanupRecordedLlamaProcessTreeSync(
+                reason = "LlamaService recorded-owner recovery",
+                rootPid = record.pid,
+                expectedStartTimeTicks = record.processStartTimeTicks,
+                expectedPort = record.port
+            )
+            return LlamaRuntimeOwnerRecovery(
+                recordedPid = record.pid,
+                recordedPort = record.port,
+                matchedRecordedOwner = cleaned > 0,
+                cleanedProcessCount = cleaned
+            )
+        }
 
         fun recordRecentStartupFailure(nowMs: Long = System.currentTimeMillis()) {
             recentStartupFailureAtMs = nowMs
@@ -1711,25 +1950,72 @@ class LlamaService : Service() {
             }?.commit()
         }
 
-        private const val MAX_SERVER_LOGS = 1000
+        private const val SERVER_LOG_FLUSH_INTERVAL_MS = 100L
         private const val STARTUP_FAILURE_PREFS = "llama_runtime_startup_failure"
         private const val KEY_RECENT_STARTUP_FAILURE_AT = "recent_startup_failure_at"
         private val _serverLogs = MutableStateFlow<List<com.example.llamadroid.util.LogEntry>>(emptyList())
         val serverLogs = _serverLogs.asStateFlow()
+        private val serverLogBufferLock = Any()
+        private val serverLogBuffer = LlamaServerLogBuffer()
+        private val serverLogFlushScheduled = AtomicBoolean(false)
+        private val serverLogFlushHandler by lazy { Handler(Looper.getMainLooper()) }
+        private val serverLogFlushRunnable = Runnable { flushServerLogs() }
 
-        fun addServerLog(message: String) {
-            val entry = com.example.llamadroid.util.LogEntry(System.currentTimeMillis(), message)
-            val current = _serverLogs.value
-            _serverLogs.value = (current + entry).takeLast(MAX_SERVER_LOGS)
-            runtimeContext?.let { context ->
-                LlamaRuntimeStateProjection.publishLog(context, runtimeGeneration, message)
+        /**
+         * Native output can arrive a line at a time from a background reader. Stage it first so
+         * neither Compose nor the cross-process projection receives an unbounded write stream.
+         */
+        fun addServerLog(message: String, lifecycleGeneration: Long? = null) {
+            val accepted = synchronized(serverLogBufferLock) {
+                if (lifecycleGeneration == null) {
+                    serverLogBuffer.appendCurrent(message)
+                } else {
+                    serverLogBuffer.append(lifecycleGeneration, message)
+                }
             }
+            if (accepted) scheduleServerLogFlush()
         }
 
-        fun clearServerLogs() {
+        fun clearServerLogs(lifecycleGeneration: Long? = null) {
+            val generation = lifecycleGeneration ?: runtimeGeneration
+            synchronized(serverLogBufferLock) {
+                serverLogBuffer.reset(generation)
+            }
+            serverLogFlushHandler.removeCallbacks(serverLogFlushRunnable)
+            serverLogFlushScheduled.set(false)
             _serverLogs.value = emptyList()
             runtimeContext?.let { context ->
                 LlamaRuntimeStateProjection.publishClearLogs(context, runtimeGeneration)
+            }
+        }
+
+        private fun scheduleServerLogFlush() {
+            if (serverLogFlushScheduled.compareAndSet(false, true)) {
+                serverLogFlushHandler.postDelayed(serverLogFlushRunnable, SERVER_LOG_FLUSH_INTERVAL_MS)
+            }
+        }
+
+        private fun flushServerLogs() {
+            val flush = synchronized(serverLogBufferLock) { serverLogBuffer.drain() }
+            if (flush != null && synchronized(serverLogBufferLock) { serverLogBuffer.isCurrent(flush) }) {
+                _serverLogs.value = flush.tail.map { line ->
+                    com.example.llamadroid.util.LogEntry(System.currentTimeMillis(), line)
+                }
+                runtimeContext?.let { context ->
+                    LlamaRuntimeStateProjection.publishLogBatch(context, runtimeGeneration, flush.lines)
+                }
+            }
+
+            val hasMore = synchronized(serverLogBufferLock) { serverLogBuffer.hasPending() }
+            if (hasMore) {
+                serverLogFlushHandler.postDelayed(serverLogFlushRunnable, SERVER_LOG_FLUSH_INTERVAL_MS)
+            } else {
+                // Clear the lease before checking again so an append racing this drain cannot
+                // leave buffered diagnostics without a future projection callback.
+                serverLogFlushScheduled.set(false)
+                if (synchronized(serverLogBufferLock) { serverLogBuffer.hasPending() }) {
+                    scheduleServerLogFlush()
+                }
             }
         }
 

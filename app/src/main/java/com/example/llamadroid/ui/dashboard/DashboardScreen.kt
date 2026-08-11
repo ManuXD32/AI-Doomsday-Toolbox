@@ -274,7 +274,7 @@ fun DashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    if (!isRunning && !isStarting) {
+                    if (dashboardCanStartServer(serverState)) {
                         Button(
                             onClick = { viewModel.startServer(context, selectedModelPath) },
                             enabled = selectedModelPath != null,
@@ -284,22 +284,41 @@ fun DashboardScreen(
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dashboard_start_llamacpp))
+                            Text(
+                                stringResource(R.string.dashboard_start_llamacpp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
-                    } else if (isStarting) {
-                        OutlinedButton(
-                            onClick = { },
-                            enabled = false,
+                        if (dashboardCanRecoverServer(serverState)) {
+                            Button(
+                                onClick = { viewModel.recoverServer(context) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 16.dp)
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    stringResource(R.string.dashboard_recover_server),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    } else if (dashboardCanStopServer(serverState)) {
+                        Button(
+                            onClick = { viewModel.stopServer(context) },
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            ),
                             contentPadding = PaddingValues(16.dp)
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
+                            Icon(Icons.Default.Close, contentDescription = null)
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dashboard_starting))
+                            Text(stringResource(R.string.dashboard_stop_server))
                         }
                     } else {
                         Button(

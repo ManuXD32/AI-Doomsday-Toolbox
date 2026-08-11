@@ -86,6 +86,8 @@ internal class SdToolGenerationRunner(
             throw IllegalStateException(context.getString(R.string.imagegen_error_missing_required_components, e.roles.joinToString(", ") { it.name }))
         } catch (e: SdUnsupportedFlagsException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_flags, e.flags.joinToString(", ")))
+        } catch (e: SdUnsupportedModesException) {
+            throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_modes, e.modes.joinToString(", ")))
         }
 
         DebugLog.log("[SdToolGenerationRunner] Running command: ${args.joinToString(" ")}")
@@ -200,7 +202,9 @@ internal suspend fun probeSdBinaryCapabilities(
             output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
         }.getOrNull()
     }
-    val capabilities = helpCapabilities.maxByOrNull { it.supportedFlags.size } ?: return@withContext null
+    val capabilities = helpCapabilities.maxByOrNull {
+        it.supportedFlags.size + it.supportedModes.size
+    } ?: return@withContext null
 
     capabilities.also {
         SdBinaryCapabilityCache.binaryPath = sdBinary.absolutePath

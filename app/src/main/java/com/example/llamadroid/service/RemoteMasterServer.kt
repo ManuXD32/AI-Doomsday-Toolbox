@@ -375,12 +375,7 @@ class RemoteMasterServer(
                 action = LlamaService.ACTION_SWITCH_MODEL
                 putExtra(LlamaService.EXTRA_MODEL_PATH, model.path)
             }
-            try {
-                androidx.core.content.ContextCompat.startForegroundService(context, intent)
-            } catch (e: Exception) {
-                DebugLog.log("[$TAG] Failed to start switch intent: ${e.message}")
-                context.startService(intent) // fallback
-            }
+            LlamaServerLauncher.dispatchOwnedCommand(context, intent).getOrThrow()
             
             return Pair(200, JSONObject().put("status", "switching").put("model", modelFilename))
             
@@ -443,12 +438,7 @@ class RemoteMasterServer(
                 action = LlamaService.ACTION_SWITCH_MODEL
                 putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
             }
-            try {
-                androidx.core.content.ContextCompat.startForegroundService(context, intent)
-            } catch (e: Exception) {
-                DebugLog.log("[$TAG] Failed to start restart intent: ${e.message}")
-                context.startService(intent) // fallback
-            }
+            LlamaServerLauncher.dispatchOwnedCommand(context, intent).getOrThrow()
             
             return Pair(200, JSONObject().put("status", "restarting").put("model", modelFilename))
             
@@ -508,12 +498,7 @@ class RemoteMasterServer(
                     action = LlamaService.ACTION_SWITCH_MODEL
                     putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
                 }
-                try {
-                    androidx.core.content.ContextCompat.startForegroundService(context, intent)
-                } catch (e: Exception) {
-                    DebugLog.log("[$TAG] Failed to start switch intent for speculative: ${e.message}")
-                    context.startService(intent) // fallback
-                }
+                LlamaServerLauncher.dispatchOwnedCommand(context, intent).getOrThrow()
             }
             
             return Pair(200, JSONObject().put("status", "updating").put("speculative", enabled))
@@ -883,12 +868,7 @@ class RemoteMasterServer(
         val intent = android.content.Intent(context, com.example.llamadroid.service.LlamaService::class.java).apply {
             action = com.example.llamadroid.service.LlamaService.ACTION_STOP
         }
-        try {
-            androidx.core.content.ContextCompat.startForegroundService(context, intent)
-        } catch (e: Exception) {
-            DebugLog.log("[$TAG] Failed to start stop intent: ${e.message}")
-            context.startService(intent) // fallback
-        }
+        LlamaServerLauncher.dispatchOwnedCommand(context, intent).getOrThrow()
         return Pair(200, JSONObject().put("status", "stopping"))
     }
     

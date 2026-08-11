@@ -11,6 +11,8 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.CpuFeatures
@@ -30,6 +32,18 @@ data class ProcessRunResult(
     val nativeLinkerStartupFailure: Boolean = false
 )
 
+internal fun llamaReadinessShouldPromote(
+    ownedChild: Boolean,
+    childAlive: Boolean,
+    httpStatus: Int?
+): Boolean = ownedChild && childAlive && httpStatus == HttpURLConnection.HTTP_OK
+
+internal fun llamaReadinessProbeHost(configuredHost: String): String = when (configuredHost) {
+    "0.0.0.0" -> "127.0.0.1"
+    "::" -> "::1"
+    else -> configuredHost
+}
+
 class ProcessController {
     
     private var process: Process? = null
@@ -44,6 +58,35 @@ class ProcessController {
     @Volatile
     var stoppedIntentionally = false
         private set
+
+    private fun awaitOwnedHttpReadiness(
+        childProcess: Process,
+        config: LlamaConfig,
+        timeoutMs: Long = HTTP_READINESS_TIMEOUT_MS
+    ): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val host = llamaReadinessProbeHost(config.host)
+        val urlHost = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+        while (System.currentTimeMillis() < deadline) {
+            val ownedChild = process === childProcess
+            if (!ownedChild || !childProcess.isAlive) return false
+            val status = runCatching {
+                (URL("http://$urlHost:${config.port}/health").openConnection() as HttpURLConnection).run {
+                    connectTimeout = HTTP_READINESS_CONNECT_TIMEOUT_MS
+                    readTimeout = HTTP_READINESS_CONNECT_TIMEOUT_MS
+                    requestMethod = "GET"
+                    try {
+                        responseCode
+                    } finally {
+                        disconnect()
+                    }
+                }
+            }.getOrNull()
+            if (llamaReadinessShouldPromote(ownedChild, childProcess.isAlive, status)) return true
+            Thread.sleep(HTTP_READINESS_RETRY_DELAY_MS)
+        }
+        return false
+    }
 
     internal fun resolveExitState(exitCode: Int, errorMessage: String): ServerState {
         return if (stoppedIntentionally) {
@@ -746,6 +789,9 @@ class ProcessController {
     private companion object {
         private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
         private const val RECENT_OUTPUT_LIMIT = 24
+        private const val HTTP_READINESS_TIMEOUT_MS = 5_000L
+        private const val HTTP_READINESS_CONNECT_TIMEOUT_MS = 500
+        private const val HTTP_READINESS_RETRY_DELAY_MS = 100L
         private val MTP_SPEC_TYPE_MARKER = "draft-mtp".toByteArray(Charsets.US_ASCII)
         private val DFLASH_SPEC_MARKERS = listOf(
             "draft-dflash",
@@ -776,8 +822,9 @@ class ProcessController {
         onLog: ((String) -> Unit)? = null,
         onReady: (() -> Unit)? = null,
         onState: ((ServerState) -> Unit)? = LlamaService.Companion::updateState,
-        onClearServerLogs: (() -> Unit)? = LlamaService.Companion::clearServerLogs,
-        onServerLog: ((String) -> Unit)? = LlamaService.Companion::addServerLog
+        onClearServerLogs: (() -> Unit)? = { LlamaService.clearServerLogs() },
+        onServerLog: ((String) -> Unit)? = { message -> LlamaService.addServerLog(message) },
+        onOwnedProcessStarted: ((pid: Int, processStartTimeTicks: Long?) -> Unit)? = null
     ): ProcessRunResult = withContext(Dispatchers.IO) {
         stoppedIntentionally = false
         if (process?.isAlive == true) stop()
@@ -793,6 +840,7 @@ class ProcessController {
         val ownershipWorkingDir = runtimeWorkingDir
             ?: nativeToolsWorkspaceDir?.takeIf { config.nativeToolsEnabled }
             ?: filesDir
+        var launchedProcess: Process? = null
         
         try {
             if (binaryPath.contains("opencl", ignoreCase = true)) {
@@ -886,6 +934,10 @@ class ProcessController {
                 resolveNativeChildPid(binaryPath)?.toLong() ?: -1L
             }
             activeChildPid = childPid.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+            onOwnedProcessStarted?.invoke(
+                activeChildPid,
+                NativeProcessCleanup.processStartTimeTicks(activeChildPid)
+            )
             val binaryTier = nativeBinaryTier(binaryPath)
             val binaryPathHash = MessageDigest.getInstance("SHA-256")
                 .digest(binaryPath.toByteArray(Charsets.UTF_8))
@@ -904,6 +956,7 @@ class ProcessController {
             // Start log consumer
             onClearServerLogs?.invoke()
             val childProcess = process ?: error("Native process disappeared immediately after start")
+            launchedProcess = childProcess
             val reader = BufferedReader(InputStreamReader(childProcess.inputStream))
             var line: String?
             var modelLoaded = false
@@ -949,10 +1002,17 @@ class ProcessController {
                     currentLine.contains("server listening")
                 if (serverReady) {
                     if (!modelLoaded) {
-                        modelLoaded = true
-                        onState?.invoke(ServerState.Running(config.port))
-                        onReady?.invoke()
-                        DebugLog.log("ProcessController: Server is ready and listening on port ${config.port}")
+                        onState?.invoke(ServerState.Loading(-1f, "Verifying server endpoint..."))
+                        if (awaitOwnedHttpReadiness(childProcess, config)) {
+                            modelLoaded = true
+                            onState?.invoke(ServerState.Running(config.port))
+                            onReady?.invoke()
+                            DebugLog.log("ProcessController: Server is ready and healthy on port ${config.port}")
+                        } else {
+                            throw IllegalStateException(
+                                "llama-server listened on port ${config.port} but its owned HTTP endpoint did not become ready"
+                            )
+                        }
                     }
                 }
             }
@@ -962,8 +1022,10 @@ class ProcessController {
             runCatching { childProcess.errorStream.close() }
             val exitCode = childProcess.waitFor()
             DebugLog.log("ProcessController: Process exited with code $exitCode")
-            if (process === childProcess) process = null
-            activeChildPid = -1
+            if (process === childProcess) {
+                process = null
+                activeChildPid = -1
+            }
             val appContext = LlamaApplication.instance
             val startupFailureDetail = if (!modelLoaded && !stoppedIntentionally) {
                 classifyNativeLinkerStartupFailure(recentOutput.toList())
@@ -988,8 +1050,10 @@ class ProcessController {
                 DebugLog.log("ProcessController: stopped while reading process output: ${e.message}")
                 runCatching { process?.inputStream?.close() }
                 runCatching { process?.errorStream?.close() }
-                process = null
-                activeChildPid = -1
+                if (process === launchedProcess) {
+                    process = null
+                    activeChildPid = -1
+                }
                 onState?.invoke(ServerState.Stopped)
                 return@withContext ProcessRunResult(
                     exitCode = -1,
@@ -1140,6 +1204,25 @@ class ProcessController {
     }
 
     fun isAlive(): Boolean = process?.isAlive == true
+
+    /** Clears only the in-memory native-output preview retained by this controller. */
+    fun clearTransientLogs() {
+        _logs.value = ""
+    }
+
+    /** Drops handles after an already-validated external recorded-owner cleanup. It never kills. */
+    @Synchronized
+    fun releaseExternallyStoppedProcess() {
+        stoppedIntentionally = true
+        stopRequestedGeneration = launchGeneration
+        runCatching { process?.inputStream?.close() }
+        runCatching { process?.errorStream?.close() }
+        process = null
+        activeChildPid = -1
+    }
+
+    /** PID captured from the child this controller owns; never use it to sweep other runtimes. */
+    fun ownedChildPid(): Int = activeChildPid
 
     fun activeProcessWasOpenCl(): Boolean = activeBinaryWasOpenCl
 

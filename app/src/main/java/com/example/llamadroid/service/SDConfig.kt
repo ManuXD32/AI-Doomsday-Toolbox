@@ -30,7 +30,9 @@ data class SDConfig(
     val outputPath: String,
     // img2img specific
     val initImage: String? = null,
+    val maskImage: String? = null,
     val strength: Float = 0.75f,
+    val imgCfgScale: Float? = null,
     // Upscale specific
     val upscaleModel: String? = null,
     val upscaleRepeats: Int = 1,
@@ -75,6 +77,7 @@ data class SDConfig(
     val photoMakerPath: String? = null,
     // IP-Adapter (classic and Plus share the same upstream CLI flags)
     val ipAdapter: SdIpAdapterConfig? = null,
+    val adetailer: SdADetailerConfig? = null,
     // Family-specific runtime flags
     val flowShift: Float? = null,
     val diffusionFa: Boolean = false,
@@ -89,7 +92,12 @@ data class SDConfig(
     // Quantization type for stable-diffusion.cpp (--type)
     val quantizationType: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
-    val customFlags: String = ""
+    val customFlags: String = "",
+    // User-facing operation metadata remains separate from the native CLI mode.
+    val operation: String? = null,
+    val sourceTransform: String? = null,
+    val maskProvenance: String? = null,
+    val maskPolarity: String? = null
 ) : Parcelable
 
 @Parcelize

@@ -981,6 +981,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
         val subfolder = when (mode) {
             SDMode.TXT2IMG -> "txt2img"
             SDMode.IMG2IMG -> "img2img"
+            SDMode.ADETAILER -> "adetailer"
             SDMode.UPSCALE -> "upscaled"
         }
         val outputFile = File(File(outputDir, subfolder).apply { mkdirs() }, "sd_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.png")

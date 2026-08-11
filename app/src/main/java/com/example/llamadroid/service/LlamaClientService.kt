@@ -789,7 +789,7 @@ class LlamaClientService : Service() {
             getString(R.string.llama_client_status_starting_local_server)
         )
         DebugLog.log("LlamaClientService: Auto-starting local llama-server at $baseUrl")
-        applicationContext.startForegroundService(startIntent)
+        LlamaServerLauncher.startLocalChat(applicationContext, startIntent).getOrThrow()
 
         if (!waitForLocalLlamaServerReady(baseUrl = baseUrl)) {
             throw IllegalStateException(getString(R.string.llama_client_error_local_server_timeout))

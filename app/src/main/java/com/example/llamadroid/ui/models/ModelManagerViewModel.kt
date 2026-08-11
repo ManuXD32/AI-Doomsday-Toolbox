@@ -36,6 +36,7 @@ class ModelManagerViewModel(
     
     private val _isSearching = MutableStateFlow(false)
     val isSearching = _isSearching.asStateFlow()
+    private var searchRequestId = 0
 
     // For file selection dialog
     private val _selectedRepoId = MutableStateFlow<String?>(null)
@@ -63,6 +64,12 @@ class ModelManagerViewModel(
     val pendingVisionDownload = _pendingVisionDownload.asStateFlow()
 
     fun search(query: String, type: ModelType) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isBlank()) {
+            clearSearchResults()
+            return
+        }
+        val requestId = ++searchRequestId
         viewModelScope.launch {
             _isSearching.value = true
             val filter = when {
@@ -72,7 +79,8 @@ class ModelManagerViewModel(
                 else -> "gguf" // Default for LLM
             }
             // Pass filter to repo for LLM/GGUF/SD filtering
-            val results = repository.searchModels(query, filter)
+            val results = repository.searchModels(normalizedQuery, filter)
+            if (requestId != searchRequestId) return@launch
             _searchResults.value = results
             _isSearching.value = false
             
@@ -87,6 +95,12 @@ class ModelManagerViewModel(
                 }
             }
         }
+    }
+
+    fun clearSearchResults() {
+        searchRequestId += 1
+        _searchResults.value = emptyList()
+        _isSearching.value = false
     }
     
     private suspend fun checkRepoForVision(repoId: String): Boolean {

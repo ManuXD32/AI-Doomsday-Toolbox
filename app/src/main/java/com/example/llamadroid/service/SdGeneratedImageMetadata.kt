@@ -76,7 +76,16 @@ data class SdGeneratedImageMetadata(
     val generationDurationMs: Long?,
     val conditioningDurationMs: Long? = null,
     val samplingDurationMs: Long? = null,
-    val decodingDurationMs: Long? = null
+    val decodingDurationMs: Long? = null,
+    val operation: String? = null,
+    val sourceTransform: String? = null,
+    val maskProvenance: String? = null,
+    val maskPolarity: String? = null,
+    val imageCfgScale: Float? = null,
+    val adetailerModelName: String? = null,
+    val adetailerConfidence: Float? = null,
+    val adetailerDenoisingStrength: Float? = null,
+    val adetailerOutcome: String? = null
 ) {
     val modeEnum: SDMode
         get() = runCatching { SDMode.valueOf(mode) }.getOrDefault(SDMode.TXT2IMG)
@@ -165,6 +174,15 @@ data class SdGeneratedImageMetadata(
         put("conditioningDurationMs", conditioningDurationMs)
         put("samplingDurationMs", samplingDurationMs)
         put("decodingDurationMs", decodingDurationMs)
+        put("operation", operation)
+        put("sourceTransform", sourceTransform)
+        put("maskProvenance", maskProvenance)
+        put("maskPolarity", maskPolarity)
+        put("imageCfgScale", imageCfgScale?.toDouble())
+        put("adetailerModelName", adetailerModelName)
+        put("adetailerConfidence", adetailerConfidence?.toDouble())
+        put("adetailerDenoisingStrength", adetailerDenoisingStrength?.toDouble())
+        put("adetailerOutcome", adetailerOutcome)
     }
 
     fun writeToFile(target: File = File(metadataPath)) {
@@ -257,7 +275,15 @@ data class SdGeneratedImageMetadata(
                 generationDurationMs = generationDurationMs,
                 conditioningDurationMs = stageTimings.conditioningMs,
                 samplingDurationMs = stageTimings.samplingMs,
-                decodingDurationMs = stageTimings.decodingMs
+                decodingDurationMs = stageTimings.decodingMs,
+                operation = config.operation,
+                sourceTransform = config.sourceTransform,
+                maskProvenance = config.maskProvenance,
+                maskPolarity = config.maskPolarity,
+                imageCfgScale = config.imgCfgScale,
+                adetailerModelName = config.adetailer?.modelPath?.let { File(it).name },
+                adetailerConfidence = config.adetailer?.confidence,
+                adetailerDenoisingStrength = config.adetailer?.denoisingStrength
             )
 
         fun fromUpscaleConfig(
@@ -432,7 +458,16 @@ data class SdGeneratedImageMetadata(
                 generationDurationMs = json.optLong("generationDurationMs", -1L).takeIf { it >= 0L },
                 conditioningDurationMs = json.optLong("conditioningDurationMs", -1L).takeIf { it >= 0L },
                 samplingDurationMs = json.optLong("samplingDurationMs", -1L).takeIf { it >= 0L },
-                decodingDurationMs = json.optLong("decodingDurationMs", -1L).takeIf { it >= 0L }
+                decodingDurationMs = json.optLong("decodingDurationMs", -1L).takeIf { it >= 0L },
+                operation = json.optString("operation").ifBlank { null },
+                sourceTransform = json.optString("sourceTransform").ifBlank { null },
+                maskProvenance = json.optString("maskProvenance").ifBlank { null },
+                maskPolarity = json.optString("maskPolarity").ifBlank { null },
+                imageCfgScale = parseOptionalFloat(json, "imageCfgScale"),
+                adetailerModelName = json.optString("adetailerModelName").ifBlank { null },
+                adetailerConfidence = parseOptionalFloat(json, "adetailerConfidence"),
+                adetailerDenoisingStrength = parseOptionalFloat(json, "adetailerDenoisingStrength"),
+                adetailerOutcome = json.optString("adetailerOutcome").ifBlank { null }
             )
 
         private fun parseSamplingMethod(value: String): SamplingMethod =

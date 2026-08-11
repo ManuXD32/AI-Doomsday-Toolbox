@@ -13,7 +13,9 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -56,6 +58,8 @@ import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.service.*
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalStorage
 import com.example.llamadroid.ui.navigation.Screen
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
@@ -74,7 +78,7 @@ import java.util.*
 /**
  * Image Generation Screen using stable-diffusion.cpp
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val context = LocalContext.current
@@ -127,6 +131,13 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
     val ipAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER)
         .collectAsState(initial = emptyList())
+    val adetailerModels by db.modelDao().getModelsByType(ModelType.SD_ADETAILER)
+        .collectAsState(initial = emptyList())
+    val compatibleAdetailerModels = remember(adetailerModels) {
+        adetailerModels.filter { model -> isCompatibleSdADetailerDetector(File(model.path)) }
+    }
+    val backgroundRemovalModels by db.modelDao().getModelsByType(ModelType.ONNX_BACKGROUND_REMOVAL)
+        .collectAsState(initial = emptyList())
     val imageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
         .collectAsState(initial = emptyList())
 
@@ -134,8 +145,18 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER)
         .collectAsState(initial = emptyList())
 
-    // Mode selection: 0 = txt2img, 1 = img2img, 2 = upscale
-    var selectedMode by remember(initialMode) { mutableIntStateOf(restoredDraft?.optInt("mode", if (initialMode == 1) 1 else 0) ?: if (initialMode == 1) 1 else 0) }
+    // Explicit deep links win over a saved draft; the normal entry point restores the draft.
+    val requestedInitialMode = initialMode.takeIf {
+        it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER
+    } ?: IMAGE_GEN_MODE_TXT2IMG
+    var selectedMode by remember(initialMode) {
+        mutableIntStateOf(
+            if (requestedInitialMode != IMAGE_GEN_MODE_TXT2IMG) requestedInitialMode
+            else restoredDraft?.optInt("mode", IMAGE_GEN_MODE_TXT2IMG)
+                ?.takeIf { it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER }
+                ?: IMAGE_GEN_MODE_TXT2IMG
+        )
+    }
 
     // Combined model list for selection (checkpoints + FLUX diffusion)
     val allGenerationModels = (sdCheckpoints + fluxDiffusionModels)
@@ -145,6 +166,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var selectedUpscalerModelPath by remember { mutableStateOf(restoredDraft?.optString("upscaler").orEmpty().ifBlank { null }) }
     var prompt by remember { mutableStateOf(restoredDraft?.optString("prompt").orEmpty()) }
     var negativePrompt by remember { mutableStateOf(restoredDraft?.optString("negativePrompt").orEmpty()) }
+    var width by remember { mutableIntStateOf(restoredDraft?.optInt("width", 512) ?: 512) }
+    var height by remember { mutableIntStateOf(restoredDraft?.optInt("height", 512) ?: 512) }
     var showAdvanced by remember { mutableStateOf(restoredDraft?.optBoolean("advanced", false) ?: false) }
     var showInfoDialog by remember { mutableStateOf(false) }
 
@@ -225,13 +248,59 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
     val serverImagePathSet = remember(serverImagePaths) { serverImagePaths.toSet() }
 
-    // Image input for img2img/upscale
+    // Image input for img2img/upscale/inpaint and existing-image ADetailer.
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    // Img2img strength
+    // Img2img/inpaint strength
     var strength by remember { mutableFloatStateOf((restoredDraft?.optDouble("strength", 0.75) ?: 0.75).toFloat()) }
+    var inpaintCanvasTransform by remember {
+        mutableStateOf(InpaintCanvasTransform.fromStoredValue(restoredDraft?.optString("inpaintTransform")))
+    }
+    var inpaintMaskPath by remember { mutableStateOf(restoredDraft?.optString("inpaintMask").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
+    var inpaintWorkspace by remember {
+        mutableStateOf(
+            selectedImagePath?.let { source ->
+                inpaintMaskPath?.let { mask ->
+                    InpaintWorkspaceManager.fromPaths(source, mask, inpaintCanvasTransform)
+                }
+            }
+        )
+    }
+    var showInpaintMaskEditor by remember { mutableStateOf(false) }
+    var pendingFullInpaintMask by remember { mutableStateOf<InpaintMaskRaster?>(null) }
+    var pendingAutoMaskPolarity by remember { mutableStateOf<InpaintAutoMaskPolarity?>(null) }
+    var selectedAutoMaskModelPath by remember {
+        mutableStateOf(restoredDraft?.optString("inpaintAutoModel").orEmpty().ifBlank { null })
+    }
+    val backgroundRemovalState by OnnxBackgroundRemovalStateStore.state.collectAsState()
+    LaunchedEffect(backgroundRemovalModels) {
+        if (backgroundRemovalModels.none { it.path == selectedAutoMaskModelPath }) {
+            selectedAutoMaskModelPath = backgroundRemovalModels.firstOrNull()?.path
+        }
+    }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            InpaintWorkspaceManager.sweepOrphans(
+                context = context,
+                referencedWorkspaceIds = setOfNotNull(inpaintWorkspace?.id)
+            )
+        }
+    }
+    var inpaintImgCfgScale by remember { mutableFloatStateOf((restoredDraft?.optDouble("inpaintImgCfg", 1.5) ?: 1.5).toFloat()) }
+    var adetailerModelPath by remember { mutableStateOf(restoredDraft?.optString("adModel").orEmpty().ifBlank { null }) }
+    var adetailerInputMode by remember {
+        mutableStateOf(ADetailerInputMode.fromStoredValue(restoredDraft?.optString("adInputMode")))
+    }
+    var adetailerPrompt by remember { mutableStateOf(restoredDraft?.optString("adPrompt").orEmpty()) }
+    var adetailerNegativePrompt by remember { mutableStateOf(restoredDraft?.optString("adNegativePrompt").orEmpty()) }
+    var adetailerConfidence by remember { mutableFloatStateOf((restoredDraft?.optDouble("adConfidence", 0.30) ?: 0.30).toFloat()) }
+    var adetailerDenoising by remember { mutableFloatStateOf((restoredDraft?.optDouble("adDenoising", 0.40) ?: 0.40).toFloat()) }
+    var adetailerMaskBlur by remember { mutableIntStateOf(restoredDraft?.optInt("adMaskBlur", 4) ?: 4) }
+    var adetailerPadding by remember { mutableIntStateOf(restoredDraft?.optInt("adPadding", 32) ?: 32) }
+    var adetailerMaxDetections by remember { mutableIntStateOf(restoredDraft?.optInt("adMaxDetections", 8) ?: 8) }
+    var adetailerAdvancedArgs by remember { mutableStateOf(restoredDraft?.optString("adAdvanced").orEmpty()) }
 
     // Quantization type for --type
     var selectedQuantType by remember { mutableStateOf(restoredDraft?.optString("quant").orEmpty()) }
@@ -340,10 +409,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             try {
-                val targetMode = when (resolveInitialImageGenMode(pendingFile.targetScreen)) {
-                    1 -> 1
-                    else -> 0
-                }
+                val targetMode = resolveInitialImageGenMode(pendingFile.targetScreen)
                 selectedMode = targetMode
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
@@ -390,24 +456,264 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     ) { uri ->
         uri?.let {
             imagePreparationScope.launch {
-                val preparedImage = prepareImageInputForMode(
-                    context = context,
-                    uri = it,
-                    targetMode = latestSelectedMode,
-                    tempFileName = "input_image.png"
-                )
-                preparedImage?.let { prepared ->
-                    imageResolution = prepared.resolution
-                    selectedImagePath = prepared.path
-                    selectedImageUri = prepared.uri
+                val targetMode = latestSelectedMode
+                runCatching {
+                    if (targetMode == IMAGE_GEN_MODE_INPAINT) {
+                        InpaintWorkspaceManager.create(
+                            context = context,
+                            sourceUri = it,
+                            canvasWidth = width,
+                            canvasHeight = height,
+                            transform = inpaintCanvasTransform
+                        )
+                    } else {
+                        prepareImageInputForMode(
+                            context = context,
+                            uri = it,
+                            targetMode = targetMode,
+                            tempFileName = "input_image.png"
+                        ) ?: error("Unable to decode image")
+                    }
+                }.onSuccess { prepared ->
+                    if (prepared is InpaintWorkspace) {
+                        inpaintWorkspace?.let(InpaintWorkspaceManager::delete)
+                        inpaintWorkspace = prepared
+                        inpaintMaskPath = null
+                        imageResolution = prepared.canvasWidth to prepared.canvasHeight
+                        selectedImagePath = prepared.sourcePath
+                        selectedImageUri = it
+                    } else {
+                        prepared as PreparedImageInput
+                        imageResolution = prepared.resolution
+                        selectedImagePath = prepared.path
+                        selectedImageUri = prepared.uri
+                    }
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
     }
 
+    val maskPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            imagePreparationScope.launch {
+                runCatching {
+                    val workspace = inpaintWorkspace ?: selectedImagePath?.let { sourcePath ->
+                        InpaintWorkspaceManager.create(
+                            context = context,
+                            sourceUri = Uri.fromFile(File(sourcePath)),
+                            canvasWidth = width,
+                            canvasHeight = height,
+                            transform = inpaintCanvasTransform
+                        )
+                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                    InpaintWorkspaceManager.importMask(context, workspace, it)
+                }.onSuccess { importedWorkspace ->
+                    inpaintWorkspace = importedWorkspace
+                    selectedImagePath = importedWorkspace.sourcePath
+                    imageResolution = importedWorkspace.canvasWidth to importedWorkspace.canvasHeight
+                    inpaintMaskPath = importedWorkspace.maskPath
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val openInpaintMaskEditor: () -> Unit = {
+        imagePreparationScope.launch {
+            runCatching {
+                inpaintWorkspace ?: selectedImagePath?.let { sourcePath ->
+                    InpaintWorkspaceManager.create(
+                        context = context,
+                        sourceUri = Uri.fromFile(File(sourcePath)),
+                        canvasWidth = width,
+                        canvasHeight = height,
+                        transform = inpaintCanvasTransform
+                    )
+                } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+            }.onSuccess { workspace ->
+                inpaintWorkspace = workspace
+                selectedImagePath = workspace.sourcePath
+                imageResolution = workspace.canvasWidth to workspace.canvasHeight
+                showInpaintMaskEditor = true
+            }.onFailure { failure ->
+                android.widget.Toast.makeText(
+                    context,
+                    failure.message ?: context.getString(R.string.error_generic),
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    val commitInpaintMask: (InpaintMaskRaster) -> Unit = { raster ->
+        val workspace = inpaintWorkspace
+        if (workspace != null) {
+            imagePreparationScope.launch {
+                runCatching {
+                    InpaintWorkspaceManager.saveMask(
+                        workspace = workspace,
+                        raster = raster,
+                        provenance = InpaintMaskProvenance.DRAWN
+                    )
+                }.onSuccess { savedWorkspace ->
+                    inpaintWorkspace = savedWorkspace
+                    inpaintMaskPath = savedWorkspace.maskPath
+                    showInpaintMaskEditor = false
+                    pendingFullInpaintMask = null
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val startAutomaticMask: (InpaintAutoMaskPolarity) -> Unit = { polarity ->
+        val model = backgroundRemovalModels.firstOrNull { it.path == selectedAutoMaskModelPath }
+        if (model == null) {
+            navController.navigate(Screen.OnnxModels.route)
+        } else if (backgroundRemovalState !is OnnxBackgroundRemovalState.Running) {
+            imagePreparationScope.launch {
+                runCatching {
+                    inpaintWorkspace ?: selectedImagePath?.let { sourcePath ->
+                        InpaintWorkspaceManager.create(
+                            context = context,
+                            sourceUri = Uri.fromFile(File(sourcePath)),
+                            canvasWidth = width,
+                            canvasHeight = height,
+                            transform = inpaintCanvasTransform
+                        )
+                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                }.onSuccess { workspace ->
+                    inpaintWorkspace = workspace
+                    selectedImagePath = workspace.sourcePath
+                    imageResolution = workspace.canvasWidth to workspace.canvasHeight
+                    pendingAutoMaskPolarity = polarity
+                    OnnxBackgroundRemovalStateStore.reset()
+                    OnnxBackgroundRemovalService.start(
+                        context,
+                        OnnxBackgroundRemovalConfig(
+                            modelPath = model.path,
+                            modelName = model.filename,
+                            inputPaths = listOf(workspace.sourcePath),
+                            inputNames = listOf(File(workspace.sourcePath).name),
+                            exportMask = true,
+                            resizeBeforeProcessing = false,
+                            preserveSourceNames = false
+                        )
+                    )
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(backgroundRemovalState, pendingAutoMaskPolarity, inpaintWorkspace) {
+        val polarity = pendingAutoMaskPolarity ?: return@LaunchedEffect
+        val workspace = inpaintWorkspace ?: return@LaunchedEffect
+        when (val state = backgroundRemovalState) {
+            is OnnxBackgroundRemovalState.Complete -> {
+                val outputFile = state.outputPaths.lastOrNull()?.let(::File)
+                val maskFile = outputFile
+                    ?.let(OnnxBackgroundRemovalStorage::readMetadata)
+                    ?.maskPath
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.canRead() }
+                runCatching {
+                    val foreground = readForegroundMaskExport(
+                        maskFile ?: error(context.getString(R.string.imagegen_inpaint_auto_mask_missing))
+                    )
+                    val raster = foregroundMaskToInpaintRaster(
+                        foregroundMask = foreground,
+                        targetWidth = workspace.canvasWidth,
+                        targetHeight = workspace.canvasHeight,
+                        polarity = polarity
+                    )
+                    InpaintWorkspaceManager.saveMask(
+                        workspace = workspace,
+                        raster = raster,
+                        provenance = if (polarity == InpaintAutoMaskPolarity.AUTO_SUBJECT) {
+                            InpaintMaskProvenance.AUTO_SUBJECT
+                        } else {
+                            InpaintMaskProvenance.AUTO_BACKGROUND
+                        }
+                    )
+                }.onSuccess { savedWorkspace ->
+                    inpaintWorkspace = savedWorkspace
+                    inpaintMaskPath = savedWorkspace.maskPath
+                    pendingAutoMaskPolarity = null
+                    showInpaintMaskEditor = true
+                }.onFailure { failure ->
+                    pendingAutoMaskPolarity = null
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                outputFile?.let(OnnxBackgroundRemovalStorage::deleteImageWithMetadata)
+            }
+            is OnnxBackgroundRemovalState.Error -> {
+                pendingAutoMaskPolarity = null
+                android.widget.Toast.makeText(context, state.message, android.widget.Toast.LENGTH_LONG).show()
+            }
+            else -> Unit
+        }
+    }
+
+    if (showInpaintMaskEditor) {
+        inpaintWorkspace?.let { workspace ->
+            InpaintMaskEditorDialog(
+                sourcePath = workspace.sourcePath,
+                initialMaskPath = inpaintMaskPath ?: workspace.maskPath,
+                onDismiss = { showInpaintMaskEditor = false },
+                onSave = { raster ->
+                    if (raster.isFull()) pendingFullInpaintMask = raster else commitInpaintMask(raster)
+                }
+            )
+        }
+    }
+
+    pendingFullInpaintMask?.let { fullMask ->
+        AlertDialog(
+            onDismissRequest = { pendingFullInpaintMask = null },
+            title = { Text(stringResource(R.string.imagegen_inpaint_full_mask_title)) },
+            text = { Text(stringResource(R.string.imagegen_inpaint_full_mask_message)) },
+            confirmButton = {
+                TextButton(onClick = { commitInpaintMask(fullMask) }) {
+                    Text(stringResource(R.string.imagegen_inpaint_full_mask_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingFullInpaintMask = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
     // Generation parameters
-    var width by remember { mutableIntStateOf(restoredDraft?.optInt("width", 512) ?: 512) }
-    var height by remember { mutableIntStateOf(restoredDraft?.optInt("height", 512) ?: 512) }
     var steps by remember { mutableIntStateOf(restoredDraft?.optInt("steps", 20) ?: 20) }
     var cfgScale by remember { mutableFloatStateOf((restoredDraft?.optDouble("cfg", 7.0) ?: 7.0).toFloat()) }
     var seed by remember { mutableLongStateOf(restoredDraft?.optLong("seed", -1L) ?: -1L) }
@@ -449,6 +755,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 put("loraEnabled", loraEnabled); put("lora", selectedLoraPath); put("loraStrength", loraStrength); put("loraApply", selectedLoraApplyMode?.cliName)
                 put("textualEnabled", textualInversionEnabled); put("textual", selectedTextualInversionPath); put("flowShift", flowShiftText); put("diffusionFa", diffusionFaEnabled); put("diffConv", diffusionConvDirectEnabled); put("vaeConv", vaeConvDirectEnabled); put("mmap", mmapEnabled); put("qwenZero", qwenImageZeroCondTEnabled); put("chromaMask", chromaDisableDitMaskEnabled)
                 put("input", selectedImagePath); put("strength", strength); put("quant", selectedQuantType); put("upscaleFactor", upscaleFactor); put("upscaleRepeats", upscaleRepeats); put("threads", threads)
+                put("inpaintMask", inpaintMaskPath); put("inpaintTransform", inpaintCanvasTransform.name); put("inpaintImgCfg", inpaintImgCfgScale); put("inpaintAutoModel", selectedAutoMaskModelPath)
+                put("adModel", adetailerModelPath); put("adInputMode", adetailerInputMode.name); put("adPrompt", adetailerPrompt); put("adNegativePrompt", adetailerNegativePrompt)
+                put("adConfidence", adetailerConfidence); put("adDenoising", adetailerDenoising); put("adMaskBlur", adetailerMaskBlur)
+                put("adPadding", adetailerPadding); put("adMaxDetections", adetailerMaxDetections); put("adAdvanced", adetailerAdvancedArgs)
                 put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
                 putSdIpAdapterDraft(currentIpAdapterDraftState())
@@ -499,72 +809,98 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     val txt2imgModeHolder = remember { SDModeStateHolder.txt2img }
     val img2imgModeHolder = remember { SDModeStateHolder.img2img }
+    val adetailerModeHolder = remember { SDModeStateHolder.adetailer }
     val upscaleModeHolder = remember { SDModeStateHolder.upscale }
 
     val txt2imgGenerationState by txt2imgModeHolder.state.collectAsState()
     val img2imgGenerationState by img2imgModeHolder.state.collectAsState()
+    val adetailerGenerationState by adetailerModeHolder.state.collectAsState()
     val upscaleGenerationState by upscaleModeHolder.state.collectAsState()
 
     val txt2imgProgress by txt2imgModeHolder.progress.collectAsState()
     val img2imgProgress by img2imgModeHolder.progress.collectAsState()
+    val adetailerProgress by adetailerModeHolder.progress.collectAsState()
     val upscaleProgress by upscaleModeHolder.progress.collectAsState()
 
     val txt2imgStatus by txt2imgModeHolder.status.collectAsState()
     val img2imgStatus by img2imgModeHolder.status.collectAsState()
+    val adetailerStatus by adetailerModeHolder.status.collectAsState()
     val upscaleStatus by upscaleModeHolder.status.collectAsState()
 
     val txt2imgGeneratedImages by txt2imgModeHolder.generatedImages.collectAsState()
     val img2imgGeneratedImages by img2imgModeHolder.generatedImages.collectAsState()
+    val adetailerGeneratedImages by adetailerModeHolder.generatedImages.collectAsState()
     val upscaleGeneratedImages by upscaleModeHolder.generatedImages.collectAsState()
 
     val txt2imgTotalSteps by txt2imgModeHolder.totalSteps.collectAsState()
     val img2imgTotalSteps by img2imgModeHolder.totalSteps.collectAsState()
+    val adetailerTotalSteps by adetailerModeHolder.totalSteps.collectAsState()
     val upscaleTotalSteps by upscaleModeHolder.totalSteps.collectAsState()
 
     val txt2imgCurrentStep by txt2imgModeHolder.currentStep.collectAsState()
     val img2imgCurrentStep by img2imgModeHolder.currentStep.collectAsState()
+    val adetailerCurrentStep by adetailerModeHolder.currentStep.collectAsState()
     val upscaleCurrentStep by upscaleModeHolder.currentStep.collectAsState()
 
     val txt2imgPersistedPrompt by txt2imgModeHolder.currentPrompt.collectAsState()
     val img2imgPersistedPrompt by img2imgModeHolder.currentPrompt.collectAsState()
+    val adetailerPersistedPrompt by adetailerModeHolder.currentPrompt.collectAsState()
+    val effectiveSdMode = when (selectedMode) {
+        IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> SDMode.IMG2IMG
+        IMAGE_GEN_MODE_UPSCALE -> SDMode.UPSCALE
+        IMAGE_GEN_MODE_ADETAILER -> if (adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE) {
+            SDMode.ADETAILER
+        } else {
+            SDMode.TXT2IMG
+        }
+        else -> SDMode.TXT2IMG
+    }
     val activeModeHolder = when (selectedMode) {
-        1 -> img2imgModeHolder
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgModeHolder
         2 -> upscaleModeHolder
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerModeHolder else txt2imgModeHolder
         else -> txt2imgModeHolder
     }
     val generationState = when (selectedMode) {
-        1 -> img2imgGenerationState
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgGenerationState
         2 -> upscaleGenerationState
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerGenerationState else txt2imgGenerationState
         else -> txt2imgGenerationState
     }
     val progress = when (selectedMode) {
-        1 -> img2imgProgress
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgProgress
         2 -> upscaleProgress
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerProgress else txt2imgProgress
         else -> txt2imgProgress
     }
     val generationStatus = when (selectedMode) {
-        1 -> img2imgStatus
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgStatus
         2 -> upscaleStatus
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerStatus else txt2imgStatus
         else -> txt2imgStatus
     }
     val generatedImages = when (selectedMode) {
-        1 -> img2imgGeneratedImages
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgGeneratedImages
         2 -> upscaleGeneratedImages
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerGeneratedImages else txt2imgGeneratedImages
         else -> txt2imgGeneratedImages
     }
     val totalStepsVal = when (selectedMode) {
-        1 -> img2imgTotalSteps
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgTotalSteps
         2 -> upscaleTotalSteps
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerTotalSteps else txt2imgTotalSteps
         else -> txt2imgTotalSteps
     }
     val currentStepVal = when (selectedMode) {
-        1 -> img2imgCurrentStep
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgCurrentStep
         2 -> upscaleCurrentStep
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerCurrentStep else txt2imgCurrentStep
         else -> txt2imgCurrentStep
     }
-    LaunchedEffect(selectedMode) {
+    LaunchedEffect(selectedMode, adetailerInputMode) {
         val persistedPrompt = when (selectedMode) {
-            1 -> img2imgPersistedPrompt
+            IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> img2imgPersistedPrompt
+            IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerPersistedPrompt else txt2imgPersistedPrompt
             else -> txt2imgPersistedPrompt
         }
         if (selectedMode != 2 && persistedPrompt.isNotBlank()) {
@@ -575,6 +911,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             mode = when (selectedMode) {
                 1 -> SDMode.IMG2IMG.name
                 2 -> SDMode.UPSCALE.name
+                IMAGE_GEN_MODE_ADETAILER -> effectiveSdMode.name
                 else -> SDMode.TXT2IMG.name
             },
             event = "mode_entered",
@@ -623,6 +960,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             outputDir,
             File(outputDir, "txt2img"),
             File(outputDir, "img2img"),
+            File(outputDir, "adetailer"),
             File(outputDir, "upscaled"),
             File(outputDir, "workflow")
         )
@@ -642,10 +980,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         diskImages = allImages.sortedByDescending { it.lastModified() }
     }
 
-    LaunchedEffect(txt2imgGenerationState, img2imgGenerationState, upscaleGenerationState, selectedMode) {
+    LaunchedEffect(txt2imgGenerationState, img2imgGenerationState, adetailerGenerationState, upscaleGenerationState, selectedMode, adetailerInputMode) {
         val activeState = when (selectedMode) {
-            1 -> img2imgGenerationState
-            2 -> upscaleGenerationState
+            IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> img2imgGenerationState
+            IMAGE_GEN_MODE_UPSCALE -> upscaleGenerationState
+            IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerGenerationState else txt2imgGenerationState
             else -> txt2imgGenerationState
         }
         when (val state = activeState) {
@@ -669,20 +1008,40 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         (generatedImages + diskImages).distinctBy { it.absolutePath }
     }
 
+    val imageGenOperation = resolveImageGenOperation(selectedMode, adetailerInputMode)
+    val imageGenReadiness = resolveImageGenReadiness(
+        ImageGenReadinessInput(
+            operation = imageGenOperation,
+            hasReadableModel = selectedModelPath?.let { File(it).isFile && File(it).canRead() } == true,
+            hasPrompt = when (imageGenOperation) {
+                ImageGenOperation.ADETAILER_EXISTING -> adetailerPrompt.isNotBlank()
+                else -> prompt.isNotBlank()
+            },
+            hasReadableSourceImage = selectedImagePath?.let { File(it).isFile && File(it).canRead() } == true,
+            hasReadableMask = inpaintMaskPath?.let { File(it).isFile && File(it).canRead() } == true,
+            hasReadableDetector = adetailerModelPath?.let { path ->
+                isCompatibleSdADetailerDetector(File(path))
+            } == true,
+            supportsTxt2Img = supportsTxt2Img,
+            supportsImg2Img = supportsImg2Img,
+            hasRequiredComponents = missingRequiredComponents.isEmpty()
+        )
+    )
+
     // Generate function - handles all modes
     val generate: () -> Unit = generate@{
         val modelPath = selectedModelPath
         val inputImagePath = selectedImagePath
-        val mode = when (selectedMode) {
-            1 -> SDMode.IMG2IMG
-            2 -> SDMode.UPSCALE
-            else -> SDMode.TXT2IMG
+        val effectiveInputImagePath = inputImagePath.takeIf {
+            selectedMode != IMAGE_GEN_MODE_ADETAILER ||
+                adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE
         }
+        val mode = effectiveSdMode
         val sdBinaryPath = binaryRepo.getSdBinary()?.absolutePath
         val launchIssue = validateSdLaunchInputs(
             mode = mode,
             modelPath = modelPath,
-            inputImagePath = inputImagePath,
+            inputImagePath = effectiveInputImagePath,
             sdBinaryPath = sdBinaryPath
         )
         if (launchIssue != null) {
@@ -696,7 +1055,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             )
             return@generate
         }
-        val effectiveIpAdapter = if (selectedMode != 2 && ipAdapterEnabled) {
+        val effectiveIpAdapter = if (
+            selectedMode !in setOf(IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER) &&
+            ipAdapterEnabled
+        ) {
             try {
                 validateSdIpAdapterConfig(
                     config = SdIpAdapterConfig(
@@ -721,28 +1083,50 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             null
         }
 
-        val modelFileExists = modelPath?.let { File(it).exists() } ?: false
-        val inputImageExists = inputImagePath?.let { File(it).exists() } ?: false
-        val canGenerate = when (selectedMode) {
-            0 -> modelPath != null && modelFileExists && prompt.isNotBlank() && supportsTxt2Img && missingRequiredComponents.isEmpty()
-            1 -> selectedModelPath != null &&
-                modelFileExists &&
-                prompt.isNotBlank() &&
-                inputImagePath != null &&
-                inputImageExists &&
-                supportsImg2Img &&
-                missingRequiredComponents.isEmpty()
-            2 -> modelPath != null && modelFileExists && inputImagePath != null && inputImageExists
-            else -> false
+        try {
+            if (selectedMode == IMAGE_GEN_MODE_INPAINT) {
+                validateSdInpaintInputs(
+                    sourceImagePath = inputImagePath,
+                    maskImagePath = inpaintMaskPath,
+                    strength = strength,
+                    width = width,
+                    height = height
+                )
+            }
+            if (selectedMode == IMAGE_GEN_MODE_ADETAILER) {
+                validateSdADetailerConfig(
+                    SdADetailerConfig(
+                        modelPath = adetailerModelPath.orEmpty(),
+                        prompt = adetailerPrompt.ifBlank { prompt },
+                        negativePrompt = adetailerNegativePrompt,
+                        confidence = adetailerConfidence,
+                        denoisingStrength = adetailerDenoising,
+                        maskBlur = adetailerMaskBlur,
+                        padding = adetailerPadding,
+                        maxDetections = adetailerMaxDetections,
+                        advancedArgs = adetailerAdvancedArgs
+                    )
+                )
+            }
+        } catch (configurationError: SdADetailerConfigurationException) {
+            errorMessage = sdADetailerErrorMessage(context, configurationError)
+            return@generate
+        } catch (configurationError: IllegalArgumentException) {
+            errorMessage = configurationError.message ?: context.getString(R.string.error_generic)
+            return@generate
         }
 
-        if (canGenerate) {
+        if (imageGenReadiness.isReady) {
             errorMessage = null
 
-            val subfolder = when (mode) {
+            val subfolder = when (imageGenOperation) {
+                ImageGenOperation.ADETAILER_EXISTING, ImageGenOperation.ADETAILER_GENERATED -> "adetailer"
+                else -> when (mode) {
                 SDMode.TXT2IMG -> "txt2img"
                 SDMode.IMG2IMG -> "img2img"
+                SDMode.ADETAILER -> "adetailer"
                 SDMode.UPSCALE -> "upscaled"
+                }
             }
 
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -753,6 +1137,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             val threadCount = if (threads > 0) threads else when (mode) {
                 SDMode.TXT2IMG -> settingsRepo.sdTxt2imgThreads.value
                 SDMode.IMG2IMG -> settingsRepo.sdImg2imgThreads.value
+                SDMode.ADETAILER -> if (adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE) {
+                    settingsRepo.sdImg2imgThreads.value
+                } else {
+                    settingsRepo.sdTxt2imgThreads.value
+                }
                 SDMode.UPSCALE -> settingsRepo.sdUpscaleThreads.value
             }
 
@@ -811,7 +1200,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 val config = SDConfig(
                     mode = mode,
                     modelPath = modelPath ?: "",
-                    prompt = prompt,
+                    prompt = if (imageGenOperation == ImageGenOperation.ADETAILER_EXISTING) adetailerPrompt else prompt,
                     negativePrompt = negativePrompt,
                     width = width,
                     height = height,
@@ -821,8 +1210,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     samplingMethod = selectedSampler,
                     scheduler = selectedScheduler,
                     outputPath = outputFile.absolutePath,
-                    initImage = inputImagePath,
+                    initImage = effectiveInputImagePath,
+                    maskImage = if (selectedMode == IMAGE_GEN_MODE_INPAINT) inpaintMaskPath else null,
                     strength = strength,
+                    imgCfgScale = if (selectedMode == IMAGE_GEN_MODE_INPAINT) inpaintImgCfgScale else null,
                     upscaleModel = null,
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
@@ -848,7 +1239,18 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         null
                     },
                     photoMakerPath = selectedPhotoMakerPath,
-                    ipAdapter = effectiveIpAdapter,
+                    ipAdapter = if (selectedMode in setOf(IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER)) null else effectiveIpAdapter,
+                    adetailer = if (selectedMode == IMAGE_GEN_MODE_ADETAILER) SdADetailerConfig(
+                        modelPath = adetailerModelPath.orEmpty(),
+                        prompt = adetailerPrompt.ifBlank { prompt },
+                        negativePrompt = adetailerNegativePrompt,
+                        confidence = adetailerConfidence,
+                        denoisingStrength = adetailerDenoising,
+                        maskBlur = adetailerMaskBlur,
+                        padding = adetailerPadding,
+                        maxDetections = adetailerMaxDetections,
+                        advancedArgs = adetailerAdvancedArgs
+                    ) else null,
                     flowShift = flowShiftText.toFloatOrNull(),
                     diffusionFa = diffusionFaEnabled,
                     diffusionConvDirect = diffusionConvDirectEnabled,
@@ -871,7 +1273,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     cacheOption = cacheOption,
                     scmMask = scmMask,
                     scmPolicy = scmPolicy,
-                    customFlags = manualCommandFlags
+                    customFlags = manualCommandFlags,
+                    operation = imageGenOperation.name,
+                    sourceTransform = inpaintWorkspace?.transform?.name,
+                    maskProvenance = inpaintWorkspace?.provenance?.name,
+                    maskPolarity = if (selectedMode == IMAGE_GEN_MODE_INPAINT) "WHITE_REGENERATES" else null
                 )
 
                 batteryGateState.runAfterCheck {
@@ -912,9 +1318,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     // Cancel function - cancels only the current mode's generation
     val cancelGeneration: () -> Unit = {
         val mode = when (selectedMode) {
-            0 -> SDMode.TXT2IMG
-            1 -> SDMode.IMG2IMG
-            else -> SDMode.UPSCALE
+            IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> SDMode.IMG2IMG
+            IMAGE_GEN_MODE_UPSCALE -> SDMode.UPSCALE
+            IMAGE_GEN_MODE_ADETAILER -> SDMode.ADETAILER
+            else -> SDMode.TXT2IMG
         }
         context.startService(StableDiffusionService.createCancelModeIntent(context, mode))
     }
@@ -925,6 +1332,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             mode = when (selectedMode) {
                 1 -> SDMode.IMG2IMG.name
                 2 -> SDMode.UPSCALE.name
+                IMAGE_GEN_MODE_ADETAILER -> SDMode.ADETAILER.name
                 else -> SDMode.TXT2IMG.name
             },
             event = "pane_rendered",
@@ -933,8 +1341,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     fun LazyListScope.generationModePaneContent() {
-        // Image Input (for img2img and upscale modes)
-        if (selectedMode > 0) item(key = "input") {
+        // Image input is required for transform, inpaint, upscale, and existing-image ADetailer.
+        if (selectedMode in setOf(IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT) ||
+            (selectedMode == IMAGE_GEN_MODE_ADETAILER && adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE)
+        ) item(key = "input") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -944,6 +1354,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     Text(
                         when {
                             selectedMode == 2 -> stringResource(R.string.imagegen_mode_upscale)
+                            selectedMode == IMAGE_GEN_MODE_INPAINT -> stringResource(R.string.imagegen_inpaint_step_source)
+                            selectedMode == IMAGE_GEN_MODE_ADETAILER -> stringResource(R.string.imagegen_adetailer_step_source)
                             selectedFamilySpec?.img2imgInputMode == SdImageInputMode.REFERENCE_IMAGE ->
                                 stringResource(R.string.imagegen_reference_image_title)
                             else -> stringResource(R.string.imagegen_mode_img2img)
@@ -951,6 +1363,47 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    if (selectedMode == IMAGE_GEN_MODE_INPAINT) {
+                        Text(
+                            stringResource(R.string.imagegen_inpaint_transform_title),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(R.string.imagegen_inpaint_transform_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            SegmentedButton(
+                                selected = inpaintCanvasTransform == InpaintCanvasTransform.FIT,
+                                onClick = { inpaintCanvasTransform = InpaintCanvasTransform.FIT },
+                                enabled = inpaintWorkspace == null,
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                            ) {
+                                Text(
+                                    stringResource(R.string.imagegen_inpaint_transform_fit),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            SegmentedButton(
+                                selected = inpaintCanvasTransform == InpaintCanvasTransform.CENTER_CROP,
+                                onClick = { inpaintCanvasTransform = InpaintCanvasTransform.CENTER_CROP },
+                                enabled = inpaintWorkspace == null,
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                            ) {
+                                Text(
+                                    stringResource(R.string.imagegen_inpaint_transform_center_crop),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
 
                     if (selectedImagePath != null && imageResolution != null) {
                         val resolution = imageResolution
@@ -996,7 +1449,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         }
                     }
 
-                    if (selectedMode == 1 && selectedFamilySpec?.img2imgInputMode != SdImageInputMode.REFERENCE_IMAGE) {
+                    if ((selectedMode in setOf(IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT) ||
+                        (selectedMode == IMAGE_GEN_MODE_ADETAILER && adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE)) &&
+                        selectedFamilySpec?.img2imgInputMode != SdImageInputMode.REFERENCE_IMAGE
+                    ) {
                         Spacer(modifier = Modifier.height(12.dp))
                         SliderWithInput(
                             value = strength,
@@ -1140,6 +1596,53 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+        }
+        if (selectedMode == IMAGE_GEN_MODE_INPAINT) item(key = "inpaint_options") {
+            ImageGenInpaintOptionsCard(
+                maskPath = inpaintMaskPath,
+                hasSourceImage = selectedImagePath?.let { File(it).isFile && File(it).canRead() } == true,
+                onDrawMask = openInpaintMaskEditor,
+                onImportMask = { maskPicker.launch("image/*") },
+                automaticSelectionModels = backgroundRemovalModels,
+                automaticSelectionModelPath = selectedAutoMaskModelPath,
+                onAutomaticSelectionModelPathChange = { selectedAutoMaskModelPath = it },
+                automaticSelectionRunning = pendingAutoMaskPolarity != null,
+                onAutoSelectSubject = { startAutomaticMask(InpaintAutoMaskPolarity.AUTO_SUBJECT) },
+                onAutoSelectBackground = { startAutomaticMask(InpaintAutoMaskPolarity.AUTO_BACKGROUND) },
+                onInstallAutomaticModel = { navController.navigate(Screen.OnnxModels.route) },
+                strength = strength,
+                onStrengthChange = { strength = it },
+                imgCfgScale = inpaintImgCfgScale,
+                onImgCfgScaleChange = { inpaintImgCfgScale = it }
+            )
+        }
+        if (selectedMode == IMAGE_GEN_MODE_ADETAILER) item(key = "adetailer_options") {
+            ImageGenADetailerOptionsCard(
+                inputMode = adetailerInputMode,
+                onInputModeChange = { adetailerInputMode = it },
+                supportsExistingImage = supportsImg2Img,
+                supportsGeneratedImage = supportsTxt2Img,
+                detectors = compatibleAdetailerModels,
+                detectorPath = adetailerModelPath,
+                onDetectorPathChange = { adetailerModelPath = it },
+                onInstallDetector = { navController.navigate(Screen.SDModels.route) },
+                detailPrompt = adetailerPrompt,
+                onDetailPromptChange = { adetailerPrompt = it },
+                detailNegativePrompt = adetailerNegativePrompt,
+                onDetailNegativePromptChange = { adetailerNegativePrompt = it },
+                confidence = adetailerConfidence,
+                onConfidenceChange = { adetailerConfidence = it },
+                denoising = adetailerDenoising,
+                onDenoisingChange = { adetailerDenoising = it },
+                maskBlur = adetailerMaskBlur,
+                onMaskBlurChange = { adetailerMaskBlur = it },
+                padding = adetailerPadding,
+                onPaddingChange = { adetailerPadding = it },
+                maxDetections = adetailerMaxDetections,
+                onMaxDetectionsChange = { adetailerMaxDetections = it },
+                advancedArgs = adetailerAdvancedArgs,
+                onAdvancedArgsChange = { adetailerAdvancedArgs = it }
+            )
         }
         item(key = "model") { Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1490,7 +1993,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-                if (selectedMode != 2) {
+                if (selectedMode !in setOf(IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER)) {
                     item(key = "ip-adapter") {
                         SdIpAdapterCard(
                             supported = supportsIpAdapter,
@@ -2076,36 +2579,79 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }
             }
         } else {
-            val buttonEnabled = when (selectedMode) {
-                0 -> selectedModelPath != null &&
-                    prompt.isNotBlank() &&
-                    supportsTxt2Img &&
-                    missingRequiredComponents.isEmpty()
-                1 -> selectedModelPath != null &&
-                    prompt.isNotBlank() &&
-                    selectedImagePath != null &&
-                    supportsImg2Img &&
-                    missingRequiredComponents.isEmpty()
-                2 -> selectedModelPath != null && selectedImagePath != null
-                else -> false
-            }
-            Button(
-                onClick = generate,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                enabled = buttonEnabled,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Default.Create, null)
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    when (selectedMode) {
-                        2 -> stringResource(R.string.imagegen_upscale_btn)
-                        else -> stringResource(R.string.imagegen_generate_btn)
-                    },
-                    fontWeight = FontWeight.Bold
-                )
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!imageGenReadiness.isReady) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                stringResource(R.string.imagegen_readiness_title),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            imageGenReadiness.issues.forEach { issue ->
+                                Text(
+                                    "• " + stringResource(
+                                        when (issue) {
+                                            ImageGenReadinessIssue.MODEL -> R.string.imagegen_readiness_model
+                                            ImageGenReadinessIssue.PROMPT -> R.string.imagegen_readiness_prompt
+                                            ImageGenReadinessIssue.SOURCE_IMAGE -> R.string.imagegen_readiness_source
+                                            ImageGenReadinessIssue.MASK -> R.string.imagegen_readiness_mask
+                                            ImageGenReadinessIssue.DETECTOR -> R.string.imagegen_readiness_detector
+                                            ImageGenReadinessIssue.FAMILY_SUPPORT -> R.string.imagegen_readiness_family
+                                            ImageGenReadinessIssue.REQUIRED_COMPONENTS -> R.string.imagegen_readiness_components
+                                        }
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (ImageGenReadinessIssue.SOURCE_IMAGE in imageGenReadiness.issues) {
+                                    TextButton(onClick = { imagePicker.launch("image/*") }) {
+                                        Text(stringResource(R.string.imagegen_fix_choose_image))
+                                    }
+                                }
+                                if (ImageGenReadinessIssue.MASK in imageGenReadiness.issues) {
+                                    TextButton(onClick = openInpaintMaskEditor) {
+                                        Text(stringResource(R.string.imagegen_inpaint_draw_mask))
+                                    }
+                                }
+                                if (ImageGenReadinessIssue.DETECTOR in imageGenReadiness.issues) {
+                                    TextButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
+                                        Text(stringResource(R.string.imagegen_adetailer_install_detector))
+                                    }
+                                }
+                                if (ImageGenReadinessIssue.MODEL in imageGenReadiness.issues ||
+                                    ImageGenReadinessIssue.REQUIRED_COMPONENTS in imageGenReadiness.issues
+                                ) {
+                                    TextButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
+                                        Text(stringResource(R.string.imagegen_fix_models))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Button(
+                    onClick = generate,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    enabled = imageGenReadiness.isReady,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.Create, null)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        when (selectedMode) {
+                            2 -> stringResource(R.string.imagegen_upscale_btn)
+                            else -> stringResource(R.string.imagegen_generate_btn)
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         } }
 
@@ -2386,36 +2932,28 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             ) {
                 item(key = "mode") {
                     val modes = listOf(
-                        stringResource(R.string.imagegen_mode_txt2img),
-                        stringResource(R.string.imagegen_mode_img2img),
-                        stringResource(R.string.imagegen_mode_upscale)
+                        IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
+                        IMAGE_GEN_MODE_IMG2IMG to stringResource(R.string.imagegen_task_transform),
+                        IMAGE_GEN_MODE_INPAINT to stringResource(R.string.imagegen_task_repair),
+                        IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
+                        IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
                     )
-                    SingleChoiceSegmentedButtonRow(
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        modes.forEachIndexed { index, mode ->
-                            val modeEnabled = when (index) {
-                                0 -> supportsTxt2Img
-                                1 -> supportsImg2Img
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(modes, key = { it.first }) { (modeIndex, modeLabel) ->
+                            val modeEnabled = when (modeIndex) {
+                                IMAGE_GEN_MODE_TXT2IMG -> supportsTxt2Img
+                                IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> supportsImg2Img
+                                IMAGE_GEN_MODE_ADETAILER -> supportsTxt2Img || supportsImg2Img
                                 else -> true
                             }
-                            SegmentedButton(
-                                selected = selectedMode == index,
+                            FilterChip(
+                                selected = selectedMode == modeIndex,
                                 onClick = {
-                                    if (index == 2) {
-                                        navController.navigate(Screen.ImageGenUpscale.route)
-                                    } else {
-                                        switchGenerationMode(index)
-                                    }
+                                    switchGenerationMode(modeIndex)
                                 },
                                 enabled = modeEnabled,
-                                shape = SegmentedButtonDefaults.itemShape(
-                                    index = index,
-                                    count = modes.size
-                                )
-                            ) {
-                                Text(mode)
-                            }
+                                label = { Text(modeLabel, maxLines = 1) }
+                            )
                         }
                     }
                 }

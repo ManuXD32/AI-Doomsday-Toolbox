@@ -10,14 +10,21 @@ import com.example.llamadroid.sd.inferSdFamily
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.util.DeviceAcceleration
 import java.io.File
+import java.util.Locale
 
 data class SdBinaryCapabilities(
-    val supportedFlags: Set<String>
+    val supportedFlags: Set<String>,
+    val supportedModes: Set<String> = emptySet(),
+    val allowAll: Boolean = false
 ) {
-    fun supports(flag: String): Boolean = supportedFlags.contains(flag)
+    fun supports(flag: String): Boolean = allowAll || supportedFlags.contains(flag)
+
+    /** `-M` values explicitly advertised by the installed stable-diffusion.cpp binary. */
+    fun supportsMode(mode: String): Boolean =
+        allowAll || mode.lowercase(Locale.US) in supportedModes
 
     companion object {
-        val ALLOW_ALL = SdBinaryCapabilities(emptySet())
+        val ALLOW_ALL = SdBinaryCapabilities(emptySet(), allowAll = true)
     }
 }
 
@@ -29,6 +36,10 @@ class SdUnsupportedFlagsException(
     val flags: List<String>
 ) : IllegalStateException("Unsupported stable-diffusion.cpp flags: ${flags.joinToString(", ")}")
 
+class SdUnsupportedModesException(
+    val modes: List<String>
+) : IllegalStateException("Unsupported stable-diffusion.cpp modes: ${modes.joinToString(", ")}")
+
 class SdDisallowedDistributedFlagException(
     val flag: String,
     override val message: String = "Disallowed distributed stable-diffusion.cpp flag: $flag"
@@ -36,8 +47,12 @@ class SdDisallowedDistributedFlagException(
 
 fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     val flagRegex = Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
+    val nativeModeRegex = Regex("""(?i)\b(?:txt2img|img2img|img_gen|upscale|adetailer|txt2vid|img2vid|vid_gen)\b""")
     return SdBinaryCapabilities(
-        supportedFlags = flagRegex.findAll(helpText).map { it.value }.toSet()
+        supportedFlags = flagRegex.findAll(helpText).map { it.value }.toSet(),
+        supportedModes = nativeModeRegex.findAll(helpText)
+            .map { it.value.lowercase(Locale.US) }
+            .toSet()
     )
 }
 
@@ -65,6 +80,7 @@ fun buildSdCommandArgs(
 ): List<String> {
     val args = mutableListOf<String>()
     val requiredFlags = mutableSetOf<String>()
+    val requiredModes = mutableSetOf<String>()
 
     fun requireFlag(flag: String) {
         if (binaryCapabilities != null &&
@@ -84,8 +100,22 @@ fun buildSdCommandArgs(
         }
     }
 
+    fun requireMode(mode: String) {
+        if (binaryCapabilities != null &&
+            binaryCapabilities != SdBinaryCapabilities.ALLOW_ALL &&
+            !binaryCapabilities.supportsMode(mode)
+        ) {
+            requiredModes += mode
+        }
+    }
+
     when (config.mode) {
         SDMode.TXT2IMG, SDMode.IMG2IMG -> args.addAll(listOf("-M", "img_gen"))
+        SDMode.ADETAILER -> {
+            requireFlag("-M")
+            requireMode("adetailer")
+            args.addAll(listOf("-M", "adetailer"))
+        }
         SDMode.UPSCALE -> args.addAll(listOf("-M", "upscale"))
     }
 
@@ -115,6 +145,9 @@ fun buildSdCommandArgs(
         args.add("-v")
         if (requiredFlags.isNotEmpty()) {
             throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
+        }
+        if (requiredModes.isNotEmpty()) {
+            throw SdUnsupportedModesException(requiredModes.toList().sorted())
         }
         return args
     }
@@ -207,6 +240,25 @@ fun buildSdCommandArgs(
     if (config.negativePrompt.isNotBlank()) {
         args.addAll(listOf("-n", config.negativePrompt))
     }
+    config.maskImage?.let {
+        requireFlag("--mask")
+        args.addAll(listOf("--mask", it))
+    }
+    config.imgCfgScale?.let {
+        requireFlag("--img-cfg-scale")
+        args.addAll(listOf("--img-cfg-scale", it.toString()))
+    }
+    config.adetailer?.let { raw ->
+        val ad = validateSdADetailerConfig(raw)
+        requireFlag("--ad-model")
+        requireFlag("--ad-prompt")
+        requireFlag("--ad-negative-prompt")
+        requireFlag("--extra-ad-args")
+        args.addAll(listOf("--ad-model", ad.modelPath))
+        if (ad.prompt.isNotBlank()) args.addAll(listOf("--ad-prompt", ad.prompt))
+        if (ad.negativePrompt.isNotBlank()) args.addAll(listOf("--ad-negative-prompt", ad.negativePrompt))
+        args.addAll(listOf("--extra-ad-args", serializeSdADetailerExtraArgs(ad)))
+    }
     args.addAll(listOf("-W", config.width.toString()))
     args.addAll(listOf("-H", config.height.toString()))
     args.addAll(listOf("--steps", config.steps.toString()))
@@ -291,7 +343,9 @@ fun buildSdCommandArgs(
 
     args.addAll(listOf("-o", config.outputPath))
 
-    if (config.mode == SDMode.IMG2IMG) {
+    if (config.mode == SDMode.IMG2IMG ||
+        (config.mode == SDMode.ADETAILER && config.initImage != null)
+    ) {
         val input = config.initImage
             ?: throw IllegalStateException("Missing input image")
         when (spec.img2imgInputMode) {
@@ -344,6 +398,9 @@ fun buildSdCommandArgs(
 
     if (requiredFlags.isNotEmpty()) {
         throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
+    }
+    if (requiredModes.isNotEmpty()) {
+        throw SdUnsupportedModesException(requiredModes.toList().sorted())
     }
 
     return args

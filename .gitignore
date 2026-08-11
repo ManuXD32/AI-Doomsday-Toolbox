@@ -1,6 +1,7 @@
 # Personal documentation (not for GitHub)
 ARCHITECTURE.md
 .adt_patch_backups
+.adt_backups
 
 # Built application files
 *.apk

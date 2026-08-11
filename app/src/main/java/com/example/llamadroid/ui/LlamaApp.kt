@@ -24,7 +24,6 @@ import com.example.llamadroid.ui.ai.AIHubScreen
 import com.example.llamadroid.ui.ai.AiServersHubScreen
 import com.example.llamadroid.ui.ai.ToolCatalog
 import com.example.llamadroid.ui.ai.ImageGenScreen
-import com.example.llamadroid.ui.ai.LegacyUpscaleScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
 import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
 import com.example.llamadroid.ui.ai.OnnxTtsScreen
@@ -420,7 +419,11 @@ fun LlamaApp(
                 val startMode = backStackEntry.arguments?.getInt("startMode") ?: 0
                 ImageGenScreen(navController, initialMode = startMode)
             }
-            composable(Screen.ImageGenUpscale.route) { LegacyUpscaleScreen(navController) }
+            // Keep the historical route for shortcuts and saved navigation state, but render the
+            // same curated workspace and task selector as every other image operation.
+            composable(Screen.ImageGenUpscale.route) {
+                ImageGenScreen(navController, initialMode = com.example.llamadroid.ui.ai.IMAGE_GEN_MODE_UPSCALE)
+            }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }

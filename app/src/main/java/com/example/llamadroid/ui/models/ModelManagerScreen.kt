@@ -5,6 +5,7 @@ import android.os.StatFs
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +29,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
 import com.example.llamadroid.R
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -1245,7 +1249,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
 
 @Composable
 fun DiscoverTab(viewModel: ModelManagerViewModel) {
-    var query by remember { mutableStateOf("llama-3") }
+    var query by rememberSaveable { mutableStateOf("") }
     val results by viewModel.searchResults.collectAsState()
     val isSearching by viewModel.isSearching.collectAsState()
     val progressMap by viewModel.downloadProgress.collectAsState()
@@ -1534,10 +1538,23 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
             ) {
                 OutlinedTextField(
                     value = query,
-                    onValueChange = { query = it },
+                    onValueChange = { value ->
+                        if (value != query) {
+                            query = value
+                            viewModel.clearSearchResults()
+                        }
+                    },
                     modifier = Modifier.weight(1f),
                     placeholder = { Text(stringResource(R.string.models_search_hint)) },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            if (query.isNotBlank() && !isSearching) {
+                                viewModel.search(query, ModelType.LLM)
+                            }
+                        }
+                    ),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.Transparent,
                         unfocusedBorderColor = Color.Transparent
@@ -1545,6 +1562,7 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                 )
                 FilledIconButton(
                     onClick = { viewModel.search(query, ModelType.LLM) },
+                    enabled = query.isNotBlank() && !isSearching,
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Icon(Icons.Default.Search, contentDescription = stringResource(R.string.models_search_hint))
@@ -1566,6 +1584,29 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
             contentPadding = PaddingValues(top = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (com.example.llamadroid.ui.components.isCuratedCatalogBrowseMode(query)) {
+                item(key = "phase_c_llama_curated_bundles") {
+                    val context = LocalContext.current
+                    val settings = remember { com.example.llamadroid.data.SettingsRepository(context) }
+                    com.example.llamadroid.ui.components.CuratedModelBundleSection(
+                        title = stringResource(R.string.phase_c_llama_bundles_title),
+                        description = stringResource(R.string.llama_bundles_desc),
+                        bundles = com.example.llamadroid.data.model.LlamaCuratedBundleCatalog.bundles,
+                        onUseBundle = { _, models, _ ->
+                            models.firstOrNull { it.type == ModelType.LLM }?.let { settings.setSelectedModelPath(it.path) }
+                            models.firstOrNull { it.type == ModelType.VISION_PROJECTOR }?.let {
+                                settings.setSelectedMmprojPath(it.path)
+                                settings.setEnableVision(true)
+                            }
+                            models.firstOrNull { it.type == ModelType.LLM_DRAFT }?.let {
+                                settings.setDraftModelPath(it.path)
+                                settings.setSpeculativeMode(com.example.llamadroid.service.LlamaSpeculativeMode.DRAFT_MTP)
+                            }
+                        }
+                    )
+                }
+            }
+
             items(results) { hfModel ->
                 val progress = progressMap[hfModel.id]
                 val isDownloading = progress != null && progress < 1f

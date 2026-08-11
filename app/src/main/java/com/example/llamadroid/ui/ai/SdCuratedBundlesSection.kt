@@ -1,8 +1,10 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -30,6 +33,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -293,15 +297,21 @@ private fun SdCuratedBundleCard(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    val allInstalled = installedCount == bundle.files.size
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(enabled = !isDownloading, onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+        border = BorderStroke(
+            1.dp,
+            if (allInstalled) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+            else MaterialTheme.colorScheme.outlineVariant
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -311,13 +321,21 @@ private fun SdCuratedBundleCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(28.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (allInstalled) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.secondaryContainer,
+                    modifier = Modifier.size(52.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Collections,
+                        contentDescription = null,
+                        tint = if (allInstalled) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         stringResource(bundle.titleRes),
@@ -331,11 +349,6 @@ private fun SdCuratedBundleCard(
                     )
                 }
                 when {
-                    installedCount == bundle.files.size -> Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = stringResource(R.string.sd_bundle_installed),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
                     isDownloading -> IconButton(onClick = onCancel) {
                         Icon(
                             Icons.Default.Close,
@@ -343,13 +356,26 @@ private fun SdCuratedBundleCard(
                             tint = MaterialTheme.colorScheme.error
                         )
                     }
+                    allInstalled -> Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Text(stringResource(R.string.curated_bundle_status_ready), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
             }
 
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 AssistChip(
                     onClick = {},
@@ -395,6 +421,12 @@ private fun SdCuratedBundleCard(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (!isDownloading) {
+                LinearProgressIndicator(
+                    progress = { installedCount.toFloat() / bundle.files.size.toFloat() },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             if (missingBytes > 0L) {
                 Text(
                     stringResource(
@@ -424,7 +456,7 @@ private fun SdCuratedBundleCard(
                     )
                 }
             } else if (installedCount < bundle.files.size) {
-                OutlinedButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
                     Icon(Icons.Default.Download, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(stringResource(R.string.sd_bundle_review_download))

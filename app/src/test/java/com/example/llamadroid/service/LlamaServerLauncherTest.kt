@@ -2,9 +2,22 @@ package com.example.llamadroid.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LlamaServerLauncherTest {
+    @Test
+    fun `owned launcher action allowlist includes only local service lifecycle commands`() {
+        assertTrue(LlamaServerLauncher.isOwnedServiceAction(LlamaService.ACTION_START))
+        assertTrue(LlamaServerLauncher.isOwnedServiceAction(LlamaService.ACTION_RECONFIGURE))
+        assertTrue(LlamaServerLauncher.isOwnedServiceAction(LlamaService.ACTION_SWITCH_MODEL))
+        assertTrue(LlamaServerLauncher.isOwnedServiceAction(LlamaService.ACTION_STOP))
+        assertTrue(LlamaServerLauncher.isOwnedServiceAction(LlamaService.ACTION_RECOVER))
+        assertFalse(LlamaServerLauncher.isOwnedServiceAction(LlamaService.ACTION_PREVIEW_COMMAND))
+        assertFalse(LlamaServerLauncher.isOwnedServiceAction(null))
+        assertFalse(LlamaServerLauncher.isOwnedServiceAction("OTHER_SERVICE"))
+    }
+
     @Test
     fun `OCR flags remove duplicated preset values and dedicated flash attention`() {
         val flags = LlamaServerLauncher.composeLlamaOcrFlags(

@@ -138,6 +138,86 @@ object NativeProcessCleanup {
         return candidates.size
     }
 
+    /**
+     * Cleans a previously recorded llama-server tree only after validating the original root PID,
+     * /proc start-time token, same UID, and recorded server port. The start-time token prevents a
+     * recycled PID from ever being treated as the old llama-server process.
+     */
+    fun cleanupRecordedLlamaProcessTreeSync(
+        reason: String,
+        rootPid: Int,
+        expectedStartTimeTicks: Long,
+        expectedPort: Int,
+        graceMs: Long = 750L,
+        forceMs: Long = 750L,
+        procRoot: File = File("/proc"),
+        myPid: Int = Process.myPid(),
+        myUid: Int = Process.myUid()
+    ): Int {
+        if (rootPid <= 0 || expectedStartTimeTicks <= 0L || expectedPort !in 1..65535) return 0
+        val entries = findSameUidProcesses(procRoot, myPid, myUid)
+        val root = entries.firstOrNull { it.pid == rootPid } ?: return 0
+        val actualStartTimeTicks = processStartTimeTicks(rootPid, procRoot) ?: return 0
+        if (!recordedLlamaOwnerMatches(
+                expectedPid = rootPid,
+                expectedStartTimeTicks = expectedStartTimeTicks,
+                expectedPort = expectedPort,
+                actualPid = root.pid,
+                actualStartTimeTicks = actualStartTimeTicks,
+                actualCommandLine = root.commandLine
+            )
+        ) {
+            DebugLog.log("[NativeProcessCleanup] Recorded llama owner did not match pid=$rootPid for $reason; refusing cleanup")
+            return 0
+        }
+
+        val candidates = selectProcessTree(entries, rootPid, includeRoot = true)
+        if (candidates.isEmpty()) return 0
+        candidates.sortedByDescending { treeDepth(it.pid, entries) }.forEach { candidate ->
+            runCatching { Os.kill(candidate.pid, OsConstants.SIGTERM) }
+                .onFailure { DebugLog.log("[NativeProcessCleanup] recorded-tree SIGTERM failed for ${candidate.pid}: ${it.message}") }
+        }
+        sleepQuietly(graceMs)
+        val stillAlive = candidates.filter { File(procRoot, it.pid.toString()).exists() }
+        stillAlive.forEach { candidate ->
+            runCatching { Os.kill(candidate.pid, OsConstants.SIGKILL) }
+                .onFailure { DebugLog.log("[NativeProcessCleanup] recorded-tree SIGKILL failed for ${candidate.pid}: ${it.message}") }
+        }
+        if (stillAlive.isNotEmpty()) sleepQuietly(forceMs)
+        val survivors = candidates.filter { File(procRoot, it.pid.toString()).exists() }
+        if (survivors.isNotEmpty()) {
+            DebugLog.log(
+                "[NativeProcessCleanup] Recorded tree still has survivors after recovery: " +
+                    survivors.joinToString { it.pid.toString() }
+            )
+            return 0
+        }
+        return candidates.size
+    }
+
+    internal fun processStartTimeTicks(pid: Int, procRoot: File = File("/proc")): Long? = runCatching {
+        val stat = File(procRoot, "$pid/stat").readText()
+        val afterName = stat.substringAfterLast(") ", missingDelimiterValue = "")
+        // /proc/<pid>/stat field 22 is starttime; after the process name, field 3 is index 0.
+        afterName.split(Regex("\\s+")).getOrNull(19)?.toLongOrNull()
+    }.getOrNull()
+
+    internal fun recordedLlamaOwnerMatches(
+        expectedPid: Int,
+        expectedStartTimeTicks: Long,
+        expectedPort: Int,
+        actualPid: Int,
+        actualStartTimeTicks: Long,
+        actualCommandLine: String
+    ): Boolean =
+        expectedPid > 0 &&
+            expectedStartTimeTicks > 0L &&
+            expectedPort in 1..65535 &&
+            actualPid == expectedPid &&
+            actualStartTimeTicks == expectedStartTimeTicks &&
+            isKnownLlamaServerCommand(actualCommandLine) &&
+            commandLineHasPort(actualCommandLine, expectedPort)
+
     fun cleanupSameUidPortListenersSync(
         reason: String,
         port: Int,

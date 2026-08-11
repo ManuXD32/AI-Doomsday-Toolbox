@@ -10,6 +10,21 @@ import java.io.File
 class ProcessControllerTest {
 
     @Test
+    fun `HTTP readiness promotes only an owned live child with a successful health response`() {
+        assertTrue(llamaReadinessShouldPromote(ownedChild = true, childAlive = true, httpStatus = 200))
+        assertFalse(llamaReadinessShouldPromote(ownedChild = false, childAlive = true, httpStatus = 200))
+        assertFalse(llamaReadinessShouldPromote(ownedChild = true, childAlive = false, httpStatus = 200))
+        assertFalse(llamaReadinessShouldPromote(ownedChild = true, childAlive = true, httpStatus = 503))
+    }
+
+    @Test
+    fun `HTTP readiness probes a loopback address for wildcard bindings`() {
+        assertEquals("127.0.0.1", llamaReadinessProbeHost("0.0.0.0"))
+        assertEquals("::1", llamaReadinessProbeHost("::"))
+        assertEquals("127.0.0.1", llamaReadinessProbeHost("127.0.0.1"))
+    }
+
+    @Test
     fun `unexpected exit resolves to error state`() {
         val controller = ProcessController()
 

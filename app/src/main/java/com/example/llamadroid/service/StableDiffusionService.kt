@@ -659,6 +659,8 @@ class StableDiffusionService : Service() {
             )
         } catch (e: SdIpAdapterConfigurationException) {
             throw SdConfigurationException(sdIpAdapterErrorMessage(this@StableDiffusionService, e))
+        } catch (e: SdADetailerConfigurationException) {
+            throw SdConfigurationException(sdADetailerErrorMessage(this@StableDiffusionService, e))
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(
                 getString(
@@ -671,6 +673,13 @@ class StableDiffusionService : Service() {
                 getString(
                     R.string.imagegen_error_binary_missing_flags,
                     e.flags.joinToString(", ")
+                )
+            )
+        } catch (e: SdUnsupportedModesException) {
+            throw IllegalStateException(
+                getString(
+                    R.string.imagegen_error_binary_missing_modes,
+                    e.modes.joinToString(", ")
                 )
             )
         } catch (e: SdDisallowedDistributedFlagException) {
@@ -699,7 +708,7 @@ class StableDiffusionService : Service() {
         val progressTracker = SdProgressTracker(
             totalStepsHint = when (config.mode) {
                 SDMode.UPSCALE -> config.upscaleRepeats.coerceAtLeast(1)
-                else -> config.steps.coerceAtLeast(1)
+                SDMode.TXT2IMG, SDMode.IMG2IMG, SDMode.ADETAILER -> config.steps.coerceAtLeast(1)
             },
             startedAtMs = SystemClock.elapsedRealtime()
         )
@@ -972,7 +981,7 @@ class StableDiffusionService : Service() {
     private fun buildStartingSnapshot(config: SDConfig): SdProgressSnapshot {
         val totalSteps = when (config.mode) {
             SDMode.UPSCALE -> config.upscaleRepeats.coerceAtLeast(1)
-            else -> config.steps.coerceAtLeast(1)
+            SDMode.TXT2IMG, SDMode.IMG2IMG, SDMode.ADETAILER -> config.steps.coerceAtLeast(1)
         }
         return buildStartingSnapshot(totalSteps)
     }
@@ -1214,6 +1223,7 @@ class StableDiffusionService : Service() {
                 SDMode.TXT2IMG -> SDModeStateHolder.workflowTxt2img
                 SDMode.UPSCALE -> SDModeStateHolder.workflowUpscale
                 SDMode.IMG2IMG -> SDModeStateHolder.getForMode(mode)
+                SDMode.ADETAILER -> SDModeStateHolder.getForMode(mode)
             }
         } else {
             SDModeStateHolder.getForMode(mode)
@@ -1222,19 +1232,21 @@ class StableDiffusionService : Service() {
     private fun subfolderForMode(mode: SDMode): String = when (mode) {
         SDMode.TXT2IMG -> "txt2img"
         SDMode.IMG2IMG -> "img2img"
+        SDMode.ADETAILER -> "adetailer"
         SDMode.UPSCALE -> "upscaled"
     }
 
     private fun modeLabel(mode: SDMode): String = when (mode) {
         SDMode.TXT2IMG -> getString(R.string.imagegen_mode_txt2img)
         SDMode.IMG2IMG -> getString(R.string.imagegen_mode_img2img)
+        SDMode.ADETAILER -> getString(R.string.imagegen_mode_adetailer)
         SDMode.UPSCALE -> getString(R.string.imagegen_mode_upscale)
     }
 
     private fun postProcessOutputIfNeeded(config: SDConfig, outputFile: File) {
         if (!outputFile.exists()) return
         val initImagePath = config.initImage ?: return
-        if (config.mode != SDMode.IMG2IMG) return
+        if (config.mode !in setOf(SDMode.IMG2IMG, SDMode.ADETAILER)) return
 
         try {
             val (origWidth, origHeight) = decodeImageBounds(initImagePath) ?: return
@@ -1722,7 +1734,9 @@ class StableDiffusionService : Service() {
                 output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
             }.getOrNull()
         }
-        val capabilities = helpCapabilities.maxByOrNull { it.supportedFlags.size } ?: return@withContext null
+        val capabilities = helpCapabilities.maxByOrNull {
+            it.supportedFlags.size + it.supportedModes.size
+        } ?: return@withContext null
 
         capabilities.also {
             cachedSdCapabilityBinaryPath = sdBinary.absolutePath
@@ -1896,7 +1910,9 @@ sealed class SDGenerationState {
 enum class SDMode {
     TXT2IMG,
     IMG2IMG,
-    UPSCALE
+    UPSCALE,
+    /** Detector-guided detail repair. It may optionally carry an img2img source. */
+    ADETAILER
 }
 
 /**
@@ -1997,6 +2013,7 @@ class SDModeStateHolder(val mode: SDMode) {
     companion object {
         val txt2img = SDModeStateHolder(SDMode.TXT2IMG)
         val img2img = SDModeStateHolder(SDMode.IMG2IMG)
+        val adetailer = SDModeStateHolder(SDMode.ADETAILER)
         val upscale = SDModeStateHolder(SDMode.UPSCALE)
 
         val workflowTxt2img = SDModeStateHolder(SDMode.TXT2IMG)
@@ -2004,17 +2021,20 @@ class SDModeStateHolder(val mode: SDMode) {
 
         val distributedTxt2img = SDModeStateHolder(SDMode.TXT2IMG)
         val distributedImg2img = SDModeStateHolder(SDMode.IMG2IMG)
+        val distributedAdetailer = SDModeStateHolder(SDMode.ADETAILER)
         val distributedUpscale = SDModeStateHolder(SDMode.UPSCALE)
 
         fun getForMode(mode: SDMode): SDModeStateHolder = when (mode) {
             SDMode.TXT2IMG -> txt2img
             SDMode.IMG2IMG -> img2img
+            SDMode.ADETAILER -> adetailer
             SDMode.UPSCALE -> upscale
         }
 
         fun getDistributedForMode(mode: SDMode): SDModeStateHolder = when (mode) {
             SDMode.TXT2IMG -> distributedTxt2img
             SDMode.IMG2IMG -> distributedImg2img
+            SDMode.ADETAILER -> distributedAdetailer
             SDMode.UPSCALE -> distributedUpscale
         }
 
