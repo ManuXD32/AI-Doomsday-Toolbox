@@ -212,17 +212,21 @@ internal suspend fun probeSdBinaryCapabilities(
     }
 }
 
+internal fun inferSdRuntimeTierSuffix(binaryName: String): String = when {
+    binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
+    binaryName.contains("_snapdragon_opencl") -> "_snapdragon_opencl"
+    binaryName.contains("_i8mm") -> "_i8mm"
+    binaryName.contains("_armv9") -> "_armv9"
+    binaryName.contains("_dotprod") -> "_dotprod"
+    binaryName.contains("_baseline") -> "_baseline"
+    else -> ""
+}
+
 internal fun setupSdLibrarySymlinks(sourceDir: File?, targetDir: File, binaryPath: String) {
     if (sourceDir == null) return
 
     val binaryName = File(binaryPath).name
-    val tier = when {
-        binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
-        binaryName.contains("_armv9") -> "_armv9"
-        binaryName.contains("_dotprod") -> "_dotprod"
-        binaryName.contains("_baseline") -> "_baseline"
-        else -> ""
-    }
+    val tier = inferSdRuntimeTierSuffix(binaryName)
 
     DebugLog.log("StableDiffusion: Inferred tier '$tier' from $binaryName")
 

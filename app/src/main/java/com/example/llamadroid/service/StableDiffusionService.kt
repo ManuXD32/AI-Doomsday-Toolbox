@@ -128,6 +128,10 @@ class StableDiffusionService : Service() {
         modeJobs[laneFor(mode, useDistributedStateHolder)]?.isActive == true
     }
 
+    private fun isModeProcessAlive(mode: SDMode): Boolean = synchronized(modeLifecycleLock) {
+        modeProcesses.any { (lane, process) -> lane.mode == mode && process.isAlive }
+    }
+
     override fun onCreate() {
         super.onCreate()
         GenerationDiagnosticsStore.init(applicationContext)
@@ -735,10 +739,11 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
-                    markActivity(config.mode, "generating")
+                    markNativeOutput(config.mode)
                     DebugLog.log("SD: $line")
                     latestStageTimings = latestStageTimings.withLine(line)
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
+                        markProgressActivity(config.mode, parsedSnapshot)
                         val snapshot = parsedSnapshot.copy(
                             statusText = withStageTimings(buildImageProgressStatus(parsedSnapshot), latestStageTimings)
                         )
@@ -768,6 +773,9 @@ class StableDiffusionService : Service() {
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
             throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
+        }
+        if (!File(config.outputPath).isFile) {
+            throw RuntimeException(getString(R.string.imagegen_error_output_missing))
         }
 
         config.outputPath
@@ -885,9 +893,10 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
-                    markActivity(SDMode.UPSCALE, "generating")
+                    markNativeOutput(SDMode.UPSCALE)
                     DebugLog.log("SD: $line")
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
+                        markProgressActivity(SDMode.UPSCALE, parsedSnapshot)
                         val snapshot = parsedSnapshot.copy(
                             statusText = buildImageProgressStatus(parsedSnapshot)
                         )
@@ -994,18 +1003,21 @@ class StableDiffusionService : Service() {
     }
 
     private fun buildImageProgressStatus(snapshot: SdProgressSnapshot): String {
-        return if (snapshot.etaSeconds == null) {
-            getString(R.string.gen_status_calculating_eta)
-        } else {
-            getString(
-                if (snapshot.phase == SdProgressPhase.VAE) {
-                    R.string.gen_status_vae_progress_with_eta
-                } else {
-                    R.string.gen_status_diffusion_progress_with_eta
-                },
-                SdProgressTracker.progressPercent(snapshot),
-                formatEtaShort(snapshot.etaSeconds)
-            )
+        val percent = SdProgressTracker.progressPercent(snapshot)
+        return when (snapshot.phase) {
+            SdProgressPhase.PREPARING -> getString(R.string.gen_status_preparing)
+            SdProgressPhase.VAE_ENCODING -> getString(R.string.gen_status_vae_encoding)
+            SdProgressPhase.CONDITIONING -> getString(R.string.gen_status_conditioning)
+            SdProgressPhase.DIFFUSION -> snapshot.etaSeconds?.let { eta ->
+                getString(
+                    R.string.gen_status_diffusion_progress_with_eta,
+                    percent,
+                    formatEtaShort(eta)
+                )
+            } ?: getString(R.string.gen_status_diffusion_progress, percent)
+            SdProgressPhase.VAE_DECODING -> getString(R.string.gen_status_vae_decoding)
+            SdProgressPhase.COMPOSITING -> getString(R.string.gen_status_compositing)
+            SdProgressPhase.SAVING -> getString(R.string.gen_status_saving)
         }
     }
 
@@ -1113,20 +1125,26 @@ class StableDiffusionService : Service() {
                 val now = SystemClock.elapsedRealtime()
                 modeDiagnostics.toMap().forEach { (mode, diagnostics) ->
                     val gapMs = now - diagnostics.lastActivityElapsedMs
-                    val bucket = stallBucketForGap(gapMs)
+                    val bucket = SdNativeLivenessPolicy.noOutputBucket(
+                        gapMs = gapMs,
+                        expectedWindowMs = diagnostics.expectedNoOutputWindowMs
+                    )
                     if (bucket > diagnostics.lastLoggedStallBucket) {
+                        if (!isModeProcessAlive(mode)) return@forEach
                         diagnostics.lastLoggedStallBucket = bucket
                         val message =
-                            "gap=${formatDuration(gapMs)} wakeLockHeld=${wakeLock?.isHeld == true} " +
+                            "gap=${formatDuration(gapMs)} " +
+                                "expectedWindow=${formatDuration(diagnostics.expectedNoOutputWindowMs)} " +
+                                "processAlive=true wakeLockHeld=${wakeLock?.isHeld == true} " +
                                 "workflowActive=${workflowJob?.isActive == true} " +
                                 "batteryExempt=${powerManager.isIgnoringBatteryOptimizations(packageName)} " +
                                 "interactive=${powerManager.isInteractive} powerSave=${powerManager.isPowerSaveMode}"
                         DebugLog.log(
-                            "[StableDiffusionService] Stall detected: mode=${mode.name} phase=${diagnostics.phase} $message"
+                            "[StableDiffusionService] No native output yet: mode=${mode.name} phase=${diagnostics.phase} $message"
                         )
                         recordModeBreadcrumb(
                             mode = mode,
-                            event = "stall_detected",
+                            event = "native_output_gap",
                             phase = diagnostics.phase,
                             details = message
                         )
@@ -1161,24 +1179,15 @@ class StableDiffusionService : Service() {
         if (diagnostics == null) {
             modeDiagnostics[mode] = ActivityDiagnostics(
                 phase = phase,
-                lastActivityElapsedMs = now
+                lastActivityElapsedMs = now,
+                expectedNoOutputWindowMs = DEFAULT_NATIVE_OUTPUT_WINDOW_MS
             )
             recordModeBreadcrumb(mode, "phase_changed", phase = phase)
             return
         }
 
         val gapMs = now - diagnostics.lastActivityElapsedMs
-        if (diagnostics.lastLoggedStallBucket > 0 && gapMs >= STALL_THRESHOLD_MS_1) {
-            val message =
-                "afterGap=${formatDuration(gapMs)} wakeLockHeld=${wakeLock?.isHeld == true} " +
-                    "workflowActive=${workflowJob?.isActive == true} " +
-                    "batteryExempt=${powerManager.isIgnoringBatteryOptimizations(packageName)} " +
-                    "interactive=${powerManager.isInteractive} powerSave=${powerManager.isPowerSaveMode}"
-            DebugLog.log(
-                "[StableDiffusionService] Activity resumed: mode=${mode.name} phase=$phase $message"
-            )
-            recordModeBreadcrumb(mode, "activity_resumed", phase = phase, details = message)
-        }
+        recordNativeOutputResumedIfNeeded(mode, diagnostics, gapMs, phase)
 
         val phaseChanged = diagnostics.phase != phase
         diagnostics.phase = phase
@@ -1189,15 +1198,58 @@ class StableDiffusionService : Service() {
         }
     }
 
-    private fun clearDiagnostics(mode: SDMode) {
-        modeDiagnostics.remove(mode)
+    /** Records real native output. The one-second ETA ticker never calls this. */
+    private fun markNativeOutput(mode: SDMode) {
+        val now = SystemClock.elapsedRealtime()
+        val diagnostics = modeDiagnostics[mode]
+        if (diagnostics == null) {
+            modeDiagnostics[mode] = ActivityDiagnostics(
+                phase = "generating",
+                lastActivityElapsedMs = now,
+                expectedNoOutputWindowMs = DEFAULT_NATIVE_OUTPUT_WINDOW_MS
+            )
+            return
+        }
+        val gapMs = now - diagnostics.lastActivityElapsedMs
+        recordNativeOutputResumedIfNeeded(mode, diagnostics, gapMs, diagnostics.phase)
+        diagnostics.lastActivityElapsedMs = now
+        diagnostics.lastLoggedStallBucket = 0
     }
 
-    private fun stallBucketForGap(gapMs: Long): Int = when {
-        gapMs >= STALL_THRESHOLD_MS_3 -> 3
-        gapMs >= STALL_THRESHOLD_MS_2 -> 2
-        gapMs >= STALL_THRESHOLD_MS_1 -> 1
-        else -> 0
+    private fun markProgressActivity(mode: SDMode, snapshot: SdProgressSnapshot) {
+        val diagnostics = modeDiagnostics[mode] ?: return
+        val phase = snapshot.phase.diagnosticName
+        val phaseChanged = diagnostics.phase != phase
+        diagnostics.phase = phase
+        diagnostics.expectedNoOutputWindowMs =
+            SdNativeLivenessPolicy.expectedNoOutputWindowMs(snapshot)
+        if (phaseChanged) {
+            recordModeBreadcrumb(mode, "phase_changed", phase = phase)
+        }
+    }
+
+    private fun recordNativeOutputResumedIfNeeded(
+        mode: SDMode,
+        diagnostics: ActivityDiagnostics,
+        gapMs: Long,
+        phase: String
+    ) {
+        if (diagnostics.lastLoggedStallBucket <= 0 ||
+            gapMs < diagnostics.expectedNoOutputWindowMs
+        ) return
+        val message =
+            "afterGap=${formatDuration(gapMs)} wakeLockHeld=${wakeLock?.isHeld == true} " +
+                "workflowActive=${workflowJob?.isActive == true} " +
+                "batteryExempt=${powerManager.isIgnoringBatteryOptimizations(packageName)} " +
+                "interactive=${powerManager.isInteractive} powerSave=${powerManager.isPowerSaveMode}"
+        DebugLog.log(
+            "[StableDiffusionService] Native output resumed: mode=${mode.name} phase=$phase $message"
+        )
+        recordModeBreadcrumb(mode, "native_output_resumed", phase = phase, details = message)
+    }
+
+    private fun clearDiagnostics(mode: SDMode) {
+        modeDiagnostics.remove(mode)
     }
 
     private fun formatDuration(durationMs: Long): String {
@@ -1751,13 +1803,7 @@ class StableDiffusionService : Service() {
         if (sourceDir == null) return
 
         val binaryName = File(binaryPath).name
-        val tier = when {
-            binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
-            binaryName.contains("_armv9") -> "_armv9"
-            binaryName.contains("_dotprod") -> "_dotprod"
-            binaryName.contains("_baseline") -> "_baseline"
-            else -> ""
-        }
+        val tier = inferSdRuntimeTierSuffix(binaryName)
 
         DebugLog.log("StableDiffusionService: Inferred tier '$tier' from $binaryName")
 
@@ -1822,9 +1868,7 @@ class StableDiffusionService : Service() {
         private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_sd_use_distributed_holder"
         private const val WORKFLOW_OUTPUT_SUBFOLDER = "workflow"
         private const val STALL_MONITOR_INTERVAL_MS = 15_000L
-        private const val STALL_THRESHOLD_MS_1 = 60_000L
-        private const val STALL_THRESHOLD_MS_2 = 120_000L
-        private const val STALL_THRESHOLD_MS_3 = 300_000L
+        private const val DEFAULT_NATIVE_OUTPUT_WINDOW_MS = 5 * 60_000L
         private const val DIAGNOSTIC_SOURCE = "image_generation"
         private const val COMMAND_BREADCRUMB_LIMIT = 768
         private var cachedSdCapabilityBinaryPath: String? = null
@@ -1890,6 +1934,7 @@ class StableDiffusionService : Service() {
     private data class ActivityDiagnostics(
         var phase: String,
         var lastActivityElapsedMs: Long,
+        var expectedNoOutputWindowMs: Long,
         var lastLoggedStallBucket: Int = 0
     )
 }

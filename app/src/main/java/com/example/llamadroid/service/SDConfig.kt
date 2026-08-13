@@ -78,6 +78,9 @@ data class SDConfig(
     // IP-Adapter (classic and Plus share the same upstream CLI flags)
     val ipAdapter: SdIpAdapterConfig? = null,
     val adetailer: SdADetailerConfig? = null,
+    // Dedicated ADetailer preserves the source resolution unless the user
+    // explicitly opts into resizing the entire source before detection.
+    val adetailerResizeInput: Boolean = false,
     // Family-specific runtime flags
     val flowShift: Float? = null,
     val diffusionFa: Boolean = false,

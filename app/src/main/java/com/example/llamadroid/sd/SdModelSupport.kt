@@ -110,7 +110,9 @@ data class SdModelFamilySpec(
     val supportsLoraApplyMode: Boolean = false,
     val supportsQwenImageZeroCondT: Boolean = false,
     val supportsChromaDisableDitMask: Boolean = false,
-    val supportsIpAdapter: Boolean = false
+    val supportsIpAdapter: Boolean = false,
+    /** Three-conditioning image CFG is an editing-model capability, not generic img2img. */
+    val supportsImgCfgScale: Boolean = false
 )
 
 fun String?.parseSdCompatProfiles(): Set<String> =
@@ -350,7 +352,8 @@ fun resolveSdFamilySpec(
         supportsDiffusionFa = true,
         supportsVaeConvDirect = true,
         supportsLoraApplyMode = true,
-        supportsIpAdapter = variant == "sd1" || variant == "sdxl"
+        supportsIpAdapter = variant == "sd1" || variant == "sdxl",
+        supportsImgCfgScale = variant in setOf("instruct_pix2pix", "instruct-pix2pix", "pix2pix")
     )
     SdModelFamily.SD3 -> SdModelFamilySpec(
         family = family,

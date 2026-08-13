@@ -576,7 +576,7 @@ class VideoGenerationService : Service() {
             getString(R.string.gen_status_calculating_eta)
         } else {
             getString(
-                if (snapshot.phase == SdProgressPhase.VAE) {
+                if (snapshot.phase.isVae) {
                     R.string.video_gen_status_vae_eta
                 } else {
                     R.string.video_gen_status_diffusion_eta

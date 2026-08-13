@@ -31,6 +31,7 @@ internal fun ImageGenInpaintOptionsCard(
     onInstallAutomaticModel: () -> Unit,
     strength: Float,
     onStrengthChange: (Float) -> Unit,
+    supportsImgCfgScale: Boolean,
     imgCfgScale: Float,
     onImgCfgScaleChange: (Float) -> Unit
 ) {
@@ -146,13 +147,21 @@ internal fun ImageGenInpaintOptionsCard(
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold
             )
-            SliderWithInput(
-                value = imgCfgScale,
-                onValueChange = onImgCfgScaleChange,
-                valueRange = 0f..20f,
-                label = stringResource(R.string.imagegen_inpaint_img_cfg),
-                decimalPlaces = 1
-            )
+            if (supportsImgCfgScale) {
+                SliderWithInput(
+                    value = imgCfgScale,
+                    onValueChange = onImgCfgScaleChange,
+                    valueRange = 0f..20f,
+                    label = stringResource(R.string.imagegen_inpaint_img_cfg),
+                    decimalPlaces = 1
+                )
+            } else {
+                Text(
+                    stringResource(R.string.imagegen_inpaint_img_cfg_unsupported),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -182,6 +191,10 @@ internal fun ImageGenADetailerOptionsCard(
     onPaddingChange: (Int) -> Unit,
     maxDetections: Int,
     onMaxDetectionsChange: (Int) -> Unit,
+    detailWidth: Int,
+    detailHeight: Int,
+    resizeInput: Boolean,
+    onResizeInputChange: (Boolean) -> Unit,
     advancedArgs: String,
     onAdvancedArgsChange: (String) -> Unit
 ) {
@@ -252,6 +265,27 @@ internal fun ImageGenADetailerOptionsCard(
             if (expertExpanded) {
                 SliderWithInput(value = confidence, onValueChange = onConfidenceChange, valueRange = 0f..1f, label = stringResource(R.string.imagegen_adetailer_confidence), decimalPlaces = 2)
                 SliderWithInput(value = denoising, onValueChange = onDenoisingChange, valueRange = 0f..1f, label = stringResource(R.string.imagegen_adetailer_denoising), decimalPlaces = 2)
+                if (inputMode == ADetailerInputMode.EXISTING_IMAGE) {
+                    Text(
+                        stringResource(R.string.imagegen_adetailer_crop_resolution, detailWidth, detailHeight),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.imagegen_adetailer_resize_source))
+                            Text(
+                                stringResource(R.string.imagegen_adetailer_resize_source_description),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(checked = resizeInput, onCheckedChange = onResizeInputChange)
+                    }
+                }
                 IntSliderWithInput(value = maskBlur, onValueChange = onMaskBlurChange, valueRange = 0..64, label = stringResource(R.string.imagegen_adetailer_mask_blur))
                 IntSliderWithInput(value = padding, onValueChange = onPaddingChange, valueRange = 0..256, label = stringResource(R.string.imagegen_adetailer_padding))
                 IntSliderWithInput(value = maxDetections, onValueChange = onMaxDetectionsChange, valueRange = 1..32, label = stringResource(R.string.imagegen_adetailer_max_detections))

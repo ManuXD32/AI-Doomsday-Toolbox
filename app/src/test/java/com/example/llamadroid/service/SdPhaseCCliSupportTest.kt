@@ -9,7 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 class SdPhaseCCliSupportTest {
-    @Test fun `inpaint emits source mask and image cfg flags`() {
+    @Test fun `sd1 inpaint emits source and mask without unsupported image cfg`() {
         val model = File.createTempFile("sd-v1-5", ".gguf")
         val source = File.createTempFile("source", ".png")
         val mask = File.createTempFile("mask", ".png")
@@ -28,9 +28,32 @@ class SdPhaseCCliSupportTest {
                 SdBinaryCapabilities.ALLOW_ALL
             )
             assertEquals(mask.absolutePath, args[args.indexOf("--mask") + 1])
-            assertEquals("1.5", args[args.indexOf("--img-cfg-scale") + 1])
+            assertFalse(args.contains("--img-cfg-scale"))
         } finally {
             model.delete(); source.delete(); mask.delete()
+        }
+    }
+
+    @Test fun `explicit editing model capability emits image cfg`() {
+        val model = File.createTempFile("instruct-pix2pix", ".gguf")
+        val source = File.createTempFile("source", ".png")
+        try {
+            val args = buildSdCommandArgs(
+                SDConfig(
+                    modelPath = model.absolutePath,
+                    modelFamily = "checkpoint",
+                    modelVariant = "instruct_pix2pix",
+                    prompt = "repair",
+                    outputPath = File(model.parentFile, "out.png").absolutePath,
+                    mode = SDMode.IMG2IMG,
+                    initImage = source.absolutePath,
+                    imgCfgScale = 1.5f
+                ),
+                SdBinaryCapabilities.ALLOW_ALL
+            )
+            assertEquals("1.5", args[args.indexOf("--img-cfg-scale") + 1])
+        } finally {
+            model.delete(); source.delete()
         }
     }
 
@@ -77,8 +100,13 @@ class SdPhaseCCliSupportTest {
                     prompt = "portrait",
                     outputPath = File(model.parentFile, "out.png").absolutePath,
                     initImage = source.absolutePath,
-                    strength = 0.35f,
-                    adetailer = SdADetailerConfig(modelPath = detector.absolutePath)
+                    width = 512,
+                    height = 512,
+                    strength = 0.75f,
+                    adetailer = SdADetailerConfig(
+                        modelPath = detector.absolutePath,
+                        denoisingStrength = 0.35f
+                    )
                 ),
                 SdBinaryCapabilities.ALLOW_ALL
             )
@@ -86,6 +114,38 @@ class SdPhaseCCliSupportTest {
             assertEquals(detector.absolutePath, args[args.indexOf("--ad-model") + 1])
             assertEquals(source.absolutePath, args[args.indexOf("-i") + 1])
             assertEquals("0.35", args[args.indexOf("--strength") + 1])
+            assertFalse(args.contains("-W"))
+            assertFalse(args.contains("-H"))
+            val extraArgs = args[args.indexOf("--extra-ad-args") + 1]
+            assertTrue(extraArgs.contains("inpaint_width=512"))
+            assertTrue(extraArgs.contains("inpaint_height=512"))
+            assertFalse(extraArgs.contains("denoising_strength"))
+        } finally {
+            model.delete(); detector.delete(); source.delete()
+        }
+    }
+
+    @Test fun `dedicated ADetailer emits global size only for explicit source resize`() {
+        val model = File.createTempFile("sd-v1-5", ".gguf")
+        val detector = compatibleDetectorFile()
+        val source = File.createTempFile("source", ".png")
+        try {
+            val args = buildSdCommandArgs(
+                SDConfig(
+                    mode = SDMode.ADETAILER,
+                    modelPath = model.absolutePath,
+                    prompt = "portrait",
+                    outputPath = File(model.parentFile, "out.png").absolutePath,
+                    initImage = source.absolutePath,
+                    width = 768,
+                    height = 512,
+                    adetailerResizeInput = true,
+                    adetailer = SdADetailerConfig(modelPath = detector.absolutePath)
+                ),
+                SdBinaryCapabilities.ALLOW_ALL
+            )
+            assertEquals("768", args[args.indexOf("-W") + 1])
+            assertEquals("512", args[args.indexOf("-H") + 1])
         } finally {
             model.delete(); detector.delete(); source.delete()
         }

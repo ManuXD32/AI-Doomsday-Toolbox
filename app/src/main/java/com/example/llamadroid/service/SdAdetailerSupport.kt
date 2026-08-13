@@ -140,11 +140,16 @@ internal fun parseSdADetailerAdvancedArgs(value: String): Map<String, String> {
     return result
 }
 
-fun serializeSdADetailerExtraArgs(config: SdADetailerConfig): String {
+fun serializeSdADetailerExtraArgs(
+    config: SdADetailerConfig,
+    includeDenoisingStrength: Boolean = true
+): String {
     validateSdADetailerConfig(config)
     val values = sortedMapOf<String, String>()
     values["confidence"] = formatSdAdFloat(config.confidence)
-    values["denoising_strength"] = formatSdAdFloat(config.denoisingStrength)
+    if (includeDenoisingStrength) {
+        values["denoising_strength"] = formatSdAdFloat(config.denoisingStrength)
+    }
     values["mask_blur"] = config.maskBlur.toString()
     values["inpaint_padding"] = config.padding.toString()
     values["max_detections"] = config.maxDetections.toString()

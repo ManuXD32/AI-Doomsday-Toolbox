@@ -288,6 +288,13 @@
     <string name="gen_status_progress_with_eta">%1$d%% • ETA %2$s</string>
     <string name="gen_status_diffusion_progress_with_eta">%1$d%% • Diffusion ETA %2$s</string>
     <string name="gen_status_vae_progress_with_eta">%1$d%% • VAE ETA %2$s</string>
+    <string name="gen_status_preparing">Preparing the native model…</string>
+    <string name="gen_status_vae_encoding">Encoding the source image (VAE)…</string>
+    <string name="gen_status_conditioning">Preparing prompt conditioning…</string>
+    <string name="gen_status_diffusion_progress">Diffusing image… %1$d%% • calculating ETA</string>
+    <string name="gen_status_vae_decoding">Decoding the image (VAE)…</string>
+    <string name="gen_status_compositing">Compositing repaired regions…</string>
+    <string name="gen_status_saving">Saving the result…</string>
     <string name="gen_eta_seconds_short">%1$ds</string>
     <string name="gen_eta_minutes_seconds_short">%1$dm %2$ds</string>
     <string name="gen_eta_hours_minutes_short">%1$dh %2$dm</string>
@@ -8611,6 +8618,7 @@
     <string name="imagegen_inpaint_full_mask_confirm">Use full mask</string>
     <string name="imagegen_inpaint_denoising">Denoising strength</string>
     <string name="imagegen_inpaint_img_cfg">Image CFG scale</string>
+    <string name="imagegen_inpaint_img_cfg_unsupported">Image CFG is not used by this model family, so the unsupported native option will be omitted.</string>
     <string name="imagegen_adetailer_title">ADetailer</string>
     <string name="imagegen_adetailer_description">Runs detector-guided detail repair in the same native generation process. It can increase runtime.</string>
     <string name="imagegen_adetailer_step_input">1. Choose image workflow</string>
@@ -8630,6 +8638,9 @@
     <string name="imagegen_adetailer_negative_prompt">Detail negative prompt</string>
     <string name="imagegen_adetailer_confidence">Confidence</string>
     <string name="imagegen_adetailer_denoising">Detail denoising</string>
+    <string name="imagegen_adetailer_crop_resolution">Detected regions are repaired at %1$d × %2$d. The source keeps its original resolution.</string>
+    <string name="imagegen_adetailer_resize_source">Resize the whole source</string>
+    <string name="imagegen_adetailer_resize_source_description">When enabled, the source and final image use the selected width and height. Leave off to preserve the original pixels.</string>
     <string name="imagegen_adetailer_mask_blur">Mask blur</string>
     <string name="imagegen_adetailer_padding">Padding</string>
     <string name="imagegen_adetailer_max_detections">Maximum detections</string>

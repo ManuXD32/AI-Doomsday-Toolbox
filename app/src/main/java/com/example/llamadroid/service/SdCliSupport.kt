@@ -154,6 +154,17 @@ fun buildSdCommandArgs(
 
     val (family, variant) = inferSdFamilyForConfig(config)
     val spec = resolveSdFamilySpec(family, variant)
+    val adetailerConfig = config.adetailer?.let { raw ->
+        val configured = if (config.mode == SDMode.ADETAILER) {
+            raw.copy(
+                inpaintWidth = raw.inpaintWidth ?: config.width,
+                inpaintHeight = raw.inpaintHeight ?: config.height
+            )
+        } else {
+            raw
+        }
+        validateSdADetailerConfig(configured)
+    }
     val missingComponents = spec.requiredRoles.filter { role ->
         when (role) {
             SdComponentRole.VAE -> config.vaePath.isNullOrBlank()
@@ -244,12 +255,11 @@ fun buildSdCommandArgs(
         requireFlag("--mask")
         args.addAll(listOf("--mask", it))
     }
-    config.imgCfgScale?.let {
+    config.imgCfgScale?.takeIf { spec.supportsImgCfgScale }?.let {
         requireFlag("--img-cfg-scale")
         args.addAll(listOf("--img-cfg-scale", it.toString()))
     }
-    config.adetailer?.let { raw ->
-        val ad = validateSdADetailerConfig(raw)
+    adetailerConfig?.let { ad ->
         requireFlag("--ad-model")
         requireFlag("--ad-prompt")
         requireFlag("--ad-negative-prompt")
@@ -257,10 +267,20 @@ fun buildSdCommandArgs(
         args.addAll(listOf("--ad-model", ad.modelPath))
         if (ad.prompt.isNotBlank()) args.addAll(listOf("--ad-prompt", ad.prompt))
         if (ad.negativePrompt.isNotBlank()) args.addAll(listOf("--ad-negative-prompt", ad.negativePrompt))
-        args.addAll(listOf("--extra-ad-args", serializeSdADetailerExtraArgs(ad)))
+        args.addAll(
+            listOf(
+                "--extra-ad-args",
+                serializeSdADetailerExtraArgs(
+                    config = ad,
+                    includeDenoisingStrength = config.mode != SDMode.ADETAILER
+                )
+            )
+        )
     }
-    args.addAll(listOf("-W", config.width.toString()))
-    args.addAll(listOf("-H", config.height.toString()))
+    if (config.mode != SDMode.ADETAILER || config.adetailerResizeInput) {
+        args.addAll(listOf("-W", config.width.toString()))
+        args.addAll(listOf("-H", config.height.toString()))
+    }
     args.addAll(listOf("--steps", config.steps.toString()))
     args.addAll(listOf("--cfg-scale", config.cfgScale.toString()))
     args.addAll(listOf("--sampling-method", config.samplingMethod.cliName))
@@ -351,7 +371,12 @@ fun buildSdCommandArgs(
         when (spec.img2imgInputMode) {
             SdImageInputMode.INIT_IMAGE -> {
                 args.addAll(listOf("-i", input))
-                args.addAll(listOf("--strength", config.strength.toString()))
+                val effectiveStrength = if (config.mode == SDMode.ADETAILER) {
+                    adetailerConfig?.denoisingStrength ?: config.strength
+                } else {
+                    config.strength
+                }
+                args.addAll(listOf("--strength", effectiveStrength.toString()))
             }
             SdImageInputMode.REFERENCE_IMAGE -> {
                 requireFlag("-r")

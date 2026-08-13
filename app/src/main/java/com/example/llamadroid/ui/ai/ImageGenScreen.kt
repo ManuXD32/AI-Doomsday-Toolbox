@@ -300,6 +300,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var adetailerMaskBlur by remember { mutableIntStateOf(restoredDraft?.optInt("adMaskBlur", 4) ?: 4) }
     var adetailerPadding by remember { mutableIntStateOf(restoredDraft?.optInt("adPadding", 32) ?: 32) }
     var adetailerMaxDetections by remember { mutableIntStateOf(restoredDraft?.optInt("adMaxDetections", 8) ?: 8) }
+    var adetailerResizeInput by remember {
+        mutableStateOf(restoredDraft?.optBoolean("adResizeInput", false) ?: false)
+    }
     var adetailerAdvancedArgs by remember { mutableStateOf(restoredDraft?.optString("adAdvanced").orEmpty()) }
 
     // Quantization type for --type
@@ -758,7 +761,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 put("inpaintMask", inpaintMaskPath); put("inpaintTransform", inpaintCanvasTransform.name); put("inpaintImgCfg", inpaintImgCfgScale); put("inpaintAutoModel", selectedAutoMaskModelPath)
                 put("adModel", adetailerModelPath); put("adInputMode", adetailerInputMode.name); put("adPrompt", adetailerPrompt); put("adNegativePrompt", adetailerNegativePrompt)
                 put("adConfidence", adetailerConfidence); put("adDenoising", adetailerDenoising); put("adMaskBlur", adetailerMaskBlur)
-                put("adPadding", adetailerPadding); put("adMaxDetections", adetailerMaxDetections); put("adAdvanced", adetailerAdvancedArgs)
+                put("adPadding", adetailerPadding); put("adMaxDetections", adetailerMaxDetections); put("adResizeInput", adetailerResizeInput); put("adAdvanced", adetailerAdvancedArgs)
                 put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
                 putSdIpAdapterDraft(currentIpAdapterDraftState())
@@ -1213,7 +1216,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     initImage = effectiveInputImagePath,
                     maskImage = if (selectedMode == IMAGE_GEN_MODE_INPAINT) inpaintMaskPath else null,
                     strength = strength,
-                    imgCfgScale = if (selectedMode == IMAGE_GEN_MODE_INPAINT) inpaintImgCfgScale else null,
+                    imgCfgScale = if (
+                        selectedMode == IMAGE_GEN_MODE_INPAINT &&
+                        selectedFamilySpec?.supportsImgCfgScale == true
+                    ) inpaintImgCfgScale else null,
                     upscaleModel = null,
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
@@ -1251,6 +1257,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         maxDetections = adetailerMaxDetections,
                         advancedArgs = adetailerAdvancedArgs
                     ) else null,
+                    adetailerResizeInput = adetailerResizeInput,
                     flowShift = flowShiftText.toFloatOrNull(),
                     diffusionFa = diffusionFaEnabled,
                     diffusionConvDirect = diffusionConvDirectEnabled,
@@ -1612,6 +1619,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 onInstallAutomaticModel = { navController.navigate(Screen.OnnxModels.route) },
                 strength = strength,
                 onStrengthChange = { strength = it },
+                supportsImgCfgScale = selectedFamilySpec?.supportsImgCfgScale == true,
                 imgCfgScale = inpaintImgCfgScale,
                 onImgCfgScaleChange = { inpaintImgCfgScale = it }
             )
@@ -1640,6 +1648,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 onPaddingChange = { adetailerPadding = it },
                 maxDetections = adetailerMaxDetections,
                 onMaxDetectionsChange = { adetailerMaxDetections = it },
+                detailWidth = width,
+                detailHeight = height,
+                resizeInput = adetailerResizeInput,
+                onResizeInputChange = { adetailerResizeInput = it },
                 advancedArgs = adetailerAdvancedArgs,
                 onAdvancedArgsChange = { adetailerAdvancedArgs = it }
             )

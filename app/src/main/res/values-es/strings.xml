@@ -301,6 +301,13 @@
     <string name="gen_status_progress_with_eta">%1$d%% • ETA %2$s</string>
     <string name="gen_status_diffusion_progress_with_eta">%1$d%% • ETA de difusion %2$s</string>
     <string name="gen_status_vae_progress_with_eta">%1$d%% • ETA de VAE %2$s</string>
+    <string name="gen_status_preparing">Preparando el modelo nativo…</string>
+    <string name="gen_status_vae_encoding">Codificando la imagen de origen (VAE)…</string>
+    <string name="gen_status_conditioning">Preparando el condicionamiento del prompt…</string>
+    <string name="gen_status_diffusion_progress">Difundiendo la imagen… %1$d%% • calculando ETA</string>
+    <string name="gen_status_vae_decoding">Decodificando la imagen (VAE)…</string>
+    <string name="gen_status_compositing">Componiendo las regiones reparadas…</string>
+    <string name="gen_status_saving">Guardando el resultado…</string>
     <string name="gen_eta_seconds_short">%1$ds</string>
     <string name="gen_eta_minutes_seconds_short">%1$dm %2$ds</string>
     <string name="gen_eta_hours_minutes_short">%1$dh %2$dm</string>
@@ -8568,6 +8575,7 @@
     <string name="imagegen_inpaint_full_mask_confirm">Usar máscara completa</string>
     <string name="imagegen_inpaint_denoising">Fuerza de eliminación de ruido</string>
     <string name="imagegen_inpaint_img_cfg">Escala CFG de imagen</string>
+    <string name="imagegen_inpaint_img_cfg_unsupported">Esta familia de modelos no usa CFG de imagen, así que se omitirá la opción nativa incompatible.</string>
     <string name="imagegen_adetailer_title">ADetailer</string>
     <string name="imagegen_adetailer_description">Ejecuta una reparación guiada por detector dentro del mismo proceso nativo. Puede aumentar el tiempo de ejecución.</string>
     <string name="imagegen_adetailer_step_input">1. Elige el flujo de imagen</string>
@@ -8587,6 +8595,9 @@
     <string name="imagegen_adetailer_negative_prompt">Prompt negativo de detalle</string>
     <string name="imagegen_adetailer_confidence">Confianza</string>
     <string name="imagegen_adetailer_denoising">Eliminación de ruido del detalle</string>
+    <string name="imagegen_adetailer_crop_resolution">Las regiones detectadas se reparan a %1$d × %2$d. La fuente conserva su resolución original.</string>
+    <string name="imagegen_adetailer_resize_source">Redimensionar toda la fuente</string>
+    <string name="imagegen_adetailer_resize_source_description">Al activarlo, la fuente y la imagen final usan el ancho y alto seleccionados. Déjalo desactivado para conservar los píxeles originales.</string>
     <string name="imagegen_adetailer_mask_blur">Desenfoque de máscara</string>
     <string name="imagegen_adetailer_padding">Margen</string>
     <string name="imagegen_adetailer_max_detections">Máximo de detecciones</string>
