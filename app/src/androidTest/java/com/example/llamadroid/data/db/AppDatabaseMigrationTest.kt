@@ -2939,7 +2939,38 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    /**
+     * Walks the entire registered migration chain in one run.
+     *
+     * The per-migration tests above each validate one hop in isolation, which
+     * cannot catch ordering mistakes, a hop missing from
+     * [Migrations.ALL_MIGRATIONS], or a migration that only fails once an earlier
+     * one has already reshaped the table. This is the path a real user upgrading
+     * from an old install actually takes, and at 80+ hops it is the failure mode
+     * with no hotfix: a broken chain corrupts local databases on upgrade.
+     *
+     * Starts at 28 because that is the oldest schema JSON exported under
+     * `app/schemas`, so it is the oldest version [MigrationTestHelper] can build.
+     */
+    @Test
+    fun migrateFullChain_fromOldestExportedSchemaToLatest() {
+        helper.createDatabase(TEST_DB, OLDEST_EXPORTED_VERSION).close()
+
+        helper.runMigrationsAndValidate(
+            TEST_DB,
+            LATEST_VERSION,
+            true,
+            *Migrations.ALL_MIGRATIONS
+        ).close()
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
+
+        /** Oldest schema JSON present in `app/schemas`. */
+        private const val OLDEST_EXPORTED_VERSION = 28
+
+        /** Keep in step with the `version` in [AppDatabase]'s `@Database`. */
+        private const val LATEST_VERSION = 109
     }
 }

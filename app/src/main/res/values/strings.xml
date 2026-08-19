@@ -7974,6 +7974,7 @@
     <string name="wear_server_confirm_title">Start llama.cpp from watch?</string>
     <string name="wear_server_confirm_message">Android needs phone confirmation before this background server can start.</string>
     <string name="wear_server_confirm_action">Start server</string>
+    <string name="wear_server_confirm_expired">This confirmation is no longer valid. Start the server again from your watch.</string>
     <string name="wear_chat_new_title">Watch chat</string>
     <string name="wear_quick_chat_title">Wear Quick Chat</string>
     <string name="wear_quick_chat_settings">Wear Quick Chat settings</string>

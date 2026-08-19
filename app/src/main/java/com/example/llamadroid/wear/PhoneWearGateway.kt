@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.R
@@ -101,6 +102,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
@@ -304,9 +306,36 @@ object PhoneWearGateway {
         }
     }
 
-    suspend fun confirmServerStart(context: Context, requestId: String): ServerCommandResult {
+    /**
+     * Request ids we ourselves put in front of the user via the confirmation
+     * notification, and which are therefore allowed to start the server.
+     *
+     * [WearServerStartConfirmationActivity] is exported and BROWSABLE, because the
+     * watch reaches it through `RemoteActivityHelper.startRemoteActivity`. That
+     * also means any app, or any web page, can launch it with an arbitrary
+     * `requestId`. Only ids minted by this process for a genuinely blocked start
+     * may proceed; anything else is rejected without touching the server.
+     */
+    private val pendingServerConfirmations = WearConfirmationRegistry()
+
+    internal fun markPendingServerConfirmation(requestId: String) {
+        pendingServerConfirmations.mark(requestId)
+    }
+
+    /**
+     * Returns null when [requestId] is not a live confirmation we are waiting on,
+     * so the caller can report it instead of silently starting a network-facing
+     * server on behalf of an untrusted launcher.
+     */
+    suspend fun confirmServerStart(context: Context, requestId: String): ServerCommandResult? {
+        // Validate before start(context): an unrecognised id must not even spin up
+        // the gateway.
+        if (!pendingServerConfirmations.consume(requestId)) {
+            Log.w("ADT-WEAR-DISCOVERY", "rejected server-start confirmation for unknown request id")
+            return null
+        }
         start(context)
-        return serverController.start(requestId.ifBlank { UUID.randomUUID().toString() })
+        return serverController.confirmPendingStart(requestId)
     }
 
     private fun advertiseCapability() {
@@ -2120,6 +2149,20 @@ class LlamaServerController(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ServerCommandResult>?): Boolean = size > 32
     })
 
+    /**
+     * Retry a start that Android previously refused, now that the user has
+     * confirmed it in the foreground.
+     *
+     * The eviction matters: [start] short-circuits on [requestCache], and the
+     * blocked attempt already cached a `PHONE_CONFIRMATION_REQUIRED` result under
+     * this same id. Without dropping that entry the confirmation replays the
+     * cached refusal and the server is never actually started.
+     */
+    suspend fun confirmPendingStart(requestId: String): ServerCommandResult {
+        requestCache.remove(requestId)
+        return start(requestId)
+    }
+
     suspend fun start(requestId: String): ServerCommandResult = mutex.withLock {
         requestCache[requestId]?.let { return@withLock it }
         val current = LlamaService.state.value
@@ -2215,6 +2258,9 @@ class LlamaServerController(
     private fun maybePostConfirmationNotification(requestId: String, error: Throwable): String? {
         val blocked = if (Build.VERSION.SDK_INT >= 31) error is android.app.ForegroundServiceStartNotAllowedException else false
         if (!blocked && error !is IllegalStateException) return null
+        // Only ids registered here may later start the server; see
+        // PhoneWearGateway.confirmServerStart.
+        PhoneWearGateway.markPendingServerConfirmation(requestId)
         val uri = "adt://wear-confirm/server/start?requestId=$requestId"
         val manager = appContext.getSystemService(NotificationManager::class.java)
         val channelId = "wear_server_control"
@@ -2250,16 +2296,30 @@ class LlamaServerController(
 class WearServerStartConfirmationActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // This Activity is exported and BROWSABLE so the watch can reach it via
+        // RemoteActivityHelper, which means an arbitrary app or web page can also
+        // launch it. Do not start the gateway here, and do not invent a request
+        // id when none was supplied: an id we did not mint must not be treated as
+        // a pending confirmation. Validation itself lives in
+        // PhoneWearGateway.confirmServerStart.
         val requestId = intent.getStringExtra("request_id")
             ?: intent.data?.getQueryParameter("requestId")
-            ?: UUID.randomUUID().toString()
-        PhoneWearGateway.start(applicationContext)
+            ?: ""
         AlertDialog.Builder(this)
             .setTitle(R.string.wear_server_confirm_title)
             .setMessage(R.string.wear_server_confirm_message)
             .setPositiveButton(R.string.wear_server_confirm_action) { _, _ ->
                 CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                    PhoneWearGateway.confirmServerStart(applicationContext, requestId)
+                    val result = PhoneWearGateway.confirmServerStart(applicationContext, requestId)
+                    if (result == null) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                applicationContext,
+                                R.string.wear_server_confirm_expired,
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
                     finish()
                 }
             }

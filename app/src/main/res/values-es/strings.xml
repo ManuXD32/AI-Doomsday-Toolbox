@@ -7971,6 +7971,7 @@
     <string name="wear_server_confirm_title">¿Iniciar llama.cpp desde el reloj?</string>
     <string name="wear_server_confirm_message">Android necesita confirmacion en el telefono antes de iniciar este servidor en segundo plano.</string>
     <string name="wear_server_confirm_action">Iniciar servidor</string>
+    <string name="wear_server_confirm_expired">Esta confirmacion ya no es valida. Vuelve a iniciar el servidor desde el reloj.</string>
     <string name="wear_chat_new_title">Chat del reloj</string>
     <string name="wear_quick_chat_title">Chat rápido del reloj</string>
     <string name="wear_quick_chat_settings">Ajustes de Chat rápido de Wear</string>

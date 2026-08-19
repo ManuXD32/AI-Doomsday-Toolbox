@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, Dev]
+  pull_request:
+    branches: [master, Dev]
+
+# A superseded push on the same branch has nothing useful left to say.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Compile and unit test
+    runs-on: ubuntu-latest
+    # Cold Kotlin compilation of :app measures ~11 min on a stock runner, and
+    # :app:testDebugUnitTest measured 20m33s locally (1247 tests). With a 1.62 GB
+    # checkout on top, and gradle.properties pinning workers.max=1 /
+    # parallel=false, budget generously so a slow cold run isn't a false failure.
+    timeout-minutes: 75
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        # Default fetch-depth 1 is deliberate: this repo tracks ~1.62 GB of
+        # native .so and model payloads, so full history would be far heavier.
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      # Deliberately NOT assembleDebug: that triggers externalNativeBuild
+      # (NDK 29.0.14206865 + CMake) and native packaging, which is slow and
+      # fragile in CI while adding no signal Kotlin compilation doesn't already
+      # give. The CodeQL job proves :app:compileDebugKotlin works on a stock
+      # runner with no NDK setup step.
+      - name: Compile Kotlin (app + wear)
+        run: >-
+          ./gradlew --no-daemon --console=plain --stacktrace
+          :app:compileDebugKotlin :wear:compileDebugKotlin
+
+      - name: Unit tests
+        run: >-
+          ./gradlew --no-daemon --console=plain --stacktrace
+          :app:testDebugUnitTest :wear-protocol:test
+
+      # Instrumented tests (app/src/androidTest) are intentionally not run here.
+      # They need an emulator and include the Room migration suites; wiring that
+      # up is tracked separately as Phase 2 item 2.2.
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            app/build/reports/tests/
+            app/build/test-results/
+            wear-protocol/build/reports/tests/
+            wear-protocol/build/test-results/
+          retention-days: 14
+          if-no-files-found: ignore
