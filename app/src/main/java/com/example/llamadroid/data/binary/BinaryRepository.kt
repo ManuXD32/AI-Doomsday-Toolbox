@@ -665,6 +665,14 @@ class BinaryRepository(private val context: Context) {
         return getTieredBinary(name, getTier())
     }
 
+    /**
+     * Resolve a binary using a launch-profile selector rather than the current global setting.
+     * The selector is intentionally explicit so managed server sessions can remain isolated from
+     * changes made in General settings after a profile was saved.
+     */
+    fun getTieredBinaryForSelection(name: String, nativeBinarySelection: String): File? =
+        getSelectedNativeBinary(name, nativeBinarySelection)
+
     fun getCpuTieredBinary(name: String): File? {
         val deviceTier = getTier()
         val tiersToTry = llamaAutomaticTiers(deviceTier, name)
@@ -724,7 +732,8 @@ class BinaryRepository(private val context: Context) {
                     name = name,
                     selectedTier = deviceTier,
                     tiersToTry = fallbackTiers,
-                    allowAccelerator = false
+                    allowAccelerator = false,
+                    nativeBinarySelectionOverride = normalizedSelection
                 )
             }
             logLlamaResolutionIfNeeded(name, normalizedSelection, listOf(exactTier))
@@ -732,7 +741,8 @@ class BinaryRepository(private val context: Context) {
                 name = name,
                 selectedTier = exactTier,
                 tiersToTry = listOf(exactTier),
-                allowAccelerator = false
+                allowAccelerator = false,
+                nativeBinarySelectionOverride = normalizedSelection
             )
         }
 
@@ -751,7 +761,8 @@ class BinaryRepository(private val context: Context) {
                 name = name,
                 selectedTier = deviceTier,
                 tiersToTry = tiersToTry,
-                allowAccelerator = false
+                allowAccelerator = false,
+                nativeBinarySelectionOverride = normalizedSelection
             )
         }
 
@@ -759,7 +770,8 @@ class BinaryRepository(private val context: Context) {
             name = name,
             selectedTier = deviceTier,
             tiersToTry = tiersForSelection(deviceTier),
-            allowAccelerator = true
+            allowAccelerator = true,
+            nativeBinarySelectionOverride = normalizedSelection
         )
     }
 
@@ -773,14 +785,17 @@ class BinaryRepository(private val context: Context) {
         name: String,
         selectedTier: String,
         tiersToTry: List<String>,
-        allowAccelerator: Boolean = true
+        allowAccelerator: Boolean = true,
+        nativeBinarySelectionOverride: String? = null
     ): File? {
         if (!DynamicFeatureManager.isNativeLibsReady(context)) {
             Log.w(TAG, "Native libs modules not fully ready yet; probing available paths for $name anyway")
         }
         
         val nativeLibDirs = nativeLibraryCandidateDirs()
-        val nativeBinarySelection = nativeBinarySelectionFor(name) ?: SettingsRepository.NATIVE_BINARY_AUTO
+        val nativeBinarySelection = nativeBinarySelectionOverride
+            ?: nativeBinarySelectionFor(name)
+            ?: SettingsRepository.NATIVE_BINARY_AUTO
         val acceleratorNames = if (allowAccelerator && DeviceAcceleration.isSnapdragonCompatible()) {
             acceleratorLibNames(name, nativeBinarySelection)
         } else {
@@ -966,8 +981,12 @@ class BinaryRepository(private val context: Context) {
     /**
      * Get the llama-server executable (tiered).
      */
-    suspend fun getExecutable(): File? = withContext(Dispatchers.IO) {
-        return@withContext getTieredBinary("llama_server")
+    suspend fun getExecutable(nativeBinarySelection: String? = null): File? = withContext(Dispatchers.IO) {
+        return@withContext if (nativeBinarySelection == null) {
+            getTieredBinary("llama_server")
+        } else {
+            getTieredBinaryForSelection("llama_server", nativeBinarySelection)
+        }
     }
 
     suspend fun getCpuExecutable(): File? = withContext(Dispatchers.IO) {

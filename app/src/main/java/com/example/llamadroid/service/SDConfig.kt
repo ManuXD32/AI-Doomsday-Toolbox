@@ -1,6 +1,7 @@
 package com.example.llamadroid.service
 
 import android.os.Parcelable
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdLoraApplyMode
 import kotlinx.parcelize.Parcelize
 
@@ -69,6 +70,8 @@ data class SDConfig(
     val loraPath: String? = null,
     val loraStrength: Float = 1.0f,
     val loraApplyMode: SdLoraApplyMode? = null,
+    /** Ordered multi-LoRA list. Empty means use the legacy single-LoRA fields. */
+    val loras: List<SdLoraSpec> = emptyList(),
     // Textual inversion embedding (optional). stable-diffusion.cpp loads all
     // embeddings from its parent directory and resolves this file's stem as a
     // prompt token.
@@ -100,8 +103,17 @@ data class SDConfig(
     val operation: String? = null,
     val sourceTransform: String? = null,
     val maskProvenance: String? = null,
-    val maskPolarity: String? = null
+    val maskPolarity: String? = null,
+    // Curated workflow provenance is copied into the sidecar metadata. It is
+    // nullable so older saved commands and non-curated generations remain valid.
+    val workflowPresetId: String? = null,
+    val workflowBundleId: String? = null,
+    val workflowRevision: String? = null
 ) : Parcelable
+
+/** Resolve old saved commands/drafts into the ordered representation. */
+fun SDConfig.resolvedLoras(): List<SdLoraSpec> =
+    if (loras.isNotEmpty()) loras else SdLoraSpec.fromLegacy(loraPath, loraStrength)
 
 @Parcelize
 data class SDWorkflowConfig(

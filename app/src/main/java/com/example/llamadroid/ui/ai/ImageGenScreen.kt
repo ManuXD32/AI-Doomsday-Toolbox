@@ -50,6 +50,16 @@ import com.example.llamadroid.sd.SdCacheArchitecture
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdImageInputMode
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
+import com.example.llamadroid.data.model.SdWorkflowOperation
+import com.example.llamadroid.data.model.SdWorkflowPreset
+import com.example.llamadroid.data.model.SdWorkflowPresetCatalog
+import com.example.llamadroid.data.model.SdWorkflowSelection
+import com.example.llamadroid.data.model.installedSdCuratedModel
+import com.example.llamadroid.data.model.evaluateSdWorkflowGate
+import com.example.llamadroid.data.model.verifySdCuratedFilePayloadCached
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
@@ -157,6 +167,20 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 ?: IMAGE_GEN_MODE_TXT2IMG
         )
     }
+    var selectedWorkflowPresetId by remember { mutableStateOf(restoredDraft?.optString("workflowPreset").orEmpty().ifBlank { null }) }
+    var workflowHashVerificationFinished by remember { mutableStateOf(false) }
+
+    // Capability probing runs off the UI thread so the workflow gate can use the
+    // actual installed binary without making the picker or Generate button stall.
+    var workflowBinaryCapabilities by remember { mutableStateOf<SdBinaryCapabilities?>(null) }
+    LaunchedEffect(selectedSdNativeBinary) {
+        workflowBinaryCapabilities = null
+        workflowBinaryCapabilities = withContext(Dispatchers.IO) {
+            binaryRepo.getSdBinary()?.let { binary ->
+                probeSdBinaryCapabilities(context, binary, binaryRepo)
+            }
+        }
+    }
 
     // Combined model list for selection (checkpoints + FLUX diffusion)
     val allGenerationModels = (sdCheckpoints + fluxDiffusionModels)
@@ -211,6 +235,15 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var selectedLoraPath by remember { mutableStateOf(restoredDraft?.optString("lora").orEmpty().ifBlank { null }) }
     var loraStrength by remember { mutableFloatStateOf((restoredDraft?.optDouble("loraStrength", 1.0) ?: 1.0).toFloat()) }
     var selectedLoraApplyMode by remember { mutableStateOf(restoredDraft?.optString("loraApply").orEmpty().let { stored -> SdLoraApplyMode.entries.firstOrNull { it.cliName == stored } }) }
+    val restoredLoraStack = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("loras")?.toSdLoraSpecs().orEmpty().ifEmpty {
+            SdLoraSpec.fromLegacy(
+                restoredDraft?.optString("lora").orEmpty().ifBlank { null },
+                (restoredDraft?.optDouble("loraStrength", 1.0) ?: 1.0).toFloat()
+            )
+        }
+    }
+    var loraStack by remember(restoredDraft) { mutableStateOf(restoredLoraStack) }
     var textualInversionEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("textualEnabled", false) ?: false) }
     var selectedTextualInversionPath by remember {
         mutableStateOf(restoredDraft?.optString("textual").orEmpty().ifBlank { null })
@@ -295,6 +328,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
     var adetailerPrompt by remember { mutableStateOf(restoredDraft?.optString("adPrompt").orEmpty()) }
     var adetailerNegativePrompt by remember { mutableStateOf(restoredDraft?.optString("adNegativePrompt").orEmpty()) }
+    val restoredAdetailerLoraStack = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("adLoras")?.toSdLoraSpecs().orEmpty()
+    }
+    var adetailerLoraStack by remember(restoredDraft) { mutableStateOf(restoredAdetailerLoraStack) }
     var adetailerConfidence by remember { mutableFloatStateOf((restoredDraft?.optDouble("adConfidence", 0.30) ?: 0.30).toFloat()) }
     var adetailerDenoising by remember { mutableFloatStateOf((restoredDraft?.optDouble("adDenoising", 0.40) ?: 0.40).toFloat()) }
     var adetailerMaskBlur by remember { mutableIntStateOf(restoredDraft?.optInt("adMaskBlur", 4) ?: 4) }
@@ -304,6 +341,57 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         mutableStateOf(restoredDraft?.optBoolean("adResizeInput", false) ?: false)
     }
     var adetailerAdvancedArgs by remember { mutableStateOf(restoredDraft?.optString("adAdvanced").orEmpty()) }
+
+    val workflowInstalledModels = allGenerationModels + vaeModels + compatibleAdetailerModels
+    val workflowInstalledModelKey = remember(workflowInstalledModels) {
+        workflowInstalledModels.joinToString("|") { model ->
+            "${model.path}:${model.sizeBytes}:${File(model.path).lastModified()}"
+        }
+    }
+    LaunchedEffect(selectedWorkflowPresetId, workflowInstalledModelKey) {
+        workflowHashVerificationFinished = false
+        val preset = selectedWorkflowPresetId?.let(SdWorkflowPresetCatalog::byId)
+        if (preset != null) {
+            withContext(Dispatchers.IO) {
+                preset.files.forEach { file ->
+                    file.installedSdCuratedModel(preset.bundle, workflowInstalledModels)
+                        ?.let { model ->
+                            runCatching {
+                                verifySdCuratedFilePayloadCached(file, File(model.path))
+                            }
+                        }
+                }
+            }
+        }
+        workflowHashVerificationFinished = true
+    }
+
+    fun applyWorkflowPreset(preset: SdWorkflowPreset) {
+        selectedWorkflowPresetId = preset.id
+        val installedModels = allGenerationModels + vaeModels + compatibleAdetailerModels
+        val installedBase = preset.files.firstOrNull {
+            it.modelType == ModelType.SD_CHECKPOINT || it.modelType == ModelType.SD_DIFFUSION
+        }?.installedSdCuratedModel(preset.bundle, installedModels)
+        val installedDetector = preset.files.firstOrNull { it.modelType == ModelType.SD_ADETAILER }
+            ?.installedSdCuratedModel(preset.bundle, installedModels)
+        val installedVae = preset.files.firstOrNull { it.modelType == ModelType.SD_VAE }
+            ?.installedSdCuratedModel(preset.bundle, installedModels)
+        installedBase?.let {
+            selectedGenerationModelPath = it.path
+        }
+        installedDetector?.let {
+            adetailerModelPath = it.path
+        }
+        installedVae?.let {
+            selectedVaePath = it.path
+        }
+        selectedMode = when (preset.operation) {
+            SdWorkflowOperation.PRECISION_INPAINTING -> IMAGE_GEN_MODE_INPAINT
+            else -> IMAGE_GEN_MODE_ADETAILER
+        }
+        adetailerMaxDetections = preset.defaultMaxDetections
+        adetailerAdvancedArgs = preset.requiredAdvancedArgs
+    }
 
     // Quantization type for --type
     var selectedQuantType by remember { mutableStateOf(restoredDraft?.optString("quant").orEmpty()) }
@@ -751,15 +839,15 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     DisposableEffect(Unit) {
         onDispose {
             val imageDraft = org.json.JSONObject().apply {
-                put("mode", selectedMode); put("model", selectedGenerationModelPath); put("upscaler", selectedUpscalerModelPath)
+                put("mode", selectedMode); put("workflowPreset", selectedWorkflowPresetId); put("model", selectedGenerationModelPath); put("upscaler", selectedUpscalerModelPath)
                 put("prompt", prompt); put("negativePrompt", negativePrompt); put("advanced", showAdvanced)
                 put("vae", selectedVaePath); put("tae", selectedTaePath); put("clipL", selectedClipLPath); put("clipG", selectedClipGPath); put("t5", selectedT5xxlPath); put("llm", selectedLlmPath); put("llmVision", selectedLlmVisionPath); put("photoMaker", selectedPhotoMakerPath)
                 put("controlEnabled", controlNetEnabled); put("control", selectedControlNetPath); put("controlStrength", controlStrength)
-                put("loraEnabled", loraEnabled); put("lora", selectedLoraPath); put("loraStrength", loraStrength); put("loraApply", selectedLoraApplyMode?.cliName)
+                put("loraEnabled", loraEnabled); put("lora", loraStack.firstOrNull()?.path ?: selectedLoraPath); put("loraStrength", loraStack.firstOrNull()?.strength ?: loraStrength); put("loraApply", selectedLoraApplyMode?.cliName); put("loras", loraStack.toJsonArray())
                 put("textualEnabled", textualInversionEnabled); put("textual", selectedTextualInversionPath); put("flowShift", flowShiftText); put("diffusionFa", diffusionFaEnabled); put("diffConv", diffusionConvDirectEnabled); put("vaeConv", vaeConvDirectEnabled); put("mmap", mmapEnabled); put("qwenZero", qwenImageZeroCondTEnabled); put("chromaMask", chromaDisableDitMaskEnabled)
                 put("input", selectedImagePath); put("strength", strength); put("quant", selectedQuantType); put("upscaleFactor", upscaleFactor); put("upscaleRepeats", upscaleRepeats); put("threads", threads)
                 put("inpaintMask", inpaintMaskPath); put("inpaintTransform", inpaintCanvasTransform.name); put("inpaintImgCfg", inpaintImgCfgScale); put("inpaintAutoModel", selectedAutoMaskModelPath)
-                put("adModel", adetailerModelPath); put("adInputMode", adetailerInputMode.name); put("adPrompt", adetailerPrompt); put("adNegativePrompt", adetailerNegativePrompt)
+                put("adModel", adetailerModelPath); put("adInputMode", adetailerInputMode.name); put("adPrompt", adetailerPrompt); put("adNegativePrompt", adetailerNegativePrompt); put("adLoras", adetailerLoraStack.toJsonArray())
                 put("adConfidence", adetailerConfidence); put("adDenoising", adetailerDenoising); put("adMaskBlur", adetailerMaskBlur)
                 put("adPadding", adetailerPadding); put("adMaxDetections", adetailerMaxDetections); put("adResizeInput", adetailerResizeInput); put("adAdvanced", adetailerAdvancedArgs)
                 put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
@@ -1033,6 +1121,35 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     // Generate function - handles all modes
     val generate: () -> Unit = generate@{
+        selectedWorkflowPresetId?.let { presetId ->
+            SdWorkflowPresetCatalog.byId(presetId)?.let { preset ->
+                val gate = evaluateSdWorkflowGate(
+                    preset = preset,
+                    installedModels = workflowInstalledModels,
+                    binaryCapabilities = workflowBinaryCapabilities,
+                    // Hashes are verified in the IO LaunchedEffect above. The gate
+                    // only consults the cache, so Generate never hashes multi-GB
+                    // checkpoints on the main thread.
+                    verifyHashes = true,
+                    selection = SdWorkflowSelection(
+                        mode = when (selectedMode) {
+                            IMAGE_GEN_MODE_INPAINT -> "inpaint"
+                            IMAGE_GEN_MODE_ADETAILER -> "adetailer"
+                            else -> "other"
+                        },
+                        modelPath = selectedGenerationModelPath,
+                        detectorPath = adetailerModelPath,
+                        vaePath = selectedVaePath,
+                        maxDetections = adetailerMaxDetections,
+                        advancedArgs = adetailerAdvancedArgs
+                    )
+                )
+                if (!gate.ready) {
+                    errorMessage = context.getString(R.string.sd_workflow_gate_missing)
+                    return@generate
+                }
+            }
+        }
         val modelPath = selectedModelPath
         val inputImagePath = selectedImagePath
         val effectiveInputImagePath = inputImagePath.takeIf {
@@ -1107,7 +1224,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         maskBlur = adetailerMaskBlur,
                         padding = adetailerPadding,
                         maxDetections = adetailerMaxDetections,
-                        advancedArgs = adetailerAdvancedArgs
+                        advancedArgs = adetailerAdvancedArgs,
+                        loras = adetailerLoraStack
                     )
                 )
             }
@@ -1236,9 +1354,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     controlNetPath = if (controlNetEnabled) selectedControlNetPath else null,
                     controlImagePath = if (controlNetEnabled) selectedImagePath else null,
                     controlStrength = controlStrength,
-                    loraPath = if (loraEnabled) selectedLoraPath else null,
-                    loraStrength = loraStrength,
+                    loraPath = if (loraEnabled) loraStack.firstOrNull()?.path ?: selectedLoraPath else null,
+                    loraStrength = loraStack.firstOrNull()?.strength ?: loraStrength,
                     loraApplyMode = if (loraEnabled) selectedLoraApplyMode else null,
+                    loras = if (loraEnabled) loraStack else emptyList(),
                     textualInversionPath = if (textualInversionEnabled) {
                         selectedTextualInversionPath
                     } else {
@@ -1255,7 +1374,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         maskBlur = adetailerMaskBlur,
                         padding = adetailerPadding,
                         maxDetections = adetailerMaxDetections,
-                        advancedArgs = adetailerAdvancedArgs
+                        advancedArgs = adetailerAdvancedArgs,
+                        loras = adetailerLoraStack
                     ) else null,
                     adetailerResizeInput = adetailerResizeInput,
                     flowShift = flowShiftText.toFloatOrNull(),
@@ -1284,7 +1404,16 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     operation = imageGenOperation.name,
                     sourceTransform = inpaintWorkspace?.transform?.name,
                     maskProvenance = inpaintWorkspace?.provenance?.name,
-                    maskPolarity = if (selectedMode == IMAGE_GEN_MODE_INPAINT) "WHITE_REGENERATES" else null
+                    maskPolarity = if (selectedMode == IMAGE_GEN_MODE_INPAINT) "WHITE_REGENERATES" else null,
+                    workflowPresetId = selectedWorkflowPresetId,
+                    workflowBundleId = selectedWorkflowPresetId
+                        ?.let(SdWorkflowPresetCatalog::byId)
+                        ?.bundle
+                        ?.id,
+                    workflowRevision = selectedWorkflowPresetId
+                        ?.let(SdWorkflowPresetCatalog::byId)
+                        ?.files
+                        ?.joinToString(",") { file -> "${file.id}@${file.revision}" }
                 )
 
                 batteryGateState.runAfterCheck {
@@ -1653,8 +1782,91 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 resizeInput = adetailerResizeInput,
                 onResizeInputChange = { adetailerResizeInput = it },
                 advancedArgs = adetailerAdvancedArgs,
-                onAdvancedArgsChange = { adetailerAdvancedArgs = it }
+                onAdvancedArgsChange = { adetailerAdvancedArgs = it },
+                loraModels = compatibleLoraModels,
+                loraStack = adetailerLoraStack,
+                onLoraStackChange = { adetailerLoraStack = it }
             )
+        }
+        if (selectedMode != IMAGE_GEN_MODE_UPSCALE) item(key = "workflow-preset") {
+            val selectedWorkflowPreset = SdWorkflowPresetCatalog.byId(selectedWorkflowPresetId.orEmpty())
+            var workflowExpanded by remember { mutableStateOf(false) }
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.sd_workflow_preset_label),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.sd_workflow_preset_help),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (selectedWorkflowPreset != null && !workflowHashVerificationFinished) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.sd_workflow_hash_verifying),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExposedDropdownMenuBox(
+                        expanded = workflowExpanded,
+                        onExpandedChange = { workflowExpanded = !workflowExpanded }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedWorkflowPreset?.let { stringResource(it.bundle.titleRes) }
+                                ?: stringResource(R.string.sd_workflow_preset_none),
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            maxLines = 1,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workflowExpanded) }
+                        )
+                        ExposedDropdownMenu(
+                            expanded = workflowExpanded,
+                            onDismissRequest = { workflowExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sd_workflow_preset_none)) },
+                                onClick = {
+                                    selectedWorkflowPresetId = null
+                                    workflowExpanded = false
+                                }
+                            )
+                            SdWorkflowPresetCatalog.presets.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(preset.bundle.titleRes),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    onClick = {
+                                        applyWorkflowPreset(preset)
+                                        workflowExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    selectedWorkflowPreset?.let { preset ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(preset.bundle.descriptionRes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
         item(key = "model") { Card(
             modifier = Modifier.fillMaxWidth(),
@@ -1945,27 +2157,99 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                 if (!it) {
                                     selectedLoraPath = null
                                     selectedLoraApplyMode = null
+                                    loraStack = emptyList()
+                                } else if (loraStack.isEmpty()) {
+                                    compatibleLoraModels.firstOrNull()?.let { model ->
+                                        selectedLoraPath = model.path
+                                        loraStack = listOf(SdLoraSpec(model.path, loraStrength))
+                                    }
                                 }
                             }
                         )
                         if (loraEnabled) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            SdComponentPickerField(
-                                label = componentRoleLabel(SdComponentRole.LORA),
-                                models = compatibleLoraModels,
-                                selectedPath = selectedLoraPath,
-                                onSelectionChange = { selectedLoraPath = it },
-                                allowNone = false,
-                                emptyMessage = stringResource(R.string.imagegen_no_lora)
-                            )
+                            if (loraStack.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.imagegen_no_lora),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            loraStack.forEachIndexed { index, item ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                    )
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.imagegen_lora_item, index + 1),
+                                                style = MaterialTheme.typography.labelLarge,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            IconButton(
+                                                onClick = {
+                                                    loraStack = loraStack.filterIndexed { itemIndex, _ -> itemIndex != index }
+                                                    if (index == 0) selectedLoraPath = loraStack.firstOrNull()?.path
+                                                }
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.imagegen_lora_remove))
+                                            }
+                                        }
+                                        SdComponentPickerField(
+                                            label = componentRoleLabel(SdComponentRole.LORA),
+                                            models = compatibleLoraModels,
+                                            selectedPath = item.path,
+                                            onSelectionChange = { path ->
+                                                path?.let {
+                                                    loraStack = loraStack.mapIndexed { itemIndex, current ->
+                                                        if (itemIndex == index) current.copy(path = it) else current
+                                                    }
+                                                    if (index == 0) selectedLoraPath = it
+                                                }
+                                            },
+                                            allowNone = false,
+                                            emptyMessage = stringResource(R.string.imagegen_no_lora)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        SliderWithInput(
+                                            value = item.strength,
+                                            onValueChange = { strengthValue ->
+                                                loraStack = loraStack.mapIndexed { itemIndex, current ->
+                                                    if (itemIndex == index) current.copy(strength = strengthValue) else current
+                                                }
+                                                if (index == 0) loraStrength = strengthValue
+                                            },
+                                            valueRange = -4f..4f,
+                                            label = stringResource(R.string.imagegen_lora_strength_label),
+                                            decimalPlaces = 2
+                                        )
+                                    }
+                                }
+                                if (index < loraStack.lastIndex) Spacer(modifier = Modifier.height(8.dp))
+                            }
                             Spacer(modifier = Modifier.height(8.dp))
-                            SliderWithInput(
-                                value = loraStrength,
-                                onValueChange = { loraStrength = it },
-                                valueRange = 0f..2f,
-                                label = stringResource(R.string.imagegen_lora_strength_label),
-                                decimalPlaces = 2
-                            )
+                            OutlinedButton(
+                                onClick = {
+                                    compatibleLoraModels.firstOrNull { model -> loraStack.none { it.path == model.path } }?.let { model ->
+                                        loraStack = loraStack + SdLoraSpec(model.path, 1.0f)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = compatibleLoraModels.any { model -> loraStack.none { it.path == model.path } }
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.imagegen_lora_add))
+                            }
                         }
                     }
 
@@ -2115,7 +2399,16 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(100.dp),
-                        placeholder = { Text(stringResource(R.string.imagegen_prompt_placeholder)) },
+                        placeholder = {
+                            val promptContext = when {
+                                selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
+                                selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
+                                else -> null
+                            }
+                            val promptText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).positiveRes) }
+                                ?: stringResource(R.string.imagegen_prompt_placeholder)
+                            Text(promptText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+                        },
                         shape = RoundedCornerShape(12.dp)
                     )
 
@@ -2149,7 +2442,16 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             value = negativePrompt,
                             onValueChange = { negativePrompt = it },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(stringResource(R.string.imagegen_negative_prompt_placeholder)) },
+                            placeholder = {
+                                val promptContext = when {
+                                    selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
+                                    selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
+                                    else -> null
+                                }
+                                val negativeText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).negativeRes) }
+                                    ?: stringResource(R.string.imagegen_negative_prompt_placeholder)
+                                Text(negativeText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+                            },
                             shape = RoundedCornerShape(12.dp)
                         )
 
@@ -3241,6 +3543,7 @@ private fun SdComponentPickerField(
                 ?: if (allowNone) stringResource(R.string.imagegen_none_builtin) else "",
             onValueChange = {},
             readOnly = true,
+            singleLine = true,
             modifier = Modifier.fillMaxWidth().menuAnchor(),
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             shape = RoundedCornerShape(12.dp)
@@ -3260,7 +3563,7 @@ private fun SdComponentPickerField(
             }
             models.forEach { model ->
                 DropdownMenuItem(
-                    text = { Text(model.filename) },
+                    text = { Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     onClick = {
                         onSelectionChange(model.path)
                         expanded = false

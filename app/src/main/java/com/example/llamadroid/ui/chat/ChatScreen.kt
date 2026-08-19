@@ -42,12 +42,14 @@ internal fun llamaChatWebViewUrl(port: Int): String =
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun ChatScreen(
-    navController: NavController
+    navController: NavController,
+    serverPortOverride: Int? = null
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val settingsRepository = remember(context) { SettingsRepository(context.applicationContext) }
-    val serverPort by settingsRepository.serverPort.collectAsState()
+    val configuredServerPort by settingsRepository.serverPort.collectAsState()
+    val serverPort = serverPortOverride ?: configuredServerPort
     val chatUrl = remember(serverPort) { llamaChatWebViewUrl(serverPort) }
     var fileUploadCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var isLoading by remember(chatUrl) { mutableStateOf(!ChatWebViewHolder.isLoaded || ChatWebViewHolder.loadedUrl != chatUrl) }

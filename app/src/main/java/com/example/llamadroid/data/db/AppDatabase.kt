@@ -111,6 +111,8 @@ class Converters {
         // Custom tools/agents
         CustomToolEntity::class,
         CustomAgentEntity::class,
+        AgentRuntimeProfileEntity::class,
+        AgentRuntimeEndpointConfigEntity::class,
         OllamaServerEntity::class,
         AiRuntimeJobEntity::class,
         // Llama Native Client entities
@@ -126,6 +128,7 @@ class Converters {
         OrganizerAlarmEntity::class,
         OrganizerLlmSettingsEntity::class,
         SavedCommand::class,
+        com.example.llamadroid.data.model.LlamaServerCardEntity::class,
         QuadtrixProfileEntity::class,
         QuadtrixRunEntity::class,
         QuadtrixMetricEntity::class,
@@ -155,7 +158,7 @@ class Converters {
         SystemStatsSampleEntity::class,
         SystemStatsEventEntity::class
     ], 
-    version = 107,
+    version = 109,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -167,6 +170,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun zimDao(): ZimDao
     abstract fun savedWorkerDao(): SavedWorkerDao
     abstract fun savedCommandDao(): SavedCommandDao
+    abstract fun llamaServerCardDao(): com.example.llamadroid.data.dao.LlamaServerCardDao
     abstract fun workflowTemplateDao(): WorkflowTemplateDao
     abstract fun benchmarkDao(): BenchmarkDao
     abstract fun datasetDao(): DatasetDao
@@ -174,6 +178,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao
+    abstract fun agentRuntimeProfileDao(): AgentRuntimeProfileDao
+    abstract fun agentRuntimeEndpointConfigDao(): AgentRuntimeEndpointConfigDao
     abstract fun ollamaServerDao(): OllamaServerDao
     abstract fun aiRuntimeJobDao(): AiRuntimeJobDao
     

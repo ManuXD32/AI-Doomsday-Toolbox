@@ -1,12 +1,15 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdImageInputMode
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.inferSdFamily
+import com.example.llamadroid.sd.activeInOrder
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.util.DeviceAcceleration
 import java.io.File
@@ -165,6 +168,8 @@ fun buildSdCommandArgs(
         }
         validateSdADetailerConfig(configured)
     }
+    val baseLoras = config.resolvedLoras().also { validateSdLoras(it) }
+    val detailLoras = adetailerConfig?.loras.orEmpty().also { validateSdLoras(it) }
     val missingComponents = spec.requiredRoles.filter { role ->
         when (role) {
             SdComponentRole.VAE -> config.vaePath.isNullOrBlank()
@@ -234,11 +239,14 @@ fun buildSdCommandArgs(
         )
     }
 
-    val promptAdapters = buildList {
-        config.loraPath?.let { path ->
-            val name = File(path).nameWithoutExtension
-            if (name.isNotBlank()) add("<lora:$name:${config.loraStrength}>")
+    fun loraPromptTokens(items: List<SdLoraSpec>): List<String> = items.activeInOrder().mapNotNull { item ->
+        item.promptTokenName.takeIf { it.isNotBlank() }?.let { name ->
+            "<lora:$name:${formatSdLoraStrength(item.strength)}>"
         }
+    }
+
+    val promptAdapters = buildList {
+        addAll(loraPromptTokens(baseLoras))
         config.textualInversionPath?.let { path ->
             val token = File(path).nameWithoutExtension
             if (token.isNotBlank()) add(token)
@@ -265,7 +273,10 @@ fun buildSdCommandArgs(
         requireFlag("--ad-negative-prompt")
         requireFlag("--extra-ad-args")
         args.addAll(listOf("--ad-model", ad.modelPath))
-        if (ad.prompt.isNotBlank()) args.addAll(listOf("--ad-prompt", ad.prompt))
+        val detailPrompt = (loraPromptTokens(detailLoras) + ad.prompt)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        if (detailPrompt.isNotBlank()) args.addAll(listOf("--ad-prompt", detailPrompt))
         if (ad.negativePrompt.isNotBlank()) args.addAll(listOf("--ad-negative-prompt", ad.negativePrompt))
         args.addAll(
             listOf(
@@ -305,14 +316,16 @@ fun buildSdCommandArgs(
         args.addAll(listOf("--control-strength", config.controlStrength.toString()))
     }
 
-    if (config.loraPath != null) {
+    val allLoras = baseLoras + detailLoras
+    val loraDirectories = allLoras
+        .activeInOrder()
+        .mapNotNull { item -> File(item.path).parent?.takeIf { it.isNotBlank() } }
+        .distinct()
+    if (loraDirectories.isNotEmpty()) {
         requireFlag("--lora-model-dir")
-        args.addAll(
-            listOf(
-                "--lora-model-dir",
-                File(config.loraPath).parent ?: "."
-            )
-        )
+        loraDirectories.forEach { directory ->
+            args.addAll(listOf("--lora-model-dir", directory))
+        }
         config.loraApplyMode?.let {
             requireFlag("--lora-apply-mode")
             args.addAll(listOf("--lora-apply-mode", it.cliName))
@@ -430,6 +443,9 @@ fun buildSdCommandArgs(
 
     return args
 }
+
+private fun formatSdLoraStrength(value: Float): String =
+    String.format(Locale.US, "%.6f", value).trimEnd('0').trimEnd('.')
 
 fun buildSdUpscaleCommandArgs(
     config: SDUpscaleConfig,

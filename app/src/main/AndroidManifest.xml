@@ -124,6 +124,12 @@
             android:exported="false" />
 
         <service
+            android:name=".service.LlamaServerSessionService"
+            android:process=":llama_sessions_runtime"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <service
             android:name=".service.DistributedMasterLlamaService"
             android:process=":distributed_llama_runtime"
             android:foregroundServiceType="dataSync"

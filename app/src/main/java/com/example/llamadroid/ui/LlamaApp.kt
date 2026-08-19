@@ -406,7 +406,21 @@ fun LlamaApp(
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
-            composable(Screen.Chat.route) { ChatScreen(navController) }
+            composable(
+                route = "${Screen.Chat.route}?port={serverPort}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("serverPort") {
+                        type = androidx.navigation.NavType.IntType
+                        defaultValue = 0
+                    }
+                )
+            ) { backStackEntry ->
+                val serverPort = backStackEntry.arguments?.getInt("serverPort")?.takeIf { it in 1..65535 }
+                ChatScreen(navController, serverPortOverride = serverPort)
+            }
+            composable(Screen.LlamaServers.route) {
+                com.example.llamadroid.ui.ai.llama.LlamaServerCardsScreen(navController)
+            }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}",
                 arguments = listOf(

@@ -2,7 +2,9 @@ package com.example.llamadroid.ui.ai
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -12,6 +14,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.SliderWithInput
 
@@ -196,10 +199,14 @@ internal fun ImageGenADetailerOptionsCard(
     resizeInput: Boolean,
     onResizeInputChange: (Boolean) -> Unit,
     advancedArgs: String,
-    onAdvancedArgsChange: (String) -> Unit
+    onAdvancedArgsChange: (String) -> Unit,
+    loraModels: List<ModelEntity> = emptyList(),
+    loraStack: List<SdLoraSpec> = emptyList(),
+    onLoraStackChange: (List<SdLoraSpec>) -> Unit = {}
 ) {
     var detectorExpanded by rememberSaveable { mutableStateOf(false) }
     var expertExpanded by rememberSaveable { mutableStateOf(false) }
+    var loraExpandedIndex by rememberSaveable { mutableIntStateOf(-1) }
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.imagegen_adetailer_title), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -252,13 +259,102 @@ internal fun ImageGenADetailerOptionsCard(
                 onValueChange = onDetailPromptChange,
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text(stringResource(R.string.imagegen_adetailer_prompt)) },
+                placeholder = {
+                    val context = sdWorkflowPromptContextForDetector(detectorPath)
+                    Text(
+                        stringResource(sdWorkflowPromptExample(context).positiveRes),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                    )
+                },
                 supportingText = {
                     if (inputMode == ADetailerInputMode.GENERATED_IMAGE) {
                         Text(stringResource(R.string.imagegen_adetailer_prompt_inherits))
                     }
                 }
             )
-            OutlinedTextField(value = detailNegativePrompt, onValueChange = onDetailNegativePromptChange, modifier = Modifier.fillMaxWidth(), label = { Text(stringResource(R.string.imagegen_adetailer_negative_prompt)) })
+            OutlinedTextField(
+                value = detailNegativePrompt,
+                onValueChange = onDetailNegativePromptChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.imagegen_adetailer_negative_prompt)) },
+                placeholder = {
+                    val context = sdWorkflowPromptContextForDetector(detectorPath)
+                    Text(
+                        stringResource(sdWorkflowPromptExample(context).negativeRes),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+                    )
+                }
+            )
+            if (loraModels.isNotEmpty()) {
+                Text(stringResource(R.string.imagegen_adetailer_lora_stack), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.imagegen_adetailer_lora_stack_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                loraStack.forEachIndexed { index, item ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                    ) {
+                        Column(Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.imagegen_lora_item, index + 1),
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                                IconButton(onClick = { onLoraStackChange(loraStack.filterIndexed { itemIndex, _ -> itemIndex != index }) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.imagegen_lora_remove))
+                                }
+                            }
+                            ExposedDropdownMenuBox(
+                                expanded = loraExpandedIndex == index,
+                                onExpandedChange = { loraExpandedIndex = if (loraExpandedIndex == index) -1 else index }
+                            ) {
+                                OutlinedTextField(
+                                    value = loraModels.firstOrNull { it.path == item.path }?.filename ?: item.filename,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                    label = { Text(stringResource(R.string.imagegen_adetailer_lora_model)) },
+                                    maxLines = 1,
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = loraExpandedIndex == index) }
+                                )
+                                ExposedDropdownMenu(expanded = loraExpandedIndex == index, onDismissRequest = { loraExpandedIndex = -1 }) {
+                                    loraModels.forEach { model ->
+                                        DropdownMenuItem(
+                                            text = { Text(model.filename, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                                            onClick = {
+                                                onLoraStackChange(loraStack.mapIndexed { itemIndex, current -> if (itemIndex == index) current.copy(path = model.path) else current })
+                                                loraExpandedIndex = -1
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            SliderWithInput(
+                                value = item.strength,
+                                onValueChange = { value -> onLoraStackChange(loraStack.mapIndexed { itemIndex, current -> if (itemIndex == index) current.copy(strength = value) else current }) },
+                                valueRange = -4f..4f,
+                                label = stringResource(R.string.imagegen_lora_strength_label),
+                                decimalPlaces = 2
+                            )
+                        }
+                    }
+                }
+                OutlinedButton(
+                    onClick = {
+                        loraModels.firstOrNull { model -> loraStack.none { it.path == model.path } }?.let { model ->
+                            onLoraStackChange(loraStack + SdLoraSpec(model.path))
+                        }
+                    },
+                    enabled = loraModels.any { model -> loraStack.none { it.path == model.path } },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.imagegen_lora_add))
+                }
+            }
             TextButton(onClick = { expertExpanded = !expertExpanded }) {
                 Text(stringResource(if (expertExpanded) R.string.imagegen_hide_expert else R.string.imagegen_show_expert))
             }

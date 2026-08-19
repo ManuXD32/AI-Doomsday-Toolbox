@@ -1,6 +1,12 @@
 package com.example.llamadroid.service
 
 import android.os.Parcelable
+import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.activeInOrder
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -49,8 +55,18 @@ data class VideoGenerationConfig(
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
+    /** Ordered Wan/video adapters. [highNoiseLoras] is kept separate per Wan 2.2 item. */
+    val loras: List<SdLoraSpec> = emptyList(),
+    val highNoiseLoras: List<SdLoraSpec> = emptyList(),
+    val loraApplyMode: SdLoraApplyMode? = null,
     val customFlags: String = ""
 ) : Parcelable
+
+fun VideoGenerationConfig.resolvedLoras(): List<SdLoraSpec> =
+    validateSdLoras(
+        loras.map { it.copy(highNoiseOnly = false) } +
+            highNoiseLoras.map { it.copy(highNoiseOnly = true) }
+    )
 
 enum class VideoGenerationMode(val folderName: String) {
     TXT2VID("txt2vid"),
@@ -112,6 +128,9 @@ data class GeneratedVideoMetadata(
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig,
+    val loras: List<SdLoraSpec> = emptyList(),
+    val highNoiseLoras: List<SdLoraSpec> = emptyList(),
+    val loraApplyMode: String? = null,
     val createdAt: Long,
     val aviPath: String,
     val mp4Path: String,
@@ -175,6 +194,9 @@ data class GeneratedVideoMetadata(
         put("distributedMaxVramSpec", distributedRuntime.maxVramSpec)
         put("distributedSplitMode", distributedRuntime.splitMode.name)
         put("distributedCustomFlags", distributedRuntime.customFlags)
+        put("loras", loras.toJsonArray())
+        put("highNoiseLoras", highNoiseLoras.toJsonArray())
+        put("loraApplyMode", loraApplyMode)
         put("createdAt", createdAt)
         put("aviPath", aviPath)
         put("mp4Path", mp4Path)
@@ -256,6 +278,9 @@ data class GeneratedVideoMetadata(
                     }.getOrDefault(SdDistributedSplitMode.LAYER),
                     customFlags = json.optString("distributedCustomFlags")
                 ),
+                loras = json.optJSONArray("loras")?.toSdLoraSpecs().orEmpty(),
+                highNoiseLoras = json.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty(),
+                loraApplyMode = json.optString("loraApplyMode").ifBlank { null },
                 createdAt = json.optLong("createdAt", 0L),
                 aviPath = json.optString("aviPath"),
                 mp4Path = json.optString("mp4Path"),

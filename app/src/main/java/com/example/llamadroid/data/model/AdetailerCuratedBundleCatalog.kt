@@ -100,7 +100,7 @@ object AdetailerCuratedBundleCatalog {
                 CuratedBundleFile(
                     id = "adetailer-yolov8n-coco-sdcpp",
                     repoId = "ultralytics/assets",
-                    revision = "main",
+                    revision = "v8.3.0",
                     remotePath = "yolov8n.pt",
                     localFilename = "yolov8n-coco-sdcpp.safetensors",
                     type = ModelType.SD_ADETAILER,

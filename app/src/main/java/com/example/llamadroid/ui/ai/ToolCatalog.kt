@@ -52,6 +52,10 @@ object ToolCatalog {
                 Color(0xFF388E3C).copy(alpha = 0.3f)
             ),
             route = Screen.Chat.route,
+            routePatterns = listOf(
+                Screen.Chat.route,
+                "${Screen.Chat.route}?port={serverPort}"
+            ),
             settingsAction = ToolSettingsAction.Navigate("settings_llm"),
             keywords = listOf("chat", "conversation", "llm")
         ),

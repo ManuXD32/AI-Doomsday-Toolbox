@@ -8,9 +8,19 @@ import androidx.work.WorkManager
 import com.example.llamadroid.R
 import com.example.llamadroid.data.AppContainer
 import com.example.llamadroid.data.DefaultAppContainer
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.SavedCommandScopes
+import com.example.llamadroid.data.db.launchProfile
 import com.example.llamadroid.data.db.isLegacyQuadtrixLoraAdapter
+import com.example.llamadroid.data.repository.LlamaServerCardRepository
+import com.example.llamadroid.data.repository.RoomGeneralSavedCommandProvider
+import com.example.llamadroid.data.runtime.AgentLiteRtModelCatalog
+import com.example.llamadroid.data.runtime.AgentRuntimeProfileRepositoryFactory
+import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
+import com.example.llamadroid.data.runtime.DurableLlamaServerCardCatalog
+import com.example.llamadroid.data.runtime.LegacyAgentRuntimeSettings
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
@@ -18,6 +28,7 @@ import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.LlamaScheduledTaskScheduler
 import com.example.llamadroid.service.LlamaRuntimeStateProjection
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.LlamaServerSessionStateStore
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.DebugLog
@@ -27,6 +38,7 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -58,6 +70,7 @@ class LlamaApplication : Application() {
             runRemovedLlmTrainingCleanupOnce()
             pruneLegacyPortableModelRows()
             normalizeLegacyQuadtrixLoraRows()
+            installAgentRuntimeProfiles()
             val staleJobs = AiRuntimeJobStore.markStaleActiveJobsTerminal(this@LlamaApplication)
             runCatching {
                 GenerationDiagnosticsStore.recordBreadcrumb(
@@ -247,6 +260,66 @@ class LlamaApplication : Application() {
             .forEach { model ->
                 db.modelDao().insertModel(model.copy(type = ModelType.LORA))
             }
+    }
+
+    private suspend fun installAgentRuntimeProfiles() {
+        val db = AppDatabase.getDatabase(this)
+        val settings = SettingsRepository(this)
+        val cardRepository = LlamaServerCardRepository(
+            db.llamaServerCardDao(),
+            RoomGeneralSavedCommandProvider(db.savedCommandDao())
+        )
+        val managedServers = DurableLlamaServerCardCatalog(
+            cards = cardRepository.cards,
+            stateStore = LlamaServerSessionStateStore(this),
+            modelNames = combine(
+                cardRepository.cards,
+                db.savedCommandDao().getCommandsByScope(SavedCommandScopes.GENERAL)
+            ) { cards, commands ->
+                    val modelByPreset = commands.associate { command ->
+                        command.id to command.launchProfile().modelPath
+                            .substringAfterLast('/')
+                            .takeIf(String::isNotBlank)
+                    }
+                    cards.associate { card ->
+                        card.id to modelByPreset[card.savedCommandId]
+                    }
+            }
+        )
+        val repository = AgentRuntimeProfileRepositoryFactory.create(
+            context = this,
+            dao = db.agentRuntimeProfileDao(),
+            endpointDao = db.agentRuntimeEndpointConfigDao(),
+            managedServerCatalog = managedServers
+        )
+        val liteRtCatalog = object : AgentLiteRtModelCatalog {
+            override suspend fun containsModel(id: Long): Boolean =
+                db.liteRtModelDao().getById(id) != null
+        }
+        val customAgents = db.customAgentDao().getAllAgents().first()
+        repository.migrateOnce(
+            customAgentNames = customAgents.map { it.name },
+            legacy = LegacyAgentRuntimeSettings(
+                globalBackend = settings.agentBackend.value,
+                globalModel = settings.agentOrchestratorModel.value,
+                llamaServerUrl = settings.llamaServerUrl.value,
+                llamaServerModelLabel = settings.agentLlamaServerModelLabel.value,
+                liteRtModelId = settings.agentLiteRtModelId.value.takeIf { it > 0L },
+                roleModels = mapOf(
+                    "ORCHESTRATOR" to settings.agentOrchestratorModel.value,
+                    "CODEBASE_SCOUT" to settings.agentCodebaseScoutModel.value,
+                    "RESEARCHER" to settings.agentResearcherModel.value,
+                    "PLANNER" to settings.agentPlannerModel.value,
+                    "CODER" to settings.agentCoderModel.value,
+                    "REVIEWER" to settings.agentReviewerModel.value,
+                    "EXECUTOR" to settings.agentExecutorModel.value,
+                    "SUMMARIZER" to settings.agentSummarizerModel.value,
+                    "VISUAL_TESTER" to settings.agentVisualTesterModel.value
+                ),
+                customModels = customAgents.associate { it.name to it.model }
+            )
+        )
+        AgentRuntimeProfileRuntime.install(repository, liteRtCatalog)
     }
 
     private fun isWithinRoot(file: File, root: File): Boolean {

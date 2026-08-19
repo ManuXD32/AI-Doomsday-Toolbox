@@ -18,6 +18,10 @@ import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_SPEED
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_TOTAL_STEPS
 import com.example.llamadroid.onnx.supertonicLanguageCodes
+import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
 import com.example.llamadroid.util.AIConstants
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +67,8 @@ data class NativeChatSdImageToolParams(
     val llmPath: String? = null,
     val llmVisionPath: String? = null,
     val photoMakerPath: String? = null,
+    val loras: List<SdLoraSpec> = emptyList(),
+    val loraApplyMode: SdLoraApplyMode? = null,
     val width: Int = DEFAULT_WIDTH,
     val height: Int = DEFAULT_HEIGHT,
     val steps: Int = DEFAULT_STEPS,
@@ -88,6 +94,8 @@ data class NativeChatSdImageToolParams(
         NativeChatToolConfig.KEY_IMAGE_SD_LLM to llmPath.orEmpty(),
         NativeChatToolConfig.KEY_IMAGE_SD_LLM_VISION to llmVisionPath.orEmpty(),
         NativeChatToolConfig.KEY_IMAGE_SD_PHOTOMAKER to photoMakerPath.orEmpty(),
+        NativeChatToolConfig.KEY_IMAGE_SD_LORAS to loras.toJsonArray().toString(),
+        NativeChatToolConfig.KEY_IMAGE_SD_LORA_APPLY_MODE to loraApplyMode?.cliName.orEmpty(),
         NativeChatToolConfig.KEY_IMAGE_SD_WIDTH to width.coerceIn(MIN_SIZE, MAX_SIZE),
         NativeChatToolConfig.KEY_IMAGE_SD_HEIGHT to height.coerceIn(MIN_SIZE, MAX_SIZE),
         NativeChatToolConfig.KEY_IMAGE_SD_STEPS to steps.coerceIn(MIN_STEPS, MAX_STEPS),
@@ -469,6 +477,11 @@ data class NativeChatToolConfig(
         const val KEY_IMAGE_SD_LLM = "tool_image_sd_llm"
         const val KEY_IMAGE_SD_LLM_VISION = "tool_image_sd_llm_vision"
         const val KEY_IMAGE_SD_PHOTOMAKER = "tool_image_sd_photomaker"
+        const val KEY_IMAGE_SD_LORAS = "tool_image_sd_loras"
+        const val KEY_IMAGE_SD_LORA_APPLY_MODE = "tool_image_sd_lora_apply_mode"
+        /** Legacy single-adapter keys retained for saved native-chat profiles. */
+        const val KEY_IMAGE_SD_LORA_PATH = "tool_image_sd_lora_path"
+        const val KEY_IMAGE_SD_LORA_STRENGTH = "tool_image_sd_lora_strength"
         const val KEY_IMAGE_SD_WIDTH = "tool_image_sd_width"
         const val KEY_IMAGE_SD_HEIGHT = "tool_image_sd_height"
         const val KEY_IMAGE_SD_STEPS = "tool_image_sd_steps"
@@ -657,6 +670,14 @@ data class NativeChatToolConfig(
                 llmPath = stringParam(params, KEY_IMAGE_SD_LLM, "").takeIf { it.isNotBlank() },
                 llmVisionPath = stringParam(params, KEY_IMAGE_SD_LLM_VISION, "").takeIf { it.isNotBlank() },
                 photoMakerPath = stringParam(params, KEY_IMAGE_SD_PHOTOMAKER, "").takeIf { it.isNotBlank() },
+                loras = parseSdLoras(
+                    json = stringParam(params, KEY_IMAGE_SD_LORAS, ""),
+                    legacyPath = stringParam(params, KEY_IMAGE_SD_LORA_PATH, "").takeIf { it.isNotBlank() },
+                    legacyStrength = floatParam(params, KEY_IMAGE_SD_LORA_STRENGTH, 1.0f)
+                ),
+                loraApplyMode = SdLoraApplyMode.fromStoredValue(
+                    stringParam(params, KEY_IMAGE_SD_LORA_APPLY_MODE, "").takeIf { it.isNotBlank() }
+                ),
                 width = intParam(params, KEY_IMAGE_SD_WIDTH, NativeChatSdImageToolParams.DEFAULT_WIDTH)
                     .coerceIn(NativeChatSdImageToolParams.MIN_SIZE, NativeChatSdImageToolParams.MAX_SIZE),
                 height = intParam(params, KEY_IMAGE_SD_HEIGHT, NativeChatSdImageToolParams.DEFAULT_HEIGHT)
@@ -677,6 +698,19 @@ data class NativeChatToolConfig(
                 qwenImageZeroCondT = booleanParam(params, KEY_IMAGE_SD_QWEN_ZERO_COND_T, false),
                 chromaDisableDitMask = booleanParam(params, KEY_IMAGE_SD_CHROMA_DISABLE_DIT_MASK, false)
             )
+
+        private fun parseSdLoras(
+            json: String,
+            legacyPath: String?,
+            legacyStrength: Float
+        ): List<SdLoraSpec> = runCatching {
+            if (json.isBlank()) emptyList()
+            else JSONArray(json).toSdLoraSpecs()
+        }.getOrElse {
+            SdLoraSpec.fromLegacy(legacyPath, legacyStrength)
+        }.ifEmpty {
+            SdLoraSpec.fromLegacy(legacyPath, legacyStrength)
+        }
 
         private fun backgroundRemovalParamsFromParams(params: Map<String, Any?>): NativeChatBackgroundRemovalToolParams =
             NativeChatBackgroundRemovalToolParams(

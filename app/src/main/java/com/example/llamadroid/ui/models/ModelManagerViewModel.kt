@@ -20,9 +20,9 @@ class ModelManagerViewModel(
     private val repository: ModelRepository
 ) : ViewModel() {
 
-    // Installed text-model family rows shown by this manager. Quadtrix checkpoints
-    // and llama.cpp LoRA adapters are displayed here, but runtime base-model
-    // pickers still use repository.getLLMModels().
+    // Installed llama.cpp model-family rows shown by this manager. MTP/draft,
+    // LoRA, embeddings, and legacy vision/projector rows stay actionable here;
+    // Quadtrix and Whisper assets have their own managers.
     val installedModels: StateFlow<List<ModelEntity>> = repository.getModelManagerModels()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         

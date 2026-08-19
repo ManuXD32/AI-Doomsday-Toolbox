@@ -3272,6 +3272,127 @@ object Migrations {
         }
     }
 
+    /**
+     * Adds independently managed llama.cpp server cards, per-agent runtime routing,
+     * and ordered multi-LoRA persistence for distributed image/video workflows.
+     */
+    val MIGRATION_107_108 = object : Migration(107, 108) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 107 -> 108: managed runtimes and multi-LoRA")
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `llama_server_cards` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `savedCommandId` INTEGER NOT NULL,
+                    `presetNameSnapshot` TEXT NOT NULL,
+                    `port` INTEGER NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_llama_server_cards_savedCommandId` " +
+                    "ON `llama_server_cards` (`savedCommandId`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_llama_server_cards_updatedAt` " +
+                    "ON `llama_server_cards` (`updatedAt`)"
+            )
+
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_runtime_profiles` (
+                    `agentKey` TEXT NOT NULL,
+                    `backend` TEXT NOT NULL,
+                    `model` TEXT,
+                    `managedLlamaServerId` INTEGER,
+                    `liteRtModelId` INTEGER,
+                    `updatedAt` INTEGER NOT NULL,
+                    PRIMARY KEY(`agentKey`)
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_runtime_profiles_backend` " +
+                    "ON `agent_runtime_profiles` (`backend`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_runtime_profiles_updatedAt` " +
+                    "ON `agent_runtime_profiles` (`updatedAt`)"
+            )
+
+            db.execSQL(
+                "ALTER TABLE `sd_distributed_master_settings` ADD COLUMN " +
+                    "`imageLorasJson` TEXT NOT NULL DEFAULT '[]'"
+            )
+            db.execSQL(
+                "ALTER TABLE `sd_distributed_master_settings` ADD COLUMN " +
+                    "`videoLorasJson` TEXT NOT NULL DEFAULT '[]'"
+            )
+            db.execSQL(
+                "ALTER TABLE `sd_distributed_master_settings` ADD COLUMN " +
+                    "`videoHighNoiseLorasJson` TEXT NOT NULL DEFAULT '[]'"
+            )
+            db.execSQL(
+                "ALTER TABLE `sd_distributed_master_settings` ADD COLUMN " +
+                    "`videoLoraApplyMode` TEXT NOT NULL DEFAULT ''"
+            )
+            // Preserve a previously configured single image LoRA as an ordered one-item list.
+            db.execSQL(
+                """
+                UPDATE `sd_distributed_master_settings`
+                SET `imageLorasJson` = '[{' ||
+                    '"path":"' || REPLACE(REPLACE(`imageLoraPath`, '\\', '\\\\'), '"', '\\"') || '",' ||
+                    '"strength":' ||
+                        CASE WHEN TRIM(`loraStrength`) = '' THEN '1.0' ELSE `loraStrength` END || ',' ||
+                    '"enabled":true,"highNoiseOnly":false}]'
+                WHERE `imageLoraEnabled` = 1 AND TRIM(`imageLoraPath`) != ''
+                """.trimIndent()
+            )
+
+            DebugLog.log("[DB] Migration 107 -> 108 complete")
+        }
+    }
+
+    /** Adds reusable named remote endpoints and per-agent endpoint references. */
+    val MIGRATION_108_109 = object : Migration(108, 109) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 108 -> 109: named agent endpoints")
+            db.execSQL(
+                "ALTER TABLE `agent_runtime_profiles` ADD COLUMN `endpointConfigId` INTEGER"
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `agent_runtime_endpoint_configs` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `name` TEXT NOT NULL,
+                    `backend` TEXT NOT NULL,
+                    `baseUrl` TEXT NOT NULL,
+                    `defaultModel` TEXT,
+                    `createdAt` INTEGER NOT NULL,
+                    `updatedAt` INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_agent_runtime_endpoint_configs_name` " +
+                    "ON `agent_runtime_endpoint_configs` (`name`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_runtime_endpoint_configs_backend` " +
+                    "ON `agent_runtime_endpoint_configs` (`backend`)"
+            )
+            db.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_agent_runtime_endpoint_configs_updatedAt` " +
+                    "ON `agent_runtime_endpoint_configs` (`updatedAt`)"
+            )
+            DebugLog.log("[DB] Migration 108 -> 109 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3352,7 +3473,9 @@ object Migrations {
         MIGRATION_103_104,
         MIGRATION_104_105,
         MIGRATION_105_106,
-        MIGRATION_106_107
+        MIGRATION_106_107,
+        MIGRATION_107_108,
+        MIGRATION_108_109
     )
     /**
      * Check if a column exists in a table.

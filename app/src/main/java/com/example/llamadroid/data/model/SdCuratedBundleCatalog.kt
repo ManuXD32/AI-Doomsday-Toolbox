@@ -13,6 +13,7 @@ import java.io.File
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
 import java.util.Locale
 
 /** One versioned upstream file in a curated Stable Diffusion bundle. */
@@ -30,14 +31,19 @@ data class SdCuratedBundleFile(
     val sdCapabilities: String? = null,
     val sdFamily: String? = null,
     val sdVariant: String? = null,
-    val sdCompatProfiles: String? = null
+    val sdCompatProfiles: String? = null,
+    /** Installed payload name when a converted artifact differs from its upstream source name. */
+    val localFilenameOverride: String? = null,
+    /** Optional pinned first-party mirror for converted detector payloads. */
+    val downloadUrlOverride: String? = null
 ) {
     val sourceFilename: String
         get() = remotePath.substringAfterLast('/')
 
     fun localFilename(bundlePrefix: String): String =
-        curatedBundleFilename(bundlePrefix, sourceFilename)
+        curatedBundleFilename(bundlePrefix, localFilenameOverride ?: sourceFilename)
 
+    /** Canonical upstream URL used for provenance and catalog diagnostics. */
     fun downloadUrl(): String {
         val encodedRevision = revision.urlPathSegment()
         val encodedPath = remotePath
@@ -45,6 +51,9 @@ data class SdCuratedBundleFile(
             .joinToString("/") { segment -> segment.urlPathSegment() }
         return "https://huggingface.co/$repoId/resolve/$encodedRevision/$encodedPath?download=true"
     }
+
+    /** Actual transfer URL; converted first-party artifacts may use a pinned mirror. */
+    fun transferUrl(): String = downloadUrlOverride ?: downloadUrl()
 }
 
 data class SdCuratedBundle(
@@ -307,7 +316,7 @@ object SdCuratedBundleCatalog {
             installPrefix = "Anime-4x",
             files = listOf(REALESRGAN_ANIME_4X)
         )
-    )
+    ) + SdWorkflowPresetCatalog.bundles
 
     fun byId(id: String): SdCuratedBundle? = bundles.firstOrNull { it.id == id }
 
@@ -336,14 +345,31 @@ fun curatedBundleFilename(prefix: String, sourceFilename: String): String {
 fun SdCuratedBundleFile.isInstalledForBundle(
     bundle: SdCuratedBundle,
     installedModels: List<com.example.llamadroid.data.db.ModelEntity>
-): Boolean {
+): Boolean = installedSdCuratedModel(bundle, installedModels) != null
+
+/**
+ * Resolve an installed curated payload by its pinned SHA identity. This lets workflow bundles
+ * reuse a model already downloaded by another curated bundle instead of storing a second copy.
+ * Every candidate filename belongs to the verified curated catalog; the download service checks
+ * that catalog entry's SHA before registration.
+ */
+fun SdCuratedBundleFile.installedSdCuratedModel(
+    bundle: SdCuratedBundle,
+    installedModels: List<com.example.llamadroid.data.db.ModelEntity>
+): com.example.llamadroid.data.db.ModelEntity? {
     val expectedFilename = localFilename(bundle.installPrefix)
-    return installedModels.any { model ->
+    val usable: (com.example.llamadroid.data.db.ModelEntity) -> Boolean = { model ->
         val installedFile = File(model.path)
         model.type == modelType &&
-            model.filename == expectedFilename &&
             installedFile.isFile &&
             (sizeIsApproximate || installedFile.length() == sizeBytes)
+    }
+    return installedModels.firstOrNull { model ->
+        model.filename == expectedFilename && usable(model)
+    } ?: installedModels.firstOrNull { model ->
+        usable(model) && SdCuratedBundleCatalog.fileForLocalFilename(model.filename)
+            ?.sha256
+            ?.equals(sha256, ignoreCase = true) == true
     }
 }
 
@@ -375,11 +401,53 @@ internal fun verifySdCuratedFilePayload(
     }
 }
 
+private data class SdCuratedHashCacheKey(
+    val path: String,
+    val sizeBytes: Long,
+    val lastModified: Long,
+    val expectedSha256: String
+)
+
+/**
+ * Hash verification is deliberately cached by file identity.  The workflow gate
+ * can therefore remain a cheap UI-thread check while a caller verifies payloads
+ * on Dispatchers.IO before launch.
+ */
+private val verifiedSdCuratedPayloads = ConcurrentHashMap.newKeySet<SdCuratedHashCacheKey>()
+
+internal fun isSdCuratedFilePayloadHashVerified(
+    file: SdCuratedBundleFile,
+    payload: File
+): Boolean = payload.isFile && verifiedSdCuratedPayloads.contains(
+    SdCuratedHashCacheKey(
+        path = payload.absolutePath,
+        sizeBytes = payload.length(),
+        lastModified = payload.lastModified(),
+        expectedSha256 = file.sha256.lowercase(Locale.US)
+    )
+)
+
+/** Verify once and remember the result for the current file identity. */
+internal fun verifySdCuratedFilePayloadCached(
+    file: SdCuratedBundleFile,
+    payload: File
+) {
+    val key = SdCuratedHashCacheKey(
+        path = payload.absolutePath,
+        sizeBytes = payload.length(),
+        lastModified = payload.lastModified(),
+        expectedSha256 = file.sha256.lowercase(Locale.US)
+    )
+    if (verifiedSdCuratedPayloads.contains(key)) return
+    verifySdCuratedFilePayload(file, payload)
+    verifiedSdCuratedPayloads += key
+}
+
 /** Returns true when [localFilename] belongs to a curated bundle and was verified. */
 fun verifySdCuratedDownload(localFilename: String, downloadedFile: File): Boolean {
     val file = SdCuratedBundleCatalog.fileForLocalFilename(localFilename) ?: return false
     try {
-        verifySdCuratedFilePayload(file, downloadedFile)
+        verifySdCuratedFilePayloadCached(file, downloadedFile)
     } catch (error: Throwable) {
         downloadedFile.delete()
         throw error
@@ -416,7 +484,7 @@ fun startSdCuratedBundleFileDownload(
     )
     DownloadService.startDownload(
         context = context,
-        url = file.downloadUrl(),
+        url = file.transferUrl(),
         destPath = destination.absolutePath,
         filename = localFilename,
         downloadId = progressKey

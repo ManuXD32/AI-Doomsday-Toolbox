@@ -104,6 +104,7 @@ sealed class Screen(val route: String) {
     object OllamaManager : Screen("ollama_manager")            // Ollama server/model manager
     
     // Native Llama Client
+    object LlamaServers : Screen("llama_servers")        // Managed llama.cpp server cards
     object LlamaServerList : Screen("llama_server_list")       // Server management (entry point)
     object LlamaChatList : Screen("llama_chat_list") {         // Chat history
         const val folderRoute = "llama_chat_list/folder/{folderId}"

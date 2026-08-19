@@ -67,6 +67,8 @@ import com.example.llamadroid.service.DistributedMasterRuntimeState
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.ProcessController
+import com.example.llamadroid.service.effectiveSpeculativeDraftPath
+import com.example.llamadroid.service.speculativeDraftModelsFor
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.util.GGUFParser
@@ -167,8 +169,8 @@ fun MasterModeScreen(navController: NavController) {
     // Get ALL models from database and filter properly
     val allModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
     
-    // Filter to models that can be used for chat inference
-    // Include LLM, VISION, and EMBEDDING types
+    // Filter to models that can be used for chat inference. Embeddings are not
+    // generative targets and must not appear in the main or draft selectors.
     // Check if file actually exists (for imported models) OR isDownloaded flag is true
     val availableModels by produceState(initialValue = emptyList<ModelEntity>(), allModels) {
         value = withContext(Dispatchers.IO) {
@@ -176,7 +178,7 @@ fun MasterModeScreen(navController: NavController) {
         }
     }
     val llmModels = remember(availableModels) { availableModels.filter { model ->
-        model.type == ModelType.LLM || model.type == ModelType.VISION || model.type == ModelType.EMBEDDING
+        model.type == ModelType.LLM || model.type == ModelType.VISION
     } }
     val mmprojModels = remember(availableModels) { availableModels.filter { model ->
         model.type == ModelType.MMPROJ || model.type == ModelType.VISION_PROJECTOR
@@ -226,7 +228,6 @@ fun MasterModeScreen(navController: NavController) {
 
     // Speculative decoding settings
     val speculativeEnabled by DistributedService.masterSpeculativeEnabled.collectAsState()
-    val draftModel = DistributedService.masterDraftModel.collectAsState().value
     val storedDraftModelPath by DistributedService.masterDraftModelPath.collectAsState()
     var showDraftModelPicker by remember { mutableStateOf(false) }
     val draftMax by DistributedService.masterDraftMax.collectAsState()
@@ -240,6 +241,15 @@ fun MasterModeScreen(navController: NavController) {
     val draftThreadsBatch by DistributedService.masterDraftThreadsBatch.collectAsState()
     val draftThreadsBatchText by DistributedService.masterDraftThreadsBatchText.collectAsState()
     val speculativeMode by DistributedService.masterSpeculativeMode.collectAsState()
+    val draftModels = remember(availableModels, speculativeMode) {
+        speculativeDraftModelsFor(availableModels, speculativeMode)
+    }
+    val effectiveDraftModelPath = remember(storedDraftModelPath, draftModels) {
+        effectiveSpeculativeDraftPath(storedDraftModelPath, draftModels)
+    }
+    val draftModel = remember(effectiveDraftModelPath, draftModels) {
+        draftModels.firstOrNull { it.path == effectiveDraftModelPath }
+    }
     val fitEnabled by DistributedService.masterFitEnabled.collectAsState()
     val fitTargetMiB by DistributedService.masterFitTargetMiB.collectAsState()
     val nglArgument by DistributedService.masterNglArgument.collectAsState()
@@ -348,10 +358,13 @@ fun MasterModeScreen(navController: NavController) {
         else -> null
     }
 
-    LaunchedEffect(storedDraftModelPath, allModels) {
-        val storedPath = storedDraftModelPath
-        if (!storedPath.isNullOrBlank() && draftModel?.path != storedPath) {
-            allModels.firstOrNull { it.path == storedPath }?.let(DistributedService::setMasterDraftModel)
+    LaunchedEffect(storedDraftModelPath, draftModels) {
+        // Wait for at least one candidate before synchronizing persisted state;
+        // the database-backed list starts empty while it is loading. Once the
+        // list is available, an incompatible path is cleared rather than being
+        // allowed to reach distributed launch fallback state.
+        if (draftModels.isNotEmpty()) {
+            DistributedService.setMasterDraftModel(draftModel)
         }
     }
     
@@ -441,13 +454,15 @@ fun MasterModeScreen(navController: NavController) {
         require(workerSpecs.isNotEmpty()) { context.getString(R.string.dist_error_no_workers) }
         val probe = effectiveLayerResult
             ?: error(context.getString(R.string.dist_probe_required))
-        val selectedDraftPath = draftModel?.path ?: storedDraftModelPath
+        val selectedDraftPath = draftModel?.path
         val effectiveDraftPath = when {
             !speculativeEnabled -> null
             speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && !mtpUseDraftModel -> null
             else -> selectedDraftPath
         }
-        if (speculativeEnabled && speculativeMode.requiresDraftModel) {
+        val requiresSelectedDraft = speculativeMode.requiresDraftModel ||
+            (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && mtpUseDraftModel)
+        if (speculativeEnabled && requiresSelectedDraft) {
             require(!effectiveDraftPath.isNullOrBlank()) {
                 context.getString(R.string.dist_speculative_missing_required_draft)
             }
@@ -1397,13 +1412,12 @@ fun MasterModeScreen(navController: NavController) {
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                draftModel?.filename ?: storedDraftModelPath?.substringAfterLast('/')
-                                    ?: stringResource(R.string.dist_speculative_select_draft),
+                                draftModel?.filename ?: stringResource(R.string.dist_speculative_select_draft),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                        if (draftModel != null || !storedDraftModelPath.isNullOrBlank()) {
+                        if (draftModel != null) {
                             TextButton(onClick = { DistributedService.setMasterDraftModel(null) }) {
                                 Text(stringResource(R.string.dist_speculative_clear_draft))
                             }
@@ -2944,9 +2958,19 @@ fun MasterModeScreen(navController: NavController) {
     if (showDraftModelPicker) {
         AlertDialog(
             onDismissRequest = { showDraftModelPicker = false },
-            title = { Text(stringResource(R.string.dist_speculative_draft_model)) },
+            title = {
+                Text(
+                    stringResource(
+                        if (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) {
+                            R.string.models_type_mtp
+                        } else {
+                            R.string.dist_speculative_draft_model
+                        }
+                    )
+                )
+            },
             text = {
-                if (llmModels.isEmpty()) {
+                if (draftModels.isEmpty()) {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.padding(16.dp)
@@ -2957,7 +2981,7 @@ fun MasterModeScreen(navController: NavController) {
                     }
                 } else {
                     LazyColumn {
-                        items(llmModels) { model ->
+                        items(draftModels) { model ->
                             Surface(
                                 onClick = {
                                     DistributedService.setMasterDraftModel(model)
@@ -3386,6 +3410,7 @@ fun MasterModeScreen(navController: NavController) {
                                     threads = threads,
                                     host = host,
                                     speculativeEnabled = speculativeEnabled,
+                                    speculativeMode = speculativeMode.flagValue,
                                     draftModelPath = draftModel?.path,
                                     draftMax = draftMax,
                                     draftMin = draftMin,
@@ -3469,10 +3494,16 @@ fun MasterModeScreen(navController: NavController) {
                                             
                                             // Speculative
                                             DistributedService.setMasterSpeculativeEnabled(cmd.speculativeEnabled)
-                                            if (cmd.draftModelPath != null) {
-                                                val draft = allModels.find { it.path == cmd.draftModelPath }
-                                                DistributedService.setMasterDraftModel(draft)
-                                            }
+                                            val commandSpeculativeMode =
+                                                LlamaSpeculativeMode.fromFlagValue(cmd.speculativeMode)
+                                            DistributedService.setMasterSpeculativeMode(commandSpeculativeMode)
+                                            val commandDraftModels = speculativeDraftModelsFor(
+                                                availableModels,
+                                                commandSpeculativeMode
+                                            )
+                                            DistributedService.setMasterDraftModel(
+                                                commandDraftModels.firstOrNull { it.path == cmd.draftModelPath }
+                                            )
                                             DistributedService.setMasterDraftMax(cmd.draftMax)
                                             DistributedService.setMasterDraftMaxText(cmd.draftMax.toString())
                                             DistributedService.setMasterDraftMin(cmd.draftMin)

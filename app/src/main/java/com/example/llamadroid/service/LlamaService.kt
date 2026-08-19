@@ -651,12 +651,30 @@ class LlamaService : Service() {
         val masterMtpUsesDraftModel = isMasterProfile &&
             (requestedMasterSpeculativeMode != LlamaSpeculativeMode.DRAFT_MTP ||
                 DistributedService.masterMtpUseDraftModel.value)
-        val effectiveDraftModelPath = distributedConfig?.draftModelPath
-            ?: localLaunchProfile?.draftModelPath
-            ?: draftModelPath
-            ?: if (masterMtpUsesDraftModel) {
-                DistributedService.masterDraftModel.value?.path ?: DistributedService.masterDraftModelPath.value
-            } else null
+        val localProfileUsesMtpDraftModel = localLaunchProfile?.let { profile ->
+            LlamaSpeculativeMode.fromFlagValue(profile.speculativeMode) != LlamaSpeculativeMode.DRAFT_MTP ||
+                profile.mtpUseDraftModel
+        } ?: true
+        val localProfileDraftModelPath = localLaunchProfile
+            ?.takeIf { localProfileUsesMtpDraftModel }
+            ?.draftModelPath
+        val explicitDraftModelPath = draftModelPath.takeIf {
+            localLaunchProfile == null || localProfileUsesMtpDraftModel
+        }
+        // A resolved distributed profile is authoritative, including an
+        // explicit null draft path. Falling back to the process-local master
+        // StateFlow here could resurrect a stale standard/MTP path after the
+        // UI has invalidated it against the current candidate family.
+        val effectiveDraftModelPath = if (distributedConfig != null) {
+            distributedConfig.draftModelPath
+        } else {
+            localProfileDraftModelPath
+                ?: explicitDraftModelPath
+                ?: if (masterMtpUsesDraftModel) {
+                    DistributedService.masterDraftModel.value?.path
+                        ?: DistributedService.masterDraftModelPath.value
+                } else null
+        }
         val effectiveDraftMax = distributedConfig?.draftMax ?: localLaunchProfile?.draftMax ?: draftMax ?: 3
         val effectiveDraftMin = distributedConfig?.draftMin ?: localLaunchProfile?.draftMin ?: draftMin ?: 0
         val effectiveDraftPMin = distributedConfig?.draftPMin ?: localLaunchProfile?.draftPMin ?: draftPMin ?: 0f
@@ -706,9 +724,12 @@ class LlamaService : Service() {
         }
         // This is intentionally a general local-profile preference. Distributed and OCR launches
         // never inherit it, even though they share LlamaConfig with local launches.
-        val openClCpuTargetGpuDraft = !isMasterProfile &&
-            !isOcrProfile &&
-            settingsRepo.llamaOpenClCpuTargetGpuDraft.value
+        val openClCpuTargetGpuDraft = if (!isMasterProfile && !isOcrProfile) {
+            localLaunchProfile?.openClCpuTargetGpuDraft
+                ?: settingsRepo.llamaOpenClCpuTargetGpuDraft.value
+        } else {
+            false
+        }
         val effectiveDraftThreads = distributedConfig?.draftThreads ?: localLaunchProfile?.draftThreads ?: draftThreads ?: if (isMasterProfile) DistributedService.masterDraftThreads.value else settingsRepo.draftThreads.value
         val effectiveDraftThreadsBatch = distributedConfig?.draftThreadsBatch ?: localLaunchProfile?.draftThreadsBatch ?: draftThreadsBatch ?: if (isMasterProfile) DistributedService.masterDraftThreadsBatch.value else settingsRepo.draftThreadsBatch.value
         val distributedDraftDeviceId = distributedConfig?.draftDeviceId ?: if (isMasterProfile &&
@@ -733,7 +754,12 @@ class LlamaService : Service() {
         val ngramMapK4VSizeN = localLaunchProfile?.ngramMapK4VSizeN ?: if (isMasterProfile) DistributedService.masterNgramMapK4VSizeN.value else if (isOcrProfile) 12 else settingsRepo.ngramMapK4VSizeN.value
         val ngramMapK4VSizeM = localLaunchProfile?.ngramMapK4VSizeM ?: if (isMasterProfile) DistributedService.masterNgramMapK4VSizeM.value else if (isOcrProfile) 48 else settingsRepo.ngramMapK4VSizeM.value
         val ngramMapK4VMinHits = localLaunchProfile?.ngramMapK4VMinHits ?: if (isMasterProfile) DistributedService.masterNgramMapK4VMinHits.value else if (isOcrProfile) 1 else settingsRepo.ngramMapK4VMinHits.value
-        val nativeToolsEnabled = !isMasterProfile && !isOcrProfile && settingsRepo.llamaNativeToolsEnabled.value
+        val nativeToolsEnabled = if (!isMasterProfile && !isOcrProfile) {
+            localLaunchProfile?.nativeToolsEnabled
+                ?: settingsRepo.llamaNativeToolsEnabled.value
+        } else {
+            false
+        }
         val nativeToolsWorkspaceDir = File(filesDir, "llama_native_tools_workspace")
         val commandTemplate = distributedLaunchProfile?.commandTemplate
             ?.takeIf { it.isNotBlank() }
@@ -862,7 +888,7 @@ class LlamaService : Service() {
             try {
                 // Get binary from BinaryRepository
                 val binaryRepo = BinaryRepository(applicationContext)
-                val binaryFile = binaryRepo.getExecutable()
+                val binaryFile = binaryRepo.getExecutable(localLaunchProfile?.nativeBinarySelection)
                 
                 if (binaryFile == null || !binaryFile.exists()) {
                     throw Exception("Binary not found. Please ensure binaries are extracted.")
@@ -1227,7 +1253,16 @@ class LlamaService : Service() {
                         processController.getCommand(candidateBinary, effectiveConfig)
                     } else {
                         DebugLog.log("LlamaService: Rendering command template for ${if (isMasterProfile) "master" else "general"} profile")
-                        processController.renderCommandTemplate(commandTemplate, candidateBinary, effectiveConfig)
+                        val rendered = processController.renderCommandTemplate(
+                            commandTemplate,
+                            candidateBinary,
+                            effectiveConfig
+                        )
+                        if (!isMasterProfile && !isOcrProfile) {
+                            normalizeManagedLlamaServerPortArgs(rendered, effectiveConfig.port)
+                        } else {
+                            rendered
+                        }
                     }
                 }
 

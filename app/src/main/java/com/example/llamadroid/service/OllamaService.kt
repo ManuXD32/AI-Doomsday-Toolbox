@@ -348,7 +348,7 @@ class OllamaService(private val context: Context) {
                         throw IllegalStateException("HTTP $responseCode")
                     }
                     val response = conn.inputStream.bufferedReader().readText()
-                    parseModels(response)
+                    _availableModels.value = parseModels(response)
                 } finally {
                     conn.disconnect()
                 }
@@ -384,18 +384,26 @@ class OllamaService(private val context: Context) {
     /**
      * Get list of installed models
      */
-    suspend fun listModels(): List<OllamaModel> = withContext(Dispatchers.IO) {
+    suspend fun listModels(baseUrlOverride: String? = null): List<OllamaModel> = withContext(Dispatchers.IO) {
         try {
-            val url = URL("${_baseUrl.value}/api/tags")
+            val effectiveBaseUrl = baseUrlOverride
+                ?.trim()
+                ?.trimEnd('/')
+                ?.takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+                ?: _baseUrl.value.trimEnd('/')
+            val url = URL("$effectiveBaseUrl/api/tags")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.connectTimeout = 10000
             
             if (conn.responseCode == 200) {
                 val response = conn.inputStream.bufferedReader().readText()
-                parseModels(response)
+                val models = parseModels(response)
                 conn.disconnect()
-                _availableModels.value
+                if (baseUrlOverride.isNullOrBlank()) {
+                    _availableModels.value = models
+                }
+                models
             } else {
                 conn.disconnect()
                 emptyList()
@@ -406,10 +414,10 @@ class OllamaService(private val context: Context) {
         }
     }
     
-    private fun parseModels(response: String) {
+    private fun parseModels(response: String): List<OllamaModel> {
         try {
             val json = JSONObject(response)
-            val modelsArray = json.optJSONArray("models") ?: return
+            val modelsArray = json.optJSONArray("models") ?: return emptyList()
             
             val models = mutableListOf<OllamaModel>()
             for (i in 0 until modelsArray.length()) {
@@ -421,9 +429,10 @@ class OllamaService(private val context: Context) {
                     digest = model.optString("digest", "")
                 ))
             }
-            _availableModels.value = models
+            return models
         } catch (e: Exception) {
             DebugLog.log("[$TAG] Failed to parse models: ${e.message}")
+            return emptyList()
         }
     }
     
@@ -433,6 +442,7 @@ class OllamaService(private val context: Context) {
      * @param model Model name (e.g., "qwen2.5-coder:3b")
      * @param messages Chat history
      * @param tools Available tools for the model to use
+     * @param baseUrlOverride Optional endpoint override for a named agent configuration
      * @param onChunk Callback for (contentChunk, thinkingChunk)
      * @return Final response with potential tool calls
      */
@@ -443,6 +453,7 @@ class OllamaService(private val context: Context) {
         thinkingEnabled: Boolean = true,
         numCtxOverride: Int? = null,
         maxOutputTokens: Int? = null,
+        baseUrlOverride: String? = null,
         onChunk: (String?, String?) -> Unit = { _, _ -> }
     ): Result<ChatResponse> = withContext(Dispatchers.IO) {
         activeChatRequests.incrementAndGet()
@@ -455,7 +466,9 @@ class OllamaService(private val context: Context) {
         }
 
         try {
-            val chatResponse = RemoteAgentProtection.withProtection(_baseUrl.value, "Running remote Ollama agent…") {
+            val effectiveBaseUrl = baseUrlOverride?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+                ?: _baseUrl.value
+            val chatResponse = RemoteAgentProtection.withProtection(effectiveBaseUrl, "Running remote Ollama agent…") {
                 RemoteBackendResilience.runWithSingleRetry(
                     onRetry = { firstError ->
                         _isRecovering.value = true
@@ -470,7 +483,8 @@ class OllamaService(private val context: Context) {
                         thinkingEnabled,
                         numCtxOverride,
                         maxOutputTokens,
-                        guardedOnChunk
+                        guardedOnChunk,
+                        effectiveBaseUrl
                     )
                 }
             }
@@ -503,9 +517,10 @@ class OllamaService(private val context: Context) {
         thinkingEnabled: Boolean,
         numCtxOverride: Int?,
         maxOutputTokens: Int?,
-        onChunk: (String?, String?) -> Unit
+        onChunk: (String?, String?) -> Unit,
+        baseUrl: String
     ): ChatResponse {
-        val url = URL("${_baseUrl.value}/api/chat")
+        val url = URL("$baseUrl/api/chat")
         val conn = url.openConnection() as HttpURLConnection
         return withTrackedConnection(conn) { trackedConn ->
             trackedConn.requestMethod = "POST"

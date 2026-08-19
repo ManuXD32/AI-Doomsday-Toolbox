@@ -2231,6 +2231,15 @@ class SettingsRepository(private val context: Context) {
     )
     val speculativeMode = _speculativeMode.asStateFlow()
     fun setSpeculativeMode(mode: LlamaSpeculativeMode) {
+        val previousMode = _speculativeMode.value
+        val crossesMtpBoundary =
+            (previousMode == LlamaSpeculativeMode.DRAFT_MTP) !=
+                (mode == LlamaSpeculativeMode.DRAFT_MTP)
+        if (crossesMtpBoundary) {
+            // Standard draft models and dedicated MTP models are different
+            // model families; never carry a path from one family into the other.
+            setDraftModelPath(null)
+        }
         prefs.edit().putString("speculative_mode", mode.flagValue).apply()
         _speculativeMode.value = mode
     }

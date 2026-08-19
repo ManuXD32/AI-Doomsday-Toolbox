@@ -8,9 +8,14 @@ import androidx.room.withTransaction
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.AgentRuntimeBackend
+import com.example.llamadroid.data.db.AgentRuntimeProfileKeys
 import com.example.llamadroid.data.db.AgentProjectEventEntity
 import com.example.llamadroid.data.db.AgentProjectRunEntity
 import com.example.llamadroid.data.db.AgentPendingPlanEntity
+import com.example.llamadroid.data.runtime.AgentRuntimeDispatch
+import com.example.llamadroid.data.runtime.AgentRuntimeNeedsDirectionReason
+import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
@@ -56,6 +61,24 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.roundToInt
+
+private fun AgentRuntimeNeedsDirectionReason.toNeedsDirectionMessage(context: Context): String =
+    when (this) {
+        AgentRuntimeNeedsDirectionReason.PROFILE_MISSING ->
+            context.getString(R.string.agent_runtime_profile_desc)
+        AgentRuntimeNeedsDirectionReason.ENDPOINT_MISSING ->
+            context.getString(R.string.agent_runtime_endpoint_config_missing)
+        AgentRuntimeNeedsDirectionReason.SERVER_MISSING ->
+            context.getString(R.string.agent_runtime_server_missing)
+        AgentRuntimeNeedsDirectionReason.SERVER_STOPPED ->
+            context.getString(R.string.agent_runtime_server_stopped)
+        AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY ->
+            context.getString(R.string.agent_runtime_server_not_ready)
+        AgentRuntimeNeedsDirectionReason.LITERT_MODEL_MISSING ->
+            context.getString(R.string.agent_runtime_litert_model_missing)
+        AgentRuntimeNeedsDirectionReason.MODEL_MISSING ->
+            context.getString(R.string.agent_runtime_model_missing)
+    }
 
 /**
  * File/directory information
@@ -1488,6 +1511,8 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 llmPath = components.llmPath,
                 llmVisionPath = components.llmVisionPath,
                 photoMakerPath = components.photoMakerPath,
+                loras = sdParams.loras,
+                loraApplyMode = sdParams.loraApplyMode,
                 flowShift = sdParams.flowShift.toFloatOrNull(),
                 diffusionFa = sdParams.diffusionFa && spec.supportsDiffusionFa,
                 mmap = sdParams.mmap && spec.supportsMmap,
@@ -7333,7 +7358,10 @@ TODO status. Return via finish_task with JSON:
                     return agentScope.launch { }
                 }
             }
-            val configuredModel = activeCustom?.model?.takeIf { it.isNotBlank() } ?: if (currentAgent == AgentRole.ORCHESTRATOR) {
+            val runtimeAgentKey = activeCustom?.let {
+                AgentRuntimeProfileKeys.custom(it.name)
+            } ?: currentAgent.name
+            val legacyConfiguredModel = activeCustom?.model?.takeIf { it.isNotBlank() } ?: if (currentAgent == AgentRole.ORCHESTRATOR) {
                 settingsRepo.getAgentModelForRole("ORCHESTRATOR")
             } else {
                 settingsRepo.getAgentModelForRole(currentAgent.name)
@@ -7342,7 +7370,12 @@ TODO status. Return via finish_task with JSON:
             val requiresPerRoleModel = !SettingsRepository.isLiteRtBackend(preflightBackend) &&
                 !SettingsRepository.usesOpenAiChatBackend(preflightBackend)
 
-            if (requiresPerRoleModel && configuredModel.isBlank()) {
+            // The profile repository is installed by the central app bootstrap after it
+            // registers the Room DAO. Keep the legacy guard only for preview/rollout builds;
+            // an installed repository is authoritative even when old settings are blank.
+            if (AgentRuntimeProfileRuntime.installedRepository() == null &&
+                requiresPerRoleModel && legacyConfiguredModel.isBlank()
+            ) {
                 addDebugLog("⚠️ No model selected for role ${currentAgent.name}")
                 return agentScope.launch { }
             }
@@ -7366,13 +7399,40 @@ TODO status. Return via finish_task with JSON:
             val newJob = agentScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     ensureAgentRunActive(runEpoch)
-                    val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+                    val runtimeDispatch = AgentRuntimeProfileRuntime.resolve(runtimeAgentKey)
+                    if (runtimeDispatch is AgentRuntimeDispatch.NeedsDirection) {
+                        // Keep this event metadata-only. The visible pause contains the
+                        // localized recovery copy, while durable diagnostics retain only the
+                        // role and enum reason, never prompts, model output, or tool content.
+                        recordAgentEvent(
+                            kind = "agent_runtime_needs_direction",
+                            summary = "Agent runtime profile needs direction",
+                            details = "agentKey=${runtimeDispatch.agentKey} reason=${runtimeDispatch.reason.name}"
+                        )
+                        pauseForNeedsDirection(
+                            context,
+                            runtimeDispatch.reason.toNeedsDirectionMessage(context)
+                        )
+                        return@launch
+                    }
+                    val runtimeReady = runtimeDispatch as? AgentRuntimeDispatch.Ready
+                    val runtimeProfile = runtimeReady?.profile
+                    val backend = runtimeProfile?.normalizedBackend?.id
+                        ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
                     val useLlamaServer = SettingsRepository.isLlamaServerBackend(backend)
                     val useLlamaSwap = SettingsRepository.isLlamaSwapBackend(backend)
                     val useOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(backend)
                     val useLiteRtBackend = SettingsRepository.isLiteRtBackend(backend)
+                    val configuredModel = runtimeProfile?.model?.takeIf { it.isNotBlank() }
+                        ?: legacyConfiguredModel
+                    val managedServerUrl = runtimeReady?.managedServer?.let { server ->
+                        "http://${server.host.trim().trimEnd('/')}:${server.port}"
+                    }
+                    val namedEndpointUrl = runtimeReady?.endpointConfig?.baseUrl
+                        ?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
                     val liteRtModel = if (useLiteRtBackend) {
-                        val selectedId = settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
+                        val selectedId = runtimeProfile?.liteRtModelId?.takeIf { it > 0L }
+                            ?: settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
                             ?: run {
                                 val message = context.getString(R.string.agent_litert_model_required_error)
                                 addDebugLog("❌ LLM Error: $message")
@@ -7404,7 +7464,9 @@ TODO status. Return via finish_task with JSON:
                     val model = if (useLiteRtBackend) {
                         liteRtModel?.displayName ?: configuredModel
                     } else if (useLlamaServer) {
-                        agentService.refreshLlamaServerRuntimeState(settingsRepo).getOrNull()?.modelLabel
+                        runtimeReady?.managedServer?.modelName
+                            ?: runtimeProfile?.model
+                            ?: agentService.refreshLlamaServerRuntimeState(settingsRepo).getOrNull()?.modelLabel
                             ?: settingsRepo.agentLlamaServerModelLabel.value
                             ?: configuredModel
                     } else {
@@ -7509,9 +7571,10 @@ TODO status. Return via finish_task with JSON:
                     val rawToolSchemaTokens =
                         estimateRawPromptTextTokens(canonicalToolSchema)
                     val calibrationEndpointGeneration = when {
-                        useLlamaServer -> settingsRepo.llamaServerUrl.value
-                        useLlamaSwap -> settingsRepo.agentLlamaSwapUrl.value
-                        else -> backend
+                        namedEndpointUrl != null -> namedEndpointUrl
+                        useLlamaServer -> managedServerUrl ?: settingsRepo.llamaServerUrl.value
+                        useLlamaSwap -> managedServerUrl ?: settingsRepo.agentLlamaSwapUrl.value
+                        else -> ollamaService.baseUrl.value
                     }
                     val promptCalibrationKey = buildAgentPromptCalibrationKey(
                         backend = backend,
@@ -8408,7 +8471,7 @@ TODO status. Return via finish_task with JSON:
                         }
                     } else if (useOpenAiBackend) {
                         // Use OpenAI-compatible API (llama-server or llama-swap)
-                        val llamaUrl = if (useLlamaSwap) {
+                        val llamaUrl = namedEndpointUrl ?: managedServerUrl ?: if (useLlamaSwap) {
                             settingsRepo.agentLlamaSwapUrl.value
                         } else {
                             settingsRepo.llamaServerUrl.value
@@ -8608,6 +8671,7 @@ TODO status. Return via finish_task with JSON:
                             tools = availableTools,
                             thinkingEnabled = thinkingEnabled,
                             maxOutputTokens = effectiveMaxOutputTokens,
+                            baseUrlOverride = namedEndpointUrl,
                             onChunk = { chunk, thinkingChunk ->
                                 if (isAgentRunActive(runEpoch)) {
                                     chunk?.let {
@@ -17107,7 +17171,32 @@ sys.exit(proc.returncode)
             )
         )
 
-        val backend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+        val runtimeDispatch = AgentRuntimeProfileRuntime.resolve("SUMMARIZER")
+        if (runtimeDispatch is AgentRuntimeDispatch.NeedsDirection) {
+            recordAgentEvent(
+                kind = "agent_runtime_needs_direction",
+                summary = "Summarizer runtime profile needs direction",
+                details = "agentKey=${runtimeDispatch.agentKey} reason=${runtimeDispatch.reason.name}"
+            )
+            pauseForNeedsDirection(
+                context,
+                runtimeDispatch.reason.toNeedsDirectionMessage(context)
+            )
+            return Result.failure(
+                IllegalStateException("Summarizer runtime profile needs direction: ${runtimeDispatch.reason.name}")
+            )
+        }
+        val runtimeReady = runtimeDispatch as? AgentRuntimeDispatch.Ready
+        val runtimeProfile = runtimeReady?.profile
+        val backend = runtimeProfile?.normalizedBackend?.id
+            ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+        val effectiveSummarizerModel = runtimeProfile?.model?.takeIf { it.isNotBlank() }
+            ?: summarizerModel
+        val managedServerUrl = runtimeReady?.managedServer?.let { server ->
+            "http://${server.host.trim().trimEnd('/')}:${server.port}"
+        }
+        val namedEndpointUrl = runtimeReady?.endpointConfig?.baseUrl
+            ?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
         val summaryOutputTokens = resolveAgentEffectiveMaxOutputTokens(
             configuredMaxOutputTokens = if (SettingsRepository.isLiteRtBackend(backend)) {
                 settingsRepo.agentLiteRtMaxOutputTokens.value
@@ -17119,7 +17208,8 @@ sys.exit(proc.returncode)
         )
         val result = if (SettingsRepository.isLiteRtBackend(backend)) {
             val appContext = context.applicationContext
-            val selectedId = settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
+            val selectedId = runtimeProfile?.liteRtModelId?.takeIf { it > 0L }
+                ?: settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
                 ?: return Result.failure(IllegalStateException("Missing LiteRT model"))
             val liteRtModel = AppDatabase.getDatabase(appContext)
                 .liteRtModelDao()
@@ -17151,11 +17241,11 @@ sys.exit(proc.returncode)
                 )
             }
         } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
-            val baseUrl = if (SettingsRepository.isLlamaSwapBackend(backend)) {
-                settingsRepo.agentLlamaSwapUrl.value.trim()
+            val baseUrl = (namedEndpointUrl ?: managedServerUrl ?: if (SettingsRepository.isLlamaSwapBackend(backend)) {
+                settingsRepo.agentLlamaSwapUrl.value
             } else {
-                settingsRepo.llamaServerUrl.value.trim()
-            }
+                settingsRepo.llamaServerUrl.value
+            }).trim()
             if (baseUrl.isBlank()) {
                 val label = if (SettingsRepository.isLlamaSwapBackend(backend)) "llama-swap" else "llama-server"
                 return Result.failure(IllegalStateException("Missing $label URL"))
@@ -17165,9 +17255,11 @@ sys.exit(proc.returncode)
                 messages = summaryMessages,
                 tools = emptyList(),
                 modelLabel = if (SettingsRepository.isLlamaSwapBackend(backend)) {
-                    summarizerModel
+                    effectiveSummarizerModel
                 } else {
-                    settingsRepo.agentLlamaServerModelLabel.value
+                    runtimeReady?.managedServer?.modelName
+                        ?: runtimeProfile?.model
+                        ?: settingsRepo.agentLlamaServerModelLabel.value
                 },
                 thinkingEnabled = false,
                 maxTokens = summaryOutputTokens,
@@ -17175,11 +17267,12 @@ sys.exit(proc.returncode)
             ) { _, _ -> }
         } else {
             ollamaService.chatWithToolsStreaming(
-                model = summarizerModel,
+                model = effectiveSummarizerModel,
                 messages = summaryMessages,
                 tools = emptyList(),
                 numCtxOverride = summarizerCtx,
-                maxOutputTokens = summaryOutputTokens
+                maxOutputTokens = summaryOutputTokens,
+                baseUrlOverride = namedEndpointUrl
             ) { _, _ -> }
         }
 

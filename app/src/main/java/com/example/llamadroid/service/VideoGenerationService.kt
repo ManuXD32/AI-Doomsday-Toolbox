@@ -32,8 +32,30 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
 import java.io.File
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.activeInOrder
+import com.example.llamadroid.sd.validateSdLoras
+import java.util.Locale
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
+
+internal fun buildVideoPrompt(config: VideoGenerationConfig): String =
+    (config.resolvedLoras().activeInOrder().map { item ->
+        wanLoraPromptToken(item)
+    } + config.prompt)
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+
+/**
+ * sd.cpp's Wan 2.2 prompt contract uses a dedicated `|high_noise|` marker for
+ * adapters that belong only to the high-noise pass.  Keeping this in the
+ * prompt, rather than inferring it from the file name, preserves user intent
+ * through saved configs and metadata round trips.
+ */
+internal fun wanLoraPromptToken(item: SdLoraSpec): String {
+    val marker = if (item.highNoiseOnly) "|high_noise|" else ""
+    return "<lora:$marker${item.promptTokenName}:${item.strength}>"
+}
 
 /**
  * Dedicated foreground service for stable-diffusion.cpp video generation.
@@ -257,8 +279,26 @@ class VideoGenerationService : Service() {
                 candidateBinary.absolutePath,
                 "-M", "vid_gen",
                 "--diffusion-model", config.diffusionModelPath,
-                "--prompt", config.prompt
+                "--prompt", buildVideoPrompt(config)
             )
+
+            val videoLoras = config.resolvedLoras().also {
+                validateSdLoras(it, requireReadableFiles = true)
+            }
+            val loraDirectories = videoLoras
+                .activeInOrder()
+                .mapNotNull { File(it.path).parent?.takeIf { parent -> parent.isNotBlank() } }
+                .distinct()
+            if (loraDirectories.isNotEmpty()) {
+                requireFlag("--lora-model-dir")
+                loraDirectories.forEach { directory ->
+                    args.addAll(listOf("--lora-model-dir", directory))
+                }
+                config.loraApplyMode?.let { mode ->
+                    requireFlag("--lora-apply-mode")
+                    args.addAll(listOf("--lora-apply-mode", mode.cliName))
+                }
+            }
 
             if (config.negativePrompt.isNotBlank()) {
                 args.addAll(listOf("-n", config.negativePrompt))
@@ -534,6 +574,9 @@ class VideoGenerationService : Service() {
             sdRuntimeBackendMode = config.sdRuntimeBackendMode,
             maxVramCpuGiB = config.maxVramCpuGiB,
             distributedRuntime = config.distributedRuntime,
+            loras = config.loras,
+            highNoiseLoras = config.highNoiseLoras,
+            loraApplyMode = config.loraApplyMode?.cliName,
             createdAt = System.currentTimeMillis(),
             aviPath = generatedAvi.absolutePath,
             mp4Path = outputMp4.absolutePath,

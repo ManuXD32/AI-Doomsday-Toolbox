@@ -11,7 +11,7 @@ import com.google.gson.Gson
  */
 @Keep
 data class LlamaServerLaunchProfile(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 3,
     val modelPath: String = "",
     val mmprojPath: String? = null,
     val visionEnabled: Boolean = false,
@@ -41,6 +41,13 @@ data class LlamaServerLaunchProfile(
     val sleepIdleSeconds: Int? = 1800,
     val customFlags: String? = null,
     val flashAttention: Boolean = false,
+    /** OpenCL-only placement policy for this launch profile. */
+    val openClCpuTargetGpuDraft: Boolean = false,
+    /**
+     * The llama-server binary requested by this profile. Null is reserved for profiles written
+     * before binary selection became part of the snapshot and falls back to the global setting.
+     */
+    val nativeBinarySelection: String? = null,
     val nativeToolsEnabled: Boolean = false,
     val commandTemplate: String? = null,
     val speculativeEnabled: Boolean = false,
@@ -139,12 +146,13 @@ data class LlamaServerLaunchProfile(
             swaFull = swaFull,
             sleepIdleSeconds = sleepIdleSeconds,
             customFlags = customFlags,
-            flashAttention = flashAttention
+            flashAttention = flashAttention,
+            openClCpuTargetGpuDraft = openClCpuTargetGpuDraft
         )
     }
 
     companion object {
-        const val SCHEMA_VERSION: Int = 1
+        const val SCHEMA_VERSION: Int = 3
         private val gson = Gson()
 
         fun capture(settings: SettingsRepository): LlamaServerLaunchProfile = LlamaServerLaunchProfile(
@@ -176,6 +184,8 @@ data class LlamaServerLaunchProfile(
             sleepIdleSeconds = settings.serverSleepIdleSeconds.value.takeIf { it >= 0 },
             customFlags = settings.customFlags.value.takeIf { it.isNotBlank() },
             flashAttention = settings.flashAttentionEnabled.value,
+            openClCpuTargetGpuDraft = settings.llamaOpenClCpuTargetGpuDraft.value,
+            nativeBinarySelection = settings.llmNativeBinarySelection.value,
             nativeToolsEnabled = settings.llamaNativeToolsEnabled.value,
             commandTemplate = settings.customCommandTemplate.value.takeIf { it.isNotBlank() },
             speculativeEnabled = settings.speculativeEnabled.value,
@@ -241,6 +251,10 @@ data class LlamaServerLaunchProfile(
             settings.setServerSleepIdleSeconds(profile.sleepIdleSeconds)
             settings.setCustomFlags(profile.customFlags.orEmpty())
             settings.setFlashAttentionEnabled(profile.flashAttention)
+            settings.setLlamaOpenClCpuTargetGpuDraft(profile.openClCpuTargetGpuDraft)
+            profile.nativeBinarySelection
+                ?.takeIf { it.isNotBlank() }
+                ?.let(settings::setLlmNativeBinarySelection)
             settings.setLlamaNativeToolsEnabled(profile.nativeToolsEnabled)
             settings.setCustomCommandTemplate(profile.commandTemplate.orEmpty())
             settings.setSpeculativeEnabled(profile.speculativeEnabled)

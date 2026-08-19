@@ -2838,6 +2838,107 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate107To108_addsManagedRuntimesAndMultiLoraStorage() {
+        helper.createDatabase(TEST_DB, 107).apply { close() }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            108,
+            true,
+            Migrations.MIGRATION_107_108
+        )
+
+        migratedDb.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                "AND name IN ('llama_server_cards', 'agent_runtime_profiles')"
+        ).use { cursor ->
+            val tables = mutableSetOf<String>()
+            while (cursor.moveToNext()) tables += cursor.getString(0)
+            assertEquals(setOf("llama_server_cards", "agent_runtime_profiles"), tables)
+        }
+        migratedDb.query("PRAGMA table_info(llama_server_cards)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(
+                columns.containsAll(
+                    setOf("id", "name", "savedCommandId", "presetNameSnapshot", "port")
+                )
+            )
+        }
+        migratedDb.query("PRAGMA table_info(agent_runtime_profiles)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(
+                columns.containsAll(
+                    setOf("agentKey", "backend", "model", "managedLlamaServerId", "liteRtModelId")
+                )
+            )
+        }
+        migratedDb.query("PRAGMA table_info(sd_distributed_master_settings)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(
+                columns.containsAll(
+                    setOf(
+                        "imageLorasJson",
+                        "videoLorasJson",
+                        "videoHighNoiseLorasJson",
+                        "videoLoraApplyMode"
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun migrate108To109_addsNamedAgentEndpointsAndPreservesProfiles() {
+        helper.createDatabase(TEST_DB, 108).apply {
+            execSQL(
+                """
+                INSERT INTO agent_runtime_profiles(
+                    agentKey, backend, model, managedLlamaServerId, liteRtModelId, updatedAt
+                ) VALUES ('CODER', 'ollama', 'qwen-test', NULL, NULL, 1234)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            109,
+            true,
+            Migrations.MIGRATION_108_109
+        )
+
+        migratedDb.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                "AND name = 'agent_runtime_endpoint_configs'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("agent_runtime_endpoint_configs", cursor.getString(0))
+        }
+        migratedDb.query("PRAGMA table_info(agent_runtime_profiles)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.contains("endpointConfigId"))
+        }
+        migratedDb.query(
+            "SELECT backend, model, endpointConfigId, updatedAt " +
+                "FROM agent_runtime_profiles WHERE agentKey = 'CODER'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("ollama", cursor.getString(0))
+            assertEquals("qwen-test", cursor.getString(1))
+            assertNull(cursor.getString(2))
+            assertEquals(1234L, cursor.getLong(3))
+        }
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
     }

@@ -25,7 +25,7 @@ data class SavedCommand(
     @ColumnInfo(name = "command")
     val commandTemplate: String = "",
     val scope: String = SavedCommandScopes.GENERAL,
-    /** Canonical, versioned general llama-server snapshot. Null rows predate v2 snapshots. */
+    /** Canonical, versioned general llama-server snapshot. Null rows predate canonical snapshots. */
     @ColumnInfo(name = "launchProfileJson")
     val launchProfileJson: String? = null,
     @ColumnInfo(name = "launchProfileSchemaVersion", defaultValue = "1")
@@ -155,6 +155,10 @@ interface SavedCommandDao {
 
     @Query("SELECT * FROM saved_commands WHERE scope = :scope ORDER BY name ASC")
     fun getCommandsByScope(scope: String): Flow<List<SavedCommand>>
+
+    /** Used by live-linked server cards; a missing row is a supported visible state. */
+    @Query("SELECT * FROM saved_commands WHERE id = :id AND scope = 'GENERAL' LIMIT 1")
+    suspend fun getGeneralCommandById(id: Long): SavedCommand?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCommand(command: SavedCommand): Long

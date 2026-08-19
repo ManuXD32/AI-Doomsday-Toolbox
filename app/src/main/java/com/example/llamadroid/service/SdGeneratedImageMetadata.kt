@@ -1,6 +1,9 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.util.DebugLog
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
 import org.json.JSONObject
 import java.io.File
 
@@ -44,6 +47,9 @@ data class SdGeneratedImageMetadata(
     val loraName: String?,
     val loraStrength: Float,
     val loraApplyMode: String?,
+    /** Ordered multi-LoRA snapshot; legacy fields above remain for old readers. */
+    val loras: List<SdLoraSpec> = emptyList(),
+    val adetailerLoras: List<SdLoraSpec> = emptyList(),
     val textualInversionPath: String?,
     val textualInversionName: String?,
     val photoMakerPath: String?,
@@ -85,7 +91,10 @@ data class SdGeneratedImageMetadata(
     val adetailerModelName: String? = null,
     val adetailerConfidence: Float? = null,
     val adetailerDenoisingStrength: Float? = null,
-    val adetailerOutcome: String? = null
+    val adetailerOutcome: String? = null,
+    val workflowPresetId: String? = null,
+    val workflowBundleId: String? = null,
+    val workflowRevision: String? = null
 ) {
     val modeEnum: SDMode
         get() = runCatching { SDMode.valueOf(mode) }.getOrDefault(SDMode.TXT2IMG)
@@ -133,6 +142,8 @@ data class SdGeneratedImageMetadata(
         put("loraName", loraName)
         put("loraStrength", loraStrength.toDouble())
         put("loraApplyMode", loraApplyMode)
+        put("loras", loras.toJsonArray())
+        put("adetailerLoras", adetailerLoras.toJsonArray())
         put("textualInversionPath", textualInversionPath)
         put("textualInversionName", textualInversionName)
         put("photoMakerPath", photoMakerPath)
@@ -183,6 +194,9 @@ data class SdGeneratedImageMetadata(
         put("adetailerConfidence", adetailerConfidence?.toDouble())
         put("adetailerDenoisingStrength", adetailerDenoisingStrength?.toDouble())
         put("adetailerOutcome", adetailerOutcome)
+        put("workflowPresetId", workflowPresetId)
+        put("workflowBundleId", workflowBundleId)
+        put("workflowRevision", workflowRevision)
     }
 
     fun writeToFile(target: File = File(metadataPath)) {
@@ -239,10 +253,14 @@ data class SdGeneratedImageMetadata(
                 controlNetPath = config.controlNetPath,
                 controlNetName = config.controlNetPath?.let { File(it).name },
                 controlStrength = config.controlStrength,
-                loraPath = config.loraPath,
-                loraName = config.loraPath?.let { File(it).name },
-                loraStrength = config.loraStrength,
+                loraPath = config.loraPath ?: config.resolvedLoras().firstOrNull()?.path,
+                loraName = (config.loraPath ?: config.resolvedLoras().firstOrNull()?.path)?.let { File(it).name },
+                loraStrength = config.loraPath?.let { config.loraStrength }
+                    ?: config.resolvedLoras().firstOrNull()?.strength
+                    ?: config.loraStrength,
                 loraApplyMode = config.loraApplyMode?.cliName,
+                loras = config.resolvedLoras(),
+                adetailerLoras = config.adetailer?.loras.orEmpty(),
                 textualInversionPath = config.textualInversionPath,
                 textualInversionName = config.textualInversionPath?.let { File(it).name },
                 photoMakerPath = config.photoMakerPath,
@@ -283,7 +301,10 @@ data class SdGeneratedImageMetadata(
                 imageCfgScale = config.imgCfgScale,
                 adetailerModelName = config.adetailer?.modelPath?.let { File(it).name },
                 adetailerConfidence = config.adetailer?.confidence,
-                adetailerDenoisingStrength = config.adetailer?.denoisingStrength
+                adetailerDenoisingStrength = config.adetailer?.denoisingStrength,
+                workflowPresetId = config.workflowPresetId,
+                workflowBundleId = config.workflowBundleId,
+                workflowRevision = config.workflowRevision
             )
 
         fun fromUpscaleConfig(
@@ -331,6 +352,8 @@ data class SdGeneratedImageMetadata(
                 loraName = null,
                 loraStrength = 0f,
                 loraApplyMode = null,
+                loras = emptyList(),
+                adetailerLoras = emptyList(),
                 textualInversionPath = null,
                 textualInversionName = null,
                 photoMakerPath = null,
@@ -412,6 +435,13 @@ data class SdGeneratedImageMetadata(
                 loraName = json.optString("loraName").ifBlank { null },
                 loraStrength = json.optDouble("loraStrength", 0.0).toFloat(),
                 loraApplyMode = json.optString("loraApplyMode").ifBlank { null },
+                loras = json.optJSONArray("loras")?.toSdLoraSpecs()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: SdLoraSpec.fromLegacy(
+                        json.optString("loraPath").ifBlank { null },
+                        json.optDouble("loraStrength", 1.0).toFloat()
+                    ),
+                adetailerLoras = json.optJSONArray("adetailerLoras")?.toSdLoraSpecs().orEmpty(),
                 textualInversionPath = json.optString("textualInversionPath").ifBlank { null },
                 textualInversionName = json.optString("textualInversionName").ifBlank { null },
                 photoMakerPath = json.optString("photoMakerPath").ifBlank { null },
@@ -467,7 +497,10 @@ data class SdGeneratedImageMetadata(
                 adetailerModelName = json.optString("adetailerModelName").ifBlank { null },
                 adetailerConfidence = parseOptionalFloat(json, "adetailerConfidence"),
                 adetailerDenoisingStrength = parseOptionalFloat(json, "adetailerDenoisingStrength"),
-                adetailerOutcome = json.optString("adetailerOutcome").ifBlank { null }
+                adetailerOutcome = json.optString("adetailerOutcome").ifBlank { null },
+                workflowPresetId = json.optString("workflowPresetId").ifBlank { null },
+                workflowBundleId = json.optString("workflowBundleId").ifBlank { null },
+                workflowRevision = json.optString("workflowRevision").ifBlank { null }
             )
 
         private fun parseSamplingMethod(value: String): SamplingMethod =

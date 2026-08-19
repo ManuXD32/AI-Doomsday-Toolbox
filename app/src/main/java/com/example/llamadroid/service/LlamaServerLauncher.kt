@@ -16,8 +16,17 @@ object LlamaServerLauncher {
         LlamaService.ACTION_RECOVER
     )
 
+    private val ownedSessionActions = setOf(
+        LlamaServerSessionService.ACTION_START,
+        LlamaServerSessionService.ACTION_STOP,
+        LlamaServerSessionService.ACTION_CLEAR_LOGS,
+        LlamaServerSessionService.ACTION_REMOVE
+    )
+
     /** Pure action gate kept separate so service-boundary policy can be unit-tested. */
     internal fun isOwnedServiceAction(action: String?): Boolean = action in ownedServiceActions
+
+    internal fun isOwnedSessionAction(action: String?): Boolean = action in ownedSessionActions
 
     /**
      * Sends only an explicit, app-local command to [LlamaService]. This keeps the launcher from
@@ -262,6 +271,79 @@ object LlamaServerLauncher {
             "launch_failed",
             "error=${error.javaClass.simpleName}: ${error.message.orEmpty()}"
         )
+    }
+
+    /** Start one independent keyed session without changing global SettingsRepository values. */
+    fun startSession(
+        context: Context,
+        sessionId: String,
+        profile: LlamaServerLaunchProfile,
+        portOverride: Int? = null
+    ): Result<Unit> = dispatchSessionCommand(
+        context,
+        Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
+            action = LlamaServerSessionService.ACTION_START
+            putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
+            putExtra(LlamaServerSessionService.EXTRA_PROFILE_JSON, LlamaServerLaunchProfile.encode(profile))
+            portOverride?.let { putExtra(LlamaServerSessionService.EXTRA_PORT, it) }
+        }
+    )
+
+    /** Stop only the child owned by [sessionId]; no same-UID sweep is performed. */
+    fun stopSession(context: Context, sessionId: String): Result<Unit> = dispatchSessionCommand(
+        context,
+        Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
+            action = LlamaServerSessionService.ACTION_STOP
+            putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
+        }
+    )
+
+    fun clearSessionLogs(context: Context, sessionId: String): Result<Unit> = dispatchSessionCommand(
+        context,
+        Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
+            action = LlamaServerSessionService.ACTION_CLEAR_LOGS
+            putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
+        }
+    )
+
+    /** Remove a card/session and its durable logs. Call only after the card itself is deleted. */
+    fun removeSession(context: Context, sessionId: String): Result<Unit> = dispatchSessionCommand(
+        context,
+        Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
+            action = LlamaServerSessionService.ACTION_REMOVE
+            putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
+        }
+    )
+
+    /** Compatibility wrapper for internal OCR/master/worker launchers. */
+    fun startReservedSession(
+        context: Context,
+        sessionId: String,
+        profile: LlamaServerLaunchProfile,
+        portOverride: Int? = null
+    ): Result<Unit> {
+        require(com.example.llamadroid.data.model.LlamaServerSessionIds.isReserved(sessionId)) {
+            "Reserved session id required for internal launcher compatibility"
+        }
+        return startSession(context, sessionId, profile, portOverride)
+    }
+
+    private fun dispatchSessionCommand(context: Context, intent: Intent): Result<Unit> = runCatching {
+        val appContext = context.applicationContext
+        val action = requireNotNull(intent.action) { "Missing llama session action" }
+        require(isOwnedSessionAction(action)) { "Unsupported llama session action: $action" }
+        val component = intent.component
+        require(
+            component?.packageName == appContext.packageName &&
+                component?.className == LlamaServerSessionService::class.java.name
+        ) { "Session command must explicitly target the local session service" }
+        val ownedIntent = Intent(intent).setPackage(appContext.packageName)
+        if (action == LlamaServerSessionService.ACTION_START) {
+            appContext.startForegroundService(ownedIntent)
+        } else {
+            appContext.startService(ownedIntent)
+        }
+        DebugLog.log("LlamaServerLauncher: dispatched session action=$action")
     }
 
     fun stop(context: Context): Result<Unit> = runCatching {

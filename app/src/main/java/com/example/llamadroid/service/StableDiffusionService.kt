@@ -15,7 +15,12 @@ import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdLoraConfigurationException
+import com.example.llamadroid.sd.validateSdLoraModelCompatibility
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
@@ -638,10 +643,7 @@ class StableDiffusionService : Service() {
         sdBinary: File,
         useDistributedStateHolder: Boolean
     ): String = coroutineScope {
-        validateOptionalComponentFile(
-            config.loraPath,
-            getString(R.string.sd_type_lora)
-        )
+        validateSdLoraLaunch(config)
         validateOptionalComponentFile(
             config.textualInversionPath,
             getString(R.string.sd_type_textual_inversion)
@@ -807,10 +809,54 @@ class StableDiffusionService : Service() {
         }
     }
 
+    private suspend fun validateSdLoraLaunch(config: SDConfig) {
+        val baseLoras = config.resolvedLoras()
+        val detailLoras = config.adetailer?.loras.orEmpty()
+        val allLoras = baseLoras + detailLoras
+        if (allLoras.isEmpty()) return
+
+        val validated = try {
+            // The base and ADetailer passes are independent native scopes. Reusing
+            // one adapter in both is valid; duplicates remain rejected within
+            // either ordered stack.
+            validateSdLoras(baseLoras, requireReadableFiles = true) +
+                validateSdLoras(detailLoras, requireReadableFiles = true)
+        } catch (error: SdLoraConfigurationException) {
+            throw IllegalStateException(
+                getString(R.string.imagegen_error_lora_invalid, error.message.orEmpty())
+            )
+        }
+
+        // The AI-tool API and the bundled pickers select installed model rows,
+        // but old saved commands can still contain a readable external path.
+        // Validate compatibility whenever the database has provenance for the
+        // selected adapter; do not reject legacy external files merely because
+        // an older database cannot describe their family.
+        val database = AppDatabase.getDatabase(applicationContext)
+        val models = database.modelDao().getModelsByTypesSync(
+            listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION, ModelType.SD_LORA)
+        )
+        val baseModel = models.firstOrNull { it.path == config.modelPath }
+        if (baseModel != null) {
+            val knownLoras = models.filter { model ->
+                model.type == ModelType.SD_LORA && validated.any { it.path == model.path }
+            }
+            val issues = validateSdLoraModelCompatibility(baseModel, knownLoras)
+            if (issues.isNotEmpty()) {
+                val details = issues.joinToString(", ") { issue ->
+                    "${issue.index}:${issue.code.name.lowercase()}"
+                }
+                throw IllegalStateException(
+                    getString(R.string.imagegen_error_lora_invalid, details)
+                )
+            }
+        }
+    }
+
     private fun validateOptionalComponentFile(path: String?, label: String) {
         val selectedPath = path?.trim()?.takeIf { it.isNotEmpty() } ?: return
         val selectedFile = File(selectedPath)
-        if (!selectedFile.isFile) {
+        if (!selectedFile.isFile || !selectedFile.canRead()) {
             throw IllegalStateException(
                 getString(
                     R.string.imagegen_error_component_file_missing,

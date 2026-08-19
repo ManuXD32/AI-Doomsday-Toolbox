@@ -70,6 +70,11 @@ import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_SPEED
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_TOTAL_STEPS
 import com.example.llamadroid.onnx.resolveSupertonicVoices
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraConfigurationException
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.validateSdLoraModelCompatibility
+import com.example.llamadroid.sd.validateSdLoras
+import com.example.llamadroid.sd.toSdLoraSpecs
 import com.example.llamadroid.service.AiServerArtifactTypes.AUDIO
 import com.example.llamadroid.service.AiServerArtifactTypes.DATASET
 import com.example.llamadroid.service.AiServerArtifactTypes.DOCUMENT
@@ -110,6 +115,29 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+
+/** Read the ordered LoRA wire format while keeping old single-LoRA clients valid. */
+private fun JSONObject.readSdLoras(
+    key: String,
+    legacyPathKey: String? = "loraPath",
+    legacyStrengthKey: String = "loraStrength"
+): List<SdLoraSpec> {
+    val raw = opt(key)
+    val parsed = runCatching {
+        when (raw) {
+            is JSONArray -> raw.toSdLoraSpecs()
+            is String -> raw.trim().takeIf { it.isNotEmpty() }?.let { JSONArray(it).toSdLoraSpecs() }.orEmpty()
+            else -> emptyList()
+        }
+    }.getOrDefault(emptyList())
+    if (parsed.isNotEmpty()) return parsed
+    return legacyPathKey?.let {
+        SdLoraSpec.fromLegacy(
+            optString(it).trim().takeIf { path -> path.isNotEmpty() },
+            optDouble(legacyStrengthKey, 1.0).toFloat()
+        )
+    }.orEmpty()
+}
 
 class AiToolServerService : Service() {
     private val binder = LocalBinder()
@@ -784,7 +812,35 @@ class AiToolServerService : Service() {
                     watchSdJob(jobId, SDModeStateHolder.upscale, outputFile)
                 }
                 else -> {
-                    val sdMode = if (action == "sd_img2img") SDMode.IMG2IMG else SDMode.TXT2IMG
+                    val sdMode = when (action) {
+                        "sd_img2img", "sd_inpaint" -> SDMode.IMG2IMG
+                        "sd_adetailer" -> SDMode.ADETAILER
+                        else -> SDMode.TXT2IMG
+                    }
+                    val inputImagePath = body.optString("inputPath").ifBlank { null }
+                    val adetailer = if (action == "sd_adetailer") {
+                        SdADetailerConfig(
+                            modelPath = body.optString("adModelPath").trim(),
+                            prompt = body.optString("adPrompt"),
+                            negativePrompt = body.optString("adNegativePrompt"),
+                            confidence = body.optDouble("adConfidence", 0.30).toFloat(),
+                            denoisingStrength = body.optDouble("adDenoisingStrength", 0.40).toFloat(),
+                            maskBlur = body.optInt("adMaskBlur", 4),
+                            padding = body.optInt("adPadding", 32),
+                            maxDetections = body.optInt("adMaxDetections", 8),
+                            detailSteps = body.optInt("adSteps", 0).takeIf { it > 0 },
+                            detailCfgScale = body.optDouble("adCfgScale", -1.0)
+                                .toFloat()
+                                .takeIf { it >= 0f },
+                            loras = body.readSdLoras(
+                                "adLoras",
+                                legacyPathKey = "adLoraPath",
+                                legacyStrengthKey = "adLoraStrength"
+                            )
+                        )
+                    } else {
+                        null
+                    }
                     startForegroundService(
                         StableDiffusionService.createStartIntent(
                             applicationContext,
@@ -798,7 +854,8 @@ class AiToolServerService : Service() {
                                 cfgScale = body.optDouble("cfgScale", 7.0).toFloat(),
                                 seed = body.optLong("seed", -1L),
                                 outputPath = outputFile.absolutePath,
-                                initImage = body.optString("inputPath").ifBlank { null },
+                                initImage = inputImagePath,
+                                maskImage = body.optString("maskPath").ifBlank { null },
                                 strength = body.optDouble("strength", 0.75).toFloat(),
                                 mode = sdMode,
                                 threads = body.optInt("threads", -1),
@@ -823,6 +880,8 @@ class AiToolServerService : Service() {
                                 loraPath = body.optNullableString("loraPath"),
                                 loraStrength = body.optDouble("loraStrength", 1.0).toFloat(),
                                 loraApplyMode = parseEnumOrNull<SdLoraApplyMode>(body.optString("loraApplyMode")),
+                                loras = body.readSdLoras("loras"),
+                                adetailer = adetailer,
                                 textualInversionPath = body.optNullableString("textualInversionPath"),
                                 photoMakerPath = body.optNullableString("photoMakerPath"),
                                 flowShift = body.optDoubleOrNull("flowShift")?.toFloat(),
@@ -896,6 +955,12 @@ class AiToolServerService : Service() {
                         cfgScale = body.optDouble("cfgScale", 6.0).toFloat(),
                         flowShift = body.optDoubleOrNull("flowShift")?.toFloat(),
                         samplingMethod = parseEnum(body.optString("samplingMethod"), SamplingMethod.EULER),
+                        loras = body.readSdLoras("loras"),
+                        // High-noise adapters are a separate ordered list.  Do
+                        // not fall back to the legacy regular `loraPath`, or
+                        // one adapter is silently applied to both Wan passes.
+                        highNoiseLoras = body.readSdLoras("highNoiseLoras", legacyPathKey = null),
+                        loraApplyMode = parseEnumOrNull<SdLoraApplyMode>(body.optString("loraApplyMode")),
                         cacheMode = parseEnumOrNull<SdCacheMode>(body.optString("cacheMode")),
                         cacheOption = body.optString("cacheOption"),
                         scmMask = body.optString("scmMask"),
@@ -1323,7 +1388,16 @@ class AiToolServerService : Service() {
             job
         }
 
-        private val imageActions = setOf("sd_txt2img", "sd_img2img", "sd_upscale", "onnx_txt2img", "onnx_img2img", "onnx_bgr")
+        private val imageActions = setOf(
+            "sd_txt2img",
+            "sd_img2img",
+            "sd_inpaint",
+            "sd_adetailer",
+            "sd_upscale",
+            "onnx_txt2img",
+            "onnx_img2img",
+            "onnx_bgr"
+        )
         private val videoActions = setOf("txt2vid", "img2vid")
         private val workflowActions = setOf("transcribe_summary", "txt2img_upscale", "manga_translation", "media_translation", "subtitle_translation")
         private val ttsActions = setOf("tts_text", "tts_document")
@@ -1376,10 +1450,20 @@ class AiToolServerService : Service() {
                     val model = runBlocking { db.modelDao().getAllModels().first() }.firstOrNull { it.path == modelPath }
                     require(model != null) { "Choose an installed SD image model." }
                     require(!model.hasSdCapability(SD_CAPABILITY_VID_GEN)) { "Video generation models are only available in Video Studio." }
+                    validateSdLoraRequest(action, params, model)
+                    if (action == "sd_adetailer") {
+                        val detectorPath = params.optString("adModelPath").trim()
+                        val detector = runBlocking {
+                            db.modelDao().getModelsByTypesSync(listOf(ModelType.SD_ADETAILER))
+                        }.firstOrNull { it.path == detectorPath }
+                        require(detector != null && isCompatibleSdADetailerDetector(File(detectorPath))) {
+                            "Choose an installed, compatible ADetailer detector."
+                        }
+                    }
                     if (action == "sd_txt2img") {
                         require(model.sdCapabilities.isNullOrBlank() || model.hasSdCapability(SD_CAPABILITY_TXT2IMG)) { "This model does not support text to image." }
                     }
-                    if (action == "sd_img2img") {
+                    if (action == "sd_img2img" || action == "sd_inpaint" || action == "sd_adetailer") {
                         require(model.sdCapabilities.isNullOrBlank() || model.hasSdCapability(SD_CAPABILITY_IMG2IMG)) { "This model does not support image to image." }
                     }
                 }
@@ -1387,6 +1471,11 @@ class AiToolServerService : Service() {
                     val modelPath = params.optString("modelPath")
                     val model = runBlocking { db.modelDao().getAllModels().first() }.firstOrNull { it.path == modelPath }
                     require(model != null && model.hasSdCapability(SD_CAPABILITY_VID_GEN)) { "Choose an installed video diffusion model." }
+                    // Wan 2.2 has a distinct high-noise prompt contract.  The
+                    // installed-file/readability checks still apply here, but
+                    // family matching is intentionally deferred for legacy
+                    // video rows whose database family predates Wan metadata.
+                    validateSdLoraRequest(action, params, model)
                 }
                 action.startsWith("tts_") -> {
                     val rawSpeed = params.opt("speed")?.toString().orEmpty()
@@ -1417,6 +1506,46 @@ class AiToolServerService : Service() {
             }
         }
 
+        private fun validateSdLoraRequest(action: String, params: JSONObject, baseModel: ModelEntity) {
+            val videoRequest = action == "txt2vid" || action == "img2vid"
+            val baseLoras = params.readSdLoras("loras")
+            val secondaryLoras = when {
+                videoRequest -> params.readSdLoras("highNoiseLoras", legacyPathKey = null)
+                action == "sd_adetailer" -> params.readSdLoras(
+                    "adLoras",
+                    legacyPathKey = "adLoraPath",
+                    legacyStrengthKey = "adLoraStrength"
+                )
+                else -> emptyList()
+            }
+            val loras = baseLoras + secondaryLoras
+            if (loras.isEmpty()) return
+
+            try {
+                // Base/detail and regular/high-noise are separate native scopes,
+                // so the same adapter may intentionally appear once in each.
+                validateSdLoras(baseLoras, requireReadableFiles = true)
+                validateSdLoras(secondaryLoras, requireReadableFiles = true)
+            } catch (error: SdLoraConfigurationException) {
+                throw IllegalArgumentException(error.message ?: "Invalid LoRA configuration")
+            }
+
+            val selectedPaths = loras.map { it.path }.toSet()
+            val installedLoras = runBlocking {
+                db.modelDao().getModelsByTypesSync(listOf(ModelType.SD_LORA))
+            }.filter { it.path in selectedPaths }
+            require(installedLoras.size == selectedPaths.size) {
+                "Every selected LoRA must be an installed Stable Diffusion model."
+            }
+            if (!videoRequest) {
+                val issues = validateSdLoraModelCompatibility(baseModel, installedLoras)
+                require(issues.isEmpty()) {
+                    "Selected LoRA is not compatible with the chosen model family: " +
+                        issues.joinToString(", ") { "${it.index}:${it.code.name.lowercase()}" }
+                }
+            }
+        }
+
         private fun fieldVisible(field: JSONObject, params: JSONObject): Boolean {
             val rule = field.optJSONObject("visibleWhen") ?: return true
             val key = rule.optString("field").ifBlank { return true }
@@ -1440,6 +1569,8 @@ class AiToolServerService : Service() {
                     engine == "onnx" && serverMode == "bgr" -> "onnx_bgr"
                     engine == "onnx" && serverMode == "img2img" -> "onnx_img2img"
                     engine == "onnx" -> "onnx_txt2img"
+                    serverMode == "inpaint" -> "sd_inpaint"
+                    serverMode == "adetailer" -> "sd_adetailer"
                     serverMode == "img2img" -> "sd_img2img"
                     serverMode == "upscale" -> "sd_upscale"
                     else -> "sd_txt2img"
@@ -1498,6 +1629,8 @@ class AiToolServerService : Service() {
                 llmPath = body.optNullableString("llmPath"),
                 llmVisionPath = body.optNullableString("llmVisionPath"),
                 photoMakerPath = body.optNullableString("photoMakerPath"),
+                loras = body.readSdLoras("loras"),
+                loraApplyMode = parseEnumOrNull<SdLoraApplyMode>(body.optString("loraApplyMode")),
                 sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
                 sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
                 maxVramCpuGiB = sdMaxVramCpuGiB
@@ -3664,12 +3797,23 @@ class AiToolServerService : Service() {
             when (type) {
                 AiServerType.IMAGE -> descriptor
                     .put("engines", JSONArray(listOf(
-                        engineJson("sd", "Stable Diffusion", "Stable Diffusion", "sd_txt2img", "sd_img2img", "sd_upscale"),
+                        engineJson(
+                            "sd",
+                            "Stable Diffusion",
+                            "Stable Diffusion",
+                            "sd_txt2img",
+                            "sd_img2img",
+                            "sd_inpaint",
+                            "sd_adetailer",
+                            "sd_upscale"
+                        ),
                         engineJson("onnx", "ONNX", "ONNX", "onnx_txt2img", "onnx_img2img", "onnx_bgr")
                     )))
                     .put("modes", JSONArray(listOf(
                         modeJson("sd_txt2img", "sd", "SD text to image", "SD texto a imagen", "Prompt driven image generation.", "Generacion de imagen desde prompt."),
                         modeJson("sd_img2img", "sd", "SD image to image", "SD imagen a imagen", "Transform an uploaded image.", "Transforma una imagen subida."),
+                        modeJson("sd_inpaint", "sd", "SD inpaint", "SD inpainting", "Edit the masked area of an uploaded image.", "Edita el area enmascarada de una imagen subida."),
+                        modeJson("sd_adetailer", "sd", "SD ADetailer", "SD ADetailer", "Detect and refine faces or objects in an uploaded image.", "Detecta y refina caras u objetos en una imagen subida."),
                         modeJson("sd_upscale", "sd", "SD upscale", "SD escalado", "Upscale an uploaded image.", "Escala una imagen subida."),
                         modeJson("onnx_txt2img", "onnx", "ONNX text to image", "ONNX texto a imagen", "Run ONNX text to image.", "Ejecuta texto a imagen con ONNX."),
                         modeJson("onnx_img2img", "onnx", "ONNX image to image", "ONNX imagen a imagen", "Run ONNX image to image.", "Ejecuta imagen a imagen con ONNX."),
@@ -3678,6 +3822,8 @@ class AiToolServerService : Service() {
                     .put("fields", JSONObject()
                         .put("sd_txt2img", sdImageFields(includeInput = false, upscaleOnly = false))
                         .put("sd_img2img", sdImageFields(includeInput = true, upscaleOnly = false))
+                        .put("sd_inpaint", sdInpaintFields())
+                        .put("sd_adetailer", sdAdetailerFields())
                         .put("sd_upscale", sdImageFields(includeInput = true, upscaleOnly = true))
                         .put("onnx_txt2img", onnxImageFields(includeInput = false, backgroundRemoval = false))
                         .put("onnx_img2img", onnxImageFields(includeInput = true, backgroundRemoval = false))
@@ -3685,6 +3831,8 @@ class AiToolServerService : Service() {
                     .put("defaults", JSONObject()
                         .put("sd_txt2img", JSONObject().put("width", 512).put("height", 512).put("steps", 20).put("cfgScale", 7.0).put("seed", -1).put("threads", -1))
                         .put("sd_img2img", JSONObject().put("width", 512).put("height", 512).put("steps", 20).put("cfgScale", 7.0).put("strength", 0.75).put("seed", -1).put("threads", -1))
+                        .put("sd_inpaint", JSONObject().put("width", 512).put("height", 512).put("steps", 20).put("cfgScale", 7.0).put("strength", 0.75).put("seed", -1).put("threads", -1))
+                        .put("sd_adetailer", JSONObject().put("width", 512).put("height", 512).put("steps", 20).put("cfgScale", 7.0).put("seed", -1).put("threads", -1).put("adConfidence", 0.30).put("adDenoisingStrength", 0.40).put("adMaskBlur", 4).put("adPadding", 32).put("adMaxDetections", 8))
                         .put("sd_upscale", JSONObject().put("upscaleRepeats", 1).put("threads", -1))
                         .put("onnx_txt2img", JSONObject().put("width", 512).put("height", 512).put("steps", 20).put("cfgScale", 7.5).put("seed", -1))
                         .put("onnx_img2img", JSONObject().put("width", 512).put("height", 512).put("steps", 20).put("cfgScale", 7.5).put("strength", ONNX_IMAGE_GEN_DEFAULT_STRENGTH.toDouble()).put("seed", -1))
@@ -3892,6 +4040,7 @@ class AiToolServerService : Service() {
                 .put("llmVision", modelsJson(ModelType.VISION, ModelType.MMPROJ, ModelType.VISION_PROJECTOR))
                 .put("controlNet", modelsJson(ModelType.SD_CONTROLNET))
                 .put("lora", modelsJson(ModelType.SD_LORA))
+                .put("adetailer", modelsJson(ModelType.SD_ADETAILER))
                 .put("textualInversion", modelsJson(ModelType.SD_TEXTUAL_INVERSION))
                 .put("photoMaker", modelsJson(ModelType.SD_PHOTOMAKER))
                 .put("onnxImage", modelsJson(ModelType.ONNX_IMAGE_GEN))
@@ -4045,6 +4194,48 @@ class AiToolServerService : Service() {
             return JSONArray(fields)
         }
 
+        /** Stable Diffusion inpaint is img2img plus a required source mask. */
+        private fun sdInpaintFields(): JSONArray = sdImageFields(
+            includeInput = true,
+            upscaleOnly = false
+        ).apply {
+            put(
+                fileField(
+                    "maskPath",
+                    "Inpaint mask",
+                    "Mascara de inpainting",
+                    required = true,
+                    accept = "image/*",
+                    section = "Inpaint"
+                )
+            )
+        }
+
+        /**
+         * ADetailer keeps the regular ordered LoRA stack for the base pass and
+         * exposes a second ordered stack for the detector's detail pass.
+         * Keeping the two JSON fields distinct prevents a detail adapter from
+         * leaking into the base image prompt.
+         */
+        private fun sdAdetailerFields(): JSONArray = sdImageFields(
+            includeInput = true,
+            upscaleOnly = false
+        ).apply {
+            put(modelField("adModelPath", "adetailer", "ADetailer detector", "Detector ADetailer", required = true, section = "ADetailer"))
+            put(fieldJson("adPrompt", "textarea", "Detail prompt", "Prompt de detalle", section = "ADetailer"))
+            put(fieldJson("adNegativePrompt", "textarea", "Detail negative prompt", "Prompt negativo de detalle", section = "ADetailer"))
+            put(fieldJson("adConfidence", "number", "Detector confidence", "Confianza del detector", defaultValue = 0.30, min = 0.0, max = 1.0, step = 0.01, section = "ADetailer"))
+            put(fieldJson("adDenoisingStrength", "number", "Detail denoising strength", "Fuerza de denoising de detalle", defaultValue = 0.40, min = 0.0, max = 1.0, step = 0.05, section = "ADetailer"))
+            put(fieldJson("adMaskBlur", "number", "Detail mask blur", "Desenfoque de mascara de detalle", defaultValue = 4, min = 0.0, max = 128.0, step = 1.0, section = "ADetailer"))
+            put(fieldJson("adPadding", "number", "Detail inpaint padding", "Margen de inpainting de detalle", defaultValue = 32, min = 0.0, max = 2048.0, step = 1.0, section = "ADetailer"))
+            put(fieldJson("adMaxDetections", "number", "Maximum detections", "Detecciones maximas", defaultValue = 8, min = 1.0, max = 128.0, step = 1.0, section = "ADetailer"))
+            put(fieldJson("adSteps", "number", "Detail steps", "Pasos de detalle", min = 1.0, max = 200.0, step = 1.0, section = "ADetailer"))
+            put(fieldJson("adCfgScale", "number", "Detail CFG scale", "Escala CFG de detalle", min = 0.0, max = 50.0, step = 0.1, section = "ADetailer"))
+            put(modelField("adLoraPath", "lora", "Legacy detail LoRA", "LoRA de detalle heredado", section = "ADetailer"))
+            put(fieldJson("adLoraStrength", "number", "Legacy detail LoRA strength", "Fuerza del LoRA de detalle heredado", defaultValue = 1.0, min = -4.0, max = 4.0, step = 0.05, section = "ADetailer"))
+            put(fieldJson("adLoras", "textarea", "Ordered detail LoRAs (JSON)", "LoRAs de detalle ordenados (JSON)", defaultValue = "[]", section = "ADetailer"))
+        }
+
         private fun sizeAndSamplingFields(): List<JSONObject> = listOf(
             fieldJson("width", "number", "Width", "Ancho", defaultValue = 512, min = 64.0, step = 8.0, section = "Sampling"),
             fieldJson("height", "number", "Height", "Alto", defaultValue = 512, min = 64.0, step = 8.0, section = "Sampling"),
@@ -4066,6 +4257,7 @@ class AiToolServerService : Service() {
             fileField("controlImagePath", "Control image", "Imagen ControlNet", accept = "image/*", section = "Components"),
             modelField("loraPath", "lora", "LoRA", "LoRA", section = "Components"),
             fieldJson("loraStrength", "number", "LoRA strength", "Fuerza LoRA", defaultValue = 1.0, min = -4.0, max = 4.0, step = 0.05, section = "Components"),
+            fieldJson("loras", "textarea", "Ordered LoRAs (JSON)", "LoRAs ordenados (JSON)", defaultValue = "[]", section = "Components"),
             fieldJson("loraApplyMode", "select", "LoRA apply mode", "Modo LoRA", options = enumOptions<SdLoraApplyMode>(), section = "Components"),
             modelField("textualInversionPath", "textualInversion", "Textual inversion", "Inversion textual", section = "Components"),
             modelField("photoMakerPath", "photoMaker", "PhotoMaker", "PhotoMaker", section = "Components")
@@ -4140,6 +4332,9 @@ class AiToolServerService : Service() {
                 modelField("vaePath", "vae", "VAE", "VAE", section = "Components"),
                 fieldJson("useT5xxl", "checkbox", "Use T5-XXL", "Usar T5-XXL", defaultValue = false, section = "Components"),
                 modelField("t5xxlPath", "t5xxl", "T5-XXL", "T5-XXL", section = "Components"),
+                fieldJson("loras", "textarea", "Ordered LoRAs (JSON)", "LoRAs ordenados (JSON)", defaultValue = "[]", section = "Components"),
+                fieldJson("highNoiseLoras", "textarea", "Wan high-noise LoRAs (JSON)", "LoRAs Wan de alto ruido (JSON)", defaultValue = "[]", section = "Components"),
+                fieldJson("loraApplyMode", "select", "LoRA apply mode", "Modo LoRA", options = enumOptions<SdLoraApplyMode>(), section = "Components"),
                 fieldJson("videoFrames", "number", "Frames", "Fotogramas", defaultValue = 8, min = 1.0, step = 1.0, section = "Video"),
                 fieldJson("fps", "number", "FPS", "FPS", defaultValue = 5, min = 1.0, step = 1.0, section = "Video"),
                 fieldJson("width", "number", "Width", "Ancho", defaultValue = 480, min = 64.0, step = 8.0, section = "Video"),

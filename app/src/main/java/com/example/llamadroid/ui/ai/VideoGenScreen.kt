@@ -122,8 +122,15 @@ import com.example.llamadroid.service.VideoGenerationService
 import com.example.llamadroid.service.VideoGenerationState
 import com.example.llamadroid.service.VideoGenerationStateHolder
 import com.example.llamadroid.service.loadGeneratedVideoMetadata
+import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
+import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.ui.components.SdSchedulerPicker
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
@@ -155,17 +162,24 @@ fun VideoGenScreen(navController: NavController) {
         .collectAsState(initial = emptyList())
     val t5xxlModels by db.modelDao().getModelsByType(ModelType.SD_T5XXL)
         .collectAsState(initial = emptyList())
+    val loraModels by db.modelDao().getModelsByType(ModelType.SD_LORA)
+        .collectAsState(initial = emptyList())
 
     val availableVideoModels = remember(videoGenModels) {
         videoGenModels.filter { it.hasSdCapability(SD_CAPABILITY_VID_GEN) }
     }
-
     var mainTab by remember { mutableIntStateOf(0) }
     var selectedMode by remember { mutableIntStateOf(restoredDraft?.optInt("mode", 0) ?: 0) }
     var galleryFilter by remember { mutableIntStateOf(0) }
 
     var selectedVideoModelPath by remember { mutableStateOf(restoredDraft?.optString("model").orEmpty().ifBlank { null }) }
     val selectedVideoModel = availableVideoModels.firstOrNull { it.path == selectedVideoModelPath }
+    val compatibleVideoLoraModels = remember(loraModels, selectedVideoModel) {
+        val (family, variant) = selectedVideoModel?.resolvedSdFamily() ?: (null to null)
+        family?.let { selectedFamily ->
+            loraModels.filter { it.matchesSdFamily(selectedFamily, variant) }
+        }.orEmpty()
+    }
     var prompt by remember { mutableStateOf(restoredDraft?.optString("prompt").orEmpty()) }
     var negativePrompt by remember { mutableStateOf(restoredDraft?.optString("negativePrompt").orEmpty()) }
     var selectedSampler by remember { mutableStateOf(SamplingMethod.entries.firstOrNull { it.name == restoredDraft?.optString("sampler") } ?: SamplingMethod.EULER) }
@@ -175,6 +189,17 @@ fun VideoGenScreen(navController: NavController) {
     var selectedVaePath by remember { mutableStateOf(restoredDraft?.optString("vae").orEmpty().ifBlank { null }) }
     var useT5xxl by remember { mutableStateOf(restoredDraft?.optBoolean("useT5", false) ?: false) }
     var selectedT5xxlPath by remember { mutableStateOf(restoredDraft?.optString("t5").orEmpty().ifBlank { null }) }
+    val restoredVideoLoras = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("loras")?.toSdLoraSpecs().orEmpty()
+    }
+    val restoredHighNoiseLoras = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty()
+    }
+    var videoLoras by remember(restoredDraft) { mutableStateOf(restoredVideoLoras) }
+    var videoHighNoiseLoras by remember(restoredDraft) { mutableStateOf(restoredHighNoiseLoras) }
+    var videoLoraApplyMode by remember(restoredDraft) {
+        mutableStateOf(SdLoraApplyMode.fromStoredValue(restoredDraft?.optString("loraApplyMode")))
+    }
 
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
     var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
@@ -226,6 +251,7 @@ fun VideoGenScreen(navController: NavController) {
                 put("useVae", useVae); put("vae", selectedVaePath); put("useT5", useT5xxl); put("t5", selectedT5xxlPath); put("input", selectedImagePath)
                 put("frames", videoFramesText); put("fps", fpsText); put("width", widthText); put("height", heightText); put("steps", stepsText); put("cfg", cfgScaleText); put("threads", threadsText); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName)
                 put("flowShiftEnabled", flowShiftEnabled); put("flowShift", flowShiftText); put("vaeTileSize", vaeTileSize); put("vaeTiling", vaeTiling); put("diffusionFa", diffusionFa); put("mmap", mmap); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("diffConv", diffusionConvDirect); put("vaeConv", vaeConvDirect); put("flags", manualCommandFlags)
+                put("loras", videoLoras.toJsonArray()); put("highNoiseLoras", videoHighNoiseLoras.toJsonArray()); put("loraApplyMode", videoLoraApplyMode?.cliName)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
             })
         }
@@ -325,7 +351,7 @@ fun VideoGenScreen(navController: NavController) {
         }
     }
 
-    val generateVideo = fun() {
+    val generateVideo = generation@ fun() {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
         val frames = videoFramesText.toIntOrNull()
         val fps = fpsText.toIntOrNull()
@@ -335,6 +361,12 @@ fun VideoGenScreen(navController: NavController) {
         val cfgScale = cfgScaleText.toFloatOrNull()
         val threads = threadsText.toIntOrNull()
         val flowShift = if (flowShiftEnabled) flowShiftText.toFloatOrNull() else null
+
+        val loraError = runCatching { validateSdLoras(videoLoras + videoHighNoiseLoras) }.exceptionOrNull()
+        if (loraError != null) {
+            errorMessage = loraError.message ?: context.getString(R.string.sd_workflow_gate_missing)
+            return@generation
+        }
 
         when {
             selectedVideoModelPath == null -> {
@@ -431,6 +463,9 @@ fun VideoGenScreen(navController: NavController) {
             vaeConvDirect = vaeConvDirect,
             mmap = mmap,
             threads = threads ?: -1,
+            loras = videoLoras,
+            highNoiseLoras = videoHighNoiseLoras,
+            loraApplyMode = videoLoraApplyMode,
             sdParamsBackendMode = selectedVideoModel?.sdParamsBackendMode ?: "auto",
             sdRuntimeBackendMode = acceleratorPlacement?.let {
                 "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
@@ -751,6 +786,18 @@ fun VideoGenScreen(navController: NavController) {
                         )
                     }
                 } }
+
+                item(key = "loras") {
+                    VideoLoraStackCard(
+                        models = compatibleVideoLoraModels,
+                        loras = videoLoras,
+                        highNoiseLoras = videoHighNoiseLoras,
+                        applyMode = videoLoraApplyMode,
+                        onLorasChange = { videoLoras = it },
+                        onHighNoiseLorasChange = { videoHighNoiseLoras = it },
+                        onApplyModeChange = { videoLoraApplyMode = it }
+                    )
+                }
 
                 item(key = "parameters") { Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -1237,6 +1284,175 @@ fun VideoGenScreen(navController: NavController) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun VideoLoraStackCard(
+    models: List<ModelEntity>,
+    loras: List<SdLoraSpec>,
+    highNoiseLoras: List<SdLoraSpec>,
+    applyMode: SdLoraApplyMode?,
+    onLorasChange: (List<SdLoraSpec>) -> Unit,
+    onHighNoiseLorasChange: (List<SdLoraSpec>) -> Unit,
+    onApplyModeChange: (SdLoraApplyMode?) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                stringResource(R.string.sd_workflow_lora_stack_label),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Text(
+                stringResource(R.string.video_gen_lora_stack_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (models.isEmpty()) {
+                Text(
+                    stringResource(R.string.imagegen_no_lora),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                if (loras.isNotEmpty()) {
+                    Text(
+                        stringResource(R.string.video_gen_lora_regular_label),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+                loras.forEachIndexed { index, item ->
+                    VideoLoraItemRow(
+                        index = index,
+                        item = item,
+                        onStrengthChange = { strength ->
+                            onLorasChange(loras.mapIndexed { itemIndex, current ->
+                                if (itemIndex == index) current.copy(strength = strength) else current
+                            })
+                        },
+                        onRemove = { onLorasChange(loras.filterIndexed { itemIndex, _ -> itemIndex != index }) }
+                    )
+                }
+                ModelDropdown(
+                    value = null,
+                    placeholder = stringResource(R.string.video_gen_lora_add),
+                    models = models,
+                    onSelected = { model ->
+                        onLorasChange(loras + SdLoraSpec(path = model.path))
+                    }
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    stringResource(R.string.video_gen_lora_high_noise_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                highNoiseLoras.forEachIndexed { index, item ->
+                    VideoLoraItemRow(
+                        index = index,
+                        item = item,
+                        onStrengthChange = { strength ->
+                            onHighNoiseLorasChange(highNoiseLoras.mapIndexed { itemIndex, current ->
+                                if (itemIndex == index) current.copy(strength = strength, highNoiseOnly = true) else current
+                            })
+                        },
+                        onRemove = {
+                            onHighNoiseLorasChange(highNoiseLoras.filterIndexed { itemIndex, _ -> itemIndex != index })
+                        }
+                    )
+                }
+                ModelDropdown(
+                    value = null,
+                    placeholder = stringResource(R.string.video_gen_lora_add_high_noise),
+                    models = models,
+                    onSelected = { model ->
+                        onHighNoiseLorasChange(highNoiseLoras + SdLoraSpec(path = model.path, highNoiseOnly = true))
+                    }
+                )
+                Text(
+                    stringResource(R.string.imagegen_lora_apply_mode_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                var applyExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = applyExpanded,
+                    onExpandedChange = { applyExpanded = !applyExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = applyMode?.cliName ?: stringResource(R.string.imagegen_lora_apply_mode_default),
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = applyExpanded)
+                        },
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = applyExpanded,
+                        onDismissRequest = { applyExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.imagegen_lora_apply_mode_default)) },
+                            onClick = {
+                                onApplyModeChange(null)
+                                applyExpanded = false
+                            }
+                        )
+                        SdLoraApplyMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.cliName) },
+                                onClick = {
+                                    onApplyModeChange(mode)
+                                    applyExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoLoraItemRow(
+    index: Int,
+    item: SdLoraSpec,
+    onStrengthChange: (Float) -> Unit,
+    onRemove: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${index + 1}. ${item.filename}",
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.imagegen_lora_remove))
+            }
+        }
+        androidx.compose.material3.Slider(
+            value = item.strength,
+            onValueChange = onStrengthChange,
+            valueRange = SdLoraSpec.MIN_STRENGTH..SdLoraSpec.MAX_STRENGTH,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            text = String.format(Locale.US, "%.2f", item.strength),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun ModelDropdown(
     value: String?,
     placeholder: String,
@@ -1252,6 +1468,7 @@ private fun ModelDropdown(
             value = value?.substringAfterLast("/") ?: placeholder,
             onValueChange = {},
             readOnly = true,
+            singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(),
@@ -1263,7 +1480,7 @@ private fun ModelDropdown(
         ) {
             models.forEach { model ->
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(model.filename) },
+                    text = { Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     onClick = {
                         onSelected(model)
                         expanded = false

@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import com.example.llamadroid.data.SettingsRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -38,6 +39,8 @@ class LlamaServerLaunchProfileTest {
             customFlags = "--no-warmup",
             commandTemplate = "{binary} {model}",
             flashAttention = true,
+            openClCpuTargetGpuDraft = true,
+            nativeBinarySelection = SettingsRepository.NATIVE_BINARY_CPU_DOTPROD,
             nativeToolsEnabled = true,
             speculativeEnabled = true,
             speculativeMode = LlamaSpeculativeMode.DRAFT_MTP.flagValue,
@@ -74,6 +77,8 @@ class LlamaServerLaunchProfileTest {
             controller.getCommand("/bin/llama-server", profile.toLlamaConfig()),
             controller.getCommand("/bin/llama-server", restored.toLlamaConfig())
         )
+        assertTrue(restored.toLlamaConfig().openClCpuTargetGpuDraft)
+        assertTrue(restored.toLlamaConfig().nativeToolsEnabled)
         assertTrue(restored.hasModel())
         assertEquals("coder.gguf · 32768 ctx · 8 threads", restored.summary())
     }
@@ -84,6 +89,18 @@ class LlamaServerLaunchProfileTest {
         assertNull(LlamaServerLaunchProfile.decode("  "))
         assertNull(LlamaServerLaunchProfile.decode("not json"))
         assertFalse(LlamaServerLaunchProfile(modelPath = "").hasModel())
+    }
+
+    @Test
+    fun `profiles written before binary selection preserve global fallback`() {
+        val restored = requireNotNull(
+            LlamaServerLaunchProfile.decode(
+                """{"schemaVersion":2,"modelPath":"/models/legacy.gguf"}"""
+            )
+        )
+
+        assertEquals(2, restored.schemaVersion)
+        assertNull(restored.nativeBinarySelection)
     }
 
     @Test

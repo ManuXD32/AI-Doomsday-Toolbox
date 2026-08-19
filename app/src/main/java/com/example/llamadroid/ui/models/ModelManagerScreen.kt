@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.models
 
 import android.os.Environment
 import android.os.StatFs
+import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -59,21 +60,39 @@ private const val MODEL_STORAGE_REFRESH_MILLIS = 15_000L
 
 private fun editableModelTypeOptions(): List<ModelType> = listOf(
     ModelType.LLM,
+    ModelType.LLM_DRAFT,
     ModelType.LORA,
     ModelType.EMBEDDING,
-    ModelType.VISION_PROJECTOR,
-    ModelType.QUADTRIX
+    ModelType.VISION_PROJECTOR
 )
 
 @Composable
 private fun modelTypeLabel(type: ModelType): String = when (type) {
-    ModelType.LLM -> stringResource(R.string.models_type_llm)
+    ModelType.LLM,
+    ModelType.VISION -> stringResource(R.string.models_type_llm)
+    ModelType.LLM_DRAFT -> stringResource(R.string.models_type_mtp)
     ModelType.LORA -> stringResource(R.string.models_type_lora)
     ModelType.EMBEDDING -> stringResource(R.string.models_type_embedding)
-    ModelType.VISION_PROJECTOR -> stringResource(R.string.models_type_vision_projector)
-    ModelType.QUADTRIX -> stringResource(R.string.models_type_quadtrix)
+    ModelType.VISION_PROJECTOR,
+    ModelType.MMPROJ -> stringResource(R.string.models_type_vision_projector)
     else -> type.name
 }
+
+private data class ModelManagerCategory(
+    @StringRes val labelRes: Int,
+    val modelTypes: Set<ModelType>
+)
+
+private val MODEL_MANAGER_CATEGORIES = listOf(
+    ModelManagerCategory(R.string.models_category_llm, setOf(ModelType.LLM, ModelType.VISION)),
+    ModelManagerCategory(R.string.models_category_mtp, setOf(ModelType.LLM_DRAFT)),
+    ModelManagerCategory(R.string.models_category_lora, setOf(ModelType.LORA)),
+    ModelManagerCategory(R.string.models_category_embeddings, setOf(ModelType.EMBEDDING)),
+    ModelManagerCategory(
+        R.string.models_category_vision_projectors,
+        setOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ)
+    )
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,8 +110,26 @@ fun ModelManagerScreen(navController: NavController) {
     )
     
     val progressMap by viewModel.downloadProgress.collectAsState()
+    val managerDownloadTypeNames = remember {
+        listOf(
+            ModelType.LLM,
+            ModelType.LLM_DRAFT,
+            ModelType.LORA,
+            ModelType.EMBEDDING,
+            ModelType.VISION,
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ
+        ).map { it.name }
+    }
+    val managerDownloadTasks by db.downloadTaskDao()
+        .observeByModelTypes(managerDownloadTypeNames)
+        .collectAsState(initial = emptyList())
+    val managerProgressKeys = remember(managerDownloadTasks) {
+        managerDownloadTasks.map { it.progressKey }.toSet()
+    }
     val activeDownloads = progressMap.count {
-        it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f
+        it.key in managerProgressKeys &&
+            (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
     }
 
     AppPageBackground {
@@ -184,6 +221,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     // Edit state
     var showRenameDialog by remember { mutableStateOf(false) }
     var modelToRename by remember { mutableStateOf<ModelEntity?>(null) }
+    var pendingDeleteModel by remember { mutableStateOf<ModelEntity?>(null) }
     var newModelName by remember { mutableStateOf("") }
     var editedModelType by remember { mutableStateOf(ModelType.LLM) }
     var editedVisionSupport by remember { mutableStateOf(false) }
@@ -285,10 +323,10 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     
                     val modelTypes = listOf(
                         ModelType.LLM to stringResource(R.string.models_type_llm),
+                        ModelType.LLM_DRAFT to stringResource(R.string.models_type_mtp),
                         ModelType.LORA to stringResource(R.string.models_type_lora),
                         ModelType.EMBEDDING to stringResource(R.string.models_type_embedding),
-                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector),
-                        ModelType.QUADTRIX to stringResource(R.string.models_type_quadtrix)
+                        ModelType.VISION_PROJECTOR to stringResource(R.string.models_type_vision_projector)
                     )
                     
                     modelTypes.forEach { (type, label) ->
@@ -438,7 +476,8 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
     
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
-            contentPadding = PaddingValues(16.dp),
+            // Keep the final row clear of the import FAB on short phones.
+            contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
@@ -475,29 +514,41 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                     }
                 }
             } else {
-                items(models) { model ->
-                    val subtitle = if (model.type == ModelType.LLM && model.isVision) {
-                        "${model.repoId} • ${stringResource(R.string.models_vision_enabled_badge)}"
-                    } else {
-                        model.repoId
-                    }
-                    ModelCard(
-                        title = model.filename,
-                        subtitle = subtitle,
-                        sizeText = FormatUtils.formatFileSize(model.sizeBytes),
-                        actionIcon = Icons.Default.Delete,
-                        actionColor = MaterialTheme.colorScheme.error,
-                        onAction = { viewModel.deleteModel(model) },
-                        onExport = { exportModel(model) },
-                        onRename = {
-                            modelToRename = model
-                            newModelName = model.filename.substringBeforeLast(".")
-                            editedModelType = model.type
-                            editedVisionSupport = model.isVision
-                            useForKnowledgeEmbedding = model.type == ModelType.EMBEDDING
-                            showRenameDialog = true
+                MODEL_MANAGER_CATEGORIES.forEach { category ->
+                    val categoryModels = models.filter { it.type in category.modelTypes }
+                    if (categoryModels.isNotEmpty()) {
+                        item {
+                            Text(
+                                stringResource(category.labelRes, categoryModels.size),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                                modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                            )
                         }
-                    )
+                        items(categoryModels) { model ->
+                            ModelCard(
+                                title = model.filename,
+                                subtitle = model.repoId,
+                                sizeText = FormatUtils.formatFileSize(model.sizeBytes),
+                                details = modelCardDetails(model),
+                                actionIcon = Icons.Default.Delete,
+                                actionColor = MaterialTheme.colorScheme.error,
+                                onAction = { pendingDeleteModel = model },
+                                onExport = { exportModel(model) },
+                                onRename = {
+                                    modelToRename = model
+                                    newModelName = model.filename.substringBeforeLast(".")
+                                    editedModelType = when (model.type) {
+                                        ModelType.VISION -> ModelType.LLM
+                                        ModelType.MMPROJ -> ModelType.VISION_PROJECTOR
+                                        else -> model.type
+                                    }
+                                    editedVisionSupport = model.isVision || model.type == ModelType.VISION
+                                    useForKnowledgeEmbedding = model.type == ModelType.EMBEDDING
+                                    showRenameDialog = true
+                                }
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -672,6 +723,32 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                 },
                 dismissButton = {
                     TextButton(onClick = { showRenameDialog = false }) { Text(stringResource(R.string.action_cancel)) }
+                }
+            )
+        }
+
+        pendingDeleteModel?.let { model ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteModel = null },
+                title = { Text(stringResource(R.string.models_delete)) },
+                text = { Text(stringResource(R.string.models_delete_confirm)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingDeleteModel = null
+                            viewModel.deleteModel(model)
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(stringResource(R.string.action_delete))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDeleteModel = null }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
                 }
             )
         }
@@ -1104,10 +1181,28 @@ private fun replaceImportedFile(tempFile: File, targetFile: File) {
 @Composable
 fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
+    val db = remember { AppDatabase.getDatabase(context) }
     val progressMap by viewModel.downloadProgress.collectAsState()
+    val modelTypes = remember {
+        listOf(
+            ModelType.LLM,
+            ModelType.LLM_DRAFT,
+            ModelType.LORA,
+            ModelType.EMBEDDING,
+            ModelType.VISION,
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ
+        )
+    }
+    val managerDownloadTypeNames = remember(modelTypes) { modelTypes.map { it.name } }
+    val storedManagerTasks by db.downloadTaskDao()
+        .observeByModelTypes(managerDownloadTypeNames)
+        .collectAsState(initial = emptyList())
+    val managerProgressKeys = remember(storedManagerTasks) {
+        storedManagerTasks.map { it.progressKey }.toSet()
+    }
     val activeDownloads = progressMap.filter {
-        !it.key.startsWith("onnx:") &&
-            !it.key.startsWith("litert:") &&
+        it.key in managerProgressKeys &&
             (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
     }
 
@@ -1117,20 +1212,10 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
     ) {
         item {
             DownloadTaskSection(
-                modelTypes = listOf(
-                    ModelType.LLM,
-                    ModelType.LORA,
-                    ModelType.EMBEDDING,
-                    ModelType.VISION,
-                    ModelType.VISION_PROJECTOR,
-                    ModelType.MMPROJ,
-                    ModelType.QUADTRIX
-                ),
-                includeTask = { task ->
-                    !task.id.startsWith("onnx:") &&
-                        !task.id.startsWith("litert:") &&
-                        !task.id.startsWith("whisper_")
-                }
+                // The exact model-type query keeps Whisper and its separate VAD
+                // assets out without relying on task-id naming conventions.
+                modelTypes = modelTypes,
+                includeTask = { task -> task.modelType in modelTypes.map { it.name } }
             )
         }
 
@@ -1729,6 +1814,7 @@ fun ModelCard(
     title: String,
     subtitle: String,
     sizeText: String,
+    details: List<String> = emptyList(),
     actionIcon: ImageVector,
     actionColor: Color,
     onAction: () -> Unit,
@@ -1757,17 +1843,29 @@ fun ModelCard(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(40.dp)
                 )
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         title,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        maxLines = 1
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         "$subtitle • $sizeText",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
+                    details.forEach { detail ->
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
             Row {
@@ -1786,5 +1884,37 @@ fun ModelCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun modelCardDetails(model: ModelEntity): List<String> = buildList {
+    add(stringResource(R.string.models_metadata_type, modelTypeLabel(model.type)))
+
+    if (model.type == ModelType.LLM || model.type == ModelType.VISION) {
+        add(
+            stringResource(
+                if (model.type == ModelType.VISION || model.isVision) {
+                    R.string.models_metadata_vision_enabled
+                } else {
+                    R.string.models_metadata_vision_not_enabled
+                }
+            )
+        )
+    }
+
+    model.mmprojPath
+        ?.substringAfterLast('/')
+        ?.takeIf { it.isNotBlank() }
+        ?.let { projector ->
+            add(stringResource(R.string.models_metadata_projector, projector))
+        }
+
+    if (model.type == ModelType.VISION_PROJECTOR || model.type == ModelType.MMPROJ) {
+        add(stringResource(R.string.models_metadata_projector_file))
+    }
+
+    if (model.layerCount > 0 && (model.type == ModelType.LLM || model.type == ModelType.VISION)) {
+        add(stringResource(R.string.models_metadata_layers, model.layerCount))
     }
 }

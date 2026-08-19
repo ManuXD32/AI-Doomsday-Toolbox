@@ -824,9 +824,21 @@ class ProcessController {
         onState: ((ServerState) -> Unit)? = LlamaService.Companion::updateState,
         onClearServerLogs: (() -> Unit)? = { LlamaService.clearServerLogs() },
         onServerLog: ((String) -> Unit)? = { message -> LlamaService.addServerLog(message) },
+        /** New keyed sessions retain output in their own store instead of General Logs. */
+        logNativeOutputToDebug: Boolean = true,
+        /** Lets keyed owners close a stop-before-spawn race without broad process cleanup. */
+        shouldStop: (() -> Boolean)? = null,
         onOwnedProcessStarted: ((pid: Int, processStartTimeTicks: Long?) -> Unit)? = null
     ): ProcessRunResult = withContext(Dispatchers.IO) {
         stoppedIntentionally = false
+        if (shouldStop?.invoke() == true) {
+            stoppedIntentionally = true
+            return@withContext ProcessRunResult(
+                exitCode = -1,
+                becameReady = false,
+                stoppedIntentionally = true
+            )
+        }
         if (process?.isAlive == true) stop()
         // Stop the previous generation before allocating the new one. This
         // keeps stopRequestedGeneration associated with the child that was
@@ -924,6 +936,16 @@ class ProcessController {
             DebugLog.log("ProcessController: Working dir=${workingDir.absolutePath}")
             
             process = pb.start()
+            // A targeted stop can arrive between the preflight check and pb.start(). Close the
+            // just-created child immediately without affecting any other owner.
+            if (shouldStop?.invoke() == true) {
+                stop()
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
             activeBinaryWasOpenCl = binaryPath.contains("opencl", ignoreCase = true)
             val reflectedChildPid = runCatching {
                 process?.let { child ->
@@ -934,6 +956,14 @@ class ProcessController {
                 resolveNativeChildPid(binaryPath)?.toLong() ?: -1L
             }
             activeChildPid = childPid.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+            if (stoppedIntentionally || shouldStop?.invoke() == true || process == null) {
+                if (process != null) stop()
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
             onOwnedProcessStarted?.invoke(
                 activeChildPid,
                 NativeProcessCleanup.processStartTimeTicks(activeChildPid)
@@ -955,6 +985,14 @@ class ProcessController {
             
             // Start log consumer
             onClearServerLogs?.invoke()
+            if (stoppedIntentionally || shouldStop?.invoke() == true) {
+                stop()
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
             val childProcess = process ?: error("Native process disappeared immediately after start")
             launchedProcess = childProcess
             val reader = BufferedReader(InputStreamReader(childProcess.inputStream))
@@ -964,7 +1002,9 @@ class ProcessController {
             while (reader.readLine().also { line = it } != null) {
                 _logs.value = line ?: ""
                 Log.d("LlamaServer", line ?: "")
-                DebugLog.log("Server: ${line ?: ""}")
+                if (logNativeOutputToDebug) {
+                    DebugLog.log("Server: ${line ?: ""}")
+                }
                 line?.let {
                     recentOutput.addLast(it)
                     while (recentOutput.size > RECENT_OUTPUT_LIMIT) {

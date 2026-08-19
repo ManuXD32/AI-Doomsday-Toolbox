@@ -127,6 +127,8 @@ class NativeChatSdImageGenerator(
                     llmPath = components.llmPath,
                     llmVisionPath = components.llmVisionPath,
                     photoMakerPath = components.photoMakerPath,
+                    loras = imageParams.loras,
+                    loraApplyMode = imageParams.loraApplyMode,
                     flowShift = imageParams.flowShift.toFloatOrNull(),
                     diffusionFa = imageParams.diffusionFa && spec.supportsDiffusionFa,
                     mmap = imageParams.mmap && spec.supportsMmap,

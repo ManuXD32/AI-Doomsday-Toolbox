@@ -91,14 +91,23 @@ class ModelRepository(
         }
     
     fun getLLMModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING)
+        listOf(ModelType.LLM, ModelType.VISION, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING)
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
     }
 
     fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(ModelType.LLM, ModelType.LLM_DRAFT, ModelType.LORA, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.QUADTRIX)
+        listOf(
+            ModelType.LLM,
+            ModelType.LLM_DRAFT,
+            ModelType.LORA,
+            ModelType.EMBEDDING,
+            // Keep legacy vision/projector rows visible for UI category normalization.
+            ModelType.VISION,
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ
+        )
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
@@ -780,6 +789,7 @@ class ModelRepository(
 
             val relevantTypes = listOf(
                 ModelType.LLM,
+                ModelType.LLM_DRAFT,
                 ModelType.LORA,
                 ModelType.EMBEDDING,
                 ModelType.VISION,
@@ -798,7 +808,8 @@ class ModelRepository(
                 ModelType.SD_CONTROLNET,
                 ModelType.SD_PHOTOMAKER,
                 ModelType.SD_CLIP_VISION,
-                ModelType.SD_IP_ADAPTER
+                ModelType.SD_IP_ADAPTER,
+                ModelType.SD_ADETAILER
             )
             modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
                 runCatching {

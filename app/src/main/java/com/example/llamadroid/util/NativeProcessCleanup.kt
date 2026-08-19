@@ -218,6 +218,31 @@ object NativeProcessCleanup {
             isKnownLlamaServerCommand(actualCommandLine) &&
             commandLineHasPort(actualCommandLine, expectedPort)
 
+    /**
+     * Read-only exact-owner check for keyed session reconciliation. A PID is considered owned
+     * only when its start-time token, llama command marker, and managed port all match.
+     */
+    fun recordedLlamaOwnerIsAliveSync(
+        rootPid: Int,
+        expectedStartTimeTicks: Long,
+        expectedPort: Int,
+        procRoot: File = File("/proc"),
+        myPid: Int = Process.myPid(),
+        myUid: Int = Process.myUid()
+    ): Boolean {
+        if (rootPid <= 0 || expectedStartTimeTicks <= 0L || expectedPort !in 1..65535) return false
+        val root = findSameUidProcesses(procRoot, myPid, myUid).firstOrNull { it.pid == rootPid } ?: return false
+        val actualStartTimeTicks = processStartTimeTicks(rootPid, procRoot) ?: return false
+        return recordedLlamaOwnerMatches(
+            expectedPid = rootPid,
+            expectedStartTimeTicks = expectedStartTimeTicks,
+            expectedPort = expectedPort,
+            actualPid = root.pid,
+            actualStartTimeTicks = actualStartTimeTicks,
+            actualCommandLine = root.commandLine
+        )
+    }
+
     fun cleanupSameUidPortListenersSync(
         reason: String,
         port: Int,

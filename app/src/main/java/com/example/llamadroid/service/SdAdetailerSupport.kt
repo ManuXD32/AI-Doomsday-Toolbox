@@ -3,6 +3,8 @@ package com.example.llamadroid.service
 import android.content.Context
 import android.os.Parcelable
 import com.example.llamadroid.R
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.validateSdLoras
 import kotlinx.parcelize.Parcelize
 import java.io.File
 import java.io.RandomAccessFile
@@ -25,7 +27,9 @@ data class SdADetailerConfig(
     val inpaintHeight: Int? = null,
     val detailSteps: Int? = null,
     val detailCfgScale: Float? = null,
-    val advancedArgs: String = ""
+    val advancedArgs: String = "",
+    /** Optional ordered adapters for the detail pass; apply mode remains global in SDConfig. */
+    val loras: List<SdLoraSpec> = emptyList()
 ) : Parcelable
 
 enum class SdADetailerConfigurationIssue {
@@ -105,6 +109,7 @@ fun validateSdADetailerConfig(config: SdADetailerConfig): SdADetailerConfig {
     config.detailCfgScale?.let {
         if (!it.isFinite() || it !in 0f..50f) throw SdADetailerConfigurationException(SdADetailerConfigurationIssue.INVALID_CFG, "ADetailer CFG is invalid")
     }
+    validateSdLoras(config.loras)
     parseSdADetailerAdvancedArgs(config.advancedArgs).keys.forEach { key ->
         if (key in typedAdKeys) {
             throw SdADetailerConfigurationException(SdADetailerConfigurationIssue.INVALID_ADVANCED_ARGUMENTS, "Advanced ADetailer argument '$key' duplicates a typed setting")
@@ -185,6 +190,9 @@ internal fun isCompatibleSdADetailerDetector(file: File): Boolean = runCatching 
         }
     }
 }.getOrDefault(false)
+
+/** Public workflow-gate wrapper; keeps converter smoke validation in one place. */
+fun smokeCheckSdADetailerDetector(file: File): Boolean = isCompatibleSdADetailerDetector(file)
 
 fun sdADetailerErrorMessage(
     context: Context,

@@ -1,5 +1,6 @@
 package com.example.llamadroid.data.db
 
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.LlamaServerLaunchProfile
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,6 +17,7 @@ class SavedCommandProfileTest {
             draftModelPath = "/models/mtp-draft.gguf",
             contextCheckpoints = 4,
             cacheIdleSlots = false,
+            nativeBinarySelection = SettingsRepository.NATIVE_BINARY_CPU_I8MM,
             nativeToolsEnabled = true
         )
 
@@ -24,6 +26,7 @@ class SavedCommandProfileTest {
         assertEquals(8, command.id)
         assertEquals(profile, command.launchProfile())
         assertTrue(command.launchProfileJson!!.contains("mtpUseDraftModel"))
+        assertTrue(command.launchProfileJson!!.contains("nativeBinarySelection"))
     }
 
     @Test

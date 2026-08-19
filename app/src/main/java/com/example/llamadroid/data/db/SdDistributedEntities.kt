@@ -115,6 +115,8 @@ data class SdDistributedMasterSettingsEntity(
     val imageLoraEnabled: Boolean = false,
     val imageLoraPath: String = "",
     val imageLoraApplyMode: String = "",
+    /** Ordered JSON array of [SdLoraSpec] values; retained separately for DB/template round-trips. */
+    val imageLorasJson: String = "[]",
     val imageCustomFlags: String = "",
     val videoWorkflowMode: String = "TXT2VID",
     val videoModelPath: String = "",
@@ -123,6 +125,11 @@ data class SdDistributedMasterSettingsEntity(
     val videoVaePath: String = "",
     val videoUseT5xxl: Boolean = false,
     val videoT5xxlPath: String = "",
+    /** Ordered JSON array of regular video LoRAs. */
+    val videoLorasJson: String = "[]",
+    /** Ordered JSON array of Wan high-noise LoRAs; item order is significant. */
+    val videoHighNoiseLorasJson: String = "[]",
+    val videoLoraApplyMode: String = "",
     val videoCustomFlags: String = "",
     val devicesExpanded: Boolean = true,
     val plannerExpanded: Boolean = true,

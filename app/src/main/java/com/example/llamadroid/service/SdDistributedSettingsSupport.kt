@@ -4,9 +4,58 @@ import android.content.Context
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
 import com.example.llamadroid.data.db.SdDistributedWorkerEntity
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
+
+private fun legacyDistributedLorasJson(path: String, strength: String): String =
+    SdLoraSpec.fromLegacy(
+        path = path.trim().takeIf { it.isNotEmpty() },
+        strength = strength.toFloatOrNull() ?: 1f
+    ).toJsonArray().toString()
+
+private fun normalizeDistributedLorasJson(json: String, legacyPath: String, legacyStrength: String): String {
+    val parsed = runCatching { JSONArray(json).toSdLoraSpecs() }.getOrDefault(emptyList())
+    return if (parsed.isNotEmpty() || legacyPath.isBlank()) {
+        if (parsed.isNotEmpty()) parsed.toJsonArray().toString() else "[]"
+    } else {
+        legacyDistributedLorasJson(legacyPath, legacyStrength)
+    }
+}
+
+/** Ordered image LoRAs, with a one-time compatibility adapter for old database rows. */
+fun SdDistributedMasterSettingsEntity.imageLoras(): List<SdLoraSpec> =
+    if (!imageLoraEnabled) {
+        // The visible enable switch is authoritative.  This prevents an old
+        // non-empty JSON stack from resurrecting an adapter after the user
+        // disabled it in the distributed editor.
+        emptyList()
+    } else {
+        val persistedStack = runCatching { JSONArray(imageLorasJson).toSdLoraSpecs() }
+            .getOrDefault(emptyList())
+        val visibleLegacy = SdLoraSpec.fromLegacy(
+            path = imageLoraPath,
+            strength = loraStrength.toFloatOrNull() ?: 1f
+        ).firstOrNull()
+        when {
+            visibleLegacy == null -> persistedStack
+            persistedStack.isEmpty() -> listOf(visibleLegacy)
+            persistedStack.first().path == visibleLegacy.path -> persistedStack
+            else -> listOf(visibleLegacy) + persistedStack.filterNot { it.path == visibleLegacy.path }
+        }
+    }
+
+/** Regular video LoRAs in declared order. */
+fun SdDistributedMasterSettingsEntity.videoLoras(): List<SdLoraSpec> =
+    runCatching { JSONArray(videoLorasJson).toSdLoraSpecs() }.getOrDefault(emptyList())
+
+/** Wan high-noise video LoRAs in declared order. */
+fun SdDistributedMasterSettingsEntity.videoHighNoiseLoras(): List<SdLoraSpec> =
+    runCatching { JSONArray(videoHighNoiseLorasJson).toSdLoraSpecs() }.getOrDefault(emptyList())
 
 fun List<SdDistributedWorkerEntity>.toSdPlanningWorkers(): List<SdDistributedPlanningWorker> =
     sortedWith(
@@ -208,6 +257,7 @@ fun settingsToJson(settings: SdDistributedMasterSettingsEntity): String =
         .put("imageLoraEnabled", settings.imageLoraEnabled)
         .put("imageLoraPath", settings.imageLoraPath)
         .put("imageLoraApplyMode", settings.imageLoraApplyMode)
+        .put("imageLorasJson", normalizeDistributedLorasJson(settings.imageLorasJson, settings.imageLoraPath, settings.loraStrength))
         .put("imageCustomFlags", settings.imageCustomFlags)
         .put("videoWorkflowMode", settings.videoWorkflowMode)
         .put("videoModelPath", settings.videoModelPath)
@@ -216,6 +266,9 @@ fun settingsToJson(settings: SdDistributedMasterSettingsEntity): String =
         .put("videoVaePath", settings.videoVaePath)
         .put("videoUseT5xxl", settings.videoUseT5xxl)
         .put("videoT5xxlPath", settings.videoT5xxlPath)
+        .put("videoLorasJson", normalizeDistributedLorasJson(settings.videoLorasJson, "", "1.0"))
+        .put("videoHighNoiseLorasJson", normalizeDistributedLorasJson(settings.videoHighNoiseLorasJson, "", "1.0"))
+        .put("videoLoraApplyMode", settings.videoLoraApplyMode)
         .put("videoCustomFlags", settings.videoCustomFlags)
         .toString()
 
@@ -316,6 +369,11 @@ fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdD
         imageLoraEnabled = obj.optBoolean("imageLoraEnabled", base.imageLoraEnabled),
         imageLoraPath = obj.optString("imageLoraPath", base.imageLoraPath),
         imageLoraApplyMode = obj.optString("imageLoraApplyMode", base.imageLoraApplyMode),
+        imageLorasJson = normalizeDistributedLorasJson(
+            obj.optString("imageLorasJson", base.imageLorasJson),
+            obj.optString("imageLoraPath", base.imageLoraPath),
+            obj.optString("loraStrength", base.loraStrength)
+        ),
         imageCustomFlags = obj.optString("imageCustomFlags", base.imageCustomFlags),
         videoWorkflowMode = obj.optString("videoWorkflowMode", base.videoWorkflowMode),
         videoModelPath = obj.optString("videoModelPath", base.videoModelPath),
@@ -324,6 +382,9 @@ fun settingsFromJson(json: String, base: SdDistributedMasterSettingsEntity = SdD
         videoVaePath = obj.optString("videoVaePath", base.videoVaePath),
         videoUseT5xxl = obj.optBoolean("videoUseT5xxl", base.videoUseT5xxl),
         videoT5xxlPath = obj.optString("videoT5xxlPath", base.videoT5xxlPath),
+        videoLorasJson = normalizeDistributedLorasJson(obj.optString("videoLorasJson", base.videoLorasJson), "", "1.0"),
+        videoHighNoiseLorasJson = normalizeDistributedLorasJson(obj.optString("videoHighNoiseLorasJson", base.videoHighNoiseLorasJson), "", "1.0"),
+        videoLoraApplyMode = obj.optString("videoLoraApplyMode", base.videoLoraApplyMode),
         videoCustomFlags = obj.optString("videoCustomFlags", base.videoCustomFlags)
     )
 }

@@ -42,6 +42,14 @@ import com.example.llamadroid.data.model.LITERT_BACKEND_CPU
 import com.example.llamadroid.data.model.LITERT_BACKEND_GPU
 import com.example.llamadroid.data.model.LiteRtModelEntity
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.db.AgentRuntimeBackend
+import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
+import com.example.llamadroid.data.db.AgentRuntimeProfile
+import com.example.llamadroid.data.db.AgentRuntimeProfileKeys
+import com.example.llamadroid.data.runtime.AgentRuntimeContinueAction
+import com.example.llamadroid.data.runtime.AgentRuntimeProfileStore
+import com.example.llamadroid.data.runtime.EmptyAgentRuntimeProfileStore
+import com.example.llamadroid.data.runtime.ManagedLlamaServerDescriptor
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolvedSdFamily
@@ -53,6 +61,7 @@ import com.example.llamadroid.service.resolveAgentLiteRtContextTokens
 import com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
+import kotlinx.coroutines.launch
 
 enum class AgentSettingsSection {
     AGENTS,
@@ -462,11 +471,6 @@ fun ConnectionSettingsDialog(
     var editedOllamaUrl by remember { mutableStateOf(ollamaUrl) }
     val context = LocalContext.current
     val settingsRepo = settingsRepository
-    val agentBackend by settingsRepo.agentBackend.collectAsState()
-    val isAgentOllama = agentBackend == SettingsRepository.PDF_BACKEND_OLLAMA
-    val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(agentBackend)
-    val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(agentBackend)
-    val isAgentLiteRt = SettingsRepository.isLiteRtBackend(agentBackend)
     val liteRtModels by remember(context) {
         AppDatabase.getDatabase(context.applicationContext).liteRtModelDao().observeAll()
     }.collectAsState(initial = emptyList())
@@ -476,7 +480,6 @@ fun ConnectionSettingsDialog(
     val agentLiteRtMaxOutputTokens by settingsRepo.agentLiteRtMaxOutputTokens.collectAsState()
     val agentLiteRtMtpEnabled by settingsRepo.agentLiteRtMtpEnabled.collectAsState()
     val agentLiteRtThinkingEnabled by settingsRepo.agentLiteRtThinkingEnabled.collectAsState()
-    var showLiteRtModelMenu by remember { mutableStateOf(false) }
     
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -557,47 +560,15 @@ fun ConnectionSettingsDialog(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Backend Selector (Ollama / llama-server / llama-swap / LiteRT)
                 val llamaServerUrl by settingsRepo.llamaServerUrl.collectAsState()
                 val llamaSwapUrl by settingsRepo.agentLlamaSwapUrl.collectAsState()
-                var showBackendDropdown by remember { mutableStateOf(false) }
-                
-                Text(stringResource(R.string.agent_backend_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
-                Text(stringResource(R.string.agent_backend_desc), fontSize = 10.sp, color = Color.Gray)
+                Text(stringResource(R.string.agent_runtime_profile_title), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary)
+                Text(stringResource(R.string.agent_runtime_global_connections_note), fontSize = 10.sp, color = Color.Gray)
                 Spacer(modifier = Modifier.height(4.dp))
-                
-                Box {
-                    OutlinedButton(onClick = { showBackendDropdown = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            when {
-                                isAgentLlamaServer -> stringResource(R.string.pdf_backend_llama_server)
-                                isAgentLlamaSwap -> stringResource(R.string.pdf_backend_llama_swap)
-                                isAgentLiteRt -> stringResource(R.string.pdf_backend_litert)
-                                else -> stringResource(R.string.pdf_backend_ollama)
-                            }
-                        )
-                    }
-                    DropdownMenu(expanded = showBackendDropdown, onDismissRequest = { showBackendDropdown = false }) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_ollama)) }, onClick = {
-                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_OLLAMA)
-                            showBackendDropdown = false
-                        })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_llama_server)) }, onClick = {
-                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LLAMA_SERVER)
-                            showBackendDropdown = false
-                        })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_llama_swap)) }, onClick = {
-                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LLAMA_SWAP)
-                            showBackendDropdown = false
-                        })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.pdf_backend_litert)) }, onClick = {
-                            settingsRepo.setAgentBackend(SettingsRepository.PDF_BACKEND_LITERT)
-                            showBackendDropdown = false
-                        })
-                    }
-                }
 
-                if (isAgentOllama) {
+                // These are shared connection/tuning settings. Engine and model
+                // ownership lives in each agent's runtime profile below.
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(stringResource(R.string.ollama_server_title), fontWeight = FontWeight.Medium, fontSize = 14.sp)
 
@@ -650,49 +621,49 @@ fun ConnectionSettingsDialog(
                     )
                 }
                 
-                if (isAgentLlamaServer || isAgentLlamaSwap) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    var editedLlamaUrl by remember(isAgentLlamaSwap) {
-                        mutableStateOf(if (isAgentLlamaSwap) llamaSwapUrl else llamaServerUrl)
+                    var editedLlamaServerUrl by remember(llamaServerUrl) {
+                        mutableStateOf(llamaServerUrl)
                     }
                     OutlinedTextField(
-                        value = editedLlamaUrl,
-                        onValueChange = { editedLlamaUrl = it },
-                        label = {
-                            Text(
-                                if (isAgentLlamaSwap) {
-                                    stringResource(R.string.agent_llama_swap_url)
-                                } else {
-                                    stringResource(R.string.agent_llama_server_url)
-                                }
-                            )
-                        },
+                        value = editedLlamaServerUrl,
+                        onValueChange = { editedLlamaServerUrl = it },
+                        label = { Text(stringResource(R.string.agent_llama_server_url)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true
                     )
-                    LaunchedEffect(editedLlamaUrl, isAgentLlamaSwap) {
-                        if (isAgentLlamaSwap) {
-                            if (editedLlamaUrl != llamaSwapUrl) {
-                                settingsRepo.setAgentLlamaSwapUrl(editedLlamaUrl)
-                            }
-                        } else if (editedLlamaUrl != llamaServerUrl) {
-                            settingsRepo.setLlamaServerUrl(editedLlamaUrl)
+                    LaunchedEffect(editedLlamaServerUrl, llamaServerUrl) {
+                        if (editedLlamaServerUrl != llamaServerUrl) {
+                            settingsRepo.setLlamaServerUrl(editedLlamaServerUrl)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    var editedLlamaSwapUrl by remember(llamaSwapUrl) {
+                        mutableStateOf(llamaSwapUrl)
+                    }
+                    OutlinedTextField(
+                        value = editedLlamaSwapUrl,
+                        onValueChange = { editedLlamaSwapUrl = it },
+                        label = { Text(stringResource(R.string.agent_llama_swap_url)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    LaunchedEffect(editedLlamaSwapUrl, llamaSwapUrl) {
+                        if (editedLlamaSwapUrl != llamaSwapUrl) {
+                            settingsRepo.setAgentLlamaSwapUrl(editedLlamaSwapUrl)
                         }
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        if (isAgentLlamaSwap) {
-                            stringResource(R.string.agent_llama_swap_note)
-                        } else {
-                            stringResource(R.string.agent_llama_server_note)
-                        },
+                        stringResource(R.string.agent_llama_server_note),
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.tertiary,
                         fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
                     )
                 }
 
-                if (isAgentLiteRt) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(stringResource(R.string.pdf_backend_litert), fontWeight = FontWeight.Medium, fontSize = 14.sp)
                     val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == agentLiteRtModelId }
@@ -714,37 +685,13 @@ fun ConnectionSettingsDialog(
                         resolvedContextTokens = liteRtResolvedContext,
                         model = selectedLiteRtModel
                     )
-                    ExposedDropdownMenuBox(
-                        expanded = showLiteRtModelMenu,
-                        onExpandedChange = { showLiteRtModelMenu = it }
-                    ) {
-                        OutlinedTextField(
-                            value = selectedLiteRtModel?.displayName.orEmpty(),
-                            onValueChange = {},
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            readOnly = true,
-                            enabled = liteRtModels.isNotEmpty(),
-                            label = { Text(stringResource(R.string.litert_model_label)) },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(showLiteRtModelMenu) },
-                            singleLine = true
-                        )
-                        ExposedDropdownMenu(
-                            expanded = showLiteRtModelMenu,
-                            onDismissRequest = { showLiteRtModelMenu = false }
-                        ) {
-                            liteRtModels.forEach { model ->
-                                DropdownMenuItem(
-                                    text = { Text(model.displayName) },
-                                    onClick = {
-                                        settingsRepo.setAgentLiteRtModelId(model.id)
-                                        showLiteRtModelMenu = false
-                                    }
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = stringResource(R.string.agent_runtime_litert_global_tuning_note),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(stringResource(R.string.litert_gallery_accelerator), fontWeight = FontWeight.Medium, fontSize = 13.sp)
                     FlowRow(
@@ -855,9 +802,7 @@ fun ConnectionSettingsDialog(
                     }
                     Button(
                         onClick = {
-                            if (isAgentOllama) {
-                                onOllamaUrlChange(editedOllamaUrl)
-                            }
+                            onOllamaUrlChange(editedOllamaUrl)
                             onConnect()
                         },
                         modifier = Modifier.weight(1f)
@@ -876,6 +821,7 @@ fun ConnectionSettingsDialog(
 fun AgentSettingsDialog(
     settingsRepository: SettingsRepository,
     availableModels: List<String>,
+    llamaSwapModels: List<String> = emptyList(),
     knowledgeBases: List<KnowledgeBaseEntity>,
     selectedKnowledgeBaseIds: List<Long>,
     availableImageGenerationModels: List<String>,
@@ -885,17 +831,30 @@ fun AgentSettingsDialog(
     onKnowledgeBaseSelectionChange: (List<Long>) -> Unit,
     onManageKnowledgeBases: () -> Unit,
     section: AgentSettingsSection = AgentSettingsSection.AGENTS,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    runtimeProfileStore: AgentRuntimeProfileStore = EmptyAgentRuntimeProfileStore,
+    managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
+    runtimeLiteRtModels: List<AgentLiteRtProfileOption>? = null,
+    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null
 ) {
     val showAgentConfiguration = section == AgentSettingsSection.AGENTS
     val showToolConfiguration = section == AgentSettingsSection.TOOLS
 
     val context = LocalContext.current
+    val runtimeProfiles by runtimeProfileStore.observeProfiles().collectAsState(initial = emptyList())
+    val runtimeEndpointConfigs by runtimeProfileStore.observeEndpointConfigs().collectAsState(initial = emptyList())
+    val runtimeProfilesByKey = remember(runtimeProfiles) {
+        runtimeProfiles.associateBy { it.agentKey }
+    }
+    val runtimeProfileScope = rememberCoroutineScope()
     val agentBackend by settingsRepository.agentBackend.collectAsState()
     val isAgentLiteRt = SettingsRepository.isLiteRtBackend(agentBackend)
     val liteRtModels by remember(context) {
         AppDatabase.getDatabase(context.applicationContext).liteRtModelDao().observeAll()
     }.collectAsState(initial = emptyList())
+    val runtimeLiteRtOptions = runtimeLiteRtModels ?: liteRtModels.map {
+        AgentLiteRtProfileOption(id = it.id, displayName = it.displayName, filename = it.filename)
+    }
     val llamaServerModelLabel by settingsRepository.agentLlamaServerModelLabel.collectAsState()
     val llamaServerContextLabel by settingsRepository.agentLlamaServerContextLabel.collectAsState()
     val agentLiteRtModelId by settingsRepository.agentLiteRtModelId.collectAsState()
@@ -1004,6 +963,27 @@ fun AgentSettingsDialog(
     val selectedAgentLiteRtModel = liteRtModels.firstOrNull { it.id == agentLiteRtModelId }
         ?: liteRtModels.firstOrNull()
 
+    fun saveRuntimeProfile(profile: AgentRuntimeProfile) {
+        runtimeProfileScope.launch {
+            runtimeProfileStore.save(profile.normalized())
+        }
+    }
+
+    fun saveRuntimeEndpointConfig(config: AgentRuntimeEndpointConfig) {
+        runtimeProfileScope.launch {
+            runtimeProfileStore.saveEndpointConfig(config)
+        }
+    }
+
+    fun deleteRuntimeEndpointConfig(id: Long) {
+        runtimeProfileScope.launch {
+            runtimeProfileStore.deleteEndpointConfig(id)
+        }
+    }
+
+    fun storedRuntimeProfile(agentKey: String): AgentRuntimeProfile? =
+        runtimeProfilesByKey[agentKey]
+
     LaunchedEffect(isAgentLiteRt, selectedAgentLiteRtModel?.id, agentLiteRtModelId) {
         if (isAgentLiteRt && selectedAgentLiteRtModel != null && agentLiteRtModelId != selectedAgentLiteRtModel.id) {
             settingsRepository.setAgentLiteRtModelId(selectedAgentLiteRtModel.id)
@@ -1082,12 +1062,15 @@ AgentKnowledgeBaseSelector(
                     )
                 }
 
-                if (showAgentConfiguration && isAgentLiteRt) {
+                if (showAgentConfiguration && (isAgentLiteRt || runtimeProfiles.any {
+                        it.normalizedBackend == AgentRuntimeBackend.LITERT
+                    })) {
                     AgentLiteRtBackendCard(
                         liteRtModels = liteRtModels,
                         selectedModel = selectedAgentLiteRtModel,
                         selectedModelId = agentLiteRtModelId,
                         onModelSelected = settingsRepository::setAgentLiteRtModelId,
+                        showModelPicker = false,
                         selectedBackend = agentLiteRtBackend,
                         onBackendSelected = settingsRepository::setAgentLiteRtBackend,
                         savedContextTokens = agentLiteRtContextTokens,
@@ -1110,6 +1093,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_orchestrator_desc),
                     selectedModel = orchestratorModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1124,7 +1108,15 @@ AgentKnowledgeBaseSelector(
                     thinkingEnabled = orchestratorThinking,
                     onThinkingChange = { settingsRepository.setAgentOrchestratorThinkingEnabled(it) },
                     visionEnabled = orchestratorVisionEnabled,
-                    onVisionChange = { settingsRepository.setAgentOrchestratorVisionEnabled(it) }
+                    onVisionChange = { settingsRepository.setAgentOrchestratorVisionEnabled(it) },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.ORCHESTRATOR),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
 
                 AgentTuningCard(
@@ -1133,6 +1125,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_codebase_scout_desc),
                     selectedModel = codebaseScoutModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1151,7 +1144,15 @@ AgentKnowledgeBaseSelector(
                             "CODEBASE_SCOUT",
                             enabled
                         )
-                    }
+                    },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.CODEBASE_SCOUT),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
 
                 AgentTuningCard(
@@ -1160,6 +1161,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_researcher_desc),
                     selectedModel = researcherModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1178,7 +1180,15 @@ AgentKnowledgeBaseSelector(
                             "RESEARCHER",
                             enabled
                         )
-                    }
+                    },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.RESEARCHER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
 
                 AgentTuningCard(
@@ -1187,6 +1197,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_planner_desc),
                     selectedModel = plannerModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1205,7 +1216,15 @@ AgentKnowledgeBaseSelector(
                             "PLANNER",
                             enabled
                         )
-                    }
+                    },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.PLANNER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
                 
                 val coderThinking by settingsRepository.agentCoderThinkingEnabled.collectAsState()
@@ -1215,6 +1234,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_coder_desc),
                     selectedModel = coderModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1231,7 +1251,15 @@ AgentKnowledgeBaseSelector(
                     visionEnabled = coderVisionEnabled,
                     onVisionChange = { settingsRepository.setAgentCoderVisionEnabled(it) },
                     isEnabled = "CODER" !in disabledAgents,
-                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("CODER", it) }
+                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("CODER", it) },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.CODER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
                 
                 val reviewerThinking by settingsRepository.agentReviewerThinkingEnabled.collectAsState()
@@ -1241,6 +1269,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_reviewer_desc),
                     selectedModel = reviewerModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1257,7 +1286,15 @@ AgentKnowledgeBaseSelector(
                     visionEnabled = reviewerVisionEnabled,
                     onVisionChange = { settingsRepository.setAgentReviewerVisionEnabled(it) },
                     isEnabled = "REVIEWER" !in disabledAgents,
-                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("REVIEWER", it) }
+                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("REVIEWER", it) },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.REVIEWER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
                 
                 // Executor
@@ -1268,6 +1305,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_executor_desc),
                     selectedModel = executorModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1284,7 +1322,15 @@ AgentKnowledgeBaseSelector(
                     visionEnabled = executorVisionEnabled,
                     onVisionChange = { settingsRepository.setAgentExecutorVisionEnabled(it) },
                     isEnabled = "EXECUTOR" !in disabledAgents,
-                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("EXECUTOR", it) }
+                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("EXECUTOR", it) },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.EXECUTOR),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
 
                 AgentTuningCard(
@@ -1293,6 +1339,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_visual_tester_desc),
                     selectedModel = visualTesterModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1317,7 +1364,15 @@ AgentKnowledgeBaseSelector(
                             "VISUAL_TESTER",
                             enabled
                         )
-                    }
+                    },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.VISUAL_TESTER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
 
                 // Summarizer
@@ -1331,6 +1386,7 @@ AgentKnowledgeBaseSelector(
                     description = stringResource(R.string.agent_summarizer_desc),
                     selectedModel = summarizerModel,
                     availableModels = availableModels,
+                    llamaSwapModels = llamaSwapModels,
                     backend = agentBackend,
                     llamaServerModelLabel = llamaServerModelLabel,
                     llamaServerContextLabel = llamaServerContextLabel,
@@ -1347,7 +1403,15 @@ AgentKnowledgeBaseSelector(
                     visionEnabled = summarizerVisionEnabled,
                     onVisionChange = { settingsRepository.setAgentSummarizerVisionEnabled(it) },
                     isEnabled = "SUMMARIZER" !in disabledAgents,
-                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("SUMMARIZER", it) }
+                    onEnabledChange = { AgentService.setBuiltInAgentEnabled("SUMMARIZER", it) },
+                    runtimeProfile = storedRuntimeProfile(AgentRuntimeProfileKeys.SUMMARIZER),
+                    managedLlamaServers = managedLlamaServers,
+                    runtimeLiteRtModels = runtimeLiteRtOptions,
+                    endpointConfigs = runtimeEndpointConfigs,
+                    onSaveEndpointConfig = ::saveRuntimeEndpointConfig,
+                    onDeleteEndpointConfig = ::deleteRuntimeEndpointConfig,
+                    onRuntimeProfileChange = { saveRuntimeProfile(it) },
+                    onRuntimeContinue = onRuntimeContinue
                 )
                 }
                 if (showToolConfiguration) {
@@ -2429,6 +2493,7 @@ private fun AgentTuningCard(
     description: String,
     selectedModel: String,
     availableModels: List<String>,
+    llamaSwapModels: List<String> = emptyList(),
     backend: String,
     llamaServerModelLabel: String?,
     llamaServerContextLabel: String?,
@@ -2442,13 +2507,22 @@ private fun AgentTuningCard(
     visionEnabled: Boolean? = null,
     onVisionChange: ((Boolean) -> Unit)? = null,
     isEnabled: Boolean,
-    onEnabledChange: (Boolean) -> Unit
+    onEnabledChange: (Boolean) -> Unit,
+    runtimeProfile: AgentRuntimeProfile? = null,
+    managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
+    runtimeLiteRtModels: List<AgentLiteRtProfileOption> = emptyList(),
+    endpointConfigs: List<AgentRuntimeEndpointConfig> = emptyList(),
+    onSaveEndpointConfig: (AgentRuntimeEndpointConfig) -> Unit = {},
+    onDeleteEndpointConfig: (Long) -> Unit = {},
+    onRuntimeProfileChange: (AgentRuntimeProfile) -> Unit = {},
+    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null
 ) {
     var modelExpanded by remember { mutableStateOf(false) }
-    val isLiteRt = SettingsRepository.isLiteRtBackend(backend)
+    val effectiveBackend = runtimeProfile?.normalizedBackend?.id ?: backend
+    val isLiteRt = SettingsRepository.isLiteRtBackend(effectiveBackend)
     val isServer =
-        SettingsRepository.isLlamaServerBackend(backend) ||
-            SettingsRepository.isLlamaSwapBackend(backend)
+        SettingsRepository.isLlamaServerBackend(effectiveBackend) ||
+            SettingsRepository.isLlamaSwapBackend(effectiveBackend)
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -2479,12 +2553,16 @@ private fun AgentTuningCard(
                             ""
                         },
                         fontWeight = FontWeight.Bold,
-                        style = MaterialTheme.typography.titleMedium
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         description,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Switch(
@@ -2495,6 +2573,20 @@ private fun AgentTuningCard(
             }
             AnimatedVisibility(visible = isEnabled) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    runtimeProfile?.let { profile ->
+                        AgentRuntimeProfileControls(
+                            profile = profile,
+                            ollamaModels = availableModels,
+                            llamaSwapModels = llamaSwapModels,
+                            managedLlamaServers = managedLlamaServers,
+                            liteRtModels = runtimeLiteRtModels,
+                            endpointConfigs = endpointConfigs,
+                            onSaveEndpointConfig = onSaveEndpointConfig,
+                            onDeleteEndpointConfig = onDeleteEndpointConfig,
+                            onProfileChange = onRuntimeProfileChange,
+                            onContinue = onRuntimeContinue
+                        )
+                    }
                     if (!isLiteRt) {
                         AgentSwitchRow(
                             title = stringResource(R.string.agent_thinking_enabled),
@@ -2510,6 +2602,7 @@ private fun AgentTuningCard(
                         )
                     }
                     when {
+                        runtimeProfile != null -> Unit
                         isLiteRt -> Text(
                             stringResource(R.string.agent_litert_role_model_note),
                             style = MaterialTheme.typography.bodySmall,
@@ -2778,6 +2871,7 @@ fun AgentLiteRtBackendCard(
     selectedModel: LiteRtModelEntity?,
     selectedModelId: Long,
     onModelSelected: (Long?) -> Unit,
+    showModelPicker: Boolean = true,
     selectedBackend: String,
     onBackendSelected: (String) -> Unit,
     savedContextTokens: Int,
@@ -2835,46 +2929,48 @@ fun AgentLiteRtBackendCard(
                 }
             }
 
-            ExposedDropdownMenuBox(
-                expanded = modelMenuExpanded,
-                onExpandedChange = { if (liteRtModels.isNotEmpty()) modelMenuExpanded = it }
-            ) {
-                OutlinedTextField(
-                    value = selectedModel?.displayName
-                        ?: stringResource(R.string.agent_litert_no_models),
-                    onValueChange = {},
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
-                    readOnly = true,
-                    enabled = liteRtModels.isNotEmpty(),
-                    label = { Text(stringResource(R.string.litert_model_label)) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelMenuExpanded) },
-                    singleLine = true
-                )
-                ExposedDropdownMenu(
+            if (showModelPicker) {
+                ExposedDropdownMenuBox(
                     expanded = modelMenuExpanded,
-                    onDismissRequest = { modelMenuExpanded = false }
+                    onExpandedChange = { if (liteRtModels.isNotEmpty()) modelMenuExpanded = it }
                 ) {
-                    liteRtModels.forEach { model ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(model.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    Text(
-                                        text = model.filename,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                    OutlinedTextField(
+                        value = selectedModel?.displayName
+                            ?: stringResource(R.string.agent_litert_no_models),
+                        onValueChange = {},
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        readOnly = true,
+                        enabled = liteRtModels.isNotEmpty(),
+                        label = { Text(stringResource(R.string.litert_model_label)) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelMenuExpanded) },
+                        singleLine = true
+                    )
+                    ExposedDropdownMenu(
+                        expanded = modelMenuExpanded,
+                        onDismissRequest = { modelMenuExpanded = false }
+                    ) {
+                        liteRtModels.forEach { model ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(model.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(
+                                            text = model.filename,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    onModelSelected(model.id)
+                                    modelMenuExpanded = false
                                 }
-                            },
-                            onClick = {
-                                onModelSelected(model.id)
-                                modelMenuExpanded = false
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
@@ -2986,6 +3082,7 @@ fun AgentConfigCard(
     description: String,
     selectedModel: String,
     availableModels: List<String>,
+    llamaSwapModels: List<String> = emptyList(),
     backend: String,
     llamaServerModelLabel: String?,
     llamaServerContextLabel: String?,
@@ -3002,14 +3099,23 @@ fun AgentConfigCard(
     visionEnabled: Boolean,
     onVisionChange: (Boolean) -> Unit,
     isEnabled: Boolean = true,
-    onEnabledChange: ((Boolean) -> Unit)? = null
+    onEnabledChange: ((Boolean) -> Unit)? = null,
+    runtimeProfile: AgentRuntimeProfile? = null,
+    managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
+    runtimeLiteRtModels: List<AgentLiteRtProfileOption> = emptyList(),
+    endpointConfigs: List<AgentRuntimeEndpointConfig> = emptyList(),
+    onSaveEndpointConfig: (AgentRuntimeEndpointConfig) -> Unit = {},
+    onDeleteEndpointConfig: (Long) -> Unit = {},
+    onRuntimeProfileChange: (AgentRuntimeProfile) -> Unit = {},
+    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     var showPrompt by remember { mutableStateOf(false) }
-    val isLiteRtBackend = SettingsRepository.isLiteRtBackend(backend)
+    val effectiveBackend = runtimeProfile?.normalizedBackend?.id ?: backend
+    val isLiteRtBackend = SettingsRepository.isLiteRtBackend(effectiveBackend)
     val isRemoteServerBackend =
-        SettingsRepository.isLlamaServerBackend(backend) ||
-            SettingsRepository.isLlamaSwapBackend(backend)
+        SettingsRepository.isLlamaServerBackend(effectiveBackend) ||
+            SettingsRepository.isLlamaSwapBackend(effectiveBackend)
     val friendlyLlamaServerModel = friendlyBackendModelLabel(llamaServerModelLabel)
     
     Card(
@@ -3029,9 +3135,17 @@ fun AgentConfigCard(
                         roleName + if (!isEnabled) " (${stringResource(R.string.agent_disabled_label)})" else "",
                         fontWeight = FontWeight.Bold,
                         style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                         color = if (isEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
-                    Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
                 if (onEnabledChange != null) {
                     Switch(
@@ -3046,6 +3160,22 @@ fun AgentConfigCard(
             AnimatedVisibility(visible = isEnabled) {
                 Column {
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    runtimeProfile?.let { profile ->
+                        AgentRuntimeProfileControls(
+                            profile = profile,
+                            ollamaModels = availableModels,
+                            llamaSwapModels = llamaSwapModels,
+                            managedLlamaServers = managedLlamaServers,
+                            liteRtModels = runtimeLiteRtModels,
+                            endpointConfigs = endpointConfigs,
+                            onSaveEndpointConfig = onSaveEndpointConfig,
+                            onDeleteEndpointConfig = onDeleteEndpointConfig,
+                            onProfileChange = onRuntimeProfileChange,
+                            onContinue = onRuntimeContinue
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
 
                     if (!isLiteRtBackend) {
                         Row(
@@ -3083,7 +3213,7 @@ fun AgentConfigCard(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    if (isLiteRtBackend) {
+                    if (runtimeProfile == null && isLiteRtBackend) {
                         Text(
                             text = stringResource(R.string.pdf_backend_litert),
                             style = MaterialTheme.typography.labelLarge
@@ -3094,7 +3224,7 @@ fun AgentConfigCard(
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    } else if (isRemoteServerBackend) {
+                    } else if (runtimeProfile == null && isRemoteServerBackend) {
                         Text(
                             text = stringResource(R.string.pdf_llama_server_model_label),
                             style = MaterialTheme.typography.labelLarge
@@ -3127,7 +3257,7 @@ fun AgentConfigCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    } else {
+                    } else if (runtimeProfile == null) {
                         ExposedDropdownMenuBox(
                             expanded = expanded,
                             onExpandedChange = { expanded = it }

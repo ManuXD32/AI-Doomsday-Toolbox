@@ -336,6 +336,15 @@ class DistributedService : Service() {
         )
         val masterSpeculativeMode: StateFlow<LlamaSpeculativeMode> = _masterSpeculativeMode.asStateFlow()
         fun setMasterSpeculativeMode(mode: LlamaSpeculativeMode) {
+            val previousMode = _masterSpeculativeMode.value
+            val crossesMtpBoundary =
+                (previousMode == LlamaSpeculativeMode.DRAFT_MTP) !=
+                    (mode == LlamaSpeculativeMode.DRAFT_MTP)
+            if (crossesMtpBoundary) {
+                // Standard draft and MTP selectors use disjoint model families.
+                // Clear both in-memory and persisted state before switching.
+                setMasterDraftModel(null)
+            }
             _masterSpeculativeMode.value = mode
             masterPrefs()?.edit()?.putString("speculative_mode", mode.flagValue)?.apply()
         }

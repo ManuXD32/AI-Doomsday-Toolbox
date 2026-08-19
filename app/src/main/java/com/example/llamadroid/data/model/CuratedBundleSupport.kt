@@ -24,7 +24,7 @@ data class CuratedBundleFile(
     init {
         require(id.isNotBlank())
         require(repoId.count { it == '/' } == 1)
-        require(revision.matches(Regex("[0-9a-f]{7,64}|main")))
+        require(revision.matches(Regex("[0-9a-f]{7,64}|main|v[0-9]+\\.[0-9]+\\.[0-9]+")))
         require(remotePath.isNotBlank() && !remotePath.startsWith('/'))
         require(File(localFilename).name == localFilename)
         require(sizeBytes > 0L)

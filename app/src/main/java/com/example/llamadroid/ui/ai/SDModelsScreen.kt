@@ -54,7 +54,6 @@ import com.example.llamadroid.sd.buildSdCompatProfiles
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
 import com.example.llamadroid.sd.defaultCompatProfilesFor
 import com.example.llamadroid.sd.inferSdFamily
-import com.example.llamadroid.sd.isSdImageSupportModel
 import com.example.llamadroid.sd.parseSdCompatProfiles
 import com.example.llamadroid.sd.sdFamilyEnum
 import com.example.llamadroid.ui.navigation.Screen
@@ -112,12 +111,18 @@ enum class SDModelSelectionType(
     PHOTOMAKER(ModelType.SD_PHOTOMAKER, R.string.sd_type_photomaker),
     CLIP_VISION(ModelType.SD_CLIP_VISION, R.string.sd_type_clip_vision),
     IP_ADAPTER(ModelType.SD_IP_ADAPTER, R.string.sd_type_ip_adapter),
+    ADETAILER(ModelType.SD_ADETAILER, R.string.sd_type_adetailer),
     IMAGE_LLM(ModelType.LLM, R.string.sd_type_image_llm),
     IMAGE_LLM_VISION(ModelType.VISION_PROJECTOR, R.string.sd_type_image_llm_vision),
     UPSCALER(ModelType.SD_UPSCALER, R.string.sd_type_upscaler)
 }
 
 private val SD_MANAGER_SELECTION_TYPES = SDModelSelectionType.entries
+    .filterNot {
+        // Image LLMs and projectors are managed by ModelManagerScreen, never by
+        // the Stable Diffusion installed/import card.
+        it == SDModelSelectionType.IMAGE_LLM || it == SDModelSelectionType.IMAGE_LLM_VISION
+    }
 
 /**
  * SDModelsScreen - Manage Stable Diffusion models with HuggingFace search
@@ -161,17 +166,15 @@ fun SDModelsScreen(navController: NavController) {
         .collectAsState(initial = emptyList())
     val sdIpAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER)
         .collectAsState(initial = emptyList())
-    val sdImageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
+    val sdAdetailerModels by db.modelDao().getModelsByType(ModelType.SD_ADETAILER)
         .collectAsState(initial = emptyList())
-    val imageLlmModels = sdImageSupportModels.filter { it.type == ModelType.LLM && it.isSdImageSupportModel() }
-    val imageVisionModels = sdImageSupportModels.filter { it.type == ModelType.VISION_PROJECTOR && it.isSdImageSupportModel() }
     // Total installed count
     val totalInstalledCount = sdCheckpoints.size + sdUpscalers.size +
         sdDiffusionModels.size + sdClipLModels.size + sdClipGModels.size +
         sdT5xxlModels.size + sdTaeModels.size + sdVaeModels.size +
         sdControlNetModels.size + sdLoraModels.size + sdPhotoMakerModels.size +
         sdClipVisionModels.size + sdIpAdapterModels.size +
-        imageLlmModels.size + imageVisionModels.size
+        sdAdetailerModels.size
     
     // Download progress
     val downloadProgress by DownloadProgressHolder.progress.collectAsState()
@@ -669,8 +672,7 @@ fun SDModelsScreen(navController: NavController) {
                 photoMakerModels = sdPhotoMakerModels,
                 clipVisionModels = sdClipVisionModels,
                 ipAdapterModels = sdIpAdapterModels,
-                imageLlmModels = imageLlmModels,
-                imageVisionModels = imageVisionModels,
+                adetailerModels = sdAdetailerModels,
                 onDelete = { model ->
                     scope.launch {
                         repository.deleteModel(model)
@@ -719,8 +721,7 @@ private fun InstalledSDModelsTab(
     photoMakerModels: List<ModelEntity>,
     clipVisionModels: List<ModelEntity>,
     ipAdapterModels: List<ModelEntity>,
-    imageLlmModels: List<ModelEntity>,
-    imageVisionModels: List<ModelEntity>,
+    adetailerModels: List<ModelEntity>,
     onDelete: (ModelEntity) -> Unit,
     repository: ModelRepository,
     settingsRepo: com.example.llamadroid.data.SettingsRepository,
@@ -749,6 +750,7 @@ private fun InstalledSDModelsTab(
     
     // Export state
     var pendingExportModel by remember { mutableStateOf<ModelEntity?>(null) }
+    var pendingDeleteModel by remember { mutableStateOf<ModelEntity?>(null) }
     var editingModel by remember { mutableStateOf<ModelEntity?>(null) }
     var editedFilename by remember { mutableStateOf("") }
     var selectedEditType by remember { mutableStateOf(SDModelSelectionType.CHECKPOINT) }
@@ -1125,7 +1127,7 @@ private fun InstalledSDModelsTab(
             t5xxlModels.isNotEmpty() || taeModels.isNotEmpty() || vaeModels.isNotEmpty() ||
             controlNetModels.isNotEmpty() || loraModels.isNotEmpty() || photoMakerModels.isNotEmpty() ||
             clipVisionModels.isNotEmpty() || ipAdapterModels.isNotEmpty() ||
-            imageLlmModels.isNotEmpty() || imageVisionModels.isNotEmpty()
+            adetailerModels.isNotEmpty()
         
         if (!hasAnyModels) {
             Box(
@@ -1158,7 +1160,9 @@ private fun InstalledSDModelsTab(
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(16.dp),
+                // Leave a safe tail below the import FAB so the final delete
+                // action remains reachable on short phones.
+                contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // SD/SDXL Checkpoints
@@ -1174,7 +1178,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1201,7 +1205,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1228,7 +1232,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1255,7 +1259,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1281,7 +1285,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1310,7 +1314,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1340,7 +1344,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1367,7 +1371,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1394,7 +1398,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1420,7 +1424,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1449,7 +1453,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1478,7 +1482,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1494,20 +1498,20 @@ private fun InstalledSDModelsTab(
                     }
                 }
 
-                if (imageLlmModels.isNotEmpty()) {
+                if (adetailerModels.isNotEmpty()) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            stringResource(R.string.sd_models_image_llm_label, imageLlmModels.size),
+                            stringResource(R.string.sd_models_adetailer_label, adetailerModels.size),
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
-                    items(imageLlmModels) { model ->
+                    items(adetailerModels) { model ->
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1515,37 +1519,6 @@ private fun InstalledSDModelsTab(
                                 selectedEditType = selectionTypeForModel(model)
                                 editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
                                 editSupportsImg2Img = checkpointSupportsImg2Img(model)
-                                editSdFamily = model.sdFamilyEnum()
-                                editSdVariant = model.sdVariant.orEmpty()
-                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
-                            }
-                        )
-                    }
-                }
-
-                if (imageVisionModels.isNotEmpty()) {
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.sd_models_image_llm_vision_label, imageVisionModels.size),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    }
-                    items(imageVisionModels) { model ->
-                        InstalledModelCard(
-                            model = model,
-                            capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
-                            onExport = { exportModel(model) },
-                            onEdit = {
-                                editingModel = model
-                                editedFilename = model.filename
-                                selectedEditType = selectionTypeForModel(model)
-                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
-                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
-                                editSdFamily = model.sdFamilyEnum()
-                                editSdVariant = model.sdVariant.orEmpty()
                                 editCompatProfiles = model.sdCompatProfiles.orEmpty()
                             }
                         )
@@ -1566,7 +1539,7 @@ private fun InstalledSDModelsTab(
                         InstalledModelCard(
                             model = model,
                             capabilities = installedCapabilitiesFor(model),
-                            onDelete = { onDelete(model) },
+                            onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
                             onEdit = {
                                 editingModel = model
@@ -1752,6 +1725,32 @@ private fun InstalledSDModelsTab(
                 }
             )
         }
+
+        pendingDeleteModel?.let { model ->
+            AlertDialog(
+                onDismissRequest = { pendingDeleteModel = null },
+                title = { Text(stringResource(R.string.models_delete)) },
+                text = { Text(stringResource(R.string.models_delete_confirm)) },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            pendingDeleteModel = null
+                            onDelete(model)
+                        },
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text(stringResource(R.string.action_delete))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDeleteModel = null }) {
+                        Text(stringResource(R.string.action_cancel))
+                    }
+                }
+            )
+        }
         
         // FAB for import - launches file picker directly
         FloatingActionButton(
@@ -1875,6 +1874,7 @@ private fun requiresCompatProfiles(selectionType: SDModelSelectionType): Boolean
     SDModelSelectionType.PHOTOMAKER,
     SDModelSelectionType.CLIP_VISION,
     SDModelSelectionType.IP_ADAPTER,
+    SDModelSelectionType.ADETAILER,
     SDModelSelectionType.IMAGE_LLM,
     SDModelSelectionType.IMAGE_LLM_VISION,
     SDModelSelectionType.UPSCALER -> true
@@ -1943,6 +1943,7 @@ private fun selectionTypeForModel(model: ModelEntity): SDModelSelectionType = wh
     ModelType.SD_PHOTOMAKER -> SDModelSelectionType.PHOTOMAKER
     ModelType.SD_CLIP_VISION -> SDModelSelectionType.CLIP_VISION
     ModelType.SD_IP_ADAPTER -> SDModelSelectionType.IP_ADAPTER
+    ModelType.SD_ADETAILER -> SDModelSelectionType.ADETAILER
     ModelType.LLM -> SDModelSelectionType.IMAGE_LLM
     ModelType.VISION_PROJECTOR -> SDModelSelectionType.IMAGE_LLM_VISION
     ModelType.SD_UPSCALER -> SDModelSelectionType.UPSCALER
@@ -1958,6 +1959,11 @@ private fun checkpointSupportsImg2Img(model: ModelEntity): Boolean =
         (model.sdCapabilities.isNullOrBlank() || model.hasSdCapability(SD_CAPABILITY_IMG2IMG))
 
 private fun inferSelectionType(repoId: String, filename: String): SDModelSelectionType = when {
+    filename.contains("yolov8", ignoreCase = true) ||
+        filename.contains("adetailer", ignoreCase = true) ||
+        repoId.contains("adetailer", ignoreCase = true) ||
+        repoId.contains("yolo", ignoreCase = true) ->
+        SDModelSelectionType.ADETAILER
     isVideoGenHint(repoId) || isVideoGenHint(filename) ->
         SDModelSelectionType.VIDEO_GEN
     filename.contains("mmproj") || repoId.contains("mmproj") ||
@@ -2442,7 +2448,8 @@ private fun DownloadingTab(
         "sd_controlnet|",
         "sd_photomaker|",
         "sd_clip_vision|",
-        "sd_ip_adapter|"
+        "sd_ip_adapter|",
+        "sd_adetailer|"
     )
     val activeDownloads = downloadProgress.filter { (key, value) ->
         sdProgressPrefixes.any { key.startsWith(it) } &&
@@ -2470,7 +2477,8 @@ private fun DownloadingTab(
                     ModelType.SD_CONTROLNET,
                     ModelType.SD_PHOTOMAKER,
                     ModelType.SD_CLIP_VISION,
-                    ModelType.SD_IP_ADAPTER
+                    ModelType.SD_IP_ADAPTER,
+                    ModelType.SD_ADETAILER
                 )
             )
         }
@@ -2625,15 +2633,17 @@ private fun DiscoverTab(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             if (com.example.llamadroid.ui.components.isCuratedCatalogBrowseMode(searchQuery)) {
+                item {
+                    // Complete SD/workflow bundles come first; individual
+                    // detector downloads remain the focused follow-up section.
+                    SdCuratedBundlesSection()
+                }
                 item(key = "phase_c_adetailer_curated_bundles") {
                     com.example.llamadroid.ui.components.CuratedModelBundleSection(
                         title = stringResource(R.string.phase_c_adetailer_bundles_title),
                         description = stringResource(R.string.adetailer_bundles_desc),
                         bundles = com.example.llamadroid.data.model.AdetailerCuratedBundleCatalog.bundles
                     )
-                }
-                item {
-                    SdCuratedBundlesSection()
                 }
             }
 

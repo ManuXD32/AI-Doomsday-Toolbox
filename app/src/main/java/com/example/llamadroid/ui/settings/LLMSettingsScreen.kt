@@ -33,6 +33,8 @@ import com.example.llamadroid.data.db.launchProfile
 import com.example.llamadroid.data.db.savedCommandFromLaunchProfile
 import com.example.llamadroid.service.LlamaSpeculativeMode
 import com.example.llamadroid.service.LlamaServerLaunchProfile
+import com.example.llamadroid.service.effectiveSpeculativeDraftPath
+import com.example.llamadroid.service.speculativeDraftModelsFor
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import kotlinx.coroutines.launch
@@ -341,13 +343,39 @@ fun LLMSettingsScreen(navController: NavController) {
     val speculativeRuns by db.llamaSpeculativeRunDao().observeRuns().collectAsState(initial = emptyList())
     // val scope = rememberCoroutineScope() // Duplicate declaration, removed
 
-    val llmModels by db.modelDao().getModelsByType(ModelType.LLM).collectAsState(initial = emptyList())
+    val llmModels by db.modelDao()
+        .getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION))
+        .collectAsState(initial = emptyList())
+    val mtpModels by db.modelDao().getModelsByType(ModelType.LLM_DRAFT).collectAsState(initial = emptyList())
     val loraAdapters by db.modelDao().getModelsByType(ModelType.LORA).collectAsState(initial = emptyList())
     val visionProjectorModels by db.modelDao().getModelsByType(ModelType.VISION_PROJECTOR).collectAsState(initial = emptyList())
-    
+
+    val draftSelectorModels = remember(llmModels, mtpModels, speculativeMode) {
+        speculativeDraftModelsFor(llmModels + mtpModels, speculativeMode)
+    }
+    val draftSelectorTitleRes = if (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) {
+        R.string.models_type_mtp
+    } else {
+        R.string.dist_speculative_draft_model
+    }
+    val effectiveDraftModelPath = remember(draftModelPath, draftSelectorModels) {
+        effectiveSpeculativeDraftPath(draftModelPath, draftSelectorModels)
+    }
+
+    // Keep a non-empty persisted path from surviving a mode-family/model-list
+    // change, but do not clear it while the database-backed candidate list is
+    // still empty during initial loading. The effective value is used below in
+    // the meantime, so launch validation cannot accept an incompatible path.
+    LaunchedEffect(draftModelPath, draftSelectorModels) {
+        if (draftSelectorModels.isNotEmpty() && draftModelPath != effectiveDraftModelPath) {
+            settingsRepo.setDraftModelPath(effectiveDraftModelPath)
+        }
+    }
+
     val selectedModel = llmModels.find { it.path == selectedModelPath }
-    // Only show vision toggle if selected model has isVision=true
-    val hasVisionCapability = selectedModel?.isVision == true && visionProjectorModels.isNotEmpty()
+    // Legacy VISION rows are image-capable LLMs even when their old isVision flag is unset.
+    val hasVisionCapability = selectedModel?.let { it.isVision || it.type == ModelType.VISION } == true &&
+        visionProjectorModels.isNotEmpty()
     
     val selectedMmprojPath by settingsRepo.selectedMmprojPath.collectAsState()
 
@@ -1337,13 +1365,13 @@ fun LLMSettingsScreen(navController: NavController) {
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         Text(
-                                            draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
+                                            effectiveDraftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
 
-                                    if (draftModelPath != null) {
+                                    if (effectiveDraftModelPath != null) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         TextButton(
                                             onClick = { settingsRepo.setDraftModelPath(null) },
@@ -1460,13 +1488,13 @@ fun LLMSettingsScreen(navController: NavController) {
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Text(
-                                                    draftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
+                                                    effectiveDraftModelPath?.substringAfterLast("/") ?: stringResource(R.string.dist_speculative_select_draft),
                                                     maxLines = 1,
                                                     overflow = TextOverflow.Ellipsis
                                                 )
                                             }
 
-                                            if (draftModelPath != null) {
+                                            if (effectiveDraftModelPath != null) {
                                                 TextButton(
                                                     onClick = { settingsRepo.setDraftModelPath(null) },
                                                     modifier = Modifier.align(Alignment.End)
@@ -1822,9 +1850,12 @@ fun LLMSettingsScreen(navController: NavController) {
             confirmButton = {
                 Button(
                     onClick = {
+                        val requiresDraftSelection =
+                            speculativeMode.requiresDraftModel ||
+                                (speculativeMode == LlamaSpeculativeMode.DRAFT_MTP && mtpUseDraftModel)
                         if (speculativeEnabled &&
-                            speculativeMode.requiresDraftModel &&
-                            draftModelPath.isNullOrBlank()
+                            requiresDraftSelection &&
+                            effectiveDraftModelPath.isNullOrBlank()
                         ) {
                             android.widget.Toast.makeText(context, context.getString(R.string.dist_speculative_missing_required_draft), android.widget.Toast.LENGTH_SHORT).show()
                         } else if (saveCommandName.isNotBlank() && selectedModelPath != null) {
@@ -1837,7 +1868,9 @@ fun LLMSettingsScreen(navController: NavController) {
                             } else {
                                 val cmd = savedCommandFromLaunchProfile(
                                     name = saveCommandName.trim(),
-                                    profile = LlamaServerLaunchProfile.capture(settingsRepo),
+                                    profile = LlamaServerLaunchProfile.capture(settingsRepo).copy(
+                                        draftModelPath = effectiveDraftModelPath
+                                    ),
                                     id = selectedSaveCommandId ?: 0L
                                 )
                                 scope.launch { db.savedCommandDao().insertCommand(cmd) }
@@ -2161,10 +2194,10 @@ fun LLMSettingsScreen(navController: NavController) {
     if (showDraftSelector) {
         AlertDialog(
             onDismissRequest = { showDraftSelector = false },
-            title = { Text(stringResource(R.string.llm_select_model), fontWeight = FontWeight.Bold) },
+            title = { Text(stringResource(draftSelectorTitleRes), fontWeight = FontWeight.Bold) },
             text = {
                 LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
-                    items(llmModels) { model ->
+                    items(draftSelectorModels) { model ->
                         Surface(
                             onClick = {
                                 settingsRepo.setDraftModelPath(model.path)
@@ -2172,7 +2205,7 @@ fun LLMSettingsScreen(navController: NavController) {
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            color = if (model.path == draftModelPath)
+                            color = if (model.path == effectiveDraftModelPath)
                                 MaterialTheme.colorScheme.primaryContainer
                             else MaterialTheme.colorScheme.surface
                         ) {
@@ -2201,7 +2234,7 @@ fun LLMSettingsScreen(navController: NavController) {
                 }
             },
             dismissButton = {
-                if (draftModelPath != null) {
+                if (effectiveDraftModelPath != null) {
                     TextButton(
                         onClick = {
                             settingsRepo.setDraftModelPath(null)

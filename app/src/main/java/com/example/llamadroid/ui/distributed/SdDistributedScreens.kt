@@ -120,6 +120,7 @@ import com.example.llamadroid.data.db.hasSdCapability
 import com.example.llamadroid.data.db.parseSdCapabilities
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdModelFamilySpec
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
@@ -127,6 +128,7 @@ import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
+import com.example.llamadroid.sd.toJsonArray
 import com.example.llamadroid.service.SDConfig
 import com.example.llamadroid.service.SDGenerationState
 import com.example.llamadroid.service.SDMode
@@ -157,6 +159,9 @@ import com.example.llamadroid.service.buildSdDistributedPreviewArgs
 import com.example.llamadroid.service.loadGeneratedVideoMetadata
 import com.example.llamadroid.service.settingsFromJson
 import com.example.llamadroid.service.settingsToJson
+import com.example.llamadroid.service.imageLoras
+import com.example.llamadroid.service.videoLoras
+import com.example.llamadroid.service.videoHighNoiseLoras
 import com.example.llamadroid.service.toMasterPlanningWorker
 import com.example.llamadroid.service.toPlanningWorkers
 import com.example.llamadroid.service.toRuntimeConfig
@@ -541,6 +546,10 @@ fun SdDistributedMasterScreen(navController: NavController) {
     val enabledWorkers = workers.filter { it.isEnabled }
     val imageMainModels = remember(imageModels) { imageModels.filter { it.isSdImageMainModel() } }
     val videoModels = remember(videoModelsRaw) { videoModelsRaw.filter { it.hasSdCapability(SD_CAPABILITY_VID_GEN) } }
+    // Wan rows in older databases do not always carry family metadata, so the
+    // distributed editor keeps the full installed LoRA catalog available and
+    // lets the native preflight enforce compatibility where metadata exists.
+    val videoLoraModels = loraModels
 
     var hostDraft by remember { mutableStateOf("") }
     var portDraft by remember { mutableStateOf(SdDistributedService.RPC_DEFAULT_PORT.toString()) }
@@ -623,6 +632,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
     var imageControlNetPath by remember { mutableStateOf(settings.imageControlNetPath) }
     var imageLoraEnabled by remember { mutableStateOf(settings.imageLoraEnabled) }
     var imageLoraPath by remember { mutableStateOf(settings.imageLoraPath) }
+    var imageLoraStack by remember { mutableStateOf(settings.imageLoras()) }
     var imageLoraApplyMode by remember { mutableStateOf(settings.imageLoraApplyMode) }
     var imageCustomFlags by remember { mutableStateOf(settings.imageCustomFlags) }
     var videoWorkflowMode by remember { mutableStateOf(settings.videoWorkflowMode) }
@@ -632,6 +642,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
     var videoVaePath by remember { mutableStateOf(settings.videoVaePath) }
     var videoUseT5xxl by remember { mutableStateOf(settings.videoUseT5xxl) }
     var videoT5xxlPath by remember { mutableStateOf(settings.videoT5xxlPath) }
+    var videoLoraStack by remember { mutableStateOf(settings.videoLoras()) }
+    var videoHighNoiseLoraStack by remember { mutableStateOf(settings.videoHighNoiseLoras()) }
+    var videoLoraApplyMode by remember { mutableStateOf(settings.videoLoraApplyMode) }
     var videoCustomFlags by remember { mutableStateOf(settings.videoCustomFlags) }
     var launchError by remember { mutableStateOf<String?>(null) }
     val imageInputPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -757,6 +770,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
         imageControlNetPath = fresh.imageControlNetPath
         imageLoraEnabled = fresh.imageLoraEnabled
         imageLoraPath = fresh.imageLoraPath
+        imageLoraStack = fresh.imageLoras()
         imageLoraApplyMode = fresh.imageLoraApplyMode
         imageCustomFlags = fresh.imageCustomFlags
         videoWorkflowMode = fresh.videoWorkflowMode
@@ -766,6 +780,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
         videoVaePath = fresh.videoVaePath
         videoUseT5xxl = fresh.videoUseT5xxl
         videoT5xxlPath = fresh.videoT5xxlPath
+        videoLoraStack = fresh.videoLoras()
+        videoHighNoiseLoraStack = fresh.videoHighNoiseLoras()
+        videoLoraApplyMode = fresh.videoLoraApplyMode
         videoCustomFlags = fresh.videoCustomFlags
         devicesExpanded = fresh.devicesExpanded
         plannerExpanded = fresh.plannerExpanded
@@ -859,8 +876,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
         imageControlNetEnabled = imageControlNetEnabled,
         imageControlNetPath = imageControlNetPath,
         imageLoraEnabled = imageLoraEnabled,
-        imageLoraPath = imageLoraPath,
+        imageLoraPath = imageLoraStack.firstOrNull()?.path.orEmpty(),
         imageLoraApplyMode = imageLoraApplyMode,
+        imageLorasJson = if (imageLoraEnabled) imageLoraStack.toJsonArray().toString() else "[]",
         imageCustomFlags = imageCustomFlags,
         videoWorkflowMode = videoWorkflowMode,
         videoModelPath = videoModelPath,
@@ -869,6 +887,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
         videoVaePath = videoVaePath,
         videoUseT5xxl = videoUseT5xxl,
         videoT5xxlPath = videoT5xxlPath,
+        videoLorasJson = videoLoraStack.toJsonArray().toString(),
+        videoHighNoiseLorasJson = videoHighNoiseLoraStack.toJsonArray().toString(),
+        videoLoraApplyMode = videoLoraApplyMode,
         videoCustomFlags = videoCustomFlags,
         devicesExpanded = devicesExpanded,
         plannerExpanded = plannerExpanded,
@@ -936,7 +957,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
         SdComponentRole.LLM_VISION to imageLlmVisionPath,
         SdComponentRole.PHOTOMAKER to imagePhotoMakerPath,
         SdComponentRole.CONTROLNET to imageControlNetPath,
-        SdComponentRole.LORA to imageLoraPath
+        SdComponentRole.LORA to imageLoraStack.firstOrNull()?.path.orEmpty()
     )
     val imageMissingRequiredRoles = imageFamilySpec?.requiredRoles?.filter { role ->
         imageSelectedComponentPaths[role].isNullOrBlank()
@@ -1077,6 +1098,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
                 loraPath = if (imageLoraEnabled) imageLoraPath.ifBlank { null } else null,
                 loraStrength = loraStrength.toFloatOrNull() ?: 1.0f,
                 loraApplyMode = if (imageLoraEnabled) SdLoraApplyMode.fromStoredValue(imageLoraApplyMode) else null,
+                loras = if (imageLoraEnabled) draftSettings.imageLoras() else emptyList(),
                 cacheMode = parsedCacheMode,
                 cacheOption = if (parsedCacheMode != null) cacheOption else "",
                 scmMask = if (parsedCacheMode == SdCacheMode.CACHE_DIT) scmMask else "",
@@ -1169,6 +1191,9 @@ fun SdDistributedMasterScreen(navController: NavController) {
             flowShift = videoFlowShift.toFloatOrNull(),
             samplingMethod = samplerMethod,
             scheduler = SdScheduler.fromCliName(videoScheduler),
+            loras = draftSettings.videoLoras(),
+            highNoiseLoras = draftSettings.videoHighNoiseLoras(),
+            loraApplyMode = SdLoraApplyMode.fromStoredValue(draftSettings.videoLoraApplyMode),
             cacheMode = parsedCacheMode,
             cacheOption = if (parsedCacheMode != null) cacheOption else "",
             scmMask = if (parsedCacheMode == SdCacheMode.CACHE_DIT) scmMask else "",
@@ -1503,7 +1528,16 @@ fun SdDistributedMasterScreen(navController: NavController) {
                     SdComponentRole.LLM_VISION -> imageLlmVisionPath = path
                     SdComponentRole.PHOTOMAKER -> imagePhotoMakerPath = path
                     SdComponentRole.CONTROLNET -> imageControlNetPath = path
-                    SdComponentRole.LORA -> imageLoraPath = path
+                    SdComponentRole.LORA -> {
+                        imageLoraPath = path
+                        imageLoraStack = if (imageLoraStack.isEmpty()) {
+                            listOf(SdLoraSpec(path = path))
+                        } else {
+                            imageLoraStack.mapIndexed { index, item ->
+                                if (index == 0) item.copy(path = path) else item
+                            }
+                        }
+                    }
                     else -> Unit
                 }
             },
@@ -1515,8 +1549,15 @@ fun SdDistributedMasterScreen(navController: NavController) {
                 imageLoraEnabled = it
                 if (!it) {
                     imageLoraPath = ""
+                    imageLoraStack = emptyList()
                     imageLoraApplyMode = ""
                 }
+            },
+            loraStack = imageLoraStack,
+            onLoraStackChange = {
+                imageLoraStack = it
+                imageLoraEnabled = it.isNotEmpty()
+                imageLoraPath = it.firstOrNull()?.path.orEmpty()
             },
             onLoraApplyModeChange = { imageLoraApplyMode = it },
             customFlags = imageCustomFlags,
@@ -1576,6 +1617,13 @@ fun SdDistributedMasterScreen(navController: NavController) {
             },
             t5xxlPath = videoT5xxlPath,
             onT5xxlPathChange = { videoT5xxlPath = it },
+            loraModels = videoLoraModels,
+            loras = videoLoraStack,
+            onLorasChange = { videoLoraStack = it },
+            highNoiseLoras = videoHighNoiseLoraStack,
+            onHighNoiseLorasChange = { videoHighNoiseLoraStack = it },
+            loraApplyMode = videoLoraApplyMode,
+            onLoraApplyModeChange = { videoLoraApplyMode = it },
             inputPath = videoInputPath,
             onInputPathChange = { videoInputPath = it },
             onPickInputImage = { videoInputPicker.launch(arrayOf("image/*")) },
@@ -2605,6 +2653,8 @@ private fun ImageRunCard(
     onComponentPathChange: (SdComponentRole, String) -> Unit,
     onControlNetEnabledChange: (Boolean) -> Unit,
     onLoraEnabledChange: (Boolean) -> Unit,
+    loraStack: List<SdLoraSpec>,
+    onLoraStackChange: (List<SdLoraSpec>) -> Unit,
     onLoraApplyModeChange: (String) -> Unit,
     customFlags: String,
     onCustomFlagsChange: (String) -> Unit,
@@ -2653,6 +2703,8 @@ private fun ImageRunCard(
                 onComponentPathChange = onComponentPathChange,
                 onControlNetEnabledChange = onControlNetEnabledChange,
                 onLoraEnabledChange = onLoraEnabledChange,
+                loraStack = loraStack,
+                onLoraStackChange = onLoraStackChange,
                 onLoraApplyModeChange = onLoraApplyModeChange
             )
         }
@@ -2730,6 +2782,13 @@ private fun VideoRunCard(
     onUseT5xxlChange: (Boolean) -> Unit,
     t5xxlPath: String,
     onT5xxlPathChange: (String) -> Unit,
+    loraModels: List<ModelEntity>,
+    loras: List<SdLoraSpec>,
+    onLorasChange: (List<SdLoraSpec>) -> Unit,
+    highNoiseLoras: List<SdLoraSpec>,
+    onHighNoiseLorasChange: (List<SdLoraSpec>) -> Unit,
+    loraApplyMode: String,
+    onLoraApplyModeChange: (String) -> Unit,
     inputPath: String,
     onInputPathChange: (String) -> Unit,
     onPickInputImage: () -> Unit,
@@ -2808,6 +2867,27 @@ private fun VideoRunCard(
             onSelectedPath = onT5xxlPathChange,
             emptyMessage = stringResource(R.string.imagegen_no_t5xxl)
         )
+        if (loraModels.isNotEmpty()) {
+            DistributedLoraStackEditor(
+                label = stringResource(R.string.video_gen_lora_regular_label),
+                models = loraModels,
+                stack = loras,
+                onStackChange = onLorasChange
+            )
+            DistributedLoraStackEditor(
+                label = stringResource(R.string.video_gen_lora_high_noise_label),
+                models = loraModels,
+                stack = highNoiseLoras,
+                onStackChange = onHighNoiseLorasChange
+            )
+            SimpleStringPicker(
+                label = stringResource(R.string.imagegen_lora_apply_mode_label),
+                selected = loraApplyMode,
+                options = listOf("") + SdLoraApplyMode.entries.map { it.cliName },
+                offLabel = stringResource(R.string.imagegen_lora_apply_mode_default),
+                onSelected = onLoraApplyModeChange
+            )
+        }
         if (mode == "IMG2VID") {
             InputImagePathField(
                 inputPath = inputPath,
@@ -3102,6 +3182,8 @@ private fun ImageComponentPickerSection(
     onComponentPathChange: (SdComponentRole, String) -> Unit,
     onControlNetEnabledChange: (Boolean) -> Unit,
     onLoraEnabledChange: (Boolean) -> Unit,
+    loraStack: List<SdLoraSpec>,
+    onLoraStackChange: (List<SdLoraSpec>) -> Unit,
     onLoraApplyModeChange: (String) -> Unit
 ) {
     val spec = components.spec ?: return
@@ -3158,15 +3240,30 @@ private fun ImageComponentPickerSection(
                 )
             }
             if (loraModels.isNotEmpty()) {
-                OptionalComponentPicker(
-                    enabled = components.loraEnabled,
-                    onEnabledChange = onLoraEnabledChange,
-                    label = sdDistributedComponentRoleLabel(SdComponentRole.LORA),
-                    models = loraModels,
-                    selectedPath = components.selectedPaths[SdComponentRole.LORA].orEmpty(),
-                    onSelectedPath = { onComponentPathChange(SdComponentRole.LORA, it) },
-                    emptyMessage = stringResource(R.string.imagegen_no_lora)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Checkbox(
+                        checked = components.loraEnabled,
+                        onCheckedChange = onLoraEnabledChange
+                    )
+                    Text(
+                        text = sdDistributedComponentRoleLabel(SdComponentRole.LORA),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (components.loraEnabled) {
+                    DistributedLoraStackEditor(
+                        label = stringResource(R.string.imagegen_lora_stack_label),
+                        models = loraModels,
+                        stack = loraStack,
+                        onStackChange = onLoraStackChange
+                    )
+                }
                 if (components.loraEnabled && spec.supportsLoraApplyMode) {
                     SimpleStringPicker(
                         label = stringResource(R.string.imagegen_lora_apply_mode_label),
@@ -3177,6 +3274,99 @@ private fun ImageComponentPickerSection(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun DistributedLoraStackEditor(
+    label: String,
+    models: List<ModelEntity>,
+    stack: List<SdLoraSpec>,
+    onStackChange: (List<SdLoraSpec>) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        stack.forEachIndexed { index, item ->
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = stringResource(R.string.imagegen_lora_item, index + 1),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        IconButton(
+                            onClick = {
+                                onStackChange(stack.filterIndexed { itemIndex, _ -> itemIndex != index })
+                            }
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = stringResource(R.string.imagegen_lora_remove)
+                            )
+                        }
+                    }
+                    ModelPicker(
+                        label = stringResource(R.string.imagegen_lora_item, index + 1),
+                        models = models,
+                        selectedPath = item.path,
+                        onSelectedPath = { path ->
+                            onStackChange(stack.mapIndexed { itemIndex, current ->
+                                if (itemIndex == index) current.copy(path = path) else current
+                            })
+                        }
+                    )
+                    OutlinedTextField(
+                        value = item.strength.toString(),
+                        onValueChange = { raw ->
+                            raw.toFloatOrNull()?.let { strength ->
+                                onStackChange(stack.mapIndexed { itemIndex, current ->
+                                    if (itemIndex == index) {
+                                        current.copy(strength = strength.coerceIn(SdLoraSpec.MIN_STRENGTH, SdLoraSpec.MAX_STRENGTH))
+                                    } else {
+                                        current
+                                    }
+                                })
+                            }
+                        },
+                        label = { Text(stringResource(R.string.imagegen_lora_strength_label)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        val nextModel = models.firstOrNull { candidate -> stack.none { it.path == candidate.path } }
+        OutlinedButton(
+            onClick = {
+                nextModel?.let { onStackChange(stack + SdLoraSpec(path = it.path)) }
+            },
+            enabled = nextModel != null,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.imagegen_lora_add),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

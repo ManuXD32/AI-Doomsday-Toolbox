@@ -31,6 +31,9 @@ class CuratedBundleSupportTest {
         assertTrue(bundles.all { it.titleRes != 0 && it.descriptionRes != 0 })
         assertTrue(bundles.flatMap { it.files }.all { it.strictSize })
         assertTrue(bundles.flatMap { it.files }.all { it.downloadUrl.contains("model-assets/adetailer") })
+        val coco = bundles.single { it.id == "adetailer-general-objects" }.files.single()
+        assertEquals("ultralytics/assets", coco.repoId)
+        assertEquals("v8.3.0", coco.revision)
     }
 
     @Test fun `catalog filename prefixes produce unique installed names`() {
