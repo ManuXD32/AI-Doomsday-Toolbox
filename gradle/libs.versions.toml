@@ -1,5 +1,9 @@
 [versions]
 agp = "8.9.1"
+# Reverted from 2.2.21 (K2). K2 could not compile :app within a dedicated 10g
+# compiler heap - it died with OutOfMemoryError at 12g shared and again with
+# "GC overhead limit exceeded" at 10g dedicated. See docs/improvement-plan-phases-1-2.md;
+# the AgentService god class is the leading suspect and should be split first.
 kotlin = "1.9.22"
 coreKtx = "1.12.0"
 junit = "4.13.2"
@@ -10,7 +14,12 @@ activityCompose = "1.10.1"
 composeBom = "2026.03.01"
 retrofit = "2.9.0"
 okhttp = "4.12.0"
+# Pinned to the Kotlin 1.9.22 / KSP1 pairing above. If Kotlin 2.x is attempted
+# again, Room must move to >= 2.7.0 at the same time: on 2.6.1 the Room processor
+# dies under KSP2 with "unexpected jvm signature V" on suspend DAO methods
+# returning Unit (google/ksp#2177, google/ksp#2957).
 room = "2.6.1"
+# Must track `kotlin` exactly.
 ksp = "1.9.22-1.0.17"
 coil = "2.6.0"
 navigationCompose = "2.8.9"
@@ -63,6 +72,7 @@ okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor",
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
 
 # Coil
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }

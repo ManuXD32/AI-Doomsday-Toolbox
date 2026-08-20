@@ -37,6 +37,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -250,7 +251,10 @@ fun LlamaServerCardsSection(
                             logVersion++
                         },
                         onEdit = { cardToEdit = card },
-                        onDelete = { cardToDelete = card }
+                        onDelete = { cardToDelete = card },
+                        onToggleWearStart = {
+                            scope.launch { cardRepository.setWearStartCard(card.id) }
+                        }
                     )
                 }
             }
@@ -350,7 +354,8 @@ private fun LlamaServerCard(
     onCopyLogs: () -> Unit,
     onClearLogs: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onToggleWearStart: () -> Unit
 ) {
     val status = snapshot?.status ?: LlamaServerSessionStatus.STOPPED
     val canStart = preset != null && status !in setOf(
@@ -425,6 +430,34 @@ private fun LlamaServerCard(
                     color = MaterialTheme.colorScheme.error,
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // Only one card may be watch-startable; the repository enforces that, so
+            // enabling this one silently clears whichever card held it before.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.llama_card_allow_wear_start),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = stringResource(R.string.llama_card_allow_wear_start_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Switch(
+                    checked = card.allowWearStart,
+                    onCheckedChange = { onToggleWearStart() },
+                    enabled = preset != null
                 )
             }
 

@@ -57,6 +57,8 @@
     <string name="llama_card_status_running">Running on %1$d</string>
     <string name="llama_card_status_error">Error: %1$s</string>
     <string name="llama_card_no_presets">Create a GENERAL saved command in LLM Settings first.</string>
+    <string name="llama_card_allow_wear_start">Allow watch to start</string>
+    <string name="llama_card_allow_wear_start_hint">Only one server can be started from the watch. Enabling this turns it off on the others.</string>
     
     <!-- AI Hub -->
     <string name="ai_hub_title">AI Tools</string>
@@ -7961,6 +7963,8 @@
     <string name="wear_bridge_protocol_mismatch">Update the phone app and watch app to matching versions.</string>
     <string name="wear_bridge_audio_channel_pending">Raw watch audio transfer is not connected yet. Use dictation text for this build.</string>
     <string name="wear_bridge_no_llama_model">Select a llama.cpp model on the phone before starting the server from the watch.</string>
+    <string name="wear_bridge_no_wear_server">No server is enabled for the watch. On the phone, open your llama.cpp servers and turn on "Allow watch to start" for one of them.</string>
+    <string name="wear_bridge_wear_server_missing_preset">The server enabled for the watch has no valid preset. Fix it on the phone and try again.</string>
     <string name="wear_bridge_unknown_path">The watch sent an unknown bridge request.</string>
     <string name="wear_bridge_oversized_payload">The watch request was too large.</string>
     <string name="wear_bridge_malformed_json">The watch request could not be read.</string>

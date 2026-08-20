@@ -86,6 +86,17 @@ class LlamaServerCardRepository(
         require(savedCommandId > 0L) { "A GENERAL saved command is required." }
         cardDao.updateSavedCommand(id, savedCommandId, presetNameSnapshot.trim())
     }
+
+    /**
+     * Allow exactly one card to be started from the watch, or none when [id] is null.
+     *
+     * Passing the id of the card that is already enabled clears the selection, so
+     * the UI toggle can turn itself off.
+     */
+    suspend fun setWearStartCard(id: Long?) {
+        val current = cardDao.getWearStartCard()?.id
+        cardDao.setWearStartCard(if (id != null && id == current) null else id)
+    }
 }
 
 /** Map a saved GENERAL command to a card launch, overriding only the card port. */

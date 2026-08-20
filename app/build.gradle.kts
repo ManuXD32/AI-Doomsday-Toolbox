@@ -261,7 +261,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    // Catalog-referenced so it can never drift from the Room runtime/compiler
+    // version, which previously had to be kept in step by hand.
+    androidTestImplementation(libs.androidx.room.testing)
 
     // Image Loading
     implementation(libs.coil.compose)

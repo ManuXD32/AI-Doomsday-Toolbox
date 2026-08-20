@@ -158,7 +158,7 @@ class Converters {
         SystemStatsSampleEntity::class,
         SystemStatsEventEntity::class
     ], 
-    version = 109,
+    version = 110,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

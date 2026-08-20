@@ -2939,6 +2939,36 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate109To110_addsWearStartFlagAndPreservesCards() {
+        helper.createDatabase(TEST_DB, 109).apply {
+            execSQL(
+                """
+                INSERT INTO llama_server_cards (
+                    id, name, savedCommandId, presetNameSnapshot, port, createdAt, updatedAt
+                ) VALUES (1, 'Phone server', 7, 'general preset', 8080, 100, 200)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            110,
+            true,
+            Migrations.MIGRATION_109_110
+        )
+
+        migratedDb.query("SELECT name, port, allowWearStart FROM llama_server_cards WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Phone server", cursor.getString(0))
+            assertEquals(8080, cursor.getInt(1))
+            // Existing cards must default to disabled: upgrading must not silently
+            // grant the watch permission to start a server.
+            assertEquals(0, cursor.getInt(2))
+        }
+    }
+
     /**
      * Walks the entire registered migration chain in one run.
      *
@@ -2971,6 +3001,6 @@ class AppDatabaseMigrationTest {
         private const val OLDEST_EXPORTED_VERSION = 28
 
         /** Keep in step with the `version` in [AppDatabase]'s `@Database`. */
-        private const val LATEST_VERSION = 109
+        private const val LATEST_VERSION = 110
     }
 }

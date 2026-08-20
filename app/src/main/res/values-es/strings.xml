@@ -58,6 +58,8 @@
     <string name="llama_card_status_running">Activo en %1$d</string>
     <string name="llama_card_status_error">Error: %1$s</string>
     <string name="llama_card_no_presets">Crea primero un comando GENERAL guardado en Ajustes de LLM.</string>
+    <string name="llama_card_allow_wear_start">Permitir inicio desde el reloj</string>
+    <string name="llama_card_allow_wear_start_hint">Solo un servidor puede iniciarse desde el reloj. Activarlo aqui lo desactiva en los demas.</string>
     
     <!-- AI Hub -->
     <string name="ai_hub_title">Herramientas IA</string>
@@ -7958,6 +7960,8 @@
     <string name="wear_bridge_protocol_mismatch">Actualiza la app del telefono y la del reloj a versiones compatibles.</string>
     <string name="wear_bridge_audio_channel_pending">La transferencia de audio sin procesar del reloj aun no esta conectada. Usa dictado de texto en esta build.</string>
     <string name="wear_bridge_no_llama_model">Selecciona un modelo llama.cpp en el telefono antes de iniciar el servidor desde el reloj.</string>
+    <string name="wear_bridge_no_wear_server">Ningun servidor esta habilitado para el reloj. En el telefono, abre tus servidores llama.cpp y activa "Permitir inicio desde el reloj" en uno de ellos.</string>
+    <string name="wear_bridge_wear_server_missing_preset">El servidor habilitado para el reloj no tiene un preset valido. Corrigelo en el telefono e intentalo de nuevo.</string>
     <string name="wear_bridge_unknown_path">El reloj envio una solicitud de puente desconocida.</string>
     <string name="wear_bridge_oversized_payload">La solicitud del reloj era demasiado grande.</string>
     <string name="wear_bridge_malformed_json">No se pudo leer la solicitud del reloj.</string>

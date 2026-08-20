@@ -25,6 +25,17 @@ data class LlamaServerCardEntity(
     /** Non-authoritative label retained when a preset is later renamed or deleted. */
     val presetNameSnapshot: String = "",
     val port: Int,
+    /**
+     * When true, a start request coming from the paired watch launches *this*
+     * card's session.
+     *
+     * At most one card may have this set; [LlamaServerCardDao.setWearStartCard]
+     * enforces that in a transaction. The flag exists so a watch-initiated start
+     * produces a normal, card-owned session the phone can see and stop, instead
+     * of the old behaviour where the watch started an unmanaged server the phone
+     * UI had no handle on.
+     */
+    val allowWearStart: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

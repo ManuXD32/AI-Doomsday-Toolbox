@@ -3393,6 +3393,17 @@ object Migrations {
         }
     }
 
+    val MIGRATION_109_110 = object : Migration(109, 110) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 109 -> 110: wear-startable server card")
+            db.execSQL(
+                "ALTER TABLE `llama_server_cards` " +
+                    "ADD COLUMN `allowWearStart` INTEGER NOT NULL DEFAULT 0"
+            )
+            DebugLog.log("[DB] Migration 109 -> 110 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3475,7 +3486,8 @@ object Migrations {
         MIGRATION_105_106,
         MIGRATION_106_107,
         MIGRATION_107_108,
-        MIGRATION_108_109
+        MIGRATION_108_109,
+        MIGRATION_109_110
     )
     /**
      * Check if a column exists in a table.

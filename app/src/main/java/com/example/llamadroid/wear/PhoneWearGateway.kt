@@ -30,11 +30,15 @@ import com.example.llamadroid.data.db.OrganizerEventEntity
 import com.example.llamadroid.data.model.LlamaMessageEntity
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.LlamaRepository
+import com.example.llamadroid.data.repository.LlamaServerCardSnapshot
 import com.example.llamadroid.onnx.OnnxTtsRequest
 import com.example.llamadroid.onnx.SupertonicTtsPipeline
 import com.example.llamadroid.service.LiveTranslatorService
 import com.example.llamadroid.service.LlamaClientService
 import com.example.llamadroid.service.LlamaServerLauncher
+import com.example.llamadroid.service.LlamaServerSessionSnapshot
+import com.example.llamadroid.service.LlamaServerSessionStateStore
+import com.example.llamadroid.service.LlamaServerSessionStatus
 import com.example.llamadroid.service.LlamaService
 import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.OllamaService
@@ -2163,17 +2167,52 @@ class LlamaServerController(
         return start(requestId)
     }
 
+    /**
+     * Resolve the one server card the user allowed the watch to start.
+     *
+     * Returns null when no card is flagged, which is a normal state the watch has
+     * to be told about rather than an error to swallow.
+     */
+    private suspend fun wearStartCard(): LlamaServerCardSnapshot? {
+        val db = AppDatabase.getDatabase(appContext)
+        val card = db.llamaServerCardDao().getWearStartCard() ?: return null
+        wearSessionId = card.sessionId
+        val preset = db.savedCommandDao().getGeneralCommandById(card.savedCommandId)
+        return LlamaServerCardSnapshot(card, preset)
+    }
+
     suspend fun start(requestId: String): ServerCommandResult = mutex.withLock {
         requestCache[requestId]?.let { return@withLock it }
-        val current = LlamaService.state.value
-        if (current is ServerState.Running || current is ServerState.Starting || current is ServerState.Loading) {
+
+        // Route through the card session the user opted in, so the resulting server
+        // is one the phone UI owns and can stop. The old path started an unmanaged
+        // server that the phone had no handle on.
+        val target = wearStartCard()
+            ?: return@withLock cacheResult(
+                requestId,
+                "FAILED_NO_WEAR_SERVER",
+                currentSnapshot(),
+                appContext.getString(R.string.wear_bridge_no_wear_server)
+            )
+        val profile = target.resolveProfile()
+            ?: return@withLock cacheResult(
+                requestId,
+                "FAILED_NO_WEAR_PRESET",
+                currentSnapshot(),
+                appContext.getString(R.string.wear_bridge_wear_server_missing_preset)
+            )
+
+        val existing = sessionSnapshot(target.sessionId)
+        if (existing != null && (existing.isRunning || existing.isBusy)) {
             return@withLock cacheResult(requestId, "ALREADY_RUNNING", currentSnapshot(), appContext.getString(R.string.wear_bridge_server_already_running))
         }
-        val modelPath = settingsRepo.selectedModelPath.value?.takeIf { it.isNotBlank() }
-        if (modelPath == null) {
-            return@withLock cacheResult(requestId, "FAILED_NO_MODEL", currentSnapshot(), appContext.getString(R.string.wear_bridge_no_llama_model))
-        }
-        val result = LlamaServerLauncher.start(appContext, modelPath)
+
+        val result = LlamaServerLauncher.startSession(
+            context = appContext,
+            sessionId = target.sessionId,
+            profile = profile,
+            portOverride = target.port
+        )
         result.fold(
             onSuccess = {
                 val snapshot = waitForNonStoppedSnapshot() ?: currentSnapshot()
@@ -2196,15 +2235,29 @@ class LlamaServerController(
 
     suspend fun stop(requestId: String): ServerCommandResult = mutex.withLock {
         requestCache[requestId]?.let { return@withLock it }
-        val current = LlamaService.state.value
-        if (current is ServerState.Stopped) {
+
+        val target = wearStartCard()
+            ?: return@withLock cacheResult(
+                requestId,
+                "FAILED_NO_WEAR_SERVER",
+                currentSnapshot(),
+                appContext.getString(R.string.wear_bridge_no_wear_server)
+            )
+        val existing = sessionSnapshot(target.sessionId)
+        if (existing == null || (!existing.isRunning && !existing.isBusy)) {
             return@withLock cacheResult(requestId, "ALREADY_STOPPED", currentSnapshot(), appContext.getString(R.string.wear_bridge_server_already_stopped))
         }
-        val result = LlamaServerLauncher.stop(appContext)
+
+        // Stop only this session; never the same-UID sweep, which would also kill
+        // servers the user started from the phone for other purposes.
+        val result = LlamaServerLauncher.stopSession(appContext, target.sessionId)
         result.fold(
             onSuccess = {
                 val stopped = withTimeoutOrNull(5_000L) {
-                    LlamaService.state.filter { it is ServerState.Stopped }.first()
+                    while (sessionSnapshot(target.sessionId)?.let { it.isRunning || it.isBusy } == true) {
+                        delay(250L)
+                    }
+                    true
                 }
                 cacheResult(requestId, "ACCEPTED", currentSnapshot(), if (stopped != null) appContext.getString(R.string.wear_bridge_server_stop_sent) else appContext.getString(R.string.wear_bridge_server_stopping))
             },
@@ -2214,9 +2267,37 @@ class LlamaServerController(
         )
     }
 
+    /** Session id of the wear-startable card, cached so the non-suspend [currentSnapshot] can use it. */
+    @Volatile
+    private var wearSessionId: String? = null
+
+    private fun sessionSnapshot(sessionId: String): LlamaServerSessionSnapshot? =
+        runCatching { LlamaServerSessionStateStore(appContext).readAll().firstOrNull { it.sessionId == sessionId } }
+            .getOrNull()
+
     fun currentSnapshot(errorOverride: String? = null): LlamaServerSnapshot {
-        val state = LlamaService.state.value
         val revisioned = Revisioned(System.currentTimeMillis(), System.currentTimeMillis(), appContext.packageName)
+
+        // Prefer the wear-startable card's session, so the watch reflects the server
+        // it actually controls rather than the legacy singleton LlamaService state.
+        wearSessionId?.let { sessionId ->
+            sessionSnapshot(sessionId)?.let { session ->
+                return when (session.status) {
+                    LlamaServerSessionStatus.STOPPED ->
+                        LlamaServerSnapshot(revisioned, "stopped", appContext.getString(R.string.status_stopped), error = errorOverride)
+                    LlamaServerSessionStatus.STARTING ->
+                        LlamaServerSnapshot(revisioned, "starting", appContext.getString(R.string.dashboard_starting), error = errorOverride)
+                    LlamaServerSessionStatus.LOADING ->
+                        LlamaServerSnapshot(revisioned, "loading", session.statusText ?: appContext.getString(R.string.dashboard_starting), progress = session.progress, error = errorOverride)
+                    LlamaServerSessionStatus.RUNNING ->
+                        LlamaServerSnapshot(revisioned, "running", appContext.getString(R.string.status_running), port = session.port, error = errorOverride)
+                    LlamaServerSessionStatus.ERROR ->
+                        LlamaServerSnapshot(revisioned, "error", appContext.getString(R.string.status_error), error = errorOverride ?: session.error)
+                }
+            }
+        }
+
+        val state = LlamaService.state.value
         return when (state) {
             ServerState.Stopped -> LlamaServerSnapshot(revisioned, "stopped", appContext.getString(R.string.status_stopped), error = errorOverride)
             ServerState.Starting -> LlamaServerSnapshot(revisioned, "starting", appContext.getString(R.string.dashboard_starting), error = errorOverride)
