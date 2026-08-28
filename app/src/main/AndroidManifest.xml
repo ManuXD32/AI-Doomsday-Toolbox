@@ -5,6 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -16,6 +17,7 @@
 
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
     
     <!-- Network permissions for distributed inference -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -36,6 +38,7 @@
         android:required="false" />
     
     <application
+        android:gwpAsanMode="${gwpAsanMode}"
         android:name=".LlamaApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -91,6 +94,21 @@
         </activity>
 
         <activity
+            android:name=".wear.WearServerStartConfirmationActivity"
+            android:exported="true"
+            android:theme="@style/Theme.LlamaDroid">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="adt"
+                    android:host="wear-confirm"
+                    android:pathPrefix="/server/start" />
+            </intent-filter>
+        </activity>
+
+        <activity
             android:name=".service.OrganizerAlarmRingActivity"
             android:excludeFromRecents="true"
             android:exported="false"
@@ -101,7 +119,20 @@
 
         <service 
             android:name=".service.LlamaService" 
+            android:process=":llama_runtime"
             android:foregroundServiceType="dataSync" 
+            android:exported="false" />
+
+        <service
+            android:name=".service.LlamaServerSessionService"
+            android:process=":llama_sessions_runtime"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <service
+            android:name=".service.DistributedMasterLlamaService"
+            android:process=":distributed_llama_runtime"
+            android:foregroundServiceType="dataSync"
             android:exported="false" />
             
         <service 
@@ -174,6 +205,11 @@
             android:name=".service.VideoUpscalerService" 
             android:foregroundServiceType="dataSync" 
             android:exported="false" />
+
+        <service
+            android:name=".service.VideoInterpolationService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
             
         <service 
             android:name=".service.ModelShareService" 
@@ -200,10 +236,19 @@
             android:foregroundServiceType="dataSync" 
             android:exported="false" />
             
-        <service 
+        <service
             android:name=".service.DistributedService" 
-            android:foregroundServiceType="dataSync" 
+            android:foregroundServiceType="dataSync"
             android:exported="false" />
+
+        <service
+            android:name=".service.StatsCollectionService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="User-enabled rootless device telemetry and history" />
+        </service>
 
         <service
             android:name=".service.SdDistributedService"
@@ -261,8 +306,29 @@
             android:exported="false" />
 
         <service
+            android:name=".wear.PhoneWearGatewayService"
+            android:exported="true"
+            tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <action android:name="com.google.android.gms.wearable.REQUEST_RECEIVED" />
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
+                <data
+                    android:scheme="wear"
+                    android:host="*"
+                    android:pathPrefix="/adt/v1" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".service.LiteRtLmWorkerService"
             android:process=":litert_lm"
+            android:exported="false" />
+        <service
+            android:name=".service.AgentRemoteChatWorkerService"
+            android:process=":agent_remote"
+            android:stopWithTask="false"
             android:exported="false" />
 
         <service

@@ -1,0 +1,7 @@
+<resources>
+    <string name="saved_command_update_existing">Actualizar un comando existente</string>
+    <string name="saved_command_overwrite_title">¿Sobrescribir el comando guardado?</string>
+    <string name="saved_command_overwrite_message">Ya existe un comando llamado "%1$s". ¿Quieres reemplazarlo con la configuración actual?</string>
+    <string name="saved_command_overwrite">Sobrescribir</string>
+    <string name="saved_command_overwritten">Comando guardado actualizado</string>
+</resources>

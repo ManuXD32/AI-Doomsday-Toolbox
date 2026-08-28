@@ -91,10 +91,28 @@ class Converters {
         DatasetPromptEntity::class,
         // Agent entities
         AgentConversationEntity::class,
+        AgentProjectFolderEntity::class,
         AgentMessageEntity::class,
+        AgentProjectRunEntity::class,
+        AgentProjectEventEntity::class,
+        AgentMessagePartEntity::class,
+        AgentTurnContextEntity::class,
+        AgentSkillEntity::class,
+        AgentSkillAssignmentEntity::class,
+        AgentPendingQuestionEntity::class,
+        AgentPendingPlanEntity::class,
+        AgentTodoEntity::class,
+        AgentCompactionEntity::class,
+        AgentProjectStateEntity::class,
+        AgentPlanVersionEntity::class,
+        AgentWorkReportEntity::class,
+        AgentInvocationEntity::class,
+        AgentPendingInputEntity::class,
         // Custom tools/agents
         CustomToolEntity::class,
         CustomAgentEntity::class,
+        AgentRuntimeProfileEntity::class,
+        AgentRuntimeEndpointConfigEntity::class,
         OllamaServerEntity::class,
         AiRuntimeJobEntity::class,
         // Llama Native Client entities
@@ -110,6 +128,7 @@ class Converters {
         OrganizerAlarmEntity::class,
         OrganizerLlmSettingsEntity::class,
         SavedCommand::class,
+        com.example.llamadroid.data.model.LlamaServerCardEntity::class,
         QuadtrixProfileEntity::class,
         QuadtrixRunEntity::class,
         QuadtrixMetricEntity::class,
@@ -135,9 +154,11 @@ class Converters {
         SdDistributedTemplateEntity::class,
         SdDistributedPlacementEntity::class,
         SdDistributedRunEntity::class,
-        DownloadTaskEntity::class
+        DownloadTaskEntity::class,
+        SystemStatsSampleEntity::class,
+        SystemStatsEventEntity::class
     ], 
-    version = 96,
+    version = 110,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -149,12 +170,16 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun zimDao(): ZimDao
     abstract fun savedWorkerDao(): SavedWorkerDao
     abstract fun savedCommandDao(): SavedCommandDao
+    abstract fun llamaServerCardDao(): com.example.llamadroid.data.dao.LlamaServerCardDao
     abstract fun workflowTemplateDao(): WorkflowTemplateDao
     abstract fun benchmarkDao(): BenchmarkDao
     abstract fun datasetDao(): DatasetDao
     abstract fun agentChatDao(): AgentChatDao
+    abstract fun agentWorkflowDao(): AgentWorkflowDao
     abstract fun customToolDao(): CustomToolDao
     abstract fun customAgentDao(): CustomAgentDao
+    abstract fun agentRuntimeProfileDao(): AgentRuntimeProfileDao
+    abstract fun agentRuntimeEndpointConfigDao(): AgentRuntimeEndpointConfigDao
     abstract fun ollamaServerDao(): OllamaServerDao
     abstract fun aiRuntimeJobDao(): AiRuntimeJobDao
     
@@ -178,6 +203,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun aiServerDao(): AiServerDao
     abstract fun sdDistributedDao(): SdDistributedDao
     abstract fun downloadTaskDao(): DownloadTaskDao
+    abstract fun systemStatsDao(): SystemStatsDao
 
     companion object {
         @Volatile

@@ -1,0 +1,709 @@
+{
+  "version": 2,
+  "build": {
+    "ndk": "android-ndk-r26d",
+    "buildCommits": "FFmpeg: d4ff0020b40b (n6.1)\nwhisper.cpp: 8a9ad7844d6e (v1.7.4)\nstable-diffusion.cpp: db99efdd6d2a (master-810-db99efd)\nllama.cpp: 94bc47f28078\nllama.cpp-sd-rpc: ded1561b4228\nncnn: a4d2ea1d4422\nrealcugan-ncnn-vulkan: 395302c5c70f (20220728)\nrealsr-ncnn-vulkan: b7f890ee2704 (20220728)\nrife-ncnn-vulkan: a7532fc3f9f8 (20221029)\n",
+    "pageAlignmentBytes": 16384,
+    "catalogueFormat": 2
+  },
+  "modules": [
+    {
+      "moduleName": "feature_llm_baseline",
+      "family": "llm",
+      "backend": "cpu",
+      "tier": "baseline",
+      "compileFlags": "-march=armv8-a",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 273507712,
+      "libraries": [
+        {
+          "name": "libffmpeg_baseline.so",
+          "sha256": "4515d4ea4bab8c078a6a63d7c568fb8f0b52ea41cd05563da9670c81816376d9",
+          "bytes": 18483584
+        },
+        {
+          "name": "libffprobe_baseline.so",
+          "sha256": "59bc8aaf1b94f624db37147d18ba2dc20f817681d8f1df62a70d7567ac9a1891",
+          "bytes": 18381880
+        },
+        {
+          "name": "libkiwix-manage_baseline.so",
+          "sha256": "b2f3d09e4b2ea02b10690051d465e62b99d3eeca3732033f925c238933d34691",
+          "bytes": 54672312
+        },
+        {
+          "name": "libkiwix-serve_baseline.so",
+          "sha256": "eda56790d295d0078639247c19a13ddc2aea65e300dd4b6548f6e4f18cbb7cfa",
+          "bytes": 62084024
+        },
+        {
+          "name": "libllama-bench_baseline.so",
+          "sha256": "d2962645537dc53566d19da3e332ed7f6d7d854dd9afc3767f0812bac7629652",
+          "bytes": 8112632
+        },
+        {
+          "name": "libllama_server_baseline.so",
+          "sha256": "bcf84c572bfe18b1c7d97e14b71d50ed55faaf0914b6b276dfbb69757926882c",
+          "bytes": 14007320
+        },
+        {
+          "name": "libmtmd_baseline.so",
+          "sha256": "f325681987468d6d08d77961cf7cc6c410c745d71a0268029b22161b833b612b",
+          "bytes": 8966584
+        },
+        {
+          "name": "libquadtrix_trainer_baseline.so",
+          "sha256": "5ef004b4c401a47c4a8ec857cd5e8fb617a91879c2f68656a9653b6b2df41337",
+          "bytes": 25635296
+        },
+        {
+          "name": "librpc-server_baseline.so",
+          "sha256": "ae97c8f007ced15354e6a431e7b12517fd639a8f374a68718ba61aabfabc0bc7",
+          "bytes": 2342920
+        },
+        {
+          "name": "libsd-rpc-server_baseline.so",
+          "sha256": "c98dd6fb8f22cceaeb3865010a99576d087d97c8b5a3e9726977cdcc811b3d9b",
+          "bytes": 2321624
+        },
+        {
+          "name": "libsd_baseline.so",
+          "sha256": "fa729dc8535de31e767584942e2560d0361d573244e8d8d89e11a13eb58d47fa",
+          "bytes": 56313496
+        },
+        {
+          "name": "libwhisper-cli_baseline.so",
+          "sha256": "e43f341c901870fcecbd89071e2ac40afb1f579e962eddbcf2b10287874e76b8",
+          "bytes": 2186040
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_llm_dotprod",
+      "family": "llm",
+      "backend": "cpu",
+      "tier": "dotprod",
+      "compileFlags": "-march=armv8.2-a+dotprod",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 273571248,
+      "libraries": [
+        {
+          "name": "libffmpeg_dotprod.so",
+          "sha256": "ba1fd05029015359d1cd735c81fc86467f538d71a80f2b532cd88c1ec77117df",
+          "bytes": 18479776
+        },
+        {
+          "name": "libffprobe_dotprod.so",
+          "sha256": "c977c2a0e202349285113c4dec98ea3f138119b1cdf63b77e63ce5193c742ae9",
+          "bytes": 18378088
+        },
+        {
+          "name": "libkiwix-manage_dotprod.so",
+          "sha256": "63cde36971b9f1853e8b7ad2dca1dd8b46f44155fd5c8a1e28e25e9b340cd235",
+          "bytes": 54655488
+        },
+        {
+          "name": "libkiwix-serve_dotprod.so",
+          "sha256": "20a9ee99b578b4190d918f1b4ad3c930d1634cb9699c8a1c8bebe1f3bed1d3d6",
+          "bytes": 62068064
+        },
+        {
+          "name": "libllama-bench_dotprod.so",
+          "sha256": "6fea3eb0c80e95d05ec8576ec18767624503f3a97a8628bb682958a07d091154",
+          "bytes": 8125448
+        },
+        {
+          "name": "libllama_server_dotprod.so",
+          "sha256": "06d2d63a691a6af40553ce16976d27a7d01b22fb3705cb1b4d3cd6179d866920",
+          "bytes": 14019400
+        },
+        {
+          "name": "libmtmd_dotprod.so",
+          "sha256": "b5eac0afed4b60a1e36b79932b1f72ee25551c12c63b3e7a6fa9dfc1dbb6b78d",
+          "bytes": 8979496
+        },
+        {
+          "name": "libquadtrix_trainer_dotprod.so",
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
+        },
+        {
+          "name": "librpc-server_dotprod.so",
+          "sha256": "bc83a187451cb2fe5eee1595a360bf8c100d058db530e90a2bead294085978da",
+          "bytes": 2378744
+        },
+        {
+          "name": "libsd-rpc-server_dotprod.so",
+          "sha256": "4f8fa5a8df22618c0b8b3d9f73f735796622d97ba1d3a7920357130d0bf6e9eb",
+          "bytes": 2357432
+        },
+        {
+          "name": "libsd_dotprod.so",
+          "sha256": "8040eb035b8bc8b9bfcefa62937a9f8ba6b1d951832f5ef16afc9ca8a62b8361",
+          "bytes": 56304856
+        },
+        {
+          "name": "libwhisper-cli_dotprod.so",
+          "sha256": "1a0b5b9d0f2840ceb0f1e2be818c06a6d912b63d8dbbf92f86c496a0331c5ec6",
+          "bytes": 2188344
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_llm_armv9",
+      "family": "llm",
+      "backend": "cpu",
+      "tier": "armv9",
+      "compileFlags": "-march=armv9-a",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 273432288,
+      "libraries": [
+        {
+          "name": "libffmpeg_armv9.so",
+          "sha256": "61c95fde3a52d4b930e9a557fe997a01ade13849075ec28f9f980c2d43f8b47a",
+          "bytes": 18481440
+        },
+        {
+          "name": "libffprobe_armv9.so",
+          "sha256": "d659141d117ed2a2f8c46354718e3200644a9ed058c5ce5ba0f794124a56f3b8",
+          "bytes": 18379784
+        },
+        {
+          "name": "libkiwix-manage_armv9.so",
+          "sha256": "f795e99e16b5d09da59a1d97bfaeef7e01256f37a228dff998aa51267fdb8517",
+          "bytes": 54693592
+        },
+        {
+          "name": "libkiwix-serve_armv9.so",
+          "sha256": "afea89c24df36b7403e832caa5f93387ccd7f5be3e125e565abf88d1f748dfce",
+          "bytes": 62109920
+        },
+        {
+          "name": "libllama-bench_armv9.so",
+          "sha256": "a874c9f6e2e10c12455d4b6d6a9d5d5f3544385f610f137c4871dbe421f2a4c5",
+          "bytes": 8083840
+        },
+        {
+          "name": "libllama_server_armv9.so",
+          "sha256": "101a77f11192c9f354eb59d91403c58163d781b380c3c9aa296e7f2707173aaf",
+          "bytes": 13987024
+        },
+        {
+          "name": "libmtmd_armv9.so",
+          "sha256": "e820de2ec921bb3becea1734696c52eb29316b4b3abb6b401c39cb34b64c2914",
+          "bytes": 8941040
+        },
+        {
+          "name": "libquadtrix_trainer_armv9.so",
+          "sha256": "3aba96692a0dbeab4cc9141ebc3ae829373e0dc192f4736f1954e80f40d1600f",
+          "bytes": 25648224
+        },
+        {
+          "name": "librpc-server_armv9.so",
+          "sha256": "00f5a8ac379dabce45e4f092fa3e1a5711936a31b27be5a31bfbf9f7635e1e61",
+          "bytes": 2289408
+        },
+        {
+          "name": "libsd-rpc-server_armv9.so",
+          "sha256": "707f9e813d686a8a5f6faa21e536e6f437204f7cd32ecf39a8f05a469b2b42a5",
+          "bytes": 2268560
+        },
+        {
+          "name": "libsd_armv9.so",
+          "sha256": "1ef91a2c4e4c360bbab1c9f882a4a3d4d3f124cd4627f4a04b4073528967a817",
+          "bytes": 56361472
+        },
+        {
+          "name": "libwhisper-cli_armv9.so",
+          "sha256": "02ae6c71ea50498ead5c17566f1a463e67b42eafc8137ed1d20eb4e9889dc50a",
+          "bytes": 2187984
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_llm_i8mm",
+      "family": "llm",
+      "backend": "cpu",
+      "tier": "i8mm",
+      "compileFlags": "-march=armv8.4-a+i8mm -DGGML_CPU_REPACK=ON",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 118116864,
+      "libraries": [
+        {
+          "name": "libllama-bench_i8mm.so",
+          "sha256": "0ce8675ad2476988002787bb091b283854daaac7e8b214b0e7501cd40c605406",
+          "bytes": 8243016
+        },
+        {
+          "name": "libllama_server_i8mm.so",
+          "sha256": "b9360c4d02882285d6997bc74f523c1319407876bfee7c93ce80e1b9899d430e",
+          "bytes": 14137000
+        },
+        {
+          "name": "libmtmd_i8mm.so",
+          "sha256": "d8f58ef6fb5e2d149acdf37b9a6d49a4fb829e4c65ed4b4b2ec3fe3b95bc6c2f",
+          "bytes": 9097064
+        },
+        {
+          "name": "libquadtrix_trainer_i8mm.so",
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
+        },
+        {
+          "name": "librpc-server_i8mm.so",
+          "sha256": "3cd40f39e38f0f10bb892880f76be79874a87aeecff8bee47e2c7c495966565b",
+          "bytes": 2303624
+        },
+        {
+          "name": "libsd_i8mm.so",
+          "sha256": "802099e44482ac08be5529bdc0479d13ee2a02fb880c030dcacdf7750293fbb0",
+          "bytes": 56509272
+        },
+        {
+          "name": "libwhisper-cli_i8mm.so",
+          "sha256": "05ee561bccf8bf39b32633e5d0c96e62a727bbf8913e00821ceb25faa39388d4",
+          "bytes": 2190776
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_llm_snapdragon_opencl",
+      "family": "llm",
+      "backend": "opencl",
+      "tier": null,
+      "compileFlags": "-march=armv8.2-a+dotprod -DGGML_OPENCL=ON -DGGML_OPENMP=OFF",
+      "approvedElfDependencies": [
+        "libAIDOCL.so",
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 84779440,
+      "libraries": [
+        {
+          "name": "libAIDOCL.so",
+          "sha256": "26515998eae3d980b28ac971a187e3112e8cfd222e6da65eca78d51170324c30",
+          "bytes": 17088
+        },
+        {
+          "name": "libllama-bench_snapdragon_opencl.so",
+          "sha256": "9ed3f8af375ac703f64997686632047196fc2524f442f6067725f76d5c56bebe",
+          "bytes": 10387000
+        },
+        {
+          "name": "libllama_server_snapdragon_opencl.so",
+          "sha256": "5b156adb522d8203437d77218c76d104b71ff2cc57128e7f1743e37ee74ca2f7",
+          "bytes": 16280696
+        },
+        {
+          "name": "libsd_snapdragon_opencl.so",
+          "sha256": "27db7495933394e61fbd8951c4a3a32cf983f98aea706fbe6113e00e289fba5c",
+          "bytes": 58094656
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_media_baseline",
+      "family": "media",
+      "backend": "cpu",
+      "tier": "baseline",
+      "compileFlags": "-march=armv8-a",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 273507712,
+      "libraries": [
+        {
+          "name": "libffmpeg_baseline.so",
+          "sha256": "4515d4ea4bab8c078a6a63d7c568fb8f0b52ea41cd05563da9670c81816376d9",
+          "bytes": 18483584
+        },
+        {
+          "name": "libffprobe_baseline.so",
+          "sha256": "59bc8aaf1b94f624db37147d18ba2dc20f817681d8f1df62a70d7567ac9a1891",
+          "bytes": 18381880
+        },
+        {
+          "name": "libkiwix-manage_baseline.so",
+          "sha256": "b2f3d09e4b2ea02b10690051d465e62b99d3eeca3732033f925c238933d34691",
+          "bytes": 54672312
+        },
+        {
+          "name": "libkiwix-serve_baseline.so",
+          "sha256": "eda56790d295d0078639247c19a13ddc2aea65e300dd4b6548f6e4f18cbb7cfa",
+          "bytes": 62084024
+        },
+        {
+          "name": "libllama-bench_baseline.so",
+          "sha256": "d2962645537dc53566d19da3e332ed7f6d7d854dd9afc3767f0812bac7629652",
+          "bytes": 8112632
+        },
+        {
+          "name": "libllama_server_baseline.so",
+          "sha256": "bcf84c572bfe18b1c7d97e14b71d50ed55faaf0914b6b276dfbb69757926882c",
+          "bytes": 14007320
+        },
+        {
+          "name": "libmtmd_baseline.so",
+          "sha256": "f325681987468d6d08d77961cf7cc6c410c745d71a0268029b22161b833b612b",
+          "bytes": 8966584
+        },
+        {
+          "name": "libquadtrix_trainer_baseline.so",
+          "sha256": "5ef004b4c401a47c4a8ec857cd5e8fb617a91879c2f68656a9653b6b2df41337",
+          "bytes": 25635296
+        },
+        {
+          "name": "librpc-server_baseline.so",
+          "sha256": "ae97c8f007ced15354e6a431e7b12517fd639a8f374a68718ba61aabfabc0bc7",
+          "bytes": 2342920
+        },
+        {
+          "name": "libsd-rpc-server_baseline.so",
+          "sha256": "c98dd6fb8f22cceaeb3865010a99576d087d97c8b5a3e9726977cdcc811b3d9b",
+          "bytes": 2321624
+        },
+        {
+          "name": "libsd_baseline.so",
+          "sha256": "fa729dc8535de31e767584942e2560d0361d573244e8d8d89e11a13eb58d47fa",
+          "bytes": 56313496
+        },
+        {
+          "name": "libwhisper-cli_baseline.so",
+          "sha256": "e43f341c901870fcecbd89071e2ac40afb1f579e962eddbcf2b10287874e76b8",
+          "bytes": 2186040
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_media_dotprod",
+      "family": "media",
+      "backend": "cpu",
+      "tier": "dotprod",
+      "compileFlags": "-march=armv8.2-a+dotprod",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 273571248,
+      "libraries": [
+        {
+          "name": "libffmpeg_dotprod.so",
+          "sha256": "ba1fd05029015359d1cd735c81fc86467f538d71a80f2b532cd88c1ec77117df",
+          "bytes": 18479776
+        },
+        {
+          "name": "libffprobe_dotprod.so",
+          "sha256": "c977c2a0e202349285113c4dec98ea3f138119b1cdf63b77e63ce5193c742ae9",
+          "bytes": 18378088
+        },
+        {
+          "name": "libkiwix-manage_dotprod.so",
+          "sha256": "63cde36971b9f1853e8b7ad2dca1dd8b46f44155fd5c8a1e28e25e9b340cd235",
+          "bytes": 54655488
+        },
+        {
+          "name": "libkiwix-serve_dotprod.so",
+          "sha256": "20a9ee99b578b4190d918f1b4ad3c930d1634cb9699c8a1c8bebe1f3bed1d3d6",
+          "bytes": 62068064
+        },
+        {
+          "name": "libllama-bench_dotprod.so",
+          "sha256": "6fea3eb0c80e95d05ec8576ec18767624503f3a97a8628bb682958a07d091154",
+          "bytes": 8125448
+        },
+        {
+          "name": "libllama_server_dotprod.so",
+          "sha256": "06d2d63a691a6af40553ce16976d27a7d01b22fb3705cb1b4d3cd6179d866920",
+          "bytes": 14019400
+        },
+        {
+          "name": "libmtmd_dotprod.so",
+          "sha256": "b5eac0afed4b60a1e36b79932b1f72ee25551c12c63b3e7a6fa9dfc1dbb6b78d",
+          "bytes": 8979496
+        },
+        {
+          "name": "libquadtrix_trainer_dotprod.so",
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
+        },
+        {
+          "name": "librpc-server_dotprod.so",
+          "sha256": "bc83a187451cb2fe5eee1595a360bf8c100d058db530e90a2bead294085978da",
+          "bytes": 2378744
+        },
+        {
+          "name": "libsd-rpc-server_dotprod.so",
+          "sha256": "4f8fa5a8df22618c0b8b3d9f73f735796622d97ba1d3a7920357130d0bf6e9eb",
+          "bytes": 2357432
+        },
+        {
+          "name": "libsd_dotprod.so",
+          "sha256": "8040eb035b8bc8b9bfcefa62937a9f8ba6b1d951832f5ef16afc9ca8a62b8361",
+          "bytes": 56304856
+        },
+        {
+          "name": "libwhisper-cli_dotprod.so",
+          "sha256": "1a0b5b9d0f2840ceb0f1e2be818c06a6d912b63d8dbbf92f86c496a0331c5ec6",
+          "bytes": 2188344
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_media_armv9",
+      "family": "media",
+      "backend": "cpu",
+      "tier": "armv9",
+      "compileFlags": "-march=armv9-a",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 273432288,
+      "libraries": [
+        {
+          "name": "libffmpeg_armv9.so",
+          "sha256": "61c95fde3a52d4b930e9a557fe997a01ade13849075ec28f9f980c2d43f8b47a",
+          "bytes": 18481440
+        },
+        {
+          "name": "libffprobe_armv9.so",
+          "sha256": "d659141d117ed2a2f8c46354718e3200644a9ed058c5ce5ba0f794124a56f3b8",
+          "bytes": 18379784
+        },
+        {
+          "name": "libkiwix-manage_armv9.so",
+          "sha256": "f795e99e16b5d09da59a1d97bfaeef7e01256f37a228dff998aa51267fdb8517",
+          "bytes": 54693592
+        },
+        {
+          "name": "libkiwix-serve_armv9.so",
+          "sha256": "afea89c24df36b7403e832caa5f93387ccd7f5be3e125e565abf88d1f748dfce",
+          "bytes": 62109920
+        },
+        {
+          "name": "libllama-bench_armv9.so",
+          "sha256": "a874c9f6e2e10c12455d4b6d6a9d5d5f3544385f610f137c4871dbe421f2a4c5",
+          "bytes": 8083840
+        },
+        {
+          "name": "libllama_server_armv9.so",
+          "sha256": "101a77f11192c9f354eb59d91403c58163d781b380c3c9aa296e7f2707173aaf",
+          "bytes": 13987024
+        },
+        {
+          "name": "libmtmd_armv9.so",
+          "sha256": "e820de2ec921bb3becea1734696c52eb29316b4b3abb6b401c39cb34b64c2914",
+          "bytes": 8941040
+        },
+        {
+          "name": "libquadtrix_trainer_armv9.so",
+          "sha256": "3aba96692a0dbeab4cc9141ebc3ae829373e0dc192f4736f1954e80f40d1600f",
+          "bytes": 25648224
+        },
+        {
+          "name": "librpc-server_armv9.so",
+          "sha256": "00f5a8ac379dabce45e4f092fa3e1a5711936a31b27be5a31bfbf9f7635e1e61",
+          "bytes": 2289408
+        },
+        {
+          "name": "libsd-rpc-server_armv9.so",
+          "sha256": "707f9e813d686a8a5f6faa21e536e6f437204f7cd32ecf39a8f05a469b2b42a5",
+          "bytes": 2268560
+        },
+        {
+          "name": "libsd_armv9.so",
+          "sha256": "1ef91a2c4e4c360bbab1c9f882a4a3d4d3f124cd4627f4a04b4073528967a817",
+          "bytes": 56361472
+        },
+        {
+          "name": "libwhisper-cli_armv9.so",
+          "sha256": "02ae6c71ea50498ead5c17566f1a463e67b42eafc8137ed1d20eb4e9889dc50a",
+          "bytes": 2187984
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_media_i8mm",
+      "family": "media",
+      "backend": "cpu",
+      "tier": "i8mm",
+      "compileFlags": "-march=armv8.4-a+i8mm -DGGML_CPU_REPACK=ON",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 118116864,
+      "libraries": [
+        {
+          "name": "libllama-bench_i8mm.so",
+          "sha256": "0ce8675ad2476988002787bb091b283854daaac7e8b214b0e7501cd40c605406",
+          "bytes": 8243016
+        },
+        {
+          "name": "libllama_server_i8mm.so",
+          "sha256": "b9360c4d02882285d6997bc74f523c1319407876bfee7c93ce80e1b9899d430e",
+          "bytes": 14137000
+        },
+        {
+          "name": "libmtmd_i8mm.so",
+          "sha256": "d8f58ef6fb5e2d149acdf37b9a6d49a4fb829e4c65ed4b4b2ec3fe3b95bc6c2f",
+          "bytes": 9097064
+        },
+        {
+          "name": "libquadtrix_trainer_i8mm.so",
+          "sha256": "5b87727b5595f30d91aaffa043a274d074291a37e5b866478f37fb59f3cae3f0",
+          "bytes": 25636112
+        },
+        {
+          "name": "librpc-server_i8mm.so",
+          "sha256": "3cd40f39e38f0f10bb892880f76be79874a87aeecff8bee47e2c7c495966565b",
+          "bytes": 2303624
+        },
+        {
+          "name": "libsd_i8mm.so",
+          "sha256": "802099e44482ac08be5529bdc0479d13ee2a02fb880c030dcacdf7750293fbb0",
+          "bytes": 56509272
+        },
+        {
+          "name": "libwhisper-cli_i8mm.so",
+          "sha256": "05ee561bccf8bf39b32633e5d0c96e62a727bbf8913e00821ceb25faa39388d4",
+          "bytes": 2190776
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_media_snapdragon_opencl",
+      "family": "media",
+      "backend": "opencl",
+      "tier": null,
+      "compileFlags": "-march=armv8.2-a+dotprod -DGGML_OPENCL=ON -DGGML_OPENMP=OFF",
+      "approvedElfDependencies": [
+        "libAIDOCL.so",
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 84779440,
+      "libraries": [
+        {
+          "name": "libAIDOCL.so",
+          "sha256": "26515998eae3d980b28ac971a187e3112e8cfd222e6da65eca78d51170324c30",
+          "bytes": 17088
+        },
+        {
+          "name": "libllama-bench_snapdragon_opencl.so",
+          "sha256": "9ed3f8af375ac703f64997686632047196fc2524f442f6067725f76d5c56bebe",
+          "bytes": 10387000
+        },
+        {
+          "name": "libllama_server_snapdragon_opencl.so",
+          "sha256": "5b156adb522d8203437d77218c76d104b71ff2cc57128e7f1743e37ee74ca2f7",
+          "bytes": 16280696
+        },
+        {
+          "name": "libsd_snapdragon_opencl.so",
+          "sha256": "27db7495933394e61fbd8951c4a3a32cf983f98aea706fbe6113e00e289fba5c",
+          "bytes": 58094656
+        }
+      ]
+    },
+    {
+      "moduleName": "feature_media_snapdragon_vulkan",
+      "family": "media",
+      "backend": "vulkan",
+      "tier": null,
+      "compileFlags": "-march=armv8.2-a+dotprod -DGGML_VULKAN=ON -DGGML_OPENMP=OFF",
+      "approvedElfDependencies": [
+        "libandroid.so",
+        "libc.so",
+        "libcamera2ndk.so",
+        "libdl.so",
+        "liblog.so",
+        "libm.so",
+        "libmediandk.so",
+        "libvulkan.so",
+        "libz.so"
+      ],
+      "uncompressedNativeBytes": 105517096,
+      "libraries": [
+        {
+          "name": "libsd_snapdragon_vulkan.so",
+          "sha256": "7ee972deb7f55345e4c10c9b437604f5c8f433c1d580c900c5de8a968ed25fb8",
+          "bytes": 105517096
+        }
+      ]
+    }
+  ]
+}

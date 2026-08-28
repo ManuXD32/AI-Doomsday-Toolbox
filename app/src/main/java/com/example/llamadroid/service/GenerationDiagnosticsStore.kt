@@ -5,15 +5,18 @@ import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
+import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.R
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.UUID
+import java.security.MessageDigest
 
 data class GenerationBreadcrumb(
     val timestamp: Long,
@@ -69,10 +72,27 @@ data class GenerationExitSnapshot(
     val reasonLabel: String,
     val status: Int,
     val importance: Int,
+    val processName: String?,
+    val pid: Int?,
+    val processPssKb: Long?,
+    val processRssKb: Long?,
     val description: String?,
     val traceSnippet: String?,
+    val traceFormat: String?,
+    val traceByteCount: Int?,
+    val traceSha256: String?,
+    val traceTruncated: Boolean = false,
+    /** Bounded tombstone metadata; the raw trace remains a separate export-only file. */
+    val tombstoneSummary: String? = null,
     val hadActiveGeneration: Boolean,
-    val sessionSummary: String?
+    val sessionSummary: String?,
+    val activeSessionDetails: List<String>,
+    val correlationSummary: String?,
+    val relatedProcessSummary: String?,
+    val agentJournalSummary: String?,
+    val deviceSummary: String?,
+    val memorySummary: String?,
+    val appVersion: String?
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("timestamp", timestamp)
@@ -80,10 +100,26 @@ data class GenerationExitSnapshot(
         put("reasonLabel", reasonLabel)
         put("status", status)
         put("importance", importance)
+        put("processName", processName)
+        put("pid", pid)
+        put("processPssKb", processPssKb)
+        put("processRssKb", processRssKb)
         put("description", description)
         put("traceSnippet", traceSnippet)
+        put("traceFormat", traceFormat)
+        put("traceByteCount", traceByteCount)
+        put("traceSha256", traceSha256)
+        put("traceTruncated", traceTruncated)
+        put("tombstoneSummary", tombstoneSummary)
         put("hadActiveGeneration", hadActiveGeneration)
         put("sessionSummary", sessionSummary)
+        put("activeSessionDetails", JSONArray(activeSessionDetails))
+        put("correlationSummary", correlationSummary)
+        put("relatedProcessSummary", relatedProcessSummary)
+        put("agentJournalSummary", agentJournalSummary)
+        put("deviceSummary", deviceSummary)
+        put("memorySummary", memorySummary)
+        put("appVersion", appVersion)
     }
 
     companion object {
@@ -94,12 +130,112 @@ data class GenerationExitSnapshot(
                 reasonLabel = json.optString("reasonLabel"),
                 status = json.optInt("status", 0),
                 importance = json.optInt("importance", 0),
+                processName = json.optString("processName").ifBlank { null },
+                pid = json.optInt("pid", -1).takeIf { it >= 0 },
+                processPssKb = json.optLong("processPssKb", -1L).takeIf { it >= 0L },
+                processRssKb = json.optLong("processRssKb", -1L).takeIf { it >= 0L },
                 description = json.optString("description").ifBlank { null },
                 traceSnippet = json.optString("traceSnippet").ifBlank { null },
+                traceFormat = json.optString("traceFormat").ifBlank { null },
+                traceByteCount = json.optInt("traceByteCount", -1).takeIf { it >= 0 },
+                traceSha256 = json.optString("traceSha256").ifBlank { null },
+                traceTruncated = json.optBoolean("traceTruncated", false),
+                tombstoneSummary = json.optString("tombstoneSummary").ifBlank { null },
                 hadActiveGeneration = json.optBoolean("hadActiveGeneration", false),
-                sessionSummary = json.optString("sessionSummary").ifBlank { null }
+                sessionSummary = json.optString("sessionSummary").ifBlank { null },
+                activeSessionDetails = json.optJSONArray("activeSessionDetails")?.let { array ->
+                    buildList {
+                        for (index in 0 until array.length()) {
+                            array.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+                        }
+                    }
+                }.orEmpty(),
+                correlationSummary = json.optString("correlationSummary").ifBlank { null },
+                relatedProcessSummary = json.optString("relatedProcessSummary").ifBlank { null },
+                agentJournalSummary = json.optString("agentJournalSummary").ifBlank { null },
+                deviceSummary = json.optString("deviceSummary").ifBlank { null },
+                memorySummary = json.optString("memorySummary").ifBlank { null },
+                appVersion = json.optString("appVersion").ifBlank { null }
             )
     }
+}
+
+/** Metadata for the raw trace file. The trace body intentionally stays out of JSON diagnostics. */
+internal data class ExitTraceCapture(
+    val summary: String,
+    val format: String,
+    val byteCount: Int,
+    val sha256: String,
+    val truncated: Boolean
+)
+
+/**
+ * Streams an ApplicationExitInfo trace directly to a temporary app-private file. A single extra
+ * byte detects a safety-cap truncation without retaining a second full copy in the UI process.
+ */
+internal fun captureExitTraceForDiagnostics(
+    input: InputStream,
+    destination: File,
+    maxBytes: Int = 8 * 1024 * 1024
+): ExitTraceCapture? {
+    require(maxBytes > 0) { "Trace cap must be positive" }
+    destination.parentFile?.mkdirs()
+    val temporary = File(destination.parentFile, "${destination.name}.${UUID.randomUUID()}.tmp")
+    val digest = MessageDigest.getInstance("SHA-256")
+    val preview = java.io.ByteArrayOutputStream(minOf(maxBytes, TRACE_PREVIEW_LIMIT))
+    var captured = 0
+    try {
+        FileOutputStream(temporary).use { output ->
+            val buffer = ByteArray(8 * 1024)
+            while (captured < maxBytes) {
+                val read = input.read(buffer, 0, minOf(buffer.size, maxBytes - captured))
+                if (read <= 0) break
+                output.write(buffer, 0, read)
+                digest.update(buffer, 0, read)
+                if (preview.size() < TRACE_PREVIEW_LIMIT) {
+                    preview.write(buffer, 0, minOf(read, TRACE_PREVIEW_LIMIT - preview.size()))
+                }
+                captured += read
+            }
+            output.fd.sync()
+        }
+        if (captured == 0) {
+            temporary.delete()
+            return null
+        }
+        val truncated = input.read() != -1
+        if (!temporary.renameTo(destination)) {
+            temporary.copyTo(destination, overwrite = true)
+            temporary.delete()
+        }
+        val binary = preview.toByteArray().isLikelyBinaryExitTrace()
+        val sha256 = digest.digest().joinToString("") { "%02x".format(it) }
+        return ExitTraceCapture(
+            summary = "${if (binary) "binary" else "text"} trace " +
+                "($captured captured bytes${if (truncated) ", truncated" else ""}, sha256=$sha256)",
+            format = if (binary) "binary" else "text",
+            byteCount = captured,
+            sha256 = sha256,
+            truncated = truncated
+        )
+    } catch (error: Throwable) {
+        temporary.delete()
+        throw error
+    }
+}
+
+private const val TRACE_PREVIEW_LIMIT = 65_536
+private const val TRACE_SNIPPET_LIMIT = 8 * 1024
+
+private fun ByteArray.isLikelyBinaryExitTrace(): Boolean {
+    if (any { it.toInt() == 0 }) return true
+    val sample = take(512)
+    if (sample.isEmpty()) return false
+    val controlCount = sample.count { byte ->
+        val value = byte.toInt() and 0xff
+        value < 0x09 || value in 0x0E..0x1F || value == 0x7F
+    }
+    return controlCount > sample.size / 50
 }
 
 object GenerationDiagnosticsStore {
@@ -110,9 +246,10 @@ object GenerationDiagnosticsStore {
     private const val DIAGNOSTICS_DIR = "generation_diagnostics"
     private const val BREADCRUMBS_FILE = "breadcrumbs.jsonl"
     private const val EXIT_SNAPSHOT_FILE = "last_exit_snapshot.json"
+    private const val EXIT_TRACE_FILE = "last_exit_trace.bin"
     private const val MAX_RECENT_BREADCRUMBS = 80
     private const val MAX_STORED_BREADCRUMBS = 200
-    private const val TRACE_SNIPPET_LIMIT = 4096
+    private const val TRACE_CAPTURE_LIMIT = 8 * 1024 * 1024
 
     private val recentBreadcrumbsState = MutableStateFlow<List<GenerationBreadcrumb>>(emptyList())
     val recentBreadcrumbs: StateFlow<List<GenerationBreadcrumb>> = recentBreadcrumbsState
@@ -277,11 +414,12 @@ object GenerationDiagnosticsStore {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val context = appContext ?: return
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val latestExit = runCatching {
+        val exitReasons = runCatching {
             activityManager
-                .getHistoricalProcessExitReasons(context.packageName, 0, 20)
-                .maxByOrNull { it.timestamp }
-        }.getOrNull() ?: return
+                .getHistoricalProcessExitReasons(context.packageName, 0, 30)
+        }.getOrNull().orEmpty()
+        val latestExit = choosePrimaryExitForDiagnostics(exitReasons, context.packageName) ?: return
+        val relatedProcessSummary = buildRelatedProcessSummary(exitReasons, latestExit, context.packageName)
 
         synchronized(lock) {
             ensureInitializedLocked()
@@ -290,14 +428,46 @@ object GenerationDiagnosticsStore {
             if (latestExit.timestamp <= lastProcessed) return
 
             val activeSessions = loadActiveSessionsLocked()
+            val traceCapture = readTraceCapture(latestExit, exitTraceFileLocked())
+            if (traceCapture == null) exitTraceFileLocked().delete()
+            val tombstoneSummary = if (traceCapture?.format == "binary") {
+                summarizeAndroidTombstoneFile(exitTraceFileLocked())?.compactText()
+            } else {
+                null
+            }
+            val correlatedBreadcrumbs = loadBreadcrumbsLocked(limit = MAX_STORED_BREADCRUMBS)
+                .filter { it.timestamp in (latestExit.timestamp - 120_000L)..latestExit.timestamp }
+                .takeLast(20)
+            val agentJournalBreadcrumbs = correlatedBreadcrumbs
+                .filter { it.source == "agent_journal" || it.source == "agent_stream" || it.source == "agent_tool_runtime" }
+                .takeLast(12)
+            val memoryInfo = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
+            val sessionDetails = activeSessions.map { session ->
+                buildString {
+                    append("${session.source}:${session.mode}")
+                    append(" started=${session.startedAt}")
+                    append(" updated=${session.lastUpdatedAt}")
+                    if (!session.lastPhase.isNullOrBlank()) append(" phase=${session.lastPhase}")
+                    if (!session.details.isNullOrBlank()) append(" details=${session.details}")
+                }
+            }
             val snapshot = GenerationExitSnapshot(
                 timestamp = latestExit.timestamp,
                 reasonCode = latestExit.reason,
                 reasonLabel = exitReasonLabel(latestExit.reason),
                 status = latestExit.status,
                 importance = latestExit.importance,
+                processName = latestExit.processName.takeIf { it.isNotBlank() },
+                pid = latestExit.pid,
+                processPssKb = latestExit.pss.takeIf { it > 0L },
+                processRssKb = latestExit.rss.takeIf { it > 0L },
                 description = latestExit.description?.takeIf { it.isNotBlank() },
-                traceSnippet = readTraceSnippet(latestExit),
+                traceSnippet = traceCapture?.summary,
+                traceFormat = traceCapture?.format,
+                traceByteCount = traceCapture?.byteCount,
+                traceSha256 = traceCapture?.sha256,
+                traceTruncated = traceCapture?.truncated ?: false,
+                tombstoneSummary = tombstoneSummary,
                 hadActiveGeneration = activeSessions.isNotEmpty(),
                 sessionSummary = activeSessions
                     .takeIf { it.isNotEmpty() }
@@ -307,7 +477,33 @@ object GenerationDiagnosticsStore {
                             if (!session.lastPhase.isNullOrBlank()) append(" phase=${session.lastPhase}")
                             if (!session.details.isNullOrBlank()) append(" ${session.details}")
                         }
-                    }
+                    },
+                activeSessionDetails = sessionDetails,
+                correlationSummary = correlatedBreadcrumbs
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(" | ") { breadcrumb ->
+                        buildString {
+                            append("${breadcrumb.source}:${breadcrumb.event}")
+                            breadcrumb.phase?.let { append("@$it") }
+                        }
+                    },
+                relatedProcessSummary = relatedProcessSummary,
+                agentJournalSummary = agentJournalBreadcrumbs
+                    .takeIf { it.isNotEmpty() }
+                    ?.joinToString(" | ") { breadcrumb ->
+                        buildString {
+                            append("${breadcrumb.source}:${breadcrumb.event}")
+                            breadcrumb.mode?.let { append("[$it]") }
+                            breadcrumb.phase?.let { append("@$it") }
+                            breadcrumb.details?.takeIf { it.isNotBlank() }?.let { append(" ").append(it.take(180)) }
+                        }
+                    },
+                deviceSummary = "${Build.MANUFACTURER} ${Build.MODEL}; Android ${Build.VERSION.RELEASE} " +
+                    "(SDK ${Build.VERSION.SDK_INT}); ABI=${Build.SUPPORTED_ABIS.joinToString()}",
+                memorySummary = "relaunchAvailable=${memoryInfo.availMem} total=${memoryInfo.totalMem} " +
+                    "lowMemory=${memoryInfo.lowMemory} threshold=${memoryInfo.threshold} " +
+                    "memoryClassMb=${activityManager.memoryClass} largeMemoryClassMb=${activityManager.largeMemoryClass}",
+                appVersion = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
             )
 
             writeExitSnapshotLocked(snapshot)
@@ -379,6 +575,7 @@ object GenerationDiagnosticsStore {
             ensureInitializedLocked()
             breadcrumbsFileLocked().delete()
             exitSnapshotFileLocked().delete()
+            exitTraceFileLocked().delete()
             latestExitSnapshotState.value = null
             recentBreadcrumbsState.value = emptyList()
             prefs?.edit()
@@ -391,6 +588,29 @@ object GenerationDiagnosticsStore {
         synchronized(lock) {
             ensureInitializedLocked()
             return loadBreadcrumbsLocked(limit = MAX_STORED_BREADCRUMBS)
+        }
+    }
+
+    fun latestTraceFileForExport(): File? {
+        synchronized(lock) {
+            ensureInitializedLocked()
+            return exitTraceFileLocked().takeIf { it.isFile && it.length() > 0L }
+        }
+    }
+
+    fun activeSessionSummaryForBreadcrumb(maxSessions: Int = 4): String {
+        synchronized(lock) {
+            ensureInitializedLocked()
+            return loadActiveSessionsLocked()
+                .takeLast(maxSessions)
+                .joinToString(";") { session ->
+                    buildString {
+                        append("${session.source}:${session.mode}")
+                        session.lastPhase?.takeIf { it.isNotBlank() }?.let { append("@$it") }
+                        session.details?.takeIf { it.isNotBlank() }?.let { append(" ").append(it.take(120)) }
+                    }
+                }
+                .ifBlank { "none" }
         }
     }
 
@@ -453,58 +673,78 @@ object GenerationDiagnosticsStore {
         prefs?.edit()?.putString(KEY_ACTIVE_SESSIONS, jsonArray.toString())?.apply()
     }
 
-    private fun readTraceSnippet(exitInfo: ApplicationExitInfo): String? {
-        return runCatching {
+    private fun readTraceSnippet(exitInfo: ApplicationExitInfo): String? = runCatching {
+        exitInfo.traceInputStream?.use { input ->
+            val bytes = ByteArray(TRACE_SNIPPET_LIMIT)
+            val read = input.read(bytes)
+            if (read > 0) bytes.copyOf(read).toString(Charsets.UTF_8).trim() else null
+        }
+    }.getOrNull()
+
+    private fun readTraceCapture(exitInfo: ApplicationExitInfo, destination: File): ExitTraceCapture? =
+        runCatching {
             exitInfo.traceInputStream?.use { input ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(512)
-                while (output.size() < TRACE_SNIPPET_LIMIT) {
-                    val toRead = minOf(buffer.size, TRACE_SNIPPET_LIMIT - output.size())
-                    val read = input.read(buffer, 0, toRead)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                }
-                output.toByteArray()
-                    .takeIf { it.isNotEmpty() }
-                    ?.toReadableExitTraceSnippet()
+                captureExitTraceForDiagnostics(input, destination, TRACE_CAPTURE_LIMIT)
             }
         }.getOrNull()
-    }
 
-    private fun ByteArray.toReadableExitTraceSnippet(): String {
-        if (isLikelyBinaryExitTrace()) return "binary trace (${size} bytes)"
-        return toString(Charsets.UTF_8).trim()
-            .takeIf { it.isNotBlank() }
-            ?.toReadableExitTraceSnippet()
-            ?: "binary trace (${size} bytes)"
-    }
-
-    private fun ByteArray.isLikelyBinaryExitTrace(): Boolean {
-        if (any { it.toInt() == 0 }) return true
-        val sample = take(512)
-        if (sample.isEmpty()) return false
-        val controlCount = sample.count { byte ->
-            val value = byte.toInt() and 0xff
-            value < 0x09 || value in 0x0E..0x1F || value == 0x7F
+    private fun choosePrimaryExitForDiagnostics(
+        exits: List<ApplicationExitInfo>,
+        packageName: String
+    ): ApplicationExitInfo? {
+        val sorted = exits.sortedByDescending { it.timestamp }
+        val mainProcessExit = sorted.firstOrNull { info ->
+            info.processName == packageName && !info.isBenignIsolatedProcessExit()
         }
-        return controlCount > sample.size / 50
+        if (mainProcessExit != null) return mainProcessExit
+
+        val nonBenignNonSandboxExit = sorted.firstOrNull { info ->
+            !info.isBenignIsolatedProcessExit() && !info.isWebViewSandboxProcess(packageName)
+        }
+        if (nonBenignNonSandboxExit != null) return nonBenignNonSandboxExit
+
+        return sorted.firstOrNull()
     }
 
-    private fun String.toReadableExitTraceSnippet(): String {
-        val line = lineSequence()
-            .map { it.trim() }
-            .firstOrNull { it.isReadableExitTraceLine() }
-        return line?.take(TRACE_SNIPPET_LIMIT)
-            ?: "binary trace (${length} chars)"
+    private fun buildRelatedProcessSummary(
+        exits: List<ApplicationExitInfo>,
+        primary: ApplicationExitInfo,
+        packageName: String
+    ): String? {
+        return exits
+            .asSequence()
+            .filter { it.timestamp != primary.timestamp || it.pid != primary.pid || it.processName != primary.processName }
+            .sortedByDescending { it.timestamp }
+            .take(5)
+            .map { info ->
+                buildString {
+                    append(info.processName.ifBlank { "unknown" })
+                    append(" ")
+                    append(exitReasonLabel(info.reason))
+                    append(" status=").append(info.status)
+                    if (info.isWebViewSandboxProcess(packageName)) append(" secondary=webview_sandbox")
+                    if (info.isBenignIsolatedProcessExit()) append(" benign=isolated_not_needed")
+                    info.description?.takeIf { it.isNotBlank() }?.let {
+                        append(" description=").append(it.take(160))
+                    }
+                }
+            }
+            .joinToString(" | ")
+            .ifBlank { null }
     }
 
-    private fun String.isReadableExitTraceLine(): Boolean {
-        if (isBlank()) return false
-        if (none { it.isLetterOrDigit() }) return false
-        val controlCount = count { it.code < 32 && it != '\t' }
-        if (controlCount > 0) return false
-        val readableCount = count { it == '\t' || it.code in 32..126 }
-        return readableCount >= (length * 0.9).toInt()
+    private fun ApplicationExitInfo.isWebViewSandboxProcess(packageName: String): Boolean {
+        val process = processName.orEmpty()
+        return process.startsWith("$packageName:") &&
+            (process.contains("webview", ignoreCase = true) ||
+                process.contains("sandbox", ignoreCase = true) ||
+                process.contains("isolated", ignoreCase = true))
+    }
+
+    private fun ApplicationExitInfo.isBenignIsolatedProcessExit(): Boolean {
+        val descriptionText = description.orEmpty()
+        return reason == ApplicationExitInfo.REASON_OTHER &&
+            descriptionText.contains("isolated not needed", ignoreCase = true)
     }
 
     private fun exitReasonLabel(reason: Int): String {
@@ -531,6 +771,8 @@ object GenerationDiagnosticsStore {
     private fun breadcrumbsFileLocked(): File = File(diagnosticsDirLocked(), BREADCRUMBS_FILE)
 
     private fun exitSnapshotFileLocked(): File = File(diagnosticsDirLocked(), EXIT_SNAPSHOT_FILE)
+
+    private fun exitTraceFileLocked(): File = File(diagnosticsDirLocked(), EXIT_TRACE_FILE)
 
     private fun diagnosticsDirLocked(): File = File(checkNotNull(appContext).filesDir, DIAGNOSTICS_DIR)
 

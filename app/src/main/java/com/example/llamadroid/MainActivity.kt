@@ -24,6 +24,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import com.example.llamadroid.ui.theme.LlamaDroidTheme
 import com.example.llamadroid.ui.LlamaApp
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.AiRuntimeJobStore
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.DatasetForegroundService
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
@@ -61,6 +64,36 @@ class MainActivity : ComponentActivity() {
      */
     override fun attachBaseContext(newBase: Context) {
         super.attachBaseContext(LlamaApplication.updateLocale(newBase))
+    }
+
+    private fun reconcileAgentJobsAfterCrash(hadActiveGeneration: Boolean) {
+        if (!hadActiveGeneration) return
+        lifecycle.coroutineScope.launch(Dispatchers.IO) {
+            val appContext = applicationContext
+            runCatching {
+                val db = AppDatabase.getDatabase(appContext)
+                db.aiRuntimeJobDao()
+                    .getActiveJobs()
+                    .filter { it.type == AiRuntimeJobStore.TYPE_AGENT_CHAT }
+                    .forEach { job ->
+                        db.aiRuntimeJobDao().updateState(
+                            jobId = job.jobId,
+                            status = AiRuntimeJobStore.STATUS_RECOVERING,
+                            checkpointJson = job.checkpointJson,
+                            progressText = getString(R.string.agent_status_interrupted),
+                            errorMessage = getString(R.string.agent_resume_reason_interrupted),
+                            updatedAt = System.currentTimeMillis()
+                        )
+                        job.conversationId?.let { conversationId ->
+                            db.agentChatDao().updateResumeState(
+                                conversationId,
+                                AgentService.RESUME_STATE_INTERRUPTED,
+                                getString(R.string.agent_resume_reason_interrupted)
+                            )
+                        }
+                    }
+            }
+        }
     }
     
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -141,12 +174,10 @@ class MainActivity : ComponentActivity() {
                     com.example.llamadroid.util.DynamicFeatureManager.installAllFeatures(this@MainActivity)
                 }
 
-                com.example.llamadroid.util.DynamicFeatureManager.installOptionalAccelerators(this@MainActivity)
-
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = "main_activity",
                     event = "startup_provisioning_finished",
-                    details = "defer=$shouldDeferProvisioning"
+                    details = "defer=$shouldDeferProvisioning optional_modules=manual_only"
                 )
             }.onFailure { error ->
                 GenerationDiagnosticsStore.recordBreadcrumb(
@@ -164,7 +195,8 @@ class MainActivity : ComponentActivity() {
         handleShareIntent(intent)
         pendingNavigationRoute.value = extractNavigationRoute(intent)
 
-        GenerationDiagnosticsStore.consumePendingRelaunchWarning()?.let {
+        GenerationDiagnosticsStore.consumePendingRelaunchWarning()?.let { exitSnapshot ->
+            reconcileAgentJobsAfterCrash(exitSnapshot.hadActiveGeneration)
             Toast.makeText(
                 this,
                 getString(R.string.generation_diag_relaunch_warning),

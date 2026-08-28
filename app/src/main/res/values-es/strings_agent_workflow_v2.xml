@@ -1,0 +1,13 @@
+<resources>
+    <string name="agent_workflow_toggle_questions">Expandir o contraer preguntas</string>
+    <string name="agent_workflow_questions_collapsed">Preguntas %1$d de %2$d listas</string>
+    <string name="agent_workflow_back">Atrás</string>
+    <string name="agent_workflow_next">Siguiente</string>
+    <string name="agent_workflow_plan_approval_failed">No se pudo completar la aprobación del plan: %1$s</string>
+    <string name="agent_plan_resolution_missing">No hay ningún plan pendiente disponible para aprobar.</string>
+    <string name="agent_plan_resolution_blank">El plan aprobado no puede estar vacío.</string>
+    <string name="agent_plan_resolution_in_progress">La aprobación de este plan ya se está procesando.</string>
+    <string name="agent_plan_resolution_failed">No se pudo guardar el plan aprobado.</string>
+    <string name="agent_plan_saving">Iniciando…</string>
+    <string name="agent_context_budget_breakdown">Presupuesto: mensajes ~%1$d · herramientas/esquema ~%2$d · solicitud %3$d · límite de entrada %4$d · salida %5$d · reserva %6$d · %7$s</string>
+</resources>

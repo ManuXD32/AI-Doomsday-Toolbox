@@ -5,11 +5,12 @@ sealed class Screen(val route: String) {
     object ModelManager : Screen("models")       // Now goes to Model Hub
     object Chat : Screen("chat")
     object Settings : Screen("settings")
+    object Stats : Screen("settings_stats")
     object Logs : Screen("logs")
     // AI screens
     object AIHub : Screen("ai_hub")              // Landing page for AI features
     object ImageGen : Screen("image_gen")        // Stable Diffusion image generation
-    object ImageGenUpscale : Screen("image_gen_upscale") // Isolated legacy-style SD upscale screen
+    object ImageGenUpscale : Screen("image_gen_upscale") // Compatibility route into the unified Enlarge task
     object OnnxImageGen : Screen("onnx_image_gen") // ONNX Runtime image generation
     object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech
@@ -18,6 +19,7 @@ sealed class Screen(val route: String) {
     object VideoGen : Screen("video_gen")        // Stable Diffusion video generation
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP
     object VideoUpscaler : Screen("video_upscaler")           // Real-ESRGAN video upscaling
+    object VideoInterpolation : Screen("video_interpolation") // RIFE video frame interpolation
     object NotesManager : Screen("notes_manager")             // Unified notes manager
     object KnowledgeBase : Screen("knowledge_base")           // User-managed retrieval knowledge bases
     object KnowledgeChunkReader : Screen("knowledge_chunk/{chunkId}") {
@@ -80,6 +82,9 @@ sealed class Screen(val route: String) {
     // AI Agent screens
     object Agent : Screen("agent")                             // AI coding agent chat
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
+    object AgentInvocation : Screen("agent_invocation/{invocationId}") {
+        fun createRoute(invocationId: String): String = "agent_invocation/$invocationId"
+    }
     // Tama virtual pet
     object Tama : Screen("tama")                               // Virtual pet companion
     object TamaChat : Screen("tama_chat")                     // AI Chat with pet
@@ -99,6 +104,7 @@ sealed class Screen(val route: String) {
     object OllamaManager : Screen("ollama_manager")            // Ollama server/model manager
     
     // Native Llama Client
+    object LlamaServers : Screen("llama_servers")        // Managed llama.cpp server cards
     object LlamaServerList : Screen("llama_server_list")       // Server management (entry point)
     object LlamaChatList : Screen("llama_chat_list") {         // Chat history
         const val folderRoute = "llama_chat_list/folder/{folderId}"

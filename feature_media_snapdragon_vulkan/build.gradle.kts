@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace = "com.example.llamadroid.feature.media.snapdragon.vulkan"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 26

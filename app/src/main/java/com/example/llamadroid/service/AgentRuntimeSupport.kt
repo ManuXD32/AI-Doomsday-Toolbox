@@ -1,10 +1,14 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.data.db.CustomToolEntity
+import com.example.llamadroid.data.model.LiteRtModelEntity
+import com.example.llamadroid.data.model.defaultLiteRtChatContextTokens
+import com.example.llamadroid.data.model.defaultLiteRtEngineMaxTokens
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.InetAddress
 import java.net.URI
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -25,6 +29,315 @@ enum class RetrievedContextSourceClass {
     PROJECT_CODE,
     UNTRUSTED_FETCHED_CONTENT,
     GENERATED_MEMORY_SUMMARY
+}
+
+data class NormalizedAgentInvocationName(
+    val displayName: String,
+    val key: String
+)
+
+/** Keeps model-provided invocation labels safe while allowing Room to suffix duplicates. */
+fun normalizeAgentInvocationName(rawName: String): NormalizedAgentInvocationName? {
+    val displayName = rawName
+        .filterNot { it.isISOControl() }
+        .trim()
+        .replace(Regex("\\s+"), " ")
+        .take(40)
+        .trim()
+    if (displayName.isBlank()) return null
+    return NormalizedAgentInvocationName(displayName, displayName.lowercase(Locale.ROOT))
+}
+
+fun boundedStreamingPreview(raw: String, maxChars: Int, tailChars: Int = maxChars / 5): String {
+    require(maxChars > 0 && tailChars in 0 until maxChars)
+    if (raw.length <= maxChars) return raw
+    val headChars = (maxChars - tailChars - 3).coerceAtLeast(1)
+    return raw.take(headChars) + "\n…\n" + raw.takeLast(tailChars)
+}
+
+/**
+ * Selects a rollover body that cannot immediately cross the same trigger again.
+ * Keeping a heading is useful for Markdown/event files, but it still counts toward the cap.
+ */
+internal fun selectMemoryRolloverLines(
+    lines: List<String>,
+    sizeBudgetLines: Int,
+    rolloverTriggerLines: Int,
+    preserveFirstLine: Boolean
+): List<String> {
+    val retainedLimit = minOf(sizeBudgetLines, rolloverTriggerLines).coerceAtLeast(1)
+    if (lines.size <= retainedLimit) return lines
+    return if (preserveFirstLine && retainedLimit > 1) {
+        listOf(lines.first()) + lines.takeLast(retainedLimit - 1)
+    } else {
+        lines.takeLast(retainedLimit)
+    }
+}
+
+/** Kept outside the frozen prefix so Plan → Build preserves prompt-cache ownership. */
+internal fun buildAgentRuntimeModeControl(isPlanMode: Boolean, isOrchestrator: Boolean): String =
+    when {
+        isPlanMode && isOrchestrator ->
+            "CURRENT RUNTIME MODE: PLAN. Keep the project read-only. Delegate work as bounded planning microsteps, one at a time, with call_agent to CODEBASE_SCOUT for repository inspection, RESEARCHER for external/Kiwix/knowledge-base research, or PLANNER for plan synthesis; omit todo_id. Build workers and mutation tools remain blocked. Ask at least one structured user question, then submit one propose_plan and wait."
+        isPlanMode ->
+            "CURRENT RUNTIME MODE: PLAN. Complete only the assigned read-only discovery, research, or planning task. Do not mutate files, memory, media, dependencies, commands, or project execution. Return a structured finish_task report to the Orchestrator."
+        isOrchestrator ->
+            "CURRENT RUNTIME MODE: BUILD. Follow the approved durable TODO state. First call todo_write to create or update the durable TODO list, then delegate exactly one current TODO at a time, reread project_state after each specialist report, and finalize only after required review and verification."
+        else ->
+            "CURRENT RUNTIME MODE: BUILD. Complete only the assigned TODO and return a structured report to the Orchestrator."
+    }
+
+/** Tool schemas are prefix-stable across modes; Plan safety is enforced at execution time. */
+internal fun <T> stableAgentToolSchemaAcrossModes(tools: List<T>, @Suppress("UNUSED_PARAMETER") isPlanMode: Boolean): List<T> = tools
+
+
+internal enum class AgentTerminalKind {
+    SUCCESS,
+    BLOCKED,
+    CANCELLED,
+    INTERRUPTED,
+    FAILED
+}
+
+internal data class AgentTerminalPresentation(
+    val kind: AgentTerminalKind,
+    val invocationStatus: String,
+    val envelopeStatus: String,
+    val continuationLabel: String
+)
+
+internal fun resolveAgentTerminalPresentation(rawStatus: String?): AgentTerminalPresentation =
+    when (rawStatus?.trim()?.uppercase(Locale.ROOT)) {
+        "SUCCESS", "COMPLETED", "PASSED", "PASS" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.SUCCESS,
+            invocationStatus = "COMPLETED",
+            envelopeStatus = "ok",
+            continuationLabel = "completed successfully"
+        )
+        "BLOCKED" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.BLOCKED,
+            invocationStatus = "BLOCKED",
+            envelopeStatus = "blocked",
+            continuationLabel = "reported a blocker"
+        )
+        "CANCELLED", "CANCELED" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.CANCELLED,
+            invocationStatus = "CANCELLED",
+            envelopeStatus = "cancelled",
+            continuationLabel = "was cancelled"
+        )
+        "INTERRUPTED" -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.INTERRUPTED,
+            invocationStatus = "INTERRUPTED",
+            envelopeStatus = "error",
+            continuationLabel = "was interrupted"
+        )
+        else -> AgentTerminalPresentation(
+            kind = AgentTerminalKind.FAILED,
+            invocationStatus = "FAILED",
+            envelopeStatus = "error",
+            continuationLabel = "failed"
+        )
+    }
+
+/**
+ * A specialist may terminate because the backend stopped before it emitted the
+ * required finish_task JSON. Never infer success from ordinary prose or from a
+ * role parser rejecting an otherwise explicit FAILED/BLOCKED terminal object.
+ */
+internal fun inferAgentTerminalStatusFromSummary(rawSummary: String): String {
+    val trimmed = rawSummary.trim()
+    val explicit = if (trimmed.startsWith("{")) {
+        runCatching {
+            JSONObject(trimmed)
+                .optString("status", "")
+                .trim()
+                .uppercase(Locale.ROOT)
+        }.getOrNull()
+    } else {
+        null
+    }
+    return when (explicit) {
+        // This helper runs only after the role-specific parser rejected the
+        // payload. An explicit success that does not satisfy the role contract
+        // is therefore a failure, never a completed delegation.
+        "SUCCESS", "COMPLETED", "PASSED", "PASS" -> "FAILED"
+        "BLOCKED" -> "BLOCKED"
+        "CANCELLED", "CANCELED" -> "CANCELLED"
+        "INTERRUPTED" -> "INTERRUPTED"
+        "FAILED" -> "FAILED"
+        else -> "FAILED"
+    }
+}
+
+internal data class AgentToolPolicyDecision(
+    val allowed: Boolean,
+    val code: String,
+    val message: String = "",
+    val recoveryHint: String = ""
+)
+
+internal class AgentToolPolicyException(
+    val decision: AgentToolPolicyDecision
+) : IllegalStateException(decision.message) {
+    val policyCode: String get() = decision.code
+    val recoveryHint: String get() = decision.recoveryHint
+}
+
+internal class AgentDelegationStartException(
+    val agentLabel: String,
+    cause: Throwable
+) : IllegalStateException(
+    "Agent $agentLabel failed to start: " +
+        (cause.message ?: cause.javaClass.simpleName),
+    cause
+)
+
+private val PLAN_MODE_PLANNING_AGENT_ALIASES = mapOf(
+    "CODEBASE_SCOUT" to "CODEBASE_SCOUT",
+    "SCOUT" to "CODEBASE_SCOUT",
+    "RESEARCHER" to "RESEARCHER",
+    "RESEARCH" to "RESEARCHER",
+    "PLANNER" to "PLANNER"
+)
+
+private val PLAN_MODE_MUTATING_TOOLS = setOf(
+    "write_file",
+    "edit_lines",
+    "apply_patch",
+    "create_folder",
+    "run_command",
+    "cancel_command",
+    "send_command_input",
+    "generate_image",
+    "remove_image_background",
+    "run_project",
+    "stop_project_run",
+    "force_stop_project_run",
+    "install_python_dependency",
+    "write_memory",
+    "rewrite_memory",
+    "delete_memory",
+    "run_skill_script"
+)
+
+private val PLAN_SAFE_CUSTOM_AGENT_TOOLS = setOf(
+    "read_file",
+    "read_file_lines",
+    "file_line_count",
+    "list_directory",
+    "search_code",
+    "view_image",
+    "read_memory",
+    "list_memory",
+    "project_state_read",
+    "project_order_read",
+    "plan_read",
+    "agent_report_read",
+    "todo_read",
+    "reflection",
+    "get_datetime",
+    "web_search",
+    "fetch_url",
+    "kiwix_search",
+    "kb_search",
+    "kb_read_chunk",
+    "kb_list_sources",
+    "run_tools_sequential",
+    "skill",
+    "read_skill_resource",
+    "finish_task",
+    "tool_help"
+)
+
+private val CRITICAL_AGENT_PROTOCOL_TOOLS = setOf(
+    "question",
+    "call_agent",
+    "propose_plan",
+    "finish_task",
+    "project_state_read",
+    "todo_read",
+    "todo_transition",
+    "tool_help"
+)
+
+internal fun isCriticalAgentProtocolTool(toolName: String): Boolean =
+    toolName.trim().lowercase(Locale.ROOT) in CRITICAL_AGENT_PROTOCOL_TOOLS
+
+internal fun isPlanSafeCustomAgentToolSet(configuredTools: Set<String>): Boolean {
+    if (configuredTools.isEmpty()) return false
+    return configuredTools
+        .map { it.trim().lowercase(Locale.ROOT) }
+        .all { it in PLAN_SAFE_CUSTOM_AGENT_TOOLS }
+}
+
+internal fun evaluatePlanModeToolPolicy(
+    isPlanMode: Boolean,
+    toolName: String,
+    arguments: Map<String, String>,
+    planSafeCustomAgentNames: Set<String> = emptySet()
+): AgentToolPolicyDecision {
+    if (!isPlanMode) {
+        return AgentToolPolicyDecision(true, "ALLOWED_BUILD_MODE")
+    }
+
+    val normalizedTool = toolName.trim().lowercase(Locale.ROOT)
+    if (normalizedTool == "call_agent") {
+        val requested = arguments["agent"]
+            ?.trim()
+            ?.uppercase(Locale.ROOT)
+            .orEmpty()
+        if (requested.isBlank()) {
+            // Required-argument validation produces the precise schema error later.
+            return AgentToolPolicyDecision(true, "ALLOWED_PENDING_SCHEMA_VALIDATION")
+        }
+        if (!arguments["todo_id"].isNullOrBlank()) {
+            return AgentToolPolicyDecision(
+                allowed = false,
+                code = "PLAN_MODE_TODO_DELEGATION_BLOCKED",
+                message = "Plan-mode discovery and research delegations must not claim a Build TODO.",
+                recoveryHint = "Remove todo_id and delegate one bounded read-only task to CODEBASE_SCOUT, RESEARCHER, or PLANNER. Switch to Build mode before claiming a TODO."
+            )
+        }
+        val planningRole = PLAN_MODE_PLANNING_AGENT_ALIASES[requested]
+        val normalizedCustomNames = planSafeCustomAgentNames
+            .map { it.trim().uppercase(Locale.ROOT) }
+            .toSet()
+        if (planningRole != null || requested in normalizedCustomNames) {
+            return AgentToolPolicyDecision(true, "ALLOWED_PLAN_RESEARCH_DELEGATION")
+        }
+        return AgentToolPolicyDecision(
+            allowed = false,
+            code = "PLAN_MODE_AGENT_BLOCKED",
+            message = "Plan mode permits only read-only CODEBASE_SCOUT, RESEARCHER, PLANNER, or explicitly read-only custom-agent delegations. Requested agent: $requested.",
+            recoveryHint = "Choose CODEBASE_SCOUT for repository inspection, RESEARCHER for external or knowledge-base research, or PLANNER for plan synthesis. Do not retry the blocked worker unchanged."
+        )
+    }
+
+    if (normalizedTool in PLAN_MODE_MUTATING_TOOLS) {
+        return AgentToolPolicyDecision(
+            allowed = false,
+            code = "PLAN_MODE_MUTATION_BLOCKED",
+            message = "Plan mode is read-only. Tool `$toolName` cannot mutate files, memory, media, dependencies, commands, or project execution.",
+            recoveryHint = "Use a read-only inspection or research action, ask the user a structured question, or propose the plan. Switch to Build mode before mutation."
+        )
+    }
+
+    return AgentToolPolicyDecision(true, "ALLOWED_PLAN_READ_ONLY_TOOL")
+}
+
+internal data class PlanApprovalPromptCacheDecision(
+    val summary: String,
+    val modifiedPlanForToolResult: String?,
+    val retainsRootCacheEpoch: Boolean = true
+)
+
+internal fun planApprovalPromptCacheDecision(originalPlan: String, approvedPlan: String): PlanApprovalPromptCacheDecision {
+    val wasEdited = approvedPlan.trim() != originalPlan.trim()
+    return PlanApprovalPromptCacheDecision(
+        summary = if (wasEdited) "Implement the modified plan." else "Implement the plan.",
+        modifiedPlanForToolResult = approvedPlan.trim().takeIf { wasEdited }
+    )
 }
 
 data class ToolCapabilityPolicy(
@@ -57,6 +370,23 @@ data class LoadingCounterUpdate(
     val wasClamped: Boolean
 )
 
+internal fun shouldPersistFullAgentSnapshot(
+    reason: String?,
+    force: Boolean
+): Boolean {
+    if (force) return true
+    // Finalized message mutations are semantic recovery boundaries. AgentService
+    // coalesces them through a short debounce and upserts only changed rows, so they
+    // survive process death without writing on every streaming token or heartbeat.
+    return reason in setOf(
+        "Agent message added",
+        "Agent message updated",
+        "Conversation history replaced",
+        "Conversation history truncated",
+        "Regenerate history truncated"
+    )
+}
+
 data class FileEditComputation(
     val updatedContent: String,
     val originalLineCount: Int,
@@ -86,19 +416,30 @@ fun buildCompactPromptBasisSections(
 ): CompactPromptBasisSections {
     val required = buildList {
         add(systemPrompt)
-        add(
-            buildString {
-                appendLine("# Initial Order")
-                appendLine()
-                append(initialOrder)
-            }.trimEnd()
-        )
-        planContent?.takeIf { it.isNotBlank() }?.let { add(it) }
-        add(compactionSummary)
+        AgentProjectControlPlane.compactDocumentReference(
+            title = "Initial Order",
+            content = initialOrder,
+            maxChars = 1_400
+        )?.let(::add)
+        AgentProjectControlPlane.compactDocumentReference(
+            title = "Plan",
+            content = planContent,
+            maxChars = 2_000
+        )?.let(::add)
+        add(compactionSummary.take(8_000))
     }
-    val optional = listOfNotNull(compactStateSnapshot?.takeIf { it.isNotBlank() })
-    return CompactPromptBasisSections(requiredSections = required, optionalSections = optional)
+    val optional = listOfNotNull(
+        compactStateSnapshot
+            ?.takeIf { it.isNotBlank() }
+            ?.take(12_000)
+    )
+    return CompactPromptBasisSections(
+        requiredSections = required,
+        optionalSections = optional
+    )
 }
+
+
 
 fun buildHardCompactionSummaryDocument(
     generatedAt: String,
@@ -299,6 +640,84 @@ fun resolveChatNumCtx(baseNumCtx: Int, overrideNumCtx: Int? = null): Int {
     return overrideNumCtx ?: baseNumCtx
 }
 
+fun friendlyBackendModelLabel(rawLabel: String?): String? {
+    val trimmed = rawLabel?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    val normalized = trimmed.trimEnd('/', '\\')
+    val separatorIndex = normalized.lastIndexOfAny(charArrayOf('/', '\\'))
+    return if (separatorIndex >= 0 && separatorIndex < normalized.lastIndex) {
+        normalized.substring(separatorIndex + 1)
+    } else {
+        normalized
+    }
+}
+
+fun resolveAgentLiteRtContextTokens(
+    savedContextTokens: Int,
+    model: LiteRtModelEntity?,
+    fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
+    minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
+    safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+): Int {
+    val advertisedCap = (model?.defaultLiteRtEngineMaxTokens() ?: fallbackContextTokens)
+        .coerceAtLeast(minContextTokens)
+    val safeCap = safeMaxContextTokens
+        .takeIf { it > 0 }
+        ?.coerceAtLeast(minContextTokens)
+        ?: advertisedCap
+    val cap = minOf(advertisedCap, safeCap).coerceAtLeast(minContextTokens)
+    val defaultContext = (model?.defaultLiteRtChatContextTokens() ?: cap)
+        .coerceIn(minContextTokens, cap)
+    return savedContextTokens
+        .takeIf { it > 0 }
+        ?.coerceIn(minContextTokens, cap)
+        ?: defaultContext
+}
+
+fun resolveAgentLiteRtMaxOutputTokens(
+    savedMaxOutputTokens: Int,
+    resolvedContextTokens: Int,
+    model: LiteRtModelEntity?,
+    fallbackMaxOutputTokens: Int = AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS,
+    minMaxOutputTokens: Int = AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS
+): Int {
+    val contextCap = listOfNotNull(
+        resolvedContextTokens.takeIf { it > 0 },
+        model?.defaultLiteRtEngineMaxTokens()?.takeIf { it > 0 }
+    ).minOrNull()
+        ?: AGENT_LITERT_FALLBACK_CONTEXT_TOKENS
+    val outputCap = contextCap.coerceAtLeast(minMaxOutputTokens)
+    val defaultOutput = fallbackMaxOutputTokens.coerceIn(minMaxOutputTokens, outputCap)
+    return savedMaxOutputTokens
+        .takeIf { it > 0 }
+        ?.coerceIn(minMaxOutputTokens, outputCap)
+        ?: defaultOutput
+}
+
+/**
+ * Resolves the user-configured output budget independently from the model
+ * context, then clamps the effective request to the remaining prompt space.
+ *
+ * The configured value is intentionally not modified when the current prompt is
+ * large; callers can continue to display and persist the user's original choice.
+ */
+fun resolveAgentEffectiveMaxOutputTokens(
+    configuredMaxOutputTokens: Int,
+    contextTokens: Int,
+    estimatedPromptTokens: Int,
+    fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
+    templateSafetyReserveTokens: Int = AGENT_OUTPUT_TEMPLATE_SAFETY_RESERVE_TOKENS
+): Int {
+    val configured = configuredMaxOutputTokens
+        .takeIf { it > 0 }
+        ?: fallbackMaxOutputTokens
+    if (contextTokens <= 0) return configured.coerceAtLeast(1)
+
+    val remaining = contextTokens -
+        estimatedPromptTokens.coerceAtLeast(0) -
+        templateSafetyReserveTokens.coerceAtLeast(0)
+    return minOf(configured, remaining.coerceAtLeast(1)).coerceAtLeast(1)
+}
+
 fun shouldScheduleHardCompaction(
     percentUsed: Int,
     thresholdPercent: Int,
@@ -396,6 +815,14 @@ fun sanitizeTerminalTranscript(raw: String): String {
     return output.toString()
 }
 
+private const val AGENT_LITERT_MIN_CONTEXT_TOKENS = 512
+private const val AGENT_LITERT_FALLBACK_CONTEXT_TOKENS = 4000
+private const val AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS = 8192
+private const val AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS = 128
+private const val AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS = 8096
+const val AGENT_DEFAULT_MAX_OUTPUT_TOKENS = 8096
+const val AGENT_OUTPUT_TEMPLATE_SAFETY_RESERVE_TOKENS = 256
+
 private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
     "write_file",
     "run_command",
@@ -404,6 +831,10 @@ private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
     "create_folder",
     "generate_image",
     "remove_image_background",
+    "run_project",
+    "stop_project_run",
+    "force_stop_project_run",
+    "install_python_dependency",
     "view_image",
     "cancel_command",
     "send_command_input",
@@ -413,7 +844,8 @@ private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
     "reflection",
     "write_memory",
     "rewrite_memory",
-    "delete_memory"
+    "delete_memory",
+    "tool_help"
 )
 
 fun isSequentialBatchBlockedTool(toolName: String): Boolean {
@@ -554,6 +986,35 @@ sealed class AgentResult {
         val carryForwardNotes: List<String>
     ) : AgentResult()
 
+    data class ScoutResult(
+        override val status: String,
+        val relevantFiles: List<String>,
+        val architecture: List<String>,
+        val dependencies: List<String>,
+        val constraints: List<String>,
+        val risks: List<String>,
+        val openQuestions: List<String>,
+        val recommendedScope: List<String>
+    ) : AgentResult()
+
+    data class ResearcherResult(
+        override val status: String,
+        val researchQuestion: String,
+        val sources: List<String>,
+        val facts: List<String>,
+        val conflicts: List<String>,
+        val uncertainties: List<String>,
+        val recommendations: List<String>
+    ) : AgentResult()
+
+    data class PlannerResult(
+        override val status: String,
+        val planMarkdown: String,
+        val structuredPlanJson: String,
+        val openQuestions: List<String>,
+        val recommendedNextSteps: List<String>
+    ) : AgentResult()
+
     data class GenericResult(
         override val status: String,
         val summary: String
@@ -602,6 +1063,32 @@ sealed class AgentResult {
                     }
                     append("- carry_forward_notes: ${carryForwardNotes.joinToString().ifBlank { "none" }}")
                 }
+                is ScoutResult -> {
+                    appendLine("- status: $status")
+                    appendLine("- relevant_files: ${relevantFiles.joinToString().ifBlank { "none" }}")
+                    appendLine("- architecture: ${architecture.joinToString().ifBlank { "none" }}")
+                    appendLine("- dependencies: ${dependencies.joinToString().ifBlank { "none" }}")
+                    appendLine("- constraints: ${constraints.joinToString().ifBlank { "none" }}")
+                    appendLine("- risks: ${risks.joinToString().ifBlank { "none" }}")
+                    appendLine("- open_questions: ${openQuestions.joinToString().ifBlank { "none" }}")
+                    append("- recommended_scope: ${recommendedScope.joinToString().ifBlank { "none" }}")
+                }
+                is ResearcherResult -> {
+                    appendLine("- status: $status")
+                    appendLine("- research_question: $researchQuestion")
+                    appendLine("- sources: ${sources.joinToString().ifBlank { "none" }}")
+                    appendLine("- facts: ${facts.joinToString().ifBlank { "none" }}")
+                    appendLine("- conflicts: ${conflicts.joinToString().ifBlank { "none" }}")
+                    appendLine("- uncertainties: ${uncertainties.joinToString().ifBlank { "none" }}")
+                    append("- recommendations: ${recommendations.joinToString().ifBlank { "none" }}")
+                }
+                is PlannerResult -> {
+                    appendLine("- status: $status")
+                    appendLine("- plan_markdown: ${planMarkdown.take(1_200)}")
+                    appendLine("- structured_plan_json: ${structuredPlanJson.take(1_200)}")
+                    appendLine("- open_questions: ${openQuestions.joinToString().ifBlank { "none" }}")
+                    append("- recommended_next_steps: ${recommendedNextSteps.joinToString().ifBlank { "none" }}")
+                }
                 is GenericResult -> {
                     appendLine("- status: $status")
                     append("- summary: $summary")
@@ -617,6 +1104,7 @@ data class CompletedAgentSession(
     val sessionId: String,
     val agentLabel: String,
     val customAgentName: String? = null,
+    val rawSummary: String,
     val result: AgentResult,
     val evidence: AgentEvidenceBundle
 )
@@ -666,6 +1154,45 @@ data class MemoryFilePolicy(
 )
 
 internal object AgentRuntimeSupport {
+    data class ContinuationGuardDecision(
+        val shouldPause: Boolean,
+        val reason: String?
+    )
+
+    fun evaluateContinuationGuard(
+        continuationCount: Int,
+        queueDepth: Int,
+        maxContinuations: Int,
+        maxQueueDepth: Int,
+        reason: String,
+        consecutiveNoProgress: Int = 0,
+        maxNoProgress: Int = 4
+    ): ContinuationGuardDecision {
+        val tooManyContinuations = continuationCount > maxContinuations
+        val queueTooDeep = queueDepth > maxQueueDepth
+        val repeatedNoProgress = consecutiveNoProgress > maxNoProgress
+        return if (tooManyContinuations || queueTooDeep || repeatedNoProgress) {
+            ContinuationGuardDecision(
+                shouldPause = true,
+                reason = "reason=${reason.take(120)} continuations=$continuationCount/$maxContinuations " +
+                    "queueDepth=$queueDepth/$maxQueueDepth noProgress=$consecutiveNoProgress/$maxNoProgress"
+            )
+        } else {
+            ContinuationGuardDecision(shouldPause = false, reason = null)
+        }
+    }
+
+    fun shouldInjectQueuedUserGuidance(
+        pendingCount: Int,
+        toolCallDetected: Boolean,
+        toolResultCommitted: Boolean,
+        modelTurnCompleted: Boolean
+    ): Boolean {
+        if (pendingCount <= 0) return false
+        if (toolResultCommitted) return true
+        return modelTurnCompleted && !toolCallDetected
+    }
+
     private val PLACEHOLDER_REGEX = Regex("""\{([a-zA-Z0-9_]+)\}""")
     private val SHELL_EXPLICIT_PREFIX = "shell:"
     private val SEQUENTIAL_BATCH_BLOCKED_TOOLS = setOf(
@@ -685,7 +1212,11 @@ internal object AgentRuntimeSupport {
         "reflection",
         "write_memory",
         "rewrite_memory",
-        "delete_memory"
+        "delete_memory",
+        "todo_write",
+        "todo_reconcile",
+        "todo_transition",
+        "tool_help"
     )
 
     fun containsTraversalSegments(path: String): Boolean {
@@ -698,6 +1229,54 @@ internal object AgentRuntimeSupport {
     fun resolveChatNumCtx(baseNumCtx: Int, overrideNumCtx: Int? = null): Int {
         return overrideNumCtx ?: baseNumCtx
     }
+
+    fun friendlyBackendModelLabel(rawLabel: String?): String? =
+        com.example.llamadroid.service.friendlyBackendModelLabel(rawLabel)
+
+    fun resolveAgentLiteRtContextTokens(
+        savedContextTokens: Int,
+        model: LiteRtModelEntity?,
+        fallbackContextTokens: Int = AGENT_LITERT_FALLBACK_CONTEXT_TOKENS,
+        minContextTokens: Int = AGENT_LITERT_MIN_CONTEXT_TOKENS,
+        safeMaxContextTokens: Int = AGENT_LITERT_SAFE_MAX_CONTEXT_TOKENS
+    ): Int =
+        com.example.llamadroid.service.resolveAgentLiteRtContextTokens(
+            savedContextTokens = savedContextTokens,
+            model = model,
+            fallbackContextTokens = fallbackContextTokens,
+            minContextTokens = minContextTokens,
+            safeMaxContextTokens = safeMaxContextTokens
+        )
+
+    fun resolveAgentLiteRtMaxOutputTokens(
+        savedMaxOutputTokens: Int,
+        resolvedContextTokens: Int,
+        model: LiteRtModelEntity?,
+        fallbackMaxOutputTokens: Int = AGENT_LITERT_FALLBACK_MAX_OUTPUT_TOKENS,
+        minMaxOutputTokens: Int = AGENT_LITERT_MIN_MAX_OUTPUT_TOKENS
+    ): Int =
+        com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens(
+            savedMaxOutputTokens = savedMaxOutputTokens,
+            resolvedContextTokens = resolvedContextTokens,
+            model = model,
+            fallbackMaxOutputTokens = fallbackMaxOutputTokens,
+            minMaxOutputTokens = minMaxOutputTokens
+        )
+
+    fun resolveAgentEffectiveMaxOutputTokens(
+        configuredMaxOutputTokens: Int,
+        contextTokens: Int,
+        estimatedPromptTokens: Int,
+        fallbackMaxOutputTokens: Int = AGENT_DEFAULT_MAX_OUTPUT_TOKENS,
+        templateSafetyReserveTokens: Int = AGENT_OUTPUT_TEMPLATE_SAFETY_RESERVE_TOKENS
+    ): Int =
+        com.example.llamadroid.service.resolveAgentEffectiveMaxOutputTokens(
+            configuredMaxOutputTokens = configuredMaxOutputTokens,
+            contextTokens = contextTokens,
+            estimatedPromptTokens = estimatedPromptTokens,
+            fallbackMaxOutputTokens = fallbackMaxOutputTokens,
+            templateSafetyReserveTokens = templateSafetyReserveTokens
+        )
 
     fun stripHtmlTags(html: String): String {
         return com.example.llamadroid.service.stripHtmlTags(html)
@@ -901,14 +1480,811 @@ internal object AgentRuntimeSupport {
         }
     }
 
+
+
+    data class FinishTaskResolution(
+        val canonicalSummary: String,
+        val result: AgentResult
+    )
+
+    data class AgentToolTrace(
+        val toolName: String,
+        val argumentsSummary: String,
+        val status: String,
+        val resultSummary: String
+    )
+
+    data class AgentWorkingStateLedger(
+        val role: String,
+        val objective: String,
+        val currentStep: String,
+        val nextStep: String,
+        val completionCondition: String,
+        val evidence: List<String> = emptyList(),
+        val recentTools: List<AgentToolTrace> = emptyList()
+    ) {
+        fun recordTool(
+            toolName: String,
+            arguments: Map<String, String>,
+            status: String,
+            rawResult: String,
+            nextHint: String? = null
+        ): AgentWorkingStateLedger {
+            val cleanTool = sanitizeAgentWorkingStateText(toolName, 80)
+                .ifBlank { "tool" }
+            val cleanStatus = sanitizeAgentWorkingStateText(status, 40)
+                .ifBlank { "UNKNOWN" }
+            val cleanResult = summarizeAgentWorkingStateResult(rawResult)
+            val trace = AgentToolTrace(
+                toolName = cleanTool,
+                argumentsSummary = summarizeAgentWorkingStateArguments(arguments),
+                status = cleanStatus,
+                resultSummary = cleanResult
+            )
+            val next = nextHint
+                ?.let { sanitizeAgentWorkingStateText(it, 320) }
+                ?.takeIf { it.isNotBlank() }
+                ?: if (cleanStatus.equals("OK", ignoreCase = true)) {
+                    "Use the new evidence to choose the smallest useful next action. " +
+                        "Call finish_task when the assigned objective is satisfied."
+                } else {
+                    "Correct the rejected or failed call, or choose a narrower diagnostic step. " +
+                        "Do not retry unchanged arguments."
+                }
+            val evidenceLine = "$cleanTool: $cleanResult"
+            return copy(
+                currentStep = "$cleanTool returned $cleanStatus.",
+                nextStep = next,
+                evidence = (evidence + evidenceLine)
+                    .filter { it.isNotBlank() }
+                    .distinct()
+                    .takeLast(6),
+                recentTools = (recentTools + trace).takeLast(8)
+            )
+        }
+
+        fun fallbackFinishSummary(maxChars: Int = 600): String {
+            val cleanObjective = sanitizeAgentWorkingStateText(objective, 260)
+                .ifBlank { "Complete the assigned bounded task." }
+            val evidenceSummary = evidence
+                .takeLast(3)
+                .joinToString("; ")
+                .let { sanitizeAgentWorkingStateText(it, 320) }
+            val raw = buildString {
+                append("Assigned objective: ")
+                append(cleanObjective)
+                if (evidenceSummary.isNotBlank()) {
+                    append(" Evidence: ")
+                    append(evidenceSummary)
+                }
+            }
+            return sanitizeAgentWorkingStateText(raw, maxChars)
+        }
+
+        fun toPromptBlock(maxChars: Int = 1_800): String {
+            val raw = buildString {
+                appendLine("AGENT WORKING STATE (runtime-managed; not chat and not hidden reasoning):")
+                appendLine("- role: ${sanitizeAgentWorkingStateText(role, 80)}")
+                appendLine("- objective: ${sanitizeAgentWorkingStateText(objective, 500)}")
+                appendLine("- current_step: ${sanitizeAgentWorkingStateText(currentStep, 320)}")
+                appendLine("- next_step: ${sanitizeAgentWorkingStateText(nextStep, 420)}")
+                appendLine("- completion_condition: ${sanitizeAgentWorkingStateText(completionCondition, 320)}")
+                if (evidence.isNotEmpty()) {
+                    appendLine("- bounded_evidence:")
+                    evidence.takeLast(6).forEach {
+                        appendLine("  - ${sanitizeAgentWorkingStateText(it, 320)}")
+                    }
+                }
+                if (recentTools.isNotEmpty()) {
+                    appendLine("- recent_tool_ledger:")
+                    recentTools.takeLast(8).forEach { trace ->
+                        append("  - ")
+                        append(trace.toolName)
+                        if (trace.argumentsSummary.isNotBlank()) {
+                            append('(')
+                            append(trace.argumentsSummary)
+                            append(')')
+                        }
+                        append(" -> ")
+                        append(trace.status)
+                        append(": ")
+                        appendLine(trace.resultSummary)
+                    }
+                }
+            }.trim()
+            if (raw.length <= maxChars) return raw
+            return raw.take((maxChars - 54).coerceAtLeast(1)).trimEnd() +
+                "\n... working state bounded by the runtime ..."
+        }
+    }
+
+    data class ScoutPathDecision(
+        val allowed: Boolean,
+        val code: String,
+        val message: String = "",
+        val recoveryHint: String = ""
+    )
+
+    private val CODEBASE_SCOUT_EXCLUDED_SEGMENTS = setOf(
+        "brain",
+        ".git",
+        ".gradle",
+        ".idea",
+        ".kotlin",
+        ".cache",
+        "node_modules",
+        "build",
+        "dist",
+        "out",
+        "target",
+        ".next",
+        ".nuxt",
+        "coverage",
+        "__pycache__",
+        ".venv",
+        "venv"
+    )
+
+    private const val CODEBASE_SCOUT_TOOLS_REFERENCE =
+        "brain/tools_reference.md"
+
+    fun createAgentWorkingState(
+        role: String,
+        objective: String?,
+        context: String? = null
+    ): AgentWorkingStateLedger {
+        val cleanRole = sanitizeAgentWorkingStateText(role, 80)
+            .ifBlank { "AGENT" }
+        val cleanObjective = sanitizeAgentWorkingStateText(
+            objective.orEmpty(),
+            700
+        ).ifBlank { "Complete the assigned bounded task." }
+        val contextHint = sanitizeAgentWorkingStateText(context.orEmpty(), 260)
+        return AgentWorkingStateLedger(
+            role = cleanRole,
+            objective = cleanObjective,
+            currentStep = if (contextHint.isBlank()) {
+                "Begin from the assigned objective and inspect only the evidence needed."
+            } else {
+                "Begin from the assigned objective. Bounded handoff context: $contextHint"
+            },
+            nextStep = "Choose the smallest available tool call that advances the objective.",
+            completionCondition =
+                "Return control with finish_task when this assigned task is complete, blocked, failed, cancelled, or interrupted."
+        )
+    }
+
+    private fun sanitizeAgentWorkingStateText(
+        raw: String,
+        maxChars: Int
+    ): String {
+        val cleaned = raw
+            .replace(
+                Regex("(?is)<think>.*?</think>"),
+                " "
+            )
+            .replace(
+                Regex("(?is)<think>.*$"),
+                " "
+            )
+            .replace("<think>", "", ignoreCase = true)
+            .replace("</think>", "", ignoreCase = true)
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        if (cleaned.length <= maxChars) return cleaned
+        return cleaned.take((maxChars - 3).coerceAtLeast(1)).trimEnd() + "..."
+    }
+
+    private fun summarizeAgentWorkingStateArguments(
+        arguments: Map<String, String>
+    ): String {
+        val hiddenKeys = setOf(
+            "content",
+            "new_content",
+            "patch",
+            "tools_json",
+            "candidate_summary"
+        )
+        return arguments
+            .toSortedMap()
+            .filterKeys { it !in hiddenKeys }
+            .entries
+            .take(4)
+            .joinToString(", ") { (key, value) ->
+                "$key=${sanitizeAgentWorkingStateText(value, 72)}"
+            }
+            .let { sanitizeAgentWorkingStateText(it, 320) }
+    }
+
+    private fun summarizeAgentWorkingStateResult(raw: String): String {
+        val stable = raw
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .filterNot { it.startsWith("important_output:") }
+            .take(4)
+            .joinToString(" ")
+        return sanitizeAgentWorkingStateText(
+            stable.ifBlank { raw },
+            360
+        ).ifBlank { "No textual result." }
+    }
+
+    /**
+     * Compatibility normalizer used only by the live tool-execution path.
+     *
+     * The low-level resolver remains strict and rejects contradictory status
+     * sources. The execution adapter treats the explicit top-level tool argument
+     * as authoritative for legacy JSON summaries, rewrites the embedded copy,
+     * and then delegates to the strict resolver. This preserves the original
+     * contract test while avoiding a recovery loop for real agent calls.
+     */
+    fun normalizeFinishTaskArgumentsForExecution(
+        arguments: Map<String, String>
+    ): Map<String, String> {
+        val explicitStatus = arguments["status"]
+            ?.trim()
+            .orEmpty()
+        val rawSummary = arguments["summary"]
+            ?.trim()
+            .orEmpty()
+        if (explicitStatus.isBlank() || !rawSummary.startsWith("{")) {
+            return arguments
+        }
+        val payload = runCatching { JSONObject(rawSummary) }
+            .getOrNull()
+            ?: return arguments
+        if (payload.optString("status", "").isBlank()) {
+            return arguments
+        }
+        payload.put("status", explicitStatus)
+        return arguments.toMutableMap().apply {
+            put("summary", payload.toString())
+        }
+    }
+
+    /**
+     * Resolves the public finish_task schema into one canonical terminal payload.
+     * No argument is required. Optional plain text/status and rich legacy JSON
+     * remain supported. Malformed rich text degrades to a bounded plain summary
+     * instead of forcing a global tool-reference recovery turn.
+     */
+    fun resolveFinishTaskPayload(
+        agentLabel: String,
+        arguments: Map<String, String>,
+        fallbackSummary: String? = null
+    ): FinishTaskResolution {
+        fun normalizeStatus(raw: String?): String {
+            val normalized = raw
+                ?.trim()
+                ?.uppercase(Locale.ROOT)
+                .orEmpty()
+                .ifBlank { "SUCCESS" }
+            return when (normalized) {
+                "SUCCESS", "COMPLETED", "PASSED", "PASS" -> "SUCCESS"
+                "FAILED", "FAIL", "ERROR" -> "FAILED"
+                "BLOCKED" -> "BLOCKED"
+                "CANCELLED", "CANCELED" -> "CANCELLED"
+                "INTERRUPTED" -> "INTERRUPTED"
+                else -> throw IllegalArgumentException(
+                    "finish_task.status must be SUCCESS, FAILED, BLOCKED, " +
+                        "CANCELLED, or INTERRUPTED."
+                )
+            }
+        }
+
+        val rawSummary = arguments["summary"]?.trim().orEmpty()
+        val fallbackDetails = sanitizeAgentWorkingStateText(
+            fallbackSummary.orEmpty(),
+            900
+        ).ifBlank {
+            "Assigned ${agentLabel.lowercase(Locale.ROOT).replace('_', ' ')} task."
+        }
+        val suppliedStatus = arguments["status"]
+            ?.takeIf { it.isNotBlank() }
+            ?.let(::normalizeStatus)
+        val flatRichArguments = arguments
+            .filterKeys { it !in setOf("summary", "status") }
+        var payload = if (rawSummary.startsWith("{")) {
+            runCatching { JSONObject(rawSummary) }
+                .getOrElse {
+                    JSONObject().put(
+                        "summary",
+                        sanitizeAgentWorkingStateText(rawSummary, 1_000)
+                    )
+                }
+        } else {
+            JSONObject().put(
+                "summary",
+                sanitizeAgentWorkingStateText(rawSummary, 1_000)
+            )
+        }
+        flatRichArguments.forEach { (key, value) ->
+            if (!payload.has(key)) {
+                payload.put(key, decodeFinishTaskArgumentValue(value))
+            }
+        }
+
+        val embeddedStatus = payload
+            .optString("status", "")
+            .takeIf { it.isNotBlank() }
+            ?.let(::normalizeStatus)
+        if (
+            suppliedStatus != null &&
+            embeddedStatus != null &&
+            suppliedStatus != embeddedStatus
+        ) {
+            throw IllegalArgumentException(
+                "finish_task.status conflicts with summary.status."
+            )
+        }
+        val status = suppliedStatus ?: embeddedStatus ?: "SUCCESS"
+        payload.put("status", status)
+
+        val role = agentLabel.trim().uppercase(Locale.ROOT)
+        if (role == "CODEBASE_SCOUT") {
+            payload = sanitizeCodebaseScoutReportPayload(payload)
+        }
+
+        val terminalFallback = when (status) {
+            "SUCCESS" -> "Completed the assigned task. $fallbackDetails"
+            "FAILED" -> "The assigned task failed before completion. $fallbackDetails"
+            "BLOCKED" -> "The assigned task is blocked. $fallbackDetails"
+            "CANCELLED" -> "The assigned task was cancelled before completion. $fallbackDetails"
+            "INTERRUPTED" -> "The assigned task was interrupted before completion. $fallbackDetails"
+            else -> fallbackDetails
+        }.let { sanitizeAgentWorkingStateText(it, 1_000) }
+        val summaryText = payload
+            .optString("summary", "")
+            .let { sanitizeAgentWorkingStateText(it, 1_000) }
+            .ifBlank { terminalFallback }
+        payload.put("summary", summaryText)
+
+        val hasRoleSpecificFields = when (role) {
+            "CODER" -> payload.has("changed_files")
+            "REVIEWER" -> payload.has("findings")
+            "EXECUTOR" ->
+                payload.has("commands_run") || payload.has("final_status")
+            "SUMMARIZER" -> payload.has("memory_files_updated")
+            "CODEBASE_SCOUT" -> listOf(
+                "relevant_files",
+                "architecture",
+                "dependencies",
+                "constraints",
+                "risks",
+                "open_questions",
+                "recommended_scope"
+            ).any(payload::has)
+            "RESEARCHER" -> listOf(
+                "research_question",
+                "sources",
+                "facts",
+                "conflicts",
+                "uncertainties",
+                "recommendations"
+            ).any(payload::has)
+            "PLANNER" ->
+                payload.has("plan_markdown") ||
+                    payload.has("structured_plan") ||
+                    payload.has("structured_plan_json")
+            else -> false
+        }
+
+        val result = if (hasRoleSpecificFields) {
+            runCatching { parseAgentResult(role, payload.toString()) }
+                .getOrElse {
+                    AgentResult.GenericResult(status, summaryText)
+                }
+        } else {
+            AgentResult.GenericResult(status, summaryText)
+        }
+
+        return FinishTaskResolution(
+            canonicalSummary = payload.toString(),
+            result = result
+        )
+    }
+
+    fun finishTaskReflectionCandidate(
+        arguments: Map<String, String>,
+        fallbackSummary: String? = null,
+        maxChars: Int = 800
+    ): String {
+        val raw = arguments["summary"]?.trim().orEmpty()
+        val extracted = if (raw.startsWith("{")) {
+            runCatching { JSONObject(raw).optString("summary", "") }
+                .getOrDefault(raw)
+        } else {
+            raw
+        }
+        return sanitizeAgentWorkingStateText(extracted, maxChars)
+            .ifBlank {
+                sanitizeAgentWorkingStateText(
+                    fallbackSummary.orEmpty(),
+                    maxChars
+                )
+            }
+            .ifBlank { "Complete the assigned bounded task." }
+    }
+
+    private fun decodeFinishTaskArgumentValue(raw: String): Any {
+        val value = raw.trim()
+        if (value.startsWith("[") && value.endsWith("]")) {
+            return runCatching { JSONArray(value) }.getOrElse { raw }
+        }
+        if (value.startsWith("{") && value.endsWith("}")) {
+            return runCatching { JSONObject(value) }.getOrElse { raw }
+        }
+        return when (value.lowercase(Locale.ROOT)) {
+            "true" -> true
+            "false" -> false
+            "null" -> JSONObject.NULL
+            else -> value.toLongOrNull()
+                ?: value.toDoubleOrNull()
+                ?: raw
+        }
+    }
+
+    fun normalizeProjectRelativePath(path: String): String =
+        path
+            .trim()
+            .replace('\\', '/')
+            .replace(Regex("/+"), "/")
+            .removePrefix("./")
+            .trim('/')
+
+    fun joinProjectRelativePath(parent: String, child: String): String {
+        val left = normalizeProjectRelativePath(parent)
+        val right = normalizeProjectRelativePath(child)
+        return listOf(left, right)
+            .filter { it.isNotBlank() }
+            .joinToString("/")
+    }
+
+    fun isCodebaseScoutExcludedPath(path: String): Boolean {
+        val normalized = normalizeProjectRelativePath(path)
+        if (normalized.isBlank()) return false
+        return normalized
+            .split('/')
+            .any { it.lowercase(Locale.ROOT) in CODEBASE_SCOUT_EXCLUDED_SEGMENTS }
+    }
+
+    fun evaluateCodebaseScoutPath(
+        toolName: String,
+        path: String
+    ): ScoutPathDecision {
+        val normalizedTool = toolName.trim().lowercase(Locale.ROOT)
+        val normalizedPath = normalizeProjectRelativePath(path)
+        val exactReferenceRead = normalizedTool in setOf(
+            "read_file",
+            "read_file_lines",
+            "file_line_count"
+        ) && normalizedPath.equals(
+            CODEBASE_SCOUT_TOOLS_REFERENCE,
+            ignoreCase = true
+        )
+        if (exactReferenceRead) {
+            return ScoutPathDecision(true, "SCOUT_EXPLICIT_TOOL_REFERENCE")
+        }
+        if (!isCodebaseScoutExcludedPath(normalizedPath)) {
+            return ScoutPathDecision(true, "SCOUT_SOURCE_PATH_ALLOWED")
+        }
+        return ScoutPathDecision(
+            allowed = false,
+            code = "SCOUT_RUNTIME_OR_GENERATED_PATH_EXCLUDED",
+            message =
+                "CODEBASE_SCOUT may not inspect `$normalizedPath` as project source. " +
+                    "brain contains runtime metadata and generated/build directories are excluded from codebase discovery.",
+            recoveryHint =
+                "Inspect a source directory outside brain/generated output. " +
+                    "For syntax help use tool_help; an exact read of brain/tools_reference.md remains allowed."
+        )
+    }
+
+    fun projectPathMatchesSearchScope(
+        path: String,
+        directory: String?,
+        filePattern: String?
+    ): Boolean {
+        val normalizedPath = normalizeProjectRelativePath(path)
+        val normalizedDirectory = normalizeProjectRelativePath(
+            directory.orEmpty().ifBlank { "." }
+        )
+        val inDirectory = normalizedDirectory.isBlank() ||
+            normalizedPath == normalizedDirectory ||
+            normalizedPath.startsWith("$normalizedDirectory/")
+        if (!inDirectory) return false
+        val pattern = filePattern
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && it != "*" && it != "**/*" }
+            ?: return true
+        return simpleGlobMatches(pattern, normalizedPath) ||
+            simpleGlobMatches(pattern, normalizedPath.substringAfterLast('/'))
+    }
+
+    private fun simpleGlobMatches(pattern: String, value: String): Boolean {
+        val normalizedPattern = pattern.replace('\\', '/')
+        val regex = buildString {
+            append('^')
+            var index = 0
+            while (index < normalizedPattern.length) {
+                val ch = normalizedPattern[index]
+                when {
+                    ch == '*' && normalizedPattern.getOrNull(index + 1) == '*' -> {
+                        append(".*")
+                        index += 2
+                    }
+                    ch == '*' -> {
+                        append("[^/]*")
+                        index += 1
+                    }
+                    ch == '?' -> {
+                        append("[^/]")
+                        index += 1
+                    }
+                    else -> {
+                        append(Regex.escape(ch.toString()))
+                        index += 1
+                    }
+                }
+            }
+            append('$')
+        }
+        return Regex(regex, RegexOption.IGNORE_CASE).matches(value)
+    }
+
+    fun formatDirectoryListing(
+        lines: List<String>,
+        excludedNotice: String? = null
+    ): String = buildString {
+        if (lines.isNotEmpty()) {
+            append(lines.joinToString("\n"))
+            append('\n')
+        }
+        excludedNotice
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?.let {
+                append(it)
+                append('\n')
+            }
+        append("there is nothing else in here")
+    }
+
+    fun buildBoundedToolRepairCard(
+        suspectedToolName: String?,
+        reason: String,
+        description: String? = null,
+        requiredParams: List<String> = emptyList(),
+        parameters: Map<String, String> = emptyMap(),
+        availableToolNames: List<String> = emptyList(),
+        maxChars: Int = 1_800
+    ): String {
+        val toolName = suspectedToolName
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        val raw = buildString {
+            appendLine("TOOL CALL REPAIR:")
+            appendLine("- error: ${sanitizeAgentWorkingStateText(reason, 420)}")
+            if (toolName == null) {
+                appendLine(
+                    "- available_tools: " +
+                        availableToolNames.sorted().joinToString(", ").take(900)
+                )
+                appendLine("- next: emit one real structured call using only an available tool.")
+            } else if (description == null) {
+                appendLine("- unavailable_tool: $toolName")
+                appendLine(
+                    "- available_tools: " +
+                        availableToolNames.sorted().joinToString(", ").take(900)
+                )
+                appendLine("- next: choose an available tool; do not retry the unavailable name.")
+            } else {
+                appendLine("- tool: $toolName")
+                appendLine("- purpose: ${sanitizeAgentWorkingStateText(description, 360)}")
+                appendLine(
+                    "- required: " +
+                        requiredParams.joinToString(", ").ifBlank { "none" }
+                )
+                val optional = parameters.keys.filterNot { it in requiredParams }
+                appendLine("- optional: ${optional.joinToString(", ").ifBlank { "none" }}")
+                parameters.entries.take(8).forEach { (name, detail) ->
+                    appendLine("  - $name: ${sanitizeAgentWorkingStateText(detail, 180)}")
+                }
+                appendLine("- retry_example: ${buildMinimalToolCallExample(toolName, requiredParams)}")
+                appendLine("- next: retry at most once with corrected arguments; do not load a global tool reference.")
+            }
+        }.trim()
+        if (raw.length <= maxChars) return raw
+        return raw.take((maxChars - 35).coerceAtLeast(1)).trimEnd() +
+            "\n... repair card bounded ..."
+    }
+
+    fun buildToolHelpText(
+        toolName: String,
+        description: String,
+        requiredParams: List<String>,
+        parameters: Map<String, String>
+    ): String = buildBoundedToolRepairCard(
+        suspectedToolName = toolName,
+        reason = "Current schema requested by the active agent.",
+        description = description,
+        requiredParams = requiredParams,
+        parameters = parameters,
+        availableToolNames = listOf(toolName)
+    )
+
+    private fun buildMinimalToolCallExample(
+        toolName: String,
+        requiredParams: List<String>
+    ): String {
+        if (toolName == "finish_task") {
+            return "{\"name\":\"finish_task\",\"arguments\":{}}"
+        }
+        val args = requiredParams.joinToString(",") { parameter ->
+            "\"$parameter\":\"<value>\""
+        }
+        return "{\"name\":\"$toolName\",\"arguments\":{$args}}"
+    }
+
+    fun stableAgentCacheLane(
+        agentRole: String,
+        customAgentName: String? = null
+    ): String = if (
+        customAgentName.isNullOrBlank() &&
+        agentRole.equals("ORCHESTRATOR", ignoreCase = true)
+    ) {
+        "orchestrator"
+    } else {
+        "specialist"
+    }
+
+    fun compactSpecialistReportReceipt(
+        reportId: String,
+        role: String,
+        status: String,
+        summary: String,
+        todoId: String? = null,
+        todoStatus: String? = null,
+        nextAction: String,
+        maxChars: Int = 900
+    ): String {
+        val raw = buildString {
+            append(role)
+            append(" — ")
+            appendLine(status)
+            appendLine(sanitizeAgentWorkingStateText(summary, 360))
+            append("report_id: ")
+            appendLine(reportId)
+            todoId?.takeIf { it.isNotBlank() }?.let {
+                append("todo_id: ")
+                appendLine(it)
+            }
+            todoStatus?.takeIf { it.isNotBlank() }?.let {
+                append("todo_status: ")
+                appendLine(it)
+            }
+            append("next_action: ")
+            appendLine(sanitizeAgentWorkingStateText(nextAction, 260))
+            append("details: agent_report_read(report_id=\"")
+            append(reportId)
+            append("\")")
+        }.trim()
+        if (raw.length <= maxChars) return raw
+        return raw.take((maxChars - 25).coerceAtLeast(1)).trimEnd() +
+            "\n... receipt bounded ..."
+    }
+
+    fun sanitizeCodebaseScoutReportPayload(
+        original: JSONObject
+    ): JSONObject {
+        val payload = JSONObject(original.toString())
+        val relevantFiles = payload
+            .optJSONArray("relevant_files")
+            .toStringList()
+            .filterNot(::isCodebaseScoutExcludedPath)
+            .distinct()
+            .take(20)
+        payload.put("relevant_files", JSONArray(relevantFiles))
+
+        val existingSummary = payload.optString("summary", "")
+        if (isCodebaseScoutMetadataClaim(existingSummary)) {
+            payload.put(
+                "summary",
+                if (relevantFiles.isEmpty()) {
+                    "No implementation files were found outside excluded runtime metadata and generated directories."
+                } else {
+                    "Mapped project implementation files outside excluded runtime metadata and generated directories."
+                }
+            )
+        }
+
+        val textArrays = listOf(
+            "architecture",
+            "dependencies",
+            "constraints",
+            "risks",
+            "open_questions",
+            "recommended_scope"
+        )
+        textArrays.forEach { key ->
+            val filtered = payload
+                .optJSONArray(key)
+                .toStringList()
+                .filterNot(::isCodebaseScoutMetadataClaim)
+                .distinct()
+                .take(20)
+            if (payload.has(key) || filtered.isNotEmpty()) {
+                payload.put(key, JSONArray(filtered))
+            }
+        }
+
+        if (
+            payload.optString("status", "SUCCESS")
+                .equals("SUCCESS", ignoreCase = true) &&
+            relevantFiles.isEmpty()
+        ) {
+            val greenfield =
+                "No implementation files were found outside excluded runtime metadata and generated directories."
+            payload.put("summary", greenfield)
+            val architecture = payload
+                .optJSONArray("architecture")
+                .toStringList()
+                .ifEmpty {
+                    listOf(
+                        "The implementation appears to be greenfield; no existing source architecture was found."
+                    )
+                }
+            payload.put("architecture", JSONArray(architecture))
+        }
+        return payload
+    }
+
+    private fun isCodebaseScoutMetadataClaim(value: String): Boolean {
+        val lower = value.lowercase(Locale.ROOT)
+        val mentionsBrain = lower.contains("brain/") ||
+            lower.contains("brain directory") ||
+            lower.contains("'brain'") ||
+            lower.contains("`brain`")
+        if (!mentionsBrain) return false
+        return listOf(
+            "implementation",
+            "source",
+            "architecture",
+            "repository",
+            "project consists",
+            "project structure",
+            "existing code"
+        ).any(lower::contains)
+    }
+
     fun parseAgentResult(agentLabel: String, summary: String): AgentResult {
         val trimmed = summary.trim()
         if (!trimmed.startsWith("{")) {
-            return AgentResult.GenericResult(status = "SUCCESS", summary = trimmed)
+            return AgentResult.GenericResult(
+                status = "FAILED",
+                summary = trimmed.ifBlank {
+                    "Specialist ended without a structured finish_task result."
+                }
+            )
         }
 
         val json = JSONObject(trimmed)
-        val status = json.optString("status", "SUCCESS").ifBlank { "SUCCESS" }
+        val status = json.optString("status", "SUCCESS")
+            .ifBlank { "SUCCESS" }
+            .uppercase()
+        require(
+            status in setOf(
+                "SUCCESS",
+                "FAILED",
+                "BLOCKED",
+                "CANCELLED",
+                "INTERRUPTED"
+            )
+        ) {
+            "Agent result status must be SUCCESS, FAILED, BLOCKED, " +
+                "CANCELLED, or INTERRUPTED."
+        }
         return when (agentLabel.uppercase()) {
             "CODER" -> AgentResult.CoderResult(
                 status = status,
@@ -917,7 +2293,11 @@ internal object AgentRuntimeSupport {
                 verificationReads = json.optJSONArray("verification_reads").toStringList(),
                 remainingRisks = json.optJSONArray("remaining_risks").toStringList()
             ).also {
-                require(it.changedFiles.isNotEmpty()) { "CoderResult.changed_files must not be empty." }
+                if (it.status == "SUCCESS") {
+                    require(it.changedFiles.isNotEmpty()) {
+                        "CoderResult.changed_files must not be empty on success."
+                    }
+                }
             }
             "REVIEWER" -> AgentResult.ReviewerResult(
                 status = status,
@@ -938,7 +2318,42 @@ internal object AgentRuntimeSupport {
                 reasonPerFile = json.optJSONObject("reason_per_file").toStringMap(),
                 carryForwardNotes = json.optJSONArray("carry_forward_notes").toStringList()
             ).also {
-                require(it.memoryFilesUpdated.isNotEmpty()) { "SummarizerResult.memory_files_updated must not be empty." }
+                if (it.status == "SUCCESS") {
+                    require(it.memoryFilesUpdated.isNotEmpty()) {
+                        "SummarizerResult.memory_files_updated must not be empty on success."
+                    }
+                }
+            }
+            "CODEBASE_SCOUT" -> AgentResult.ScoutResult(
+                status = status,
+                relevantFiles = json.optJSONArray("relevant_files").toStringList(),
+                architecture = json.optJSONArray("architecture").toStringList(),
+                dependencies = json.optJSONArray("dependencies").toStringList(),
+                constraints = json.optJSONArray("constraints").toStringList(),
+                risks = json.optJSONArray("risks").toStringList(),
+                openQuestions = json.optJSONArray("open_questions").toStringList(),
+                recommendedScope = json.optJSONArray("recommended_scope").toStringList()
+            )
+            "RESEARCHER" -> AgentResult.ResearcherResult(
+                status = status,
+                researchQuestion = json.optString("research_question").ifBlank { "Unspecified research question" },
+                sources = json.optJSONArray("sources").toStringList(),
+                facts = json.optJSONArray("facts").toStringList(),
+                conflicts = json.optJSONArray("conflicts").toStringList(),
+                uncertainties = json.optJSONArray("uncertainties").toStringList(),
+                recommendations = json.optJSONArray("recommendations").toStringList()
+            )
+            "PLANNER" -> AgentResult.PlannerResult(
+                status = status,
+                planMarkdown = json.optString("plan_markdown"),
+                structuredPlanJson = json.optJSONObject("structured_plan")?.toString()
+                    ?: json.optString("structured_plan_json"),
+                openQuestions = json.optJSONArray("open_questions").toStringList(),
+                recommendedNextSteps = json.optJSONArray("recommended_next_steps").toStringList()
+            ).also {
+                require(it.planMarkdown.isNotBlank() || it.structuredPlanJson.isNotBlank()) {
+                    "PlannerResult requires plan_markdown or structured_plan."
+                }
             }
             else -> AgentResult.GenericResult(
                 status = status,

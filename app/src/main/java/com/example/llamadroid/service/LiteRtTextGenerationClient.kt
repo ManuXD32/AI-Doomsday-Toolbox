@@ -17,7 +17,14 @@ import kotlinx.coroutines.withContext
 data class LiteRtTextGenerationResult(
     val output: String,
     val rawOutput: String,
-    val stats: LiteRtLmChatStats
+    val stats: LiteRtLmChatStats,
+    val runtimeFallbacks: Int = 0,
+    val thinking: String = ""
+)
+
+private data class LiteRtSafeStreamResult(
+    val stats: LiteRtLmChatStats,
+    val runtimeFallbacks: Int
 )
 
 class LiteRtTextGenerationClient(private val context: Context) {
@@ -35,6 +42,7 @@ class LiteRtTextGenerationClient(private val context: Context) {
         mtpEnabled: Boolean,
         userImagePath: String? = null,
         userAudioPath: String? = null,
+        onStatus: suspend (String) -> Unit = {},
         onChunk: suspend (String) -> Unit = {},
         onThinkingChunk: suspend (String) -> Unit = {}
     ): LiteRtTextGenerationResult = withContext(Dispatchers.IO) {
@@ -69,10 +77,10 @@ class LiteRtTextGenerationClient(private val context: Context) {
                 userAudioPath = userAudioPath
             )
         )
-        val stats = streamSafely(
+        val safeResult = streamSafely(
             model = model,
             request = request,
-            onStatus = {},
+            onStatus = onStatus,
             onChunk = { chunk ->
                 output.append(chunk)
                 onChunk(chunk)
@@ -87,10 +95,12 @@ class LiteRtTextGenerationClient(private val context: Context) {
         LiteRtTextGenerationResult(
             output = cleaned,
             rawOutput = raw,
-            stats = stats.copy(
-                completionTokens = stats.completionTokens.takeIf { it > 0 }
+            stats = safeResult.stats.copy(
+                completionTokens = safeResult.stats.completionTokens.takeIf { it > 0 }
                     ?: estimateLiteRtCompletionTokens(cleaned)
-            )
+            ),
+            runtimeFallbacks = safeResult.runtimeFallbacks,
+            thinking = thinking.toString()
         )
     }
 
@@ -100,12 +110,21 @@ class LiteRtTextGenerationClient(private val context: Context) {
         onStatus: suspend (String) -> Unit,
         onChunk: suspend (String) -> Unit,
         onThinkingChunk: suspend (String) -> Unit
-    ): LiteRtLmChatStats {
+    ): LiteRtSafeStreamResult {
         val backendMode = normalizeLiteRtBackend(request.backendMode)
+        val workerClient = LiteRtLmWorkerClient(context)
 
-        suspend fun runGpuWorker(): LiteRtLmChatStats =
-            LiteRtLmWorkerClient(context).streamGpuChat(
-                request = request.copy(backendMode = LITERT_BACKEND_GPU),
+        suspend fun runGpuWorker(gpuRequest: LiteRtLmChatRequest = request): LiteRtLmChatStats =
+            workerClient.streamGpuChat(
+                request = gpuRequest.copy(backendMode = LITERT_BACKEND_GPU),
+                onStatus = onStatus,
+                onChunk = onChunk,
+                onThinkingChunk = onThinkingChunk
+            )
+
+        suspend fun runCpuWorker(cpuRequest: LiteRtLmChatRequest = request): LiteRtLmChatStats =
+            workerClient.streamCpuChat(
+                request = cpuRequest.copy(backendMode = LITERT_BACKEND_CPU),
                 onStatus = onStatus,
                 onChunk = onChunk,
                 onThinkingChunk = onThinkingChunk
@@ -113,7 +132,7 @@ class LiteRtTextGenerationClient(private val context: Context) {
 
         if (backendMode == LITERT_BACKEND_GPU) {
             return try {
-                runGpuWorker()
+                LiteRtSafeStreamResult(runGpuWorker(), 0)
             } catch (error: Throwable) {
                 val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.name
                 LiteRtLmAcceleratorHealth.recordGpuCrash(context, model, detail)
@@ -124,23 +143,64 @@ class LiteRtTextGenerationClient(private val context: Context) {
             }
         }
 
+        if (backendMode == LITERT_BACKEND_CPU) {
+            return try {
+                LiteRtSafeStreamResult(runCpuWorker(), 0)
+            } catch (error: Throwable) {
+                val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.name
+                throw IllegalStateException(
+                    context.getString(R.string.litert_error_explicit_backend_failed, "CPU", detail),
+                    error
+                )
+            }
+        }
+
         if (backendMode == LITERT_BACKEND_AUTO && model.supportsGpu && model.isLikelyLiteRtGpuPackage()) {
             if (!LiteRtLmAcceleratorHealth.isGpuQuarantined(context, model)) {
                 try {
-                    return runGpuWorker()
+                    return LiteRtSafeStreamResult(runGpuWorker(), 0)
                 } catch (error: Throwable) {
-                    val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.name
-                    LiteRtLmAcceleratorHealth.recordGpuCrash(context, model, detail)
-                    DebugLog.log("LiteRtTextGenerationClient: GPU worker failed, falling back to CPU: $detail")
+                    val mtpEnabled = (request.params[LITERT_PARAM_MTP_ENABLED] as? Boolean) ?: false
+                    if (mtpEnabled) {
+                        DebugLog.log(
+                            "LiteRtTextGenerationClient: GPU/MTP generation failed; retrying the same GPU backend with MTP disabled"
+                        )
+                        try {
+                            return LiteRtSafeStreamResult(
+                                stats = runGpuWorker(
+                                    request.copy(
+                                        params = request.params + (LITERT_PARAM_MTP_ENABLED to false)
+                                    )
+                                ),
+                                runtimeFallbacks = 1
+                            )
+                        } catch (retryError: Throwable) {
+                            val detail = retryError.message?.takeIf { it.isNotBlank() }
+                                ?: retryError.javaClass.name
+                            LiteRtLmAcceleratorHealth.recordGpuCrash(context, model, detail)
+                            DebugLog.log(
+                                "LiteRtTextGenerationClient: GPU retry without MTP failed; considering CPU: $detail"
+                            )
+                        }
+                    } else {
+                        val detail = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.name
+                        LiteRtLmAcceleratorHealth.recordGpuCrash(context, model, detail)
+                        DebugLog.log("LiteRtTextGenerationClient: GPU worker failed; considering CPU: $detail")
+                    }
                 }
             }
         }
 
-        return LiteRtLmChatService(context).streamChat(
-            request = request.copy(backendMode = LITERT_BACKEND_CPU),
-            onStatus = onStatus,
-            onChunk = onChunk,
-            onThinkingChunk = onThinkingChunk
+        check(model.supportsCpu) {
+            context.getString(
+                R.string.litert_error_explicit_backend_failed,
+                "CPU",
+                context.getString(R.string.litert_error_cpu_unsupported_package)
+            )
+        }
+        return LiteRtSafeStreamResult(
+            stats = runCpuWorker(),
+            runtimeFallbacks = if (backendMode == LITERT_BACKEND_AUTO && model.supportsGpu) 1 else 0
         )
     }
 }

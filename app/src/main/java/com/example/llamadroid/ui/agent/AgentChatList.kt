@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -29,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.llamadroid.service.AgentService
@@ -81,6 +83,234 @@ private fun formatAgentMessageTimestamp(timestamp: Long, locale: Locale = Locale
     return SimpleDateFormat(pattern, locale).format(Date(timestamp))
 }
 
+private fun formatToolDuration(durationMs: Long): String {
+    val safeDurationMs = durationMs.coerceAtLeast(0L)
+    return when {
+        safeDurationMs < 1_000L -> "${safeDurationMs}ms"
+        safeDurationMs < 60_000L -> "%.1fs".format(Locale.US, safeDurationMs / 1_000.0)
+        else -> {
+            val minutes = safeDurationMs / 60_000L
+            val seconds = (safeDurationMs % 60_000L) / 1_000L
+            "${minutes}m ${seconds}s"
+        }
+    }
+}
+
+private sealed class AgentChatListItem {
+    abstract val key: String
+
+    data class Message(
+        val message: AgentService.Companion.ChatMessage
+    ) : AgentChatListItem() {
+        override val key: String = message.id
+    }
+
+    data class ToolGroup(
+        val messages: List<AgentService.Companion.ChatMessage>,
+        val resultsByToolCallId: Map<String, AgentService.Companion.ChatMessage>
+    ) : AgentChatListItem() {
+        override val key: String = "tool-group-${messages.firstOrNull()?.id.orEmpty()}-${messages.lastOrNull()?.id.orEmpty()}"
+    }
+
+    /** A delegation is a first-class timeline event, never an incidental tool row. */
+    data class Delegation(
+        val message: AgentService.Companion.ChatMessage?,
+        val result: AgentService.Companion.ChatMessage?,
+        val info: AgentDelegationInfo?
+    ) : AgentChatListItem() {
+        override val key: String = "delegation-${info?.invocationId ?: message?.id.orEmpty()}"
+    }
+}
+
+/** Durable invocation metadata used by the parent timeline's delegation card. */
+data class AgentDelegationInfo(
+    val invocationId: String,
+    val parentToolCallId: String,
+    val displayName: String,
+    val status: String,
+    val task: String,
+    val returnSummary: String? = null,
+    val startedAt: Long = 0L
+)
+
+private fun resolvedToolName(message: AgentService.Companion.ChatMessage): String? =
+    message.toolName ?: message.pendingToolCall?.name
+
+private fun isGroupableToolCall(message: AgentService.Companion.ChatMessage): Boolean {
+    return message.role == "assistant" &&
+        resolvedToolName(message) != null &&
+        !message.needsApproval &&
+        !message.isPlan
+}
+
+private fun toolCallAgentKey(message: AgentService.Companion.ChatMessage): String {
+    return message.customAgentName
+        ?.takeIf { it.isNotBlank() }
+        ?.let { "custom:$it" }
+        ?: message.agentRole
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "role:$it" }
+        ?: "role:unknown"
+}
+
+private fun buildAgentChatListItems(
+    visibleMessages: List<AgentService.Companion.ChatMessage>,
+    allMessages: List<AgentService.Companion.ChatMessage>,
+    delegationsByParentToolCallId: Map<String, AgentDelegationInfo> = emptyMap()
+): List<AgentChatListItem> {
+    val resultsByToolCallId = allMessages
+        .asSequence()
+        .filter { it.role == "tool" && it.toolCallId != null }
+        .associateBy { it.toolCallId.orEmpty() }
+
+    val items = mutableListOf<AgentChatListItem>()
+    val visibleDelegationToolCallIds = visibleMessages
+        .asSequence()
+        .filter { it.role == "assistant" && resolvedToolName(it) == "call_agent" }
+        .mapNotNull { it.toolCallId ?: it.pendingToolCall?.id }
+        .toSet()
+    val unmatchedDelegations = delegationsByParentToolCallId.values
+        .filter { it.parentToolCallId !in visibleDelegationToolCallIds }
+        .sortedBy { it.startedAt }
+    var unmatchedIndex = 0
+
+    fun appendUnmatchedDelegations(upToTimestamp: Long = Long.MAX_VALUE) {
+        while (
+            unmatchedIndex < unmatchedDelegations.size &&
+            unmatchedDelegations[unmatchedIndex].startedAt <= upToTimestamp
+        ) {
+            val info = unmatchedDelegations[unmatchedIndex++]
+            items += AgentChatListItem.Delegation(
+                message = null,
+                result = resultsByToolCallId[info.parentToolCallId],
+                info = info
+            )
+        }
+    }
+
+    var index = 0
+    while (index < visibleMessages.size) {
+        val message = visibleMessages[index]
+        appendUnmatchedDelegations(message.timestamp)
+        // Keep delegation separate even when it is next to other tool calls. The
+        // parent handoff is meaningful workflow, not merely tool activity.
+        if (message.role == "assistant" && resolvedToolName(message) == "call_agent") {
+            val toolCallId = message.toolCallId ?: message.pendingToolCall?.id
+            items += AgentChatListItem.Delegation(
+                message = message,
+                result = toolCallId?.let(resultsByToolCallId::get),
+                info = toolCallId?.let(delegationsByParentToolCallId::get)
+            )
+            index += 1
+            continue
+        }
+        if (!isGroupableToolCall(message)) {
+            items += AgentChatListItem.Message(message)
+            index += 1
+            continue
+        }
+
+        val group = mutableListOf(message)
+        index += 1
+        val groupAgentKey = toolCallAgentKey(message)
+        while (
+            index < visibleMessages.size &&
+            isGroupableToolCall(visibleMessages[index]) &&
+            toolCallAgentKey(visibleMessages[index]) == groupAgentKey
+        ) {
+            group += visibleMessages[index]
+            index += 1
+        }
+
+        // A single call is still a tool sequence. Keeping it in the same compact
+        // component makes the uncluttered presentation consistent.
+        items += AgentChatListItem.ToolGroup(
+            messages = group,
+            resultsByToolCallId = resultsByToolCallId
+        )
+    }
+    appendUnmatchedDelegations()
+    return items
+}
+
+internal fun buildAgentChatRenderProjection(
+    messages: List<AgentService.Companion.ChatMessage>,
+    maxMessages: Int = AGENT_CHAT_RENDER_MESSAGE_LIMIT
+): List<AgentService.Companion.ChatMessage> {
+    val bounded = if (messages.size <= maxMessages) messages else messages.takeLast(maxMessages)
+    return bounded.map { message ->
+        if (message.role == "user" && AgentService.isQueuedGuidanceEnvelope(message.content)) {
+            message.copy(
+                content = AgentService.visibleQueuedGuidanceContent(message.content),
+                guidanceDeliveryState = message.guidanceDeliveryState ?: "DELIVERED"
+            )
+        } else {
+            message
+        }
+    }
+}
+
+/** Shared, persistence-safe timeline filtering for the root and invocation chats. */
+internal fun buildVisibleAgentTimelineMessages(
+    renderMessages: List<AgentService.Companion.ChatMessage>,
+    showAllOutput: Boolean
+): List<AgentService.Companion.ChatMessage> {
+    val assistantTrackedToolCalls = renderMessages
+        .asSequence()
+        .filter { it.role == "assistant" && it.toolCallId != null && it.toolName != null }
+        .mapNotNull { it.toolCallId }
+        .toSet()
+
+    return renderMessages.filter { msg ->
+        when {
+            // Tool results are presented inside their assistant tool row. Showing
+            // the database transport message as a second chat bubble breaks
+            // consecutive grouping and duplicates large output.
+            msg.role == "tool" && msg.toolCallId != null &&
+                assistantTrackedToolCalls.contains(msg.toolCallId) -> false
+            // A request placeholder is persisted before a model produces text.
+            // It is useful only while the live stream owns it; old placeholders
+            // otherwise become empty ASSISTANT cards in restored timelines.
+            msg.role == "assistant" && msg.content.isBlank() && msg.toolName == null &&
+                msg.thinking.isNullOrBlank() && !msg.isStreaming -> false
+            showAllOutput -> true
+            msg.role == "system" ->
+                msg.content.contains("ready") || AgentService.isTransientCompactionStatusMessageForUi(msg)
+            isBackgroundCommandReminder(msg.toolName, msg.content, msg.toolOutput) -> false
+            else -> true
+        }
+    }
+}
+
+/**
+ * Reconciles durable invocation history with the coordinator's live projection.
+ * A live row with the same stable message id replaces its Room counterpart so a
+ * streaming placeholder is never duplicated when an incremental checkpoint lands.
+ */
+internal fun mergeInvocationTimelineMessages(
+    persistedMessages: List<AgentService.Companion.ChatMessage>,
+    liveMessages: List<AgentService.Companion.ChatMessage>,
+    invocationId: String
+): List<AgentService.Companion.ChatMessage> {
+    val mergedById = LinkedHashMap<String, AgentService.Companion.ChatMessage>()
+    persistedMessages
+        .asSequence()
+        .filter { it.invocationId == invocationId }
+        .forEach { mergedById[it.id] = it }
+    liveMessages
+        .asSequence()
+        .filter { it.invocationId == invocationId }
+        .forEach { mergedById[it.id] = it }
+    return mergedById.values.sortedWith(
+        compareBy<AgentService.Companion.ChatMessage> { it.sequenceNumber }
+            .thenBy { it.timestamp }
+            .thenBy { it.id }
+    )
+}
+
+private fun boundedPreview(raw: String, maxChars: Int): String =
+    if (raw.length <= maxChars) raw else raw.take(maxChars) + "\n…"
+
 @Composable
 fun AgentChatList(
     messages: List<AgentService.Companion.ChatMessage>,
@@ -96,29 +326,22 @@ fun AgentChatList(
     onEditingTextChange: (String) -> Unit,
     onSaveEdit: () -> Unit,
     onCancelEdit: () -> Unit,
+    resolvingPlanMessageId: String? = null,
     onToggleOutput: (String) -> Unit, // New callback
     onKnowledgeLinkClick: (String) -> Boolean = { false },
+    delegationsByParentToolCallId: Map<String, AgentDelegationInfo> = emptyMap(),
+    onOpenDelegation: (AgentDelegationInfo) -> Unit = {},
+    readOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    val visibleMessages = remember(messages, showAllOutput) {
-        if (showAllOutput) {
-            messages
-        } else {
-            val assistantTrackedToolCalls = messages
-                .asSequence()
-                .filter { it.role == "assistant" && it.toolCallId != null && it.toolName != null }
-                .mapNotNull { it.toolCallId }
-                .toSet()
-
-            messages.filter { msg ->
-                when {
-                    msg.role == "system" -> msg.content.contains("ready") || AgentService.isTransientCompactionStatusMessageForUi(msg)
-                    !showAllOutput && isBackgroundCommandReminder(msg.toolName, msg.content, msg.toolOutput) -> false
-                    msg.role == "tool" && msg.toolCallId != null && assistantTrackedToolCalls.contains(msg.toolCallId) -> false
-                    else -> true
-                }
-            }
-        }
+    val renderMessages = remember(messages) {
+        buildAgentChatRenderProjection(messages)
+    }
+    val visibleMessages = remember(renderMessages, showAllOutput) {
+        buildVisibleAgentTimelineMessages(renderMessages, showAllOutput)
+    }
+    val visibleItems = remember(visibleMessages, renderMessages, delegationsByParentToolCallId) {
+        buildAgentChatListItems(visibleMessages, renderMessages, delegationsByParentToolCallId)
     }
 
     LazyColumn(
@@ -126,25 +349,369 @@ fun AgentChatList(
         modifier = modifier,
         contentPadding = PaddingValues(16.dp)
     ) {
-        items(visibleMessages, key = { it.id }) { message ->
-            ChatMessageBubble(
-                message = message,
-                onApprove = { onApprove(message) },
-                onDeny = { onDeny(message) },
-                onDelete = { onDelete(message.id) },
-                onRegenerate = { onRegenerate(message.id) },
-                onEdit = { onEdit(message.id, message.content) },
-                isEditing = editingMessageId == message.id,
-                editingText = editingText,
-                onEditingTextChange = onEditingTextChange,
-                onSaveEdit = onSaveEdit,
-                onCancelEdit = onCancelEdit,
-                onToggleOutput = { onToggleOutput(message.id) },
-                onKnowledgeLinkClick = onKnowledgeLinkClick
+        items(visibleItems, key = { it.key }) { item ->
+            when (item) {
+                is AgentChatListItem.Message -> {
+                    val message = item.message
+                    ChatMessageBubble(
+                        message = message,
+                        onApprove = { onApprove(message) },
+                        onDeny = { onDeny(message) },
+                        onDelete = { onDelete(message.id) },
+                        onRegenerate = { onRegenerate(message.id) },
+                        onEdit = { onEdit(message.id, message.content) },
+                        isEditing = editingMessageId == message.id,
+                        editingText = editingText,
+                        onEditingTextChange = onEditingTextChange,
+                        onSaveEdit = onSaveEdit,
+                        onCancelEdit = onCancelEdit,
+                        isPlanResolving = resolvingPlanMessageId == message.id,
+                        onToggleOutput = { onToggleOutput(message.id) },
+                        onKnowledgeLinkClick = onKnowledgeLinkClick,
+                        showMessageActions = !readOnly
+                    )
+                }
+                is AgentChatListItem.ToolGroup -> {
+                    ToolCallGroupBubble(
+                        messages = item.messages,
+                        resultsByToolCallId = item.resultsByToolCallId,
+                        onToggleOutput = onToggleOutput,
+                        onKnowledgeLinkClick = onKnowledgeLinkClick,
+                        useLocalOutputExpansion = readOnly
+                    )
+                }
+                is AgentChatListItem.Delegation -> {
+                    DelegationCard(
+                        message = item.message,
+                        result = item.result,
+                        info = item.info,
+                        onOpen = { item.info?.let(onOpenDelegation) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DelegationCard(
+    message: AgentService.Companion.ChatMessage?,
+    result: AgentService.Companion.ChatMessage?,
+    info: AgentDelegationInfo?,
+    onOpen: () -> Unit
+) {
+    val fallbackName = listOfNotNull(message?.toolArgs?.get("agent"), message?.toolArgs?.get("name"))
+        .joinToString(" - ")
+        .ifBlank { message?.toolArgs?.get("agent") ?: "Agent" }
+    val isTerminal = info?.status?.let { it != "RUNNING" } ?: (result != null)
+    val startedAt = info?.startedAt?.takeIf { it > 0L } ?: message?.timestamp ?: System.currentTimeMillis()
+    val timestamp = remember(startedAt) { formatAgentMessageTimestamp(startedAt) }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp)
+            .clickable(enabled = info != null, onClick = onOpen),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800).copy(alpha = 0.24f)),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Groups, null, tint = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    info?.displayName ?: fallbackName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    delegationStatusLabel(info?.status, isTerminal),
+                    style = MaterialTheme.typography.labelMedium
+                )
+            }
+            (info?.task ?: message?.toolArgs?.get("task"))?.takeIf { it.isNotBlank() }?.let { task ->
+                Text(task, maxLines = 3, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+            }
+            (info?.returnSummary ?: result?.toolOutput ?: result?.content)
+                ?.takeIf { isTerminal && it.isNotBlank() }
+                ?.let { summary ->
+                    Text(boundedPreview(summary, TOOL_OUTPUT_PREVIEW_CHARS), maxLines = 5, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                }
+            Text(
+                "$timestamp · ${stringResource(R.string.agent_role_label, agentRoleLabel("ORCHESTRATOR"))}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
             )
         }
     }
 }
+
+@Composable
+private fun delegationStatusLabel(status: String?, isTerminal: Boolean): String = when (status?.uppercase()) {
+    "RUNNING" -> stringResource(R.string.agent_invocation_working)
+    "COMPLETED" -> stringResource(R.string.agent_invocation_status_completed)
+    "FAILED" -> stringResource(R.string.agent_invocation_status_failed)
+    "CANCELLED" -> stringResource(R.string.agent_invocation_status_cancelled)
+    "INTERRUPTED" -> stringResource(R.string.agent_invocation_status_interrupted)
+    else -> stringResource(if (isTerminal) R.string.agent_invocation_finished else R.string.agent_invocation_working)
+}
+
+@Composable
+private fun ToolCallGroupBubble(
+    messages: List<AgentService.Companion.ChatMessage>,
+    resultsByToolCallId: Map<String, AgentService.Companion.ChatMessage>,
+    onToggleOutput: (String) -> Unit,
+    onKnowledgeLinkClick: (String) -> Boolean,
+    useLocalOutputExpansion: Boolean
+) {
+    var groupExpanded by remember(messages.firstOrNull()?.id, messages.size) { mutableStateOf(false) }
+    val startedAt = messages.firstOrNull()?.timestamp ?: System.currentTimeMillis()
+    val formattedTimestamp = remember(startedAt) { formatAgentMessageTimestamp(startedAt) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+        horizontalAlignment = Alignment.Start
+    ) {
+        Card(
+            modifier = Modifier.widthIn(max = 380.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)),
+            shape = RoundedCornerShape(
+                topStart = 20.dp,
+                topEnd = 20.dp,
+                bottomStart = 4.dp,
+                bottomEnd = 20.dp
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { groupExpanded = !groupExpanded },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        if (groupExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.secondary
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(Icons.Default.Build, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.secondary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.agent_tool_group_title),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = stringResource(R.string.agent_tool_group_count, messages.size),
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+                AnimatedVisibility(
+                    visible = groupExpanded,
+                    enter = expandVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy)),
+                    exit = shrinkVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(top = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        messages.forEach { toolMessage ->
+                            ToolCallGroupRow(
+                                message = toolMessage,
+                                resultMessage = toolMessage.toolCallId?.let(resultsByToolCallId::get),
+                                onToggleOutput = { onToggleOutput(toolMessage.id) },
+                                onKnowledgeLinkClick = onKnowledgeLinkClick,
+                                useLocalOutputExpansion = useLocalOutputExpansion
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        Text(
+            text = "$formattedTimestamp · ${stringResource(R.string.agent_role_label, agentRoleLabel(messages.firstOrNull()?.agentRole ?: "ORCHESTRATOR"))}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+        )
+    }
+}
+
+@Composable
+private fun ToolCallGroupRow(
+    message: AgentService.Companion.ChatMessage,
+    resultMessage: AgentService.Companion.ChatMessage?,
+    onToggleOutput: () -> Unit,
+    onKnowledgeLinkClick: (String) -> Boolean,
+    useLocalOutputExpansion: Boolean
+) {
+    val toolName = resolvedToolName(message).orEmpty()
+    var locallyExpanded by rememberSaveable(message.id) { mutableStateOf(false) }
+    val isExpanded = message.isOutputExpanded || (useLocalOutputExpansion && locallyExpanded)
+    val output = message.toolOutput ?: resultMessage?.toolOutput ?: resultMessage?.content
+    val durationText = resultMessage?.let { formatToolDuration(it.timestamp - message.timestamp) }
+    val startedText = stringResource(R.string.agent_tool_started_at, formatAgentMessageTimestamp(message.timestamp))
+    val durationLabel = durationText?.let { stringResource(R.string.agent_tool_duration, it) }
+    val cleanOutput = remember(output) {
+        output
+            ?.replaceFirst(Regex("(?m)^PREVIEW_IMAGE_PATH:.*$"), "")
+            ?.trim()
+    }
+    val outputPreview = remember(cleanOutput) {
+        cleanOutput?.let {
+            if (it.length <= TOOL_OUTPUT_PREVIEW_CHARS) it
+            else it.take(TOOL_OUTPUT_PREVIEW_CHARS) + "\n…"
+        }
+    }
+    var showFullOutput by remember(message.id) { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    if (showFullOutput && !cleanOutput.isNullOrBlank()) {
+        val visibleFullOutput = remember(cleanOutput) {
+            boundedPreview(cleanOutput, TOOL_OUTPUT_VIEWER_CHARS)
+        }
+        Dialog(onDismissRequest = { showFullOutput = false }) {
+            Card(modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.agent_tool_call_title, toolName),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SelectionContainer(modifier = Modifier.weight(1f, fill = false)) {
+                        Text(
+                            visibleFullOutput,
+                            modifier = Modifier.verticalScroll(rememberScrollState()),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Row(modifier = Modifier.align(Alignment.End)) {
+                        TextButton(onClick = {
+                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clipboard.setPrimaryClip(ClipData.newPlainText(toolName, cleanOutput.orEmpty()))
+                        }) { Text(stringResource(R.string.action_copy)) }
+                        TextButton(onClick = { showFullOutput = false }) {
+                            Text(stringResource(R.string.action_close))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.35f),
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        if (useLocalOutputExpansion) {
+                            locallyExpanded = !locallyExpanded
+                        } else {
+                            onToggleOutput()
+                        }
+                    },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = stringResource(R.string.agent_tool_call_title, toolName),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Text(
+                text = listOfNotNull(startedText, durationLabel).joinToString(" · "),
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(start = 22.dp, top = 2.dp)
+            )
+            if (isExpanded) {
+                Column(modifier = Modifier.padding(top = 8.dp)) {
+                    if (message.content.isNotBlank()) {
+                        ChatMessageContent(
+                            message = message,
+                            isEditing = false,
+                            editingText = "",
+                            onEditingTextChange = {},
+                            onCancelEdit = {},
+                            onSaveEdit = {},
+                            textColor = MaterialTheme.colorScheme.onSurface,
+                            onKnowledgeLinkClick = onKnowledgeLinkClick
+                        )
+                    }
+                    val argsString = message.toolArgs
+                        ?.entries
+                        ?.joinToString("\n") { "${it.key}: ${it.value}" }
+                        ?.let { boundedPreview(it, TOOL_ARGS_PREVIEW_CHARS) }
+                        .orEmpty()
+                    if (argsString.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        SelectionContainer {
+                            Text(
+                                text = argsString,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.Black.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
+                            )
+                        }
+                    }
+                    if (!outputPreview.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        SelectionContainer {
+                            Text(
+                                text = outputPreview,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                maxLines = TOOL_OUTPUT_PREVIEW_LINES,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                    .padding(8.dp)
+                            )
+                        }
+                        if ((cleanOutput?.length ?: 0) > TOOL_OUTPUT_PREVIEW_CHARS) {
+                            TextButton(onClick = { showFullOutput = true }) {
+                                Text(stringResource(R.string.agent_tool_view_full_output))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private const val TOOL_OUTPUT_PREVIEW_CHARS = 4_000
+private const val TOOL_OUTPUT_PREVIEW_LINES = 18
+private const val TOOL_OUTPUT_VIEWER_CHARS = 60_000
+private const val TOOL_ARGS_PREVIEW_CHARS = 2_000
+private const val AGENT_CHAT_RENDER_MESSAGE_LIMIT = 600
 
 @Composable
 fun ChatMessageBubble(
@@ -159,10 +726,11 @@ fun ChatMessageBubble(
     onEditingTextChange: (String) -> Unit = {},
     onSaveEdit: () -> Unit = {},
     onCancelEdit: () -> Unit = {},
+    isPlanResolving: Boolean = false,
     onToggleOutput: () -> Unit = {},
-    onKnowledgeLinkClick: (String) -> Boolean = { false }
+    onKnowledgeLinkClick: (String) -> Boolean = { false },
+    showMessageActions: Boolean = true
 ) {
-    val currentStatusText by AgentService.statusText.collectAsState()
     val context = LocalContext.current
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val isUser = message.role == "user"
@@ -276,15 +844,33 @@ fun ChatMessageBubble(
                                         } else {
                                             "Lines: ${message.toolArgs?.get("start_line")} - ${message.toolArgs?.get("end_line")}\n\n${message.toolArgs?.get("new_content")}"
                                         }
-                                        Text(text = content ?: "", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                                        Text(
+                                            text = boundedPreview(content.orEmpty(), TOOL_ARGS_PREVIEW_CHARS),
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 12.sp,
+                                            maxLines = TOOL_OUTPUT_PREVIEW_LINES,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                     "run_command" -> {
-                                        Text(text = message.toolArgs?.get("command") ?: "", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
+                                        Text(
+                                            text = boundedPreview(message.toolArgs?.get("command").orEmpty(), TOOL_ARGS_PREVIEW_CHARS),
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 12.sp,
+                                            maxLines = TOOL_OUTPUT_PREVIEW_LINES,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                     else -> {
                                         // Generic tool args preview
                                         val argsString = message.toolArgs?.entries?.joinToString("\n") { "${it.key}: ${it.value}" } ?: ""
-                                        Text(text = argsString.ifEmpty { stringResource(R.string.agent_no_args) }, fontFamily = FontFamily.Monospace, fontSize = 11.sp)
+                                        Text(
+                                            text = boundedPreview(argsString.ifEmpty { stringResource(R.string.agent_no_args) }, TOOL_ARGS_PREVIEW_CHARS),
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            maxLines = TOOL_OUTPUT_PREVIEW_LINES,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                 }
                             }
@@ -335,18 +921,20 @@ fun ChatMessageBubble(
 
                     // Tool Call block
                     message.toolName?.let { tool ->
-                        val isExpanded = message.isOutputExpanded || (message.isPlan && message.isPlanApproved != true)
+                        val isExpanded = message.isOutputExpanded || (message.isPlan && message.isPlanApproved == null)
                         Surface(
                             color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 4.dp)
-                                .clickable { onToggleOutput() }
                         ) {
                             Column(modifier = Modifier.padding(8.dp)) {
                                 Row(
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(onClick = onToggleOutput)
+                                        .padding(vertical = 4.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
@@ -376,7 +964,11 @@ fun ChatMessageBubble(
                                     Column {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         ChatMessageContent(
-                                            message = message,
+                                            message = if (message.isPlan && !message.planModifiedContent.isNullOrBlank()) {
+                                                message.copy(content = message.planModifiedContent)
+                                            } else {
+                                                message
+                                            },
                                             isEditing = isEditing,
                                             editingText = editingText,
                                             onEditingTextChange = onEditingTextChange,
@@ -422,7 +1014,10 @@ fun ChatMessageBubble(
                                                 ) {
                                                     SelectionContainer {
                                                         Text(
-                                                            text = output.replaceFirst(Regex("(?m)^PREVIEW_IMAGE_PATH:.*$"), "").trim(),
+                                                            text = boundedPreview(
+                                                                output.replaceFirst(Regex("(?m)^PREVIEW_IMAGE_PATH:.*$"), "").trim(),
+                                                                TOOL_OUTPUT_PREVIEW_CHARS
+                                                            ),
                                                             fontFamily = FontFamily.Monospace,
                                                             fontSize = 11.sp,
                                                             modifier = Modifier.padding(8.dp)
@@ -432,39 +1027,6 @@ fun ChatMessageBubble(
                                             }
                                         }
 
-                                        // Action Row for Plans (at bottom)
-                                        if (message.isPlan && message.isPlanApproved != true && !isEditing) {
-                                            Spacer(modifier = Modifier.height(16.dp))
-                                            HorizontalDivider(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f))
-                                            Spacer(modifier = Modifier.height(16.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                            ) {
-                                                Button(
-                                                    onClick = onEdit,
-                                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                                    modifier = Modifier.weight(1f).height(40.dp),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text(stringResource(R.string.agent_modify_plan), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                                }
-                                                Button(
-                                                    onClick = onApprove,
-                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
-                                                    modifier = Modifier.weight(1f).height(40.dp),
-                                                    shape = RoundedCornerShape(12.dp),
-                                                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
-                                                ) {
-                                                    Icon(Icons.Default.Check, null, modifier = Modifier.size(16.dp), tint = Color.White)
-                                                    Spacer(modifier = Modifier.width(8.dp))
-                                                    Text(stringResource(R.string.action_approve), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             }
@@ -485,6 +1047,7 @@ fun ChatMessageBubble(
                     }
                     
                     if (message.isStreaming) {
+                        val currentStatusText by AgentService.statusText.collectAsState()
                         val streamingMessageId by AgentService.streamingMessageId.collectAsState()
                         val isTargeted = streamingMessageId == message.id
                         
@@ -503,6 +1066,22 @@ fun ChatMessageBubble(
             }
         }
         
+        if (
+            message.isPlan &&
+            message.isPlanApproved == null &&
+            !isEditing
+        ) {
+            AgentPlanDecisionButtons(
+                onDeny = onDeny,
+                onModify = onEdit,
+                onApprove = onApprove,
+                isResolving = isPlanResolving,
+                modifier = Modifier
+                    .widthIn(max = 340.dp)
+                    .padding(top = 8.dp)
+            )
+        }
+
         if (!message.isStreaming) {
             val roleLabel = when {
                 isUser -> stringResource(R.string.agent_user_label)
@@ -510,7 +1089,7 @@ fun ChatMessageBubble(
                 isSystem -> stringResource(R.string.agent_system_label)
                 message.customAgentName != null -> stringResource(R.string.agent_custom_agent_label, message.customAgentName)
                 message.agentRole != null -> stringResource(R.string.agent_role_label, agentRoleLabel(message.agentRole))
-                else -> stringResource(R.string.agent_assistant_label)
+                else -> stringResource(R.string.agent_role_label, agentRoleLabel("ORCHESTRATOR"))
             }
             Row(
                 modifier = Modifier.padding(start = 4.dp, top = 2.dp),
@@ -525,7 +1104,7 @@ fun ChatMessageBubble(
         }
 
         // ========== Action Row Below Bubble (like Llama Native) ==========
-        if (!message.isStreaming && !isSystem) {
+        if (showMessageActions && !message.isStreaming && !isSystem) {
             Row(
                 modifier = Modifier.padding(start = 4.dp, top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -593,6 +1172,106 @@ fun ChatMessageBubble(
                         Text(stringResource(R.string.action_close))
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentPlanDecisionButtons(
+    onDeny: () -> Unit,
+    onModify: () -> Unit,
+    onApprove: () -> Unit,
+    isResolving: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Button(
+            onClick = onDeny,
+            enabled = !isResolving,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer
+            ),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                stringResource(R.string.action_deny),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Button(
+                onClick = onModify,
+                enabled = !isResolving,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Icon(Icons.Default.Edit, null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    stringResource(R.string.agent_modify_plan),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+            }
+
+            Button(
+                onClick = onApprove,
+                enabled = !isResolving,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF4CAF50)
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 48.dp),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (isResolving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.Check,
+                        null,
+                        modifier = Modifier.size(18.dp),
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    stringResource(
+                        if (isResolving) R.string.agent_plan_saving
+                        else R.string.action_approve
+                    ),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    maxLines = 1
+                )
             }
         }
     }
@@ -677,6 +1356,29 @@ fun ChatMessageContent(
     textColor: Color,
     onKnowledgeLinkClick: (String) -> Boolean = { false }
 ) {
+    var showFullMessage by remember(message.id) { mutableStateOf(false) }
+    if (showFullMessage) {
+        Dialog(onDismissRequest = { showFullMessage = false }) {
+            Card(modifier = Modifier.fillMaxWidth().heightIn(max = 600.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    SelectionContainer(modifier = Modifier.weight(1f, fill = false)) {
+                        Text(
+                            text = remember(message.content) {
+                                boundedPreview(message.content, MAX_MESSAGE_VIEWER_CHARS)
+                            },
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                        )
+                    }
+                    TextButton(
+                        onClick = { showFullMessage = false },
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(stringResource(R.string.action_close))
+                    }
+                }
+            }
+        }
+    }
     if (isEditing) {
         Column {
             OutlinedTextField(
@@ -709,35 +1411,79 @@ fun ChatMessageContent(
                     val streamingContent by AgentService.streamingContent.collectAsState()
                     val textToDisplay = streamingContent.ifEmpty { message.content }
                     if (textToDisplay.isNotBlank()) {
-                        MarkdownText(
-                            text = textToDisplay,
-                            textColor = textColor,
+                        Text(
+                            text = remember(textToDisplay) { boundedAgentStreamingPreview(textToDisplay) },
+                            color = textColor,
                             modifier = Modifier.fillMaxWidth(),
-                            onLinkClick = onKnowledgeLinkClick
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     }
                 } else {
                     // Show whatever content it has, but don't collect the global stream
                     if (message.content.isNotBlank()) {
-                        MarkdownText(
-                            text = message.content,
-                            textColor = textColor,
+                        Text(
+                            text = remember(message.content) { boundedAgentStreamingPreview(message.content) },
+                            color = textColor,
                             modifier = Modifier.fillMaxWidth(),
-                            onLinkClick = onKnowledgeLinkClick
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     }
                 }
             } else {
                 if (message.content.isNotBlank()) {
+                    val preview = remember(message.content) {
+                        boundedAgentStreamingPreview(message.content)
+                    }
                     MarkdownText(
-                        text = message.content,
+                        text = preview,
                         textColor = textColor,
                         modifier = Modifier.fillMaxWidth(),
                         onLinkClick = onKnowledgeLinkClick
                     )
+                    if (preview.length < message.content.length) {
+                        TextButton(onClick = { showFullMessage = true }) {
+                            Text(stringResource(R.string.agent_message_view_full))
+                        }
+                    }
+                }
+            }
+            message.guidanceDeliveryState?.let { deliveryState ->
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text(
+                        text = stringResource(
+                            if (deliveryState == "QUEUED") {
+                                R.string.agent_guidance_state_queued
+                            } else {
+                                R.string.agent_guidance_state_delivered
+                            }
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
         }
+    }
+}
+
+private const val MAX_STREAMING_PREVIEW_CHARS = 24_000
+private const val MAX_STREAMING_LINE_CHARS = 2_000
+private const val MAX_MESSAGE_VIEWER_CHARS = 120_000
+
+internal fun boundedAgentStreamingPreview(text: String): String {
+    val boundedLines = text.lineSequence().map { line ->
+        if (line.length <= MAX_STREAMING_LINE_CHARS) line
+        else line.take(MAX_STREAMING_LINE_CHARS) + "…"
+    }.joinToString("\n")
+    return if (boundedLines.length <= MAX_STREAMING_PREVIEW_CHARS) {
+        boundedLines
+    } else {
+        boundedLines.take(MAX_STREAMING_PREVIEW_CHARS) + "\n…"
     }
 }
 
@@ -770,16 +1516,26 @@ fun ThinkingBlock(message: AgentService.Companion.ChatMessage) {
 @Composable
 fun ThinkingBlockContent(text: String, messageId: String, isStreaming: Boolean = false) {
     var thinkingExpanded by remember(messageId) { mutableStateOf(false) }
-    
-    val infiniteTransition = rememberInfiniteTransition()
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.05f,
-        targetValue = 0.15f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
+    val boundedText = remember(text) { boundedAgentStreamingPreview(text) }
+
+    // Completed reasoning blocks are static. Creating an infinite transition for
+    // every historical message kept all of them recomposing forever, even while
+    // collapsed, which made long Agent projects continuously exercise Compose/Skia.
+    val pulseAlpha = if (isStreaming) {
+        val infiniteTransition = rememberInfiniteTransition(label = "agent-thinking-pulse")
+        val animatedAlpha by infiniteTransition.animateFloat(
+            initialValue = 0.05f,
+            targetValue = 0.15f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "agent-thinking-alpha"
         )
-    )
+        animatedAlpha
+    } else {
+        0.05f
+    }
     
     val bgColor = if (isStreaming) {
         MaterialTheme.colorScheme.primary.copy(alpha = pulseAlpha)
@@ -817,7 +1573,7 @@ fun ThinkingBlockContent(text: String, messageId: String, isStreaming: Boolean =
                 exit = shrinkVertically(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy))
             ) {
                 Text(
-                    text = text, 
+                    text = boundedText,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f), 
                     fontSize = 12.sp, 
                     fontStyle = FontStyle.Italic, 

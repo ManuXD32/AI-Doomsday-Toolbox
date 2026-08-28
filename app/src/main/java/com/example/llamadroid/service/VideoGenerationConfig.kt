@@ -1,6 +1,12 @@
 package com.example.llamadroid.service
 
 import android.os.Parcelable
+import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.activeInOrder
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.util.DebugLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +39,7 @@ data class VideoGenerationConfig(
     val cfgScale: Float = 6.0f,
     val flowShift: Float? = null,
     val samplingMethod: SamplingMethod = SamplingMethod.EULER,
+    val scheduler: SdScheduler? = null,
     val cacheMode: SdCacheMode? = null,
     val cacheOption: String = "",
     val scmMask: String = "",
@@ -40,14 +47,26 @@ data class VideoGenerationConfig(
     val vaeTiling: Boolean = false,
     val vaeTileSize: String = "24x24",
     val diffusionFa: Boolean = true,
+    val diffusionConvDirect: Boolean = false,
+    val vaeConvDirect: Boolean = false,
     val mmap: Boolean = true,
     val threads: Int = -1,
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
+    /** Ordered Wan/video adapters. [highNoiseLoras] is kept separate per Wan 2.2 item. */
+    val loras: List<SdLoraSpec> = emptyList(),
+    val highNoiseLoras: List<SdLoraSpec> = emptyList(),
+    val loraApplyMode: SdLoraApplyMode? = null,
     val customFlags: String = ""
 ) : Parcelable
+
+fun VideoGenerationConfig.resolvedLoras(): List<SdLoraSpec> =
+    validateSdLoras(
+        loras.map { it.copy(highNoiseOnly = false) } +
+            highNoiseLoras.map { it.copy(highNoiseOnly = true) }
+    )
 
 enum class VideoGenerationMode(val folderName: String) {
     TXT2VID("txt2vid"),
@@ -93,6 +112,7 @@ data class GeneratedVideoMetadata(
     val cfgScale: Float,
     val flowShift: Float?,
     val samplingMethod: SamplingMethod,
+    val scheduler: SdScheduler?,
     val cacheMode: SdCacheMode?,
     val cacheOption: String,
     val scmMask: String,
@@ -101,15 +121,24 @@ data class GeneratedVideoMetadata(
     val vaeTiling: Boolean,
     val vaeTileSize: String?,
     val diffusionFa: Boolean,
+    val diffusionConvDirect: Boolean = false,
+    val vaeConvDirect: Boolean = false,
     val mmap: Boolean,
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig,
+    val loras: List<SdLoraSpec> = emptyList(),
+    val highNoiseLoras: List<SdLoraSpec> = emptyList(),
+    val loraApplyMode: String? = null,
     val createdAt: Long,
     val aviPath: String,
     val mp4Path: String,
     val metadataPath: String,
+    val generationDurationMs: Long? = null,
+    val conditioningDurationMs: Long? = null,
+    val samplingDurationMs: Long? = null,
+    val decodingDurationMs: Long? = null,
     val exportedAviUri: String? = null,
     val exportedMp4Uri: String? = null,
     val exportedMetadataUri: String? = null
@@ -141,6 +170,7 @@ data class GeneratedVideoMetadata(
         put("cfgScale", cfgScale.toDouble())
         put("flowShift", flowShift?.toDouble())
         put("samplingMethod", samplingMethod.name)
+        put("scheduler", scheduler?.name)
         put("cacheMode", cacheMode?.name)
         put("cacheOption", cacheOption)
         put("scmMask", scmMask)
@@ -149,6 +179,8 @@ data class GeneratedVideoMetadata(
         put("vaeTiling", vaeTiling)
         put("vaeTileSize", vaeTileSize)
         put("diffusionFa", diffusionFa)
+        put("diffusionConvDirect", diffusionConvDirect)
+        put("vaeConvDirect", vaeConvDirect)
         put("mmap", mmap)
         put("sdParamsBackendMode", sdParamsBackendMode)
         put("sdRuntimeBackendMode", sdRuntimeBackendMode)
@@ -162,10 +194,17 @@ data class GeneratedVideoMetadata(
         put("distributedMaxVramSpec", distributedRuntime.maxVramSpec)
         put("distributedSplitMode", distributedRuntime.splitMode.name)
         put("distributedCustomFlags", distributedRuntime.customFlags)
+        put("loras", loras.toJsonArray())
+        put("highNoiseLoras", highNoiseLoras.toJsonArray())
+        put("loraApplyMode", loraApplyMode)
         put("createdAt", createdAt)
         put("aviPath", aviPath)
         put("mp4Path", mp4Path)
         put("metadataPath", metadataPath)
+        put("generationDurationMs", generationDurationMs)
+        put("conditioningDurationMs", conditioningDurationMs)
+        put("samplingDurationMs", samplingDurationMs)
+        put("decodingDurationMs", decodingDurationMs)
         put("exportedAviUri", exportedAviUri)
         put("exportedMp4Uri", exportedMp4Uri)
         put("exportedMetadataUri", exportedMetadataUri)
@@ -209,6 +248,7 @@ data class GeneratedVideoMetadata(
                 cfgScale = json.optDouble("cfgScale", 6.0).toFloat(),
                 flowShift = parseOptionalFloat(json, "flowShift"),
                 samplingMethod = parseSamplingMethod(json.optString("samplingMethod")),
+                scheduler = SdScheduler.fromCliName(json.optString("scheduler")),
                 cacheMode = SdCacheMode.fromStoredValue(json.optString("cacheMode").ifBlank { null }),
                 cacheOption = json.optString("cacheOption"),
                 scmMask = json.optString("scmMask"),
@@ -217,6 +257,8 @@ data class GeneratedVideoMetadata(
                 vaeTiling = json.optBoolean("vaeTiling", false),
                 vaeTileSize = json.optString("vaeTileSize").ifBlank { null },
                 diffusionFa = json.optBoolean("diffusionFa", true),
+                diffusionConvDirect = json.optBoolean("diffusionConvDirect", false),
+                vaeConvDirect = json.optBoolean("vaeConvDirect", false),
                 mmap = json.optBoolean("mmap", true),
                 sdParamsBackendMode = json.optString("sdParamsBackendMode", "auto"),
                 sdRuntimeBackendMode = json.optString("sdRuntimeBackendMode", "auto"),
@@ -236,10 +278,17 @@ data class GeneratedVideoMetadata(
                     }.getOrDefault(SdDistributedSplitMode.LAYER),
                     customFlags = json.optString("distributedCustomFlags")
                 ),
+                loras = json.optJSONArray("loras")?.toSdLoraSpecs().orEmpty(),
+                highNoiseLoras = json.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty(),
+                loraApplyMode = json.optString("loraApplyMode").ifBlank { null },
                 createdAt = json.optLong("createdAt", 0L),
                 aviPath = json.optString("aviPath"),
                 mp4Path = json.optString("mp4Path"),
                 metadataPath = json.optString("metadataPath", filePathFallback(json)),
+                generationDurationMs = json.optLong("generationDurationMs", -1L).takeIf { it >= 0L },
+                conditioningDurationMs = json.optLong("conditioningDurationMs", -1L).takeIf { it >= 0L },
+                samplingDurationMs = json.optLong("samplingDurationMs", -1L).takeIf { it >= 0L },
+                decodingDurationMs = json.optLong("decodingDurationMs", -1L).takeIf { it >= 0L },
                 exportedAviUri = json.optString("exportedAviUri").ifBlank { null },
                 exportedMp4Uri = json.optString("exportedMp4Uri").ifBlank { null },
                 exportedMetadataUri = json.optString("exportedMetadataUri").ifBlank { null }

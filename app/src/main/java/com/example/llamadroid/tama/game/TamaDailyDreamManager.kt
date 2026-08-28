@@ -6,6 +6,7 @@ import android.net.Uri
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.LlamaServerChatService
+import com.example.llamadroid.service.LlamaServerLauncher
 import com.example.llamadroid.service.LlamaService
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.LlamaSpeculativeMode
@@ -713,7 +714,7 @@ object TamaDailyDreamManager {
             putExtra(LlamaService.EXTRA_CUSTOM_FLAGS, settingsRepo.customFlags.value)
             putExtra(LlamaService.EXTRA_COMMAND_TEMPLATE, settingsRepo.customCommandTemplate.value)
         }
-        context.startForegroundService(intent)
+        LlamaServerLauncher.dispatchOwnedCommand(context, intent).getOrThrow()
     }
 
     internal fun releaseOwnedLocalLlamaServerIfNeeded(context: Context, petId: String, ownsRuntime: Boolean) {
@@ -722,7 +723,7 @@ object TamaDailyDreamManager {
         val stopIntent = Intent(context, LlamaService::class.java).apply {
             action = LlamaService.ACTION_STOP
         }
-        context.startService(stopIntent)
+        LlamaServerLauncher.dispatchOwnedCommand(context, stopIntent).getOrThrow()
     }
 
     private fun recordDreamBreadcrumb(event: String, petId: String, details: String? = null) {

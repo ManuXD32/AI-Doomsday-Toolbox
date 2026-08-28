@@ -359,7 +359,7 @@ class LlamaScheduledTaskService : Service() {
             putExtra(LlamaService.EXTRA_COMMAND_TEMPLATE, settingsRepo.customCommandTemplate.value)
         }
         updateProgress(getString(R.string.llama_scheduler_status_starting_local_server, taskName))
-        applicationContext.startForegroundService(intent)
+        LlamaServerLauncher.dispatchOwnedCommand(applicationContext, intent).getOrThrow()
         ownsLocalLlamaServer = ownsLocalLlamaServer || !wasAlreadyRunning
 
         repeat(LOCAL_SERVER_READY_ATTEMPTS) { attempt ->
@@ -424,11 +424,12 @@ class LlamaScheduledTaskService : Service() {
         if (!ownsLocalLlamaServer) return
         ownsLocalLlamaServer = false
         runCatching {
-            applicationContext.startService(
+            LlamaServerLauncher.dispatchOwnedCommand(
+                applicationContext,
                 Intent(applicationContext, LlamaService::class.java).apply {
                     action = LlamaService.ACTION_STOP
                 }
-            )
+            ).getOrThrow()
         }
     }
 

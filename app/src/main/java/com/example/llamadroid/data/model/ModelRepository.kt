@@ -91,14 +91,23 @@ class ModelRepository(
         }
     
     fun getLLMModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING)
+        listOf(ModelType.LLM, ModelType.VISION, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING)
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
     }
 
     fun getModelManagerModels(): Flow<List<ModelEntity>> = modelDao.getModelsByTypes(
-        listOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.EMBEDDING, ModelType.QUADTRIX)
+        listOf(
+            ModelType.LLM,
+            ModelType.LLM_DRAFT,
+            ModelType.LORA,
+            ModelType.EMBEDDING,
+            // Keep legacy vision/projector rows visible for UI category normalization.
+            ModelType.VISION,
+            ModelType.VISION_PROJECTOR,
+            ModelType.MMPROJ
+        )
     ).onStart {
         pruneLegacyPortableModelRows()
         reconcileManagedModelCopiesIfNeeded()
@@ -190,7 +199,8 @@ class ModelRepository(
         
         // Get subfolder based on type
         val subfolder = when (type) {
-            ModelType.LLM, ModelType.EMBEDDING, ModelType.VISION -> "llm"
+            ModelType.LLM, ModelType.LORA, ModelType.EMBEDDING, ModelType.VISION -> "llm"
+            ModelType.LLM_DRAFT -> "llm/drafts"
             ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> "mmproj"
             ModelType.QUADTRIX -> "quadtrix"
             ModelType.SD_CHECKPOINT, ModelType.SD_UPSCALER -> "sd/checkpoints"
@@ -201,8 +211,12 @@ class ModelRepository(
             ModelType.SD_TAE -> "sd/tae"
             ModelType.SD_VAE -> "sd/vae"
             ModelType.SD_LORA -> "sd/lora"
+            ModelType.SD_TEXTUAL_INVERSION -> "sd/embeddings"
             ModelType.SD_CONTROLNET -> "sd/controlnet"
             ModelType.SD_PHOTOMAKER -> "sd/photomaker"
+            ModelType.SD_CLIP_VISION -> "sd/clip_vision"
+            ModelType.SD_IP_ADAPTER -> "sd/ip_adapter"
+            ModelType.SD_ADETAILER -> "sd/adetailer"
             ModelType.ONNX_IMAGE_GEN,
             ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
@@ -348,15 +362,22 @@ class ModelRepository(
         onnxAssetKind: String? = null,
         onnxPipelineFamily: String? = null,
         onnxReferenceUri: String? = null,
-        onnxReferencePath: String? = null
+        onnxReferencePath: String? = null,
+        downloadUrlOverride: String? = null,
+        localFilenameOverride: String? = null
     ) {
         val modelDir = getModelDir(type)
-        val localFilename = chooseUniqueDownloadFilename(
+        val localFilename = localFilenameOverride?.let { requested ->
+            val clean = ModelLibraryManager.canonicalFilename(requested)
+            require(clean == requested && clean.isNotBlank()) { "Unsafe local filename override" }
+            require(!File(modelDir, clean).exists()) { "A model named $clean is already installed" }
+            clean
+        } ?: chooseUniqueDownloadFilename(
             requestedFilename = filename,
             type = type,
             modelDir = modelDir
         )
-        val modelUrl = "https://huggingface.co/$repoId/resolve/main/$filename"
+        val modelUrl = downloadUrlOverride ?: "https://huggingface.co/$repoId/resolve/main/$filename"
         val destFile = File(modelDir, localFilename)
         val inferredFamily = inferSdFamily(type, repoId, filename)
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
@@ -537,6 +558,10 @@ class ModelRepository(
     
     suspend fun insertModel(model: ModelEntity) {
         modelDao.insertModel(model)
+    }
+
+    suspend fun updateVisionSupport(filename: String, isVision: Boolean) {
+        modelDao.updateVisionSupport(filename, isVision)
     }
 
     fun huggingFaceToken(): String =
@@ -764,6 +789,8 @@ class ModelRepository(
 
             val relevantTypes = listOf(
                 ModelType.LLM,
+                ModelType.LLM_DRAFT,
+                ModelType.LORA,
                 ModelType.EMBEDDING,
                 ModelType.VISION,
                 ModelType.VISION_PROJECTOR,
@@ -779,7 +806,10 @@ class ModelRepository(
                 ModelType.SD_VAE,
                 ModelType.SD_LORA,
                 ModelType.SD_CONTROLNET,
-                ModelType.SD_PHOTOMAKER
+                ModelType.SD_PHOTOMAKER,
+                ModelType.SD_CLIP_VISION,
+                ModelType.SD_IP_ADAPTER,
+                ModelType.SD_ADETAILER
             )
             modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
                 runCatching {

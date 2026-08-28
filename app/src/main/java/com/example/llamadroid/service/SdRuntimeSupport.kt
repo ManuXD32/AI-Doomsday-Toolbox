@@ -80,10 +80,14 @@ internal class SdToolGenerationRunner(
         )
         try {
             args.addAll(buildSdCommandArgs(effectiveConfig, binaryCapabilities))
+        } catch (e: SdIpAdapterConfigurationException) {
+            throw SdConfigurationException(sdIpAdapterErrorMessage(context, e))
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_missing_required_components, e.roles.joinToString(", ") { it.name }))
         } catch (e: SdUnsupportedFlagsException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_flags, e.flags.joinToString(", ")))
+        } catch (e: SdUnsupportedModesException) {
+            throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_modes, e.modes.joinToString(", ")))
         }
 
         DebugLog.log("[SdToolGenerationRunner] Running command: ${args.joinToString(" ")}")
@@ -148,6 +152,7 @@ internal fun shouldRetrySdGenerationOnCpu(
     distributedRuntime: SdDistributedRuntimeConfig,
     error: Throwable
 ): Boolean {
+    if (error is SdConfigurationException) return false
     if (!DeviceAcceleration.isAcceleratorBinary(sdBinary) ||
         cpuBinary == null ||
         !cpuBinary.exists() ||
@@ -197,7 +202,9 @@ internal suspend fun probeSdBinaryCapabilities(
             output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
         }.getOrNull()
     }
-    val capabilities = helpCapabilities.maxByOrNull { it.supportedFlags.size } ?: return@withContext null
+    val capabilities = helpCapabilities.maxByOrNull {
+        it.supportedFlags.size + it.supportedModes.size
+    } ?: return@withContext null
 
     capabilities.also {
         SdBinaryCapabilityCache.binaryPath = sdBinary.absolutePath
@@ -205,17 +212,21 @@ internal suspend fun probeSdBinaryCapabilities(
     }
 }
 
+internal fun inferSdRuntimeTierSuffix(binaryName: String): String = when {
+    binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
+    binaryName.contains("_snapdragon_opencl") -> "_snapdragon_opencl"
+    binaryName.contains("_i8mm") -> "_i8mm"
+    binaryName.contains("_armv9") -> "_armv9"
+    binaryName.contains("_dotprod") -> "_dotprod"
+    binaryName.contains("_baseline") -> "_baseline"
+    else -> ""
+}
+
 internal fun setupSdLibrarySymlinks(sourceDir: File?, targetDir: File, binaryPath: String) {
     if (sourceDir == null) return
 
     val binaryName = File(binaryPath).name
-    val tier = when {
-        binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
-        binaryName.contains("_armv9") -> "_armv9"
-        binaryName.contains("_dotprod") -> "_dotprod"
-        binaryName.contains("_baseline") -> "_baseline"
-        else -> ""
-    }
+    val tier = inferSdRuntimeTierSuffix(binaryName)
 
     DebugLog.log("StableDiffusion: Inferred tier '$tier' from $binaryName")
 

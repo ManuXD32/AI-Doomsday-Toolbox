@@ -17,7 +17,6 @@ import com.example.llamadroid.ui.settings.WhisperSettingsScreen
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsScreen
 import com.example.llamadroid.ui.settings.SystemPromptsSettingsScreen
 import com.example.llamadroid.ui.settings.PDFSettingsScreen
-import com.example.llamadroid.ui.settings.PDFTranslationSettingsScreen
 import com.example.llamadroid.ui.logs.LogsScreen
 import com.example.llamadroid.ui.pdf.PDFToolboxScreen
 import com.example.llamadroid.ui.pdf.PDFSummaryScreen
@@ -25,7 +24,6 @@ import com.example.llamadroid.ui.ai.AIHubScreen
 import com.example.llamadroid.ui.ai.AiServersHubScreen
 import com.example.llamadroid.ui.ai.ToolCatalog
 import com.example.llamadroid.ui.ai.ImageGenScreen
-import com.example.llamadroid.ui.ai.LegacyUpscaleScreen
 import com.example.llamadroid.ui.ai.OnnxImageGenScreen
 import com.example.llamadroid.ui.ai.OnnxBackgroundRemovalScreen
 import com.example.llamadroid.ui.ai.OnnxTtsScreen
@@ -61,6 +59,7 @@ import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 
 import com.example.llamadroid.ui.ai.AudioTranscriptionScreen
+import com.example.llamadroid.ui.ai.VideoInterpolationScreen
 import com.example.llamadroid.ui.ai.VideoUpscalerScreen
 import com.example.llamadroid.ui.models.WhisperModelsScreen
 import com.example.llamadroid.ui.models.OnnxModelsScreen
@@ -86,6 +85,7 @@ import com.example.llamadroid.ui.distributed.SdDistributedRunConfigScreen
 import com.example.llamadroid.ui.distributed.SdDistributedWorkerScreen
 import com.example.llamadroid.ui.settings.WelcomeScreen
 import com.example.llamadroid.ui.settings.AboutScreen
+import com.example.llamadroid.ui.settings.StatsScreen
 import com.example.llamadroid.ui.settings.BenchmarkHistoryScreen
 import com.example.llamadroid.ui.settings.BenchmarkScreen
 import com.example.llamadroid.ui.ai.DatasetScreen
@@ -144,33 +144,44 @@ fun LlamaApp(
     var showWelcome by remember { mutableStateOf(!hasCompletedWelcome) }
     
     // Shared Tama State
-    val tamaDatabase = remember { TamaDatabase.getInstance(context) }
-    val farmRepository = remember { FarmRepository(tamaDatabase.farmDao(), context) }
-    val farmEngine = remember { FarmEngine(farmRepository) }
-    val tamaGameEngine = remember {
-        TamaGameEngine(
-            context = context,
-            dao = tamaDatabase.tamaDao(),
-            farmEngine = farmEngine,
-            farmRepository = farmRepository,
-            settingsRepo = settingsRepo
-        )
+    // These services used to be created for every app route. Keep them lazy so scrolling an
+    // unrelated settings or server screen does not compete with Tama database/game work.
+    val tamaDatabaseHolder = remember { lazy { TamaDatabase.getInstance(context) } }
+    val tamaDatabase by tamaDatabaseHolder
+    val farmRepositoryHolder = remember { lazy { FarmRepository(tamaDatabase.farmDao(), context) } }
+    val farmRepository by farmRepositoryHolder
+    val farmEngineHolder = remember { lazy { FarmEngine(farmRepository) } }
+    val farmEngine by farmEngineHolder
+    val tamaGameEngineHolder = remember {
+        lazy {
+            TamaGameEngine(
+                context = context,
+                dao = tamaDatabase.tamaDao(),
+                farmEngine = farmEngine,
+                farmRepository = farmRepository,
+                settingsRepo = settingsRepo
+            )
+        }
     }
-    DisposableEffect(tamaGameEngine) {
+    val tamaGameEngine by tamaGameEngineHolder
+    DisposableEffect(Unit) {
         onDispose {
-            tamaGameEngine.close()
+            if (tamaGameEngineHolder.isInitialized()) tamaGameEngine.close()
         }
     }
     val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
-    val tamaAgentService = remember { 
-        TamaAgentService(
-            context = context,
-            dao = tamaDatabase.tamaDao(),
-            settingsRepo = settingsRepo,
-            ollamaService = OllamaService(context),
-            scope = scope
-        )
+    val tamaAgentServiceHolder = remember {
+        lazy {
+            TamaAgentService(
+                context = context,
+                dao = tamaDatabase.tamaDao(),
+                settingsRepo = settingsRepo,
+                ollamaService = OllamaService(context),
+                scope = scope
+            )
+        }
     }
+    val tamaAgentService by tamaAgentServiceHolder
     
     // Share intent chooser dialog
     var showShareChooser by remember { mutableStateOf(false) }
@@ -194,6 +205,7 @@ fun LlamaApp(
                 // Video -> User chooses Whisper, Video Upscaler, or Workflow
                 mimeType.startsWith("video/") -> {
                     shareOptions = listOf(
+                        context.getString(R.string.share_interpolation) to Screen.VideoInterpolation.route,
                         context.getString(R.string.share_upscaler) to Screen.VideoUpscaler.route,
                         context.getString(R.string.share_transcribe) to Screen.AudioTranscription.route,
                         context.getString(R.string.share_workflow) to Screen.Workflows.route
@@ -389,11 +401,26 @@ fun LlamaApp(
         ) {
             composable(Screen.Dashboard.route) { DashboardScreen(navController) }
             composable(Screen.Settings.route) { SettingsHubScreen(navController) }
+            composable(Screen.Stats.route) { StatsScreen(navController) }
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
-            composable(Screen.Chat.route) { ChatScreen(navController) }
+            composable(
+                route = "${Screen.Chat.route}?port={serverPort}",
+                arguments = listOf(
+                    androidx.navigation.navArgument("serverPort") {
+                        type = androidx.navigation.NavType.IntType
+                        defaultValue = 0
+                    }
+                )
+            ) { backStackEntry ->
+                val serverPort = backStackEntry.arguments?.getInt("serverPort")?.takeIf { it in 1..65535 }
+                ChatScreen(navController, serverPortOverride = serverPort)
+            }
+            composable(Screen.LlamaServers.route) {
+                com.example.llamadroid.ui.ai.llama.LlamaServerCardsScreen(navController)
+            }
             composable(
                 route = "${Screen.ImageGen.route}?startMode={startMode}",
                 arguments = listOf(
@@ -406,7 +433,11 @@ fun LlamaApp(
                 val startMode = backStackEntry.arguments?.getInt("startMode") ?: 0
                 ImageGenScreen(navController, initialMode = startMode)
             }
-            composable(Screen.ImageGenUpscale.route) { LegacyUpscaleScreen(navController) }
+            // Keep the historical route for shortcuts and saved navigation state, but render the
+            // same curated workspace and task selector as every other image operation.
+            composable(Screen.ImageGenUpscale.route) {
+                ImageGenScreen(navController, initialMode = com.example.llamadroid.ui.ai.IMAGE_GEN_MODE_UPSCALE)
+            }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
@@ -415,6 +446,7 @@ fun LlamaApp(
             composable(Screen.VideoGen.route) { VideoGenScreen(navController) }
             composable(Screen.AudioTranscription.route) { AudioTranscriptionScreen(navController) }
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
+            composable(Screen.VideoInterpolation.route) { VideoInterpolationScreen(navController) }
             composable(Screen.SubtitleBurn.route) { SubtitleBurnScreen(navController) }
             composable(Screen.NotesManager.route) { NotesManagerScreen(navController) }
             composable(Screen.KnowledgeBase.route) { KnowledgeBaseScreen(navController) }
@@ -448,7 +480,6 @@ fun LlamaApp(
             composable("pdf_toolbox") { PDFToolboxScreen(navController) }
             composable("pdf_summary") { PDFSummaryScreen(navController) }
             composable("settings_pdf") { PDFSettingsScreen(navController) }
-            composable("settings_pdf_translation") { PDFTranslationSettingsScreen(navController) }
             composable("video_sumup") { VideoSumupScreen(navController) }
             composable("about") { AboutScreen(navController) }
             // Kiwix screens
@@ -777,6 +808,17 @@ fun LlamaApp(
             // Agent Workspace File Manager
             composable(Screen.AgentWorkspace.route) {
                 com.example.llamadroid.ui.agent.AgentWorkspaceScreen(navController)
+            }
+            composable(
+                Screen.AgentInvocation.route,
+                arguments = listOf(
+                    androidx.navigation.navArgument("invocationId") { type = androidx.navigation.NavType.StringType }
+                )
+            ) { backStackEntry ->
+                com.example.llamadroid.ui.agent.AgentInvocationDetailScreen(
+                    navController = navController,
+                    invocationId = backStackEntry.arguments?.getString("invocationId").orEmpty()
+                )
             }
             
             // Tama virtual pet

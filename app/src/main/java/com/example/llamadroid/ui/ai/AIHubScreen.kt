@@ -20,12 +20,15 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,6 +76,8 @@ import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.settings.ImageGenSettingsContent
 import com.example.llamadroid.ui.settings.PDFSettingsContent
 import com.example.llamadroid.ui.settings.VideoUpscalerSettingsContent
+import com.example.llamadroid.ui.ai.llama.RunningLlamaChatServerUi
+import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.settings.WhisperSettingsContent
 import kotlinx.coroutines.launch
 
@@ -101,6 +106,8 @@ fun AIHubScreen(navController: NavController) {
         mutableStateOf(pinPrefs.getStringSet(PINNED_TOOLS_KEY, emptySet()).orEmpty())
     }
     var selectedSettingsTool by remember { mutableStateOf<AIToolDefinition?>(null) }
+    var showChatServerPicker by rememberSaveable { mutableStateOf(false) }
+    val runningChatServers = rememberRunningLlamaChatServers()
 
     val categoryTitles = ToolCategory.entries.associateWith { stringResource(it.titleRes) }
     val toolUiItems = ToolCatalog.tools.map { tool ->
@@ -149,6 +156,26 @@ fun AIHubScreen(navController: NavController) {
         pinPrefs.edit().putStringSet(PINNED_TOOLS_KEY, next.toSet()).apply()
     }
 
+    fun openChat(server: RunningLlamaChatServerUi) {
+        navController.navigate("${Screen.Chat.route}?port=${server.port}")
+    }
+
+    fun openChatOrChoose() {
+        when (runningChatServers.size) {
+            0 -> navController.navigate(Screen.LlamaServers.route)
+            1 -> openChat(runningChatServers.single())
+            else -> showChatServerPicker = true
+        }
+    }
+
+    fun openTool(item: ToolUiItem) {
+        if (item.definition.id == "chat") {
+            openChatOrChoose()
+        } else {
+            navController.navigate(item.definition.route)
+        }
+    }
+
     selectedSettingsTool?.let { tool ->
         ModalBottomSheet(
             onDismissRequest = { selectedSettingsTool = null },
@@ -163,6 +190,17 @@ fun AIHubScreen(navController: NavController) {
                 }
             )
         }
+    }
+
+    if (showChatServerPicker) {
+        ChatServerPickerDialog(
+            servers = runningChatServers,
+            onDismiss = { showChatServerPicker = false },
+            onServerSelected = { server ->
+                showChatServerPicker = false
+                openChat(server)
+            }
+        )
     }
 
     AppPageBackground {
@@ -273,7 +311,7 @@ fun AIHubScreen(navController: NavController) {
                                 gradientColors = item.definition.gradientColors,
                                 hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
                                 isPinned = true,
-                                onOpen = { navController.navigate(item.definition.route) },
+                                onOpen = { openTool(item) },
                                 onSettings = { selectedSettingsTool = item.definition },
                                 onTogglePinned = { setToolPinned(item.definition.id, false) }
                             )
@@ -298,7 +336,7 @@ fun AIHubScreen(navController: NavController) {
                                 gradientColors = item.definition.gradientColors,
                                 hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
                                 isPinned = false,
-                                onOpen = { navController.navigate(item.definition.route) },
+                                onOpen = { openTool(item) },
                                 onSettings = { selectedSettingsTool = item.definition },
                                 onTogglePinned = { setToolPinned(item.definition.id, true) }
                             )
@@ -308,6 +346,74 @@ fun AIHubScreen(navController: NavController) {
             }
         }
     }
+}
+
+@Composable
+private fun ChatServerPickerDialog(
+    servers: List<RunningLlamaChatServerUi>,
+    onDismiss: () -> Unit,
+    onServerSelected: (RunningLlamaChatServerUi) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = stringResource(R.string.ai_chat_choose_server),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.ai_chat_servers_many),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+                servers.forEach { server ->
+                    Button(
+                        onClick = { onServerSelected(server) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = server.name,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = stringResource(R.string.ai_chat_server_port, server.port),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(
+                    text = stringResource(R.string.action_cancel),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    )
 }
 
 private data class PinnedChatUiItem(
@@ -642,6 +748,7 @@ private fun ToolSettingsSheetContent(
                     )
                     ToolSettingsSheet.WHISPER -> WhisperSettingsContent(
                         settingsRepo = settingsRepo,
+                        onOpenModels = { onNavigate(Screen.WhisperModels.route) },
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(horizontal = 20.dp, vertical = 12.dp)

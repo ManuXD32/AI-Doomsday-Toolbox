@@ -54,6 +54,7 @@ import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.launch
 
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DashboardScreen(
     navController: NavController,
@@ -91,232 +92,51 @@ fun DashboardScreen(
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
         AppPageHeader(
-            eyebrow = "HOME",
+            eyebrow = stringResource(R.string.nav_home),
             title = stringResource(R.string.app_name),
             subtitle = stringResource(R.string.ai_hub_subtitle)
         )
-        
-        // Server Status Card (Hero)
+
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(
-                containerColor = if (isRunning) 
-                    MaterialTheme.colorScheme.primaryContainer 
-                else 
-                    MaterialTheme.colorScheme.surfaceVariant
+                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.52f)
             ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+            onClick = { navController.navigate(Screen.LlamaServers.route) }
         ) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    // Status indicator
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(
-                                when {
-                                    isRunning -> Color(0xFF4CAF50)
-                                    isLoading -> Color(0xFF2196F3)
-                                    isStarting -> Color(0xFFFFC107)
-                                    serverState is ServerState.Error -> Color(0xFFF44336)
-                                    else -> Color(0xFF9E9E9E)
-                                }
-                            )
+                Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.llama_cards_title),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        when (serverState) {
-                            is ServerState.Stopped -> stringResource(R.string.status_stopped)
-                            is ServerState.Starting -> stringResource(R.string.dashboard_starting)
-                            is ServerState.Loading -> stringResource(R.string.status_loading)
-                            is ServerState.Running -> stringResource(R.string.status_running)
-                            is ServerState.Error -> stringResource(R.string.status_error)
-                        },
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                }
-                
-                if (isRunning) {
-                    val remoteAccess by settingsRepo.remoteAccess.collectAsState()
-                    val ips = remember { getDeviceIPs(context) }
-                    val port = (serverState as ServerState.Running).port
-                    
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            stringResource(R.string.dashboard_running_port, port),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                        )
-                        if (remoteAccess && ips.isNotEmpty()) {
-                            Text(
-                                stringResource(R.string.dashboard_connect_from),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.6f)
-                            )
-                            ips.forEach { ip ->
-                                Text(
-                                    "http://$ip:$port",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                )
-                            }
-                        } else if (!remoteAccess) {
-                            Text(
-                                stringResource(R.string.dashboard_local_only),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
-                            )
-                        }
-                    }
-                }
-                
-                // Loading progress bar
-                if (isLoading) {
-                    val loadingState = serverState as ServerState.Loading
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            loadingState.status,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (loadingState.progress >= 0f) {
-                            LinearProgressIndicator(
-                                progress = { loadingState.progress },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(6.dp)
-                                    .clip(RoundedCornerShape(3.dp)),
-                                color = Color(0xFF2196F3),
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        } else {
-                            LinearProgressIndicator(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(6.dp)
-                                    .clip(RoundedCornerShape(3.dp)),
-                                color = Color(0xFF2196F3),
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        }
-                    }
-                }
-                
-                if (serverState is ServerState.Error) {
-                    Text(
-                        (serverState as ServerState.Error).message,
+                        text = stringResource(R.string.llama_cards_subtitle),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.76f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
-                
-                // Model info
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.7f)
-                    ),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Star,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                stringResource(R.string.llm_model),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                selectedModelPath?.substringAfterLast("/") ?: stringResource(R.string.dashboard_no_model),
-                                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                                maxLines = 1
-                            )
-                            // RAM Estimation
-                            selectedModelPath?.let { modelPath ->
-                                val modelFile = java.io.File(modelPath)
-                                if (modelFile.exists()) {
-                                    val modelSizeGb = modelFile.length() / (1024.0 * 1024.0 * 1024.0)
-                                    // Context memory: ~2 bytes per token per layer (rough estimate)
-                                    // Model weights + 20% overhead + context buffer
-                                    val estimatedRam = modelSizeGb * 1.2 + (contextSize / 1024.0) * 0.1
-                                    Text(
-                                        stringResource(R.string.dashboard_ram_needed, String.format("%.1f", estimatedRam)),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (estimatedRam > stats.freeRamGb) 
-                                            MaterialTheme.colorScheme.error 
-                                        else 
-                                            MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // Action buttons
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    if (!isRunning && !isStarting) {
-                        Button(
-                            onClick = { viewModel.startServer(context, selectedModelPath) },
-                            enabled = selectedModelPath != null,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(16.dp)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dashboard_start_llamacpp))
-                        }
-                    } else if (isStarting) {
-                        OutlinedButton(
-                            onClick = { },
-                            enabled = false,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(16.dp)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dashboard_starting))
-                        }
-                    } else {
-                        Button(
-                            onClick = { viewModel.stopServer(context) },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.error
-                            ),
-                            contentPadding = PaddingValues(16.dp)
-                        ) {
-                            Icon(Icons.Default.Close, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dashboard_stop_server))
-                        }
-                    }
-                }
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
             }
         }
 
@@ -356,13 +176,18 @@ fun DashboardScreen(
                     }
                     Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     AssistChip(
                         onClick = { navController.navigate(Screen.KnowledgeBase.route) },
                         label = { Text(stringResource(R.string.kb_pending_count, knowledgePendingCount)) }
                     )
                     AssistChip(
                         onClick = { navController.navigate(Screen.KnowledgeBase.route) },
+                        modifier = Modifier.widthIn(max = 240.dp),
                         label = {
                             Text(
                                 if (knowledgeErrorCount > 0) {
@@ -420,10 +245,20 @@ fun DashboardScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.dashboard_qr_connect), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text(
+                                    stringResource(R.string.dashboard_qr_connect),
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                             IconButton(onClick = { expanded = !expanded }) {
                                 Icon(

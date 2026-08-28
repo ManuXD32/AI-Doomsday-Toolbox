@@ -109,6 +109,7 @@ object VideoSumupService {
         whisperModelPath: String,
         language: String = "auto",
         threads: Int = 4,
+        vadConfig: WhisperVadConfig? = null,
         saveToNotes: Boolean = true,
         noteType: NoteType = NoteType.VIDEO_SUMMARY,  // WORKFLOW for workflow calls
         audioSourcePath: String? = null,  // Original audio path for workflow notes
@@ -117,6 +118,7 @@ object VideoSumupService {
         currentJob?.cancel()
         _result.value = null
         isCancelled = false
+        val frozenVadConfig = vadConfig ?: SettingsRepository(context).whisperVadConfigSnapshot()
         if (noteType == NoteType.WORKFLOW) {
             WorkflowStateHolder.setCancelled(false)
             WorkflowStateHolder.setError(null)
@@ -162,7 +164,7 @@ object VideoSumupService {
         
         currentJob = serviceScope.launch {
             try {
-                val result = summarizeVideo(context, videoPath, videoFileName, whisperModelPath, language, threads, saveToNotes, noteType, audioSourcePath, settingsOverride)
+                val result = summarizeVideo(context, videoPath, videoFileName, whisperModelPath, language, threads, frozenVadConfig, saveToNotes, noteType, audioSourcePath, settingsOverride)
                 _result.value = result
                 
                 // Complete notification on success
@@ -198,6 +200,7 @@ object VideoSumupService {
         whisperModelPath: String,
         language: String,
         threads: Int,
+        vadConfig: WhisperVadConfig,
         saveToNotes: Boolean,
         noteType: NoteType,
         audioSourcePath: String?,
@@ -234,10 +237,22 @@ object VideoSumupService {
             notificationTaskId?.let { id -> UnifiedNotificationManager.updateProgress(id, 0.5f, context.getString(R.string.video_sumup_transcribing)) }
             DebugLog.log("[VIDEO-SUMUP] Step 2: Transcribing")
             
-            val transcriptResult = transcribe(context, audioFile.absolutePath, whisperModelPath, language, threads)
+            val transcriptResult = transcribe(
+                context,
+                audioFile.absolutePath,
+                whisperModelPath,
+                language,
+                threads,
+                vadConfig
+            )
             if (transcriptResult.isFailure) {
-                _state.value = VideoSumupState.Error(transcriptResult.exceptionOrNull()?.message ?: "Transcribe failed")
-                return@withContext Result.failure(transcriptResult.exceptionOrNull()!!)
+                val error = transcriptResult.exceptionOrNull()
+                    ?: IllegalStateException("Transcribe failed")
+                if (error is CancellationException || isCancelled) {
+                    return@withContext Result.failure(CancellationException("Cancelled"))
+                }
+                _state.value = VideoSumupState.Error(error.message ?: "Transcribe failed")
+                return@withContext Result.failure(error)
             }
             val transcript = transcriptResult.getOrThrow()
             if (noteType == NoteType.WORKFLOW) {
@@ -373,6 +388,9 @@ object VideoSumupService {
             _state.value = VideoSumupState.Idle
             _progress.value = context.getString(R.string.video_sumup_complete)
             Result.success(VideoSumupResult(transcript, summary))
+        } catch (cancelled: CancellationException) {
+            _state.value = VideoSumupState.Idle
+            Result.failure(cancelled)
         } catch (e: Exception) {
             DebugLog.log("[VIDEO-SUMUP] Error: ${e.message}")
             _state.value = VideoSumupState.Error(e.message ?: "Error")
@@ -415,38 +433,119 @@ object VideoSumupService {
         } catch (e: Exception) { Result.failure(e) }
     }
     
-    private suspend fun transcribe(context: Context, audioPath: String, modelPath: String, language: String, threads: Int): Result<String> {
-        return try {
+    private suspend fun transcribe(
+        context: Context,
+        audioPath: String,
+        modelPath: String,
+        language: String,
+        threads: Int,
+        vadConfig: WhisperVadConfig?
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val outputBase = File(
+            context.cacheDir,
+            "whisper_sumup_${System.currentTimeMillis()}_${System.nanoTime()}"
+        )
+        val transcriptFile = File("${outputBase.absolutePath}.txt")
+        var process: Process? = null
+        try {
+            if (isCancelled) throw CancellationException("Cancelled")
             val binaryRepo = com.example.llamadroid.data.binary.BinaryRepository(context)
             val whisper = binaryRepo.getWhisperCliBinary()
-            if (whisper == null || !whisper.exists()) return Result.failure(Exception("Whisper not found"))
+            if (whisper == null || !whisper.exists()) {
+                throw IllegalStateException(context.getString(R.string.whisper_error_binary_not_found))
+            }
             val resolvedModelPath = WhisperModelPathResolver.resolve(context, modelPath)
-                ?: return Result.failure(Exception(context.getString(R.string.whisper_error_no_model)))
-            
-            val outputBase = File(context.cacheDir, "whisper_sumup")
-            val args = listOf(whisper.absolutePath, "-m", resolvedModelPath, "-f", audioPath, 
-                "-l", language, "-t", threads.toString(), "--no-gpu", "-otxt", "-of", outputBase.absolutePath)
+                ?: throw IllegalStateException(context.getString(R.string.whisper_error_no_model))
+            val requestedVad = vadConfig ?: SettingsRepository(context).whisperVadConfigSnapshot()
+            val effectiveVad = try {
+                WhisperVadAssetStore.effectiveConfig(
+                    context = context,
+                    config = requestedVad,
+                    purpose = WhisperInvocationPurpose.VIDEO_SUMMARY
+                )
+            } catch (error: WhisperVadUnavailableException) {
+                throw IllegalStateException(
+                    context.getString(R.string.whisper_error_vad_model_missing),
+                    error
+                )
+            }
+
+            val symlinkDir = File(context.cacheDir, "ffmpeg_libs").apply { mkdirs() }
+            val environment = mapOf(
+                "LD_LIBRARY_PATH" to
+                    "${binaryRepo.getLibraryDir()}:${symlinkDir.absolutePath}",
+                "GGML_BACKEND_PATH" to "/dev/null",
+                "HOME" to context.filesDir.absolutePath,
+                "TMPDIR" to context.cacheDir.absolutePath
+            )
+            val capabilities = if (effectiveVad.enabled) {
+                WhisperBinaryCapabilityCache.capabilitiesFor(
+                    binary = whisper,
+                    workingDirectory = context.filesDir,
+                    environment = environment
+                )
+            } else {
+                null
+            }
+            val args = try {
+                buildWhisperInvocationArgs(
+                    request = WhisperInvocationRequest(
+                        binaryPath = whisper.absolutePath,
+                        modelPath = resolvedModelPath,
+                        audioPath = audioPath,
+                        language = language,
+                        threads = threads,
+                        translate = false,
+                        outputFormats = setOf(WhisperOutputFormat.TXT),
+                        outputBasePath = outputBase.absolutePath,
+                        purpose = WhisperInvocationPurpose.VIDEO_SUMMARY,
+                        vad = effectiveVad
+                    ),
+                    binaryCapabilities = capabilities
+                )
+            } catch (error: WhisperUnsupportedFlagsException) {
+                throw IllegalStateException(
+                    context.getString(
+                        R.string.whisper_error_vad_unsupported,
+                        error.flags.joinToString(", ")
+                    ),
+                    error
+                )
+            }
             DebugLog.log("[VIDEO-SUMUP] Whisper: ${args.joinToString(" ")}")
-            
-            val pb = ProcessBuilder(args)
-            pb.redirectErrorStream(true)
-            val symlinkDir = File(context.cacheDir, "ffmpeg_libs")
-            pb.environment()["LD_LIBRARY_PATH"] = "${binaryRepo.getLibraryDir()}:${symlinkDir.absolutePath}"
-            
-            val process = pb.start()
+
+            val processBuilder = ProcessBuilder(args)
+                .directory(context.filesDir)
+                .redirectErrorStream(true)
+            processBuilder.environment().putAll(environment)
+            process = processBuilder.start()
             currentProcess = process
-            process.inputStream.bufferedReader().readText()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
             val exitCode = process.waitFor()
-            
-            if (exitCode != 0) return Result.failure(Exception("Whisper exit $exitCode"))
-            
-            val transcriptFile = File("${outputBase.absolutePath}.txt")
-            if (!transcriptFile.exists()) return Result.failure(Exception("No transcript"))
-            
-            val transcript = transcriptFile.readText().trim()
+            if (isCancelled) throw CancellationException("Cancelled")
+            if (output.isNotBlank()) {
+                DebugLog.log(
+                    "[VIDEO-SUMUP] ${output.lineSequence().toList().takeLast(10).joinToString("\n")}"
+                )
+            }
+            if (exitCode != 0) {
+                throw IllegalStateException(
+                    context.getString(R.string.whisper_error_failed_with_exit_code, exitCode)
+                )
+            }
+            if (!transcriptFile.isFile) {
+                throw IllegalStateException(context.getString(R.string.whisper_error_no_transcript))
+            }
+            Result.success(transcriptFile.readText().trim())
+        } catch (cancelled: CancellationException) {
+            Result.failure(cancelled)
+        } catch (error: Exception) {
+            Result.failure(error)
+        } finally {
+            if (process?.isAlive == true) process.destroyForcibly()
+            if (currentProcess === process) currentProcess = null
             transcriptFile.delete()
-            Result.success(transcript)
-        } catch (e: Exception) { Result.failure(e) }
+        }
     }
     
     private suspend fun summarizeRemotely(

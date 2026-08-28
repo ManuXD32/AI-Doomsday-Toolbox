@@ -11,9 +11,14 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
 import com.example.llamadroid.util.CpuFeatures
+import com.example.llamadroid.util.NativeModuleCatalog
+import com.example.llamadroid.util.NativeProcessCleanup
+import java.security.MessageDigest
 import kotlin.math.min
 
 data class ProcessRunResult(
@@ -27,9 +32,25 @@ data class ProcessRunResult(
     val nativeLinkerStartupFailure: Boolean = false
 )
 
+internal fun llamaReadinessShouldPromote(
+    ownedChild: Boolean,
+    childAlive: Boolean,
+    httpStatus: Int?
+): Boolean = ownedChild && childAlive && httpStatus == HttpURLConnection.HTTP_OK
+
+internal fun llamaReadinessProbeHost(configuredHost: String): String = when (configuredHost) {
+    "0.0.0.0" -> "127.0.0.1"
+    "::" -> "::1"
+    else -> configuredHost
+}
+
 class ProcessController {
     
     private var process: Process? = null
+    private var launchGeneration = 0L
+    @Volatile private var stopRequestedGeneration = 0L
+    @Volatile private var activeChildPid: Int = -1
+    @Volatile private var activeBinaryWasOpenCl: Boolean = false
     private val _logs = MutableStateFlow<String>("")
     val logs = _logs.asStateFlow()
     
@@ -37,6 +58,35 @@ class ProcessController {
     @Volatile
     var stoppedIntentionally = false
         private set
+
+    private fun awaitOwnedHttpReadiness(
+        childProcess: Process,
+        config: LlamaConfig,
+        timeoutMs: Long = HTTP_READINESS_TIMEOUT_MS
+    ): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        val host = llamaReadinessProbeHost(config.host)
+        val urlHost = if (host.contains(':') && !host.startsWith('[')) "[$host]" else host
+        while (System.currentTimeMillis() < deadline) {
+            val ownedChild = process === childProcess
+            if (!ownedChild || !childProcess.isAlive) return false
+            val status = runCatching {
+                (URL("http://$urlHost:${config.port}/health").openConnection() as HttpURLConnection).run {
+                    connectTimeout = HTTP_READINESS_CONNECT_TIMEOUT_MS
+                    readTimeout = HTTP_READINESS_CONNECT_TIMEOUT_MS
+                    requestMethod = "GET"
+                    try {
+                        responseCode
+                    } finally {
+                        disconnect()
+                    }
+                }
+            }.getOrNull()
+            if (llamaReadinessShouldPromote(ownedChild, childProcess.isAlive, status)) return true
+            Thread.sleep(HTTP_READINESS_RETRY_DELAY_MS)
+        }
+        return false
+    }
 
     internal fun resolveExitState(exitCode: Int, errorMessage: String): ServerState {
         return if (stoppedIntentionally) {
@@ -64,7 +114,18 @@ class ProcessController {
     
 
     fun getCommand(binaryPath: String, config: LlamaConfig): List<String> {
-        val customFlagsText = config.customFlags.orEmpty()
+        val forceOpenClCpuTargetGpuDraft = shouldForceOpenClCpuTargetGpuDraft(binaryPath, config)
+        val rawCustomFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
+        val baseCustomFlagsArgs = filterDistributedLlamaCustomFlags(
+            filterManagedLlamaCustomFlags(rawCustomFlagsArgs, config),
+            config
+        )
+        val customFlagsArgs = if (forceOpenClCpuTargetGpuDraft) {
+            filterOpenClCpuTargetGpuDraftConflicts(baseCustomFlagsArgs)
+        } else {
+            baseCustomFlagsArgs
+        }
+        val customFlagsText = buildCommandString(customFlagsArgs)
         val args = mutableListOf(
             binaryPath,
             "-m", config.modelPath,
@@ -83,6 +144,16 @@ class ProcessController {
         if (config.mmprojPath != null) {
             args.add("--mmproj")
             args.add(config.mmprojPath)
+            config.mmprojOffload?.let { offload ->
+                args.add(if (offload) "--mmproj-offload" else "--no-mmproj-offload")
+            }
+        }
+
+        if (!config.loraPath.isNullOrBlank() &&
+            !hasAnyCommandFlag(customFlagsText, setOf("--lora"))
+        ) {
+            args.add("--lora")
+            args.add(config.loraPath)
         }
         
         if (config.isEmbedding) {
@@ -93,8 +164,9 @@ class ProcessController {
              args.add(config.temperature.toString())
         }
         
-        // Add KV cache quantization flags if enabled
         if (config.kvCacheEnabled) {
+            // KV cache quantization remains user-controlled, including when the OpenCL placement
+            // switch is enabled.
             args.add("--cache-type-k")
             args.add(config.kvCacheTypeK)
             args.add("--cache-type-v")
@@ -105,31 +177,70 @@ class ProcessController {
             }
         }
         appendKvOffloadArgs(args, config, customFlagsText)
+        if (forceOpenClCpuTargetGpuDraft) {
+            // The OpenCL switch fixes only target/drafter placement and backend sampling. KV
+            // offload and quantization remain controlled by the existing general settings.
+            args.add("--device")
+            args.add("none")
+            args.add("-ngl")
+            args.add("0")
+            args.add("--no-spec-draft-backend-sampling")
+        }
         
         // Add RPC workers for distributed inference
         if (config.rpcWorkers.isNotEmpty()) {
             val rpcArg = config.rpcWorkers.joinToString(",")
+            val fitTarget = if (config.fitEnabled) {
+                DistributedLlamaArguments.normalizeFitTarget(config.fitTargetMiB, config.rpcWorkers.size)
+            } else {
+                null
+            }
+            val distributedDeviceCount = config.targetDevices.size.coerceAtLeast(config.rpcWorkers.size)
+            DistributedLlamaArguments.validate(
+                deviceCount = distributedDeviceCount,
+                fitEnabled = config.fitEnabled,
+                fitTargetMiB = config.fitTargetMiB,
+                tensorSplit = config.tensorSplit.takeIf { distributedDeviceCount > 1 }
+            )
             args.add("--rpc")
             args.add(rpcArg)
-            // Disable automatic memory fitting for distributed inference - it can cause SIGSEGV
-            args.add("--fit")
-            args.add("off")
-            
-            // Use -ngl to specify how many layers to offload to RPC workers
-            // MUST always be sent in RPC mode - without it, llama-server defaults to 'auto'
-            // which offloads ALL layers, potentially crashing low-RAM workers
-            args.add("-ngl")
-            args.add(config.nGpuLayers.toString())
+            if (config.targetDevices.isNotEmpty()) {
+                args.add("--device")
+                args.add(config.targetDevices.joinToString(","))
+            }
+            config.splitMode?.takeIf(String::isNotBlank)?.let {
+                args.add("--split-mode")
+                args.add(it)
+            }
+            config.mainGpu?.let {
+                args.add("--main-gpu")
+                args.add(it.toString())
+            }
+            // Explicit distributed placement never falls back to llama.cpp's automatic
+            // offload amount. CPU-only target placement intentionally emits zero.
+            config.nGpuLayersArgument?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                args.add("-ngl")
+                args.add(it)
+            }
+            if (config.fitEnabled) {
+                args.add("--fit")
+                args.add("on")
+            }
+            fitTarget?.let {
+                args.add("--fit-target")
+                args.add(it)
+            }
             
             // Use -ts to split the offloaded layers among multiple workers
             // Only needed when there are 2+ workers
-            if (!config.tensorSplit.isNullOrEmpty() && config.rpcWorkers.size > 1) {
+            if (!config.tensorSplit.isNullOrEmpty() && distributedDeviceCount > 1) {
                 args.add("-ts")
-                args.add(config.tensorSplit)
+                args.add(DistributedLlamaArguments.normalizeTensorSplit(config.tensorSplit, distributedDeviceCount)!!)
             }
         }
 
-        if (DeviceAcceleration.isAcceleratorBinary(File(binaryPath)) &&
+        if (!forceOpenClCpuTargetGpuDraft &&
+            DeviceAcceleration.isAcceleratorBinary(File(binaryPath)) &&
             config.rpcWorkers.isEmpty() &&
             "-ngl" !in customFlagsText &&
             "--n-gpu-layers" !in customFlagsText
@@ -143,7 +254,29 @@ class ProcessController {
             args.add("--no-mmap")
         }
         
-        args.addAll(buildSpeculativeArgs(config))
+        val speculativeConfig = if (forceOpenClCpuTargetGpuDraft) {
+            config.copy(
+                customFlags = null,
+                draftDeviceMode = LlamaDraftDeviceMode.ACCELERATOR.value,
+                draftDeviceId = "GPUOpenCL",
+                draftGpuLayers = "all"
+            )
+        } else {
+            config
+        }
+        val speculativeArgs = buildSpeculativeArgs(speculativeConfig)
+        args.addAll(speculativeArgs)
+        if (forceOpenClCpuTargetGpuDraft &&
+            !hasAnyCommandFlag(
+                speculativeArgs,
+                setOf("--device-draft", "--spec-draft-device", "-devd")
+            )
+        ) {
+            args.add("--spec-draft-device")
+            args.add("GPUOpenCL")
+            args.add("--spec-draft-ngl")
+            args.add("all")
+        }
 
         // Advanced Settings
         if (config.parallel != null) {
@@ -159,15 +292,33 @@ class ProcessController {
             args.add("--cache-ram")
             args.add(config.cacheRam.toString())
         }
+        config.contextCheckpoints?.let {
+            args.add("--ctx-checkpoints")
+            args.add(it.toString())
+        }
+        config.checkpointMinStep?.let {
+            args.add("--checkpoint-min-step")
+            args.add(it.toString())
+        }
+        if (config.emitDefaultCachePolicyArgs) {
+            args.add(if (config.cachePrompt) "--cache-prompt" else "--no-cache-prompt")
+            args.add(if (config.cacheIdleSlots) "--cache-idle-slots" else "--no-cache-idle-slots")
+            when (LlamaKvUnifiedMode.fromValue(config.kvUnifiedMode)) {
+                LlamaKvUnifiedMode.ENABLED -> args.add("--kv-unified")
+                LlamaKvUnifiedMode.DISABLED -> args.add("--no-kv-unified")
+                LlamaKvUnifiedMode.AUTO -> Unit
+            }
+            if (config.swaFull) args.add("--swa-full")
+            config.sleepIdleSeconds?.let {
+                args.add("--sleep-idle-seconds")
+                args.add(it.toString())
+            }
+        }
         
         args.add("--flash-attn")
         args.add(if (config.flashAttention) "on" else "off")
 
-        if (!config.customFlags.isNullOrBlank()) {
-            // Split custom flags by space, ignoring excessive spaces.
-            val flags = config.customFlags.trim().split("\\s+".toRegex())
-            args.addAll(flags)
-        }
+        args.addAll(customFlagsArgs)
 
         if (config.nativeToolsEnabled && !hasAnyCommandFlag(customFlagsText, setOf("--tools"))) {
             args.add("--tools")
@@ -203,6 +354,10 @@ class ProcessController {
             }
         }
 
+        require(!inSingleQuotes && !inDoubleQuotes && !escaping) {
+            "Command contains incomplete quoting or escaping"
+        }
+
         if (current.isNotEmpty()) {
             tokens += current.toString()
         }
@@ -213,6 +368,12 @@ class ProcessController {
     fun buildCommandString(args: List<String>): String =
         args.joinToString(" ") { shellEscape(it) }
 
+    fun containsDistributedOnlyArgument(args: List<String>): Boolean =
+        args.any { token ->
+            val flag = token.substringBefore('=')
+            flag in setOf("--rpc", "--fit", "--fit-target", "--tensor-split", "-ts")
+        }
+
     fun renderCommandTemplate(
         template: String,
         binaryPath: String,
@@ -222,20 +383,37 @@ class ProcessController {
 
         val defaultArgs = getCommand(binaryPath, config)
         val templateContainsNativeToolsPlaceholder = template.contains("{native_tools_args}")
+        val templateContainsLoraPlaceholder =
+            template.contains("{lora}") || template.contains("{lora_args}")
         val substituted = substituteTemplateValues(template, binaryPath, config, defaultArgs)
         val renderedArgs = splitCommandLine(substituted).filter { it.isNotBlank() }.let { args ->
-            appendNativeToolsArgsIfNeeded(
-                args = args,
+            val scopedArgs = if (config.rpcWorkers.isEmpty()) {
+                filterDistributedLlamaCustomFlags(args, config)
+            } else args
+            val withTools = appendNativeToolsArgsIfNeeded(
+                args = scopedArgs,
                 enabled = config.nativeToolsEnabled && !templateContainsNativeToolsPlaceholder
+            )
+            appendLoraArgsIfNeeded(
+                args = withTools,
+                loraPath = config.loraPath.takeUnless {
+                    templateContainsLoraPlaceholder
+                }
             )
         }
         if (renderedArgs.isEmpty()) return defaultArgs
 
-        val hasExplicitBinary = template.contains("{binary}") ||
-            renderedArgs.firstOrNull() == binaryPath ||
-            renderedArgs.firstOrNull()?.startsWith("-") == false
+        val effectiveRenderedArgs = enforceOpenClCpuTargetGpuDraftArgs(
+            args = renderedArgs,
+            binaryPath = binaryPath,
+            config = config
+        )
 
-        return if (hasExplicitBinary) renderedArgs else listOf(binaryPath) + renderedArgs
+        val hasExplicitBinary = template.contains("{binary}") ||
+            effectiveRenderedArgs.firstOrNull() == binaryPath ||
+            effectiveRenderedArgs.firstOrNull()?.startsWith("-") == false
+
+        return if (hasExplicitBinary) effectiveRenderedArgs else listOf(binaryPath) + effectiveRenderedArgs
     }
 
     private fun substituteTemplateValues(
@@ -244,10 +422,28 @@ class ProcessController {
         config: LlamaConfig,
         defaultArgs: List<String>
     ): String {
-        val customFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
-        val speculativeArgs = buildSpeculativeArgs(config)
+        val forceOpenClCpuTargetGpuDraft = shouldForceOpenClCpuTargetGpuDraft(binaryPath, config)
+        val customFlagsArgs = filterDistributedLlamaCustomFlags(
+            filterManagedLlamaCustomFlags(splitCommandLine(config.customFlags.orEmpty()), config),
+            config
+        )
+        val speculativeConfig = if (forceOpenClCpuTargetGpuDraft) {
+            config.copy(
+                customFlags = null,
+                draftDeviceMode = LlamaDraftDeviceMode.ACCELERATOR.value,
+                draftDeviceId = "GPUOpenCL",
+                draftGpuLayers = "all"
+            )
+        } else {
+            config
+        }
+        val speculativeArgs = buildSpeculativeArgs(speculativeConfig)
         val mtpArgs = if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) speculativeArgs else emptyList()
         val nativeToolsArgs = buildNativeToolsArgs(config.nativeToolsEnabled)
+        val loraArgs = config.loraPath
+            ?.takeIf { it.isNotBlank() }
+            ?.let { listOf("--lora", it) }
+            .orEmpty()
         val kvOffloadArgs = buildKvOffloadArgs(config, customFlagsArgs)
         val kvCacheArgs = if (config.kvCacheEnabled) {
             buildList {
@@ -269,6 +465,7 @@ class ProcessController {
             "{model}" to config.modelPath,
             "{draft_model}" to (config.draftModelPath ?: ""),
             "{mmproj}" to (config.mmprojPath ?: ""),
+            "{lora}" to (config.loraPath ?: ""),
             "{threads}" to config.threads.toString(),
             "{batch_size}" to config.batchSize.toString(),
             "{physical_batch_size}" to (config.physicalBatchSize ?: config.batchSize).toString(),
@@ -284,15 +481,34 @@ class ProcessController {
             "{kv_cache_reuse}" to config.kvCacheReuse.toString(),
             "{rpc_workers}" to config.rpcWorkers.joinToString(","),
             "{n_gpu_layers}" to config.nGpuLayers.toString(),
+            "{n_gpu_layers_argument}" to (config.nGpuLayersArgument ?: config.nGpuLayers.toString()),
             "{tensor_split}" to (config.tensorSplit ?: ""),
+            "{fit}" to if (config.fitEnabled) "on" else "off",
+            "{fit_target}" to (config.fitTargetMiB ?: ""),
             "{custom_flags}" to buildCommandString(customFlagsArgs),
             "{default_args}" to buildCommandString(defaultArgs.drop(1)),
             "{speculative_args}" to buildCommandString(speculativeArgs),
             "{mtp_args}" to buildCommandString(mtpArgs),
             "{native_tools_args}" to buildCommandString(nativeToolsArgs),
+            "{lora_args}" to buildCommandString(loraArgs),
             "{kv_cache_args}" to buildCommandString(kvCacheArgs + kvOffloadArgs),
             "{kv_offload_args}" to buildCommandString(kvOffloadArgs),
-            "{draft_device_args}" to buildCommandString(buildDraftDeviceArgs(config, customFlagsArgs))
+            "{draft_device_args}" to buildCommandString(
+                buildDraftDeviceArgs(
+                    speculativeConfig,
+                    if (forceOpenClCpuTargetGpuDraft) emptyList() else customFlagsArgs
+                )
+            ),
+            "{opencl_cpu_target_gpu_draft_args}" to buildCommandString(
+                if (forceOpenClCpuTargetGpuDraft) {
+                    listOf(
+                        "--device", "none", "-ngl", "0",
+                        "--no-spec-draft-backend-sampling"
+                    )
+                } else {
+                    emptyList()
+                }
+            )
         )
 
         var rendered = template
@@ -300,6 +516,16 @@ class ProcessController {
             rendered = rendered.replace(placeholder, value)
         }
         return rendered.trim()
+    }
+
+    private fun appendLoraArgsIfNeeded(
+        args: List<String>,
+        loraPath: String?
+    ): List<String> {
+        if (loraPath.isNullOrBlank() ||
+            hasAnyCommandFlag(args, setOf("--lora"))
+        ) return args
+        return args + listOf("--lora", loraPath)
     }
 
     private fun buildSpeculativeArgs(config: LlamaConfig): List<String> {
@@ -313,7 +539,7 @@ class ProcessController {
                     "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString(),
                     "--spec-draft-n-min", config.draftMin.coerceAtLeast(0).toString(),
                     "--spec-draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin.coerceIn(0f, 1f))
-                ) + buildDraftThreadArgs(config)
+                ) + buildDraftThreadArgs(config) + buildDraftDeviceArgs(config, config.customFlags.orEmpty())
             }
             LlamaSpeculativeMode.DRAFT_MTP -> buildList {
                 add("--spec-type")
@@ -337,7 +563,17 @@ class ProcessController {
                     "--spec-type", config.speculativeMode.flagValue,
                     "-md", draftModel,
                     "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString()
-                ) + buildDraftThreadArgs(config)
+                ) + buildDraftThreadArgs(config) + buildDraftDeviceArgs(config, config.customFlags.orEmpty())
+            }
+            LlamaSpeculativeMode.DRAFT_DSPARK -> {
+                val draftModel = config.draftModelPath ?: return emptyList()
+                listOf(
+                    "--spec-type", config.speculativeMode.flagValue,
+                    "--spec-draft-model", draftModel,
+                    "--spec-draft-n-max", config.draftMax.coerceAtLeast(1).toString(),
+                    "--spec-draft-n-min", config.draftMin.coerceAtLeast(0).toString(),
+                    "--spec-draft-p-min", String.format(java.util.Locale.US, "%.2f", config.draftPMin.coerceIn(0f, 1f))
+                ) + buildDraftThreadArgs(config) + buildDraftDeviceArgs(config, config.customFlags.orEmpty())
             }
             LlamaSpeculativeMode.NGRAM_MOD -> listOf(
                 "--spec-type", config.speculativeMode.flagValue,
@@ -396,8 +632,23 @@ class ProcessController {
         buildDraftDeviceArgs(config, splitCommandLine(customFlagsText))
 
     private fun buildDraftDeviceArgs(config: LlamaConfig, customFlagsArgs: List<String>): List<String> {
-        if (hasAnyCommandFlag(customFlagsArgs, setOf("--device-draft", "--gpu-layers-draft"))) {
+        if (hasAnyCommandFlag(customFlagsArgs, setOf(
+                "--device-draft", "--spec-draft-device", "-devd",
+                "--gpu-layers-draft", "--spec-draft-ngl", "-ngld"
+            ))) {
             return emptyList()
+        }
+        if (!config.draftDeviceId.isNullOrBlank() || !config.draftGpuLayers.isNullOrBlank()) {
+            return buildList {
+                config.draftDeviceId?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                    add("--spec-draft-device")
+                    add(it)
+                }
+                config.draftGpuLayers?.trim()?.takeIf { it.isNotEmpty() }?.let {
+                    add("--spec-draft-ngl")
+                    add(it)
+                }
+            }
         }
         return when (LlamaDraftDeviceMode.fromValue(config.draftDeviceMode)) {
             LlamaDraftDeviceMode.AUTO -> emptyList()
@@ -422,6 +673,16 @@ class ProcessController {
     fun binarySupportsDflashSpeculative(binaryFile: File): Boolean {
         if (!binaryFile.isFile || !binaryFile.canRead()) return false
         return DFLASH_SPEC_MARKERS.any { marker -> binaryContainsMarker(binaryFile, marker) }
+    }
+
+    fun binarySupportsDsparkSpeculative(binaryFile: File): Boolean {
+        if (!binaryFile.isFile || !binaryFile.canRead()) return false
+        return DSPARK_SPEC_MARKERS.any { marker -> binaryContainsMarker(binaryFile, marker) }
+    }
+
+    fun binarySupportsDistributedFit(binaryFile: File): Boolean {
+        if (!binaryFile.isFile || !binaryFile.canRead()) return false
+        return DISTRIBUTED_FIT_MARKERS.any { marker -> binaryContainsMarker(binaryFile, marker) }
     }
 
     private fun binaryContainsMarker(binaryFile: File, marker: ByteArray): Boolean {
@@ -465,6 +726,59 @@ class ProcessController {
             flags.any { flag -> token == flag || token.startsWith("$flag=") }
         }
 
+    private fun shouldForceOpenClCpuTargetGpuDraft(
+        binaryPath: String,
+        config: LlamaConfig
+    ): Boolean = config.openClCpuTargetGpuDraft &&
+        config.rpcWorkers.isEmpty() &&
+        File(binaryPath).name.contains("opencl", ignoreCase = true)
+
+    /**
+     * The OpenCL placement switch is an explicit override for model/drafter placement and draft
+     * backend sampling. KV cache flags remain available to the existing general settings.
+     */
+    private fun filterOpenClCpuTargetGpuDraftConflicts(args: List<String>): List<String> {
+        val valueFlags = setOf(
+            "--device", "-dev",
+            "--gpu-layers", "-ngl", "--n-gpu-layers",
+            "--device-draft", "--spec-draft-device", "-devd",
+            "--gpu-layers-draft", "--spec-draft-ngl", "-ngld"
+        )
+        val toggleFlags = setOf(
+            "--spec-draft-backend-sampling", "--no-spec-draft-backend-sampling"
+        )
+        val blocked = valueFlags + toggleFlags
+        val filtered = mutableListOf<String>()
+        var index = 0
+        while (index < args.size) {
+            val argument = args[index]
+            val flagName = argument.substringBefore('=')
+            if (flagName in blocked) {
+                val consumesFollowingValue = flagName in valueFlags && '=' !in argument
+                index += if (consumesFollowingValue && index + 1 < args.size) 2 else 1
+            } else {
+                filtered += argument
+                index += 1
+            }
+        }
+        return filtered
+    }
+
+    private fun enforceOpenClCpuTargetGpuDraftArgs(
+        args: List<String>,
+        binaryPath: String,
+        config: LlamaConfig
+    ): List<String> {
+        if (!shouldForceOpenClCpuTargetGpuDraft(binaryPath, config)) return args
+        val result = filterOpenClCpuTargetGpuDraftConflicts(args).toMutableList()
+        result += listOf(
+            "--device", "none", "-ngl", "0",
+            "--no-spec-draft-backend-sampling"
+        )
+        result += listOf("--spec-draft-device", "GPUOpenCL", "--spec-draft-ngl", "all")
+        return result
+    }
+
     private fun shellEscape(arg: String): String {
         if (arg.isEmpty()) return "''"
         val safeChars = "-_./:=,@+%".toSet()
@@ -475,12 +789,25 @@ class ProcessController {
     private companion object {
         private const val DEFAULT_BINARY_SCAN_BUFFER_SIZE = 8192
         private const val RECENT_OUTPUT_LIMIT = 24
+        private const val HTTP_READINESS_TIMEOUT_MS = 5_000L
+        private const val HTTP_READINESS_CONNECT_TIMEOUT_MS = 500
+        private const val HTTP_READINESS_RETRY_DELAY_MS = 100L
         private val MTP_SPEC_TYPE_MARKER = "draft-mtp".toByteArray(Charsets.US_ASCII)
         private val DFLASH_SPEC_MARKERS = listOf(
             "draft-dflash",
             "common_speculative_impl_draft_dflash",
             "llama_model_dflash",
             "dflash"
+        ).map { it.toByteArray(Charsets.US_ASCII) }
+        private val DSPARK_SPEC_MARKERS = listOf(
+            "draft-dspark",
+            "common_speculative_impl_draft_dspark",
+            "dspark"
+        ).map { it.toByteArray(Charsets.US_ASCII) }
+        private val DISTRIBUTED_FIT_MARKERS = listOf(
+            "--fit",
+            "--fit-target",
+            "fit_target"
         ).map { it.toByteArray(Charsets.US_ASCII) }
     }
 
@@ -489,30 +816,76 @@ class ProcessController {
         config: LlamaConfig, 
         filesDir: File, 
         nativeToolsWorkspaceDir: File? = null,
+        runtimeWorkingDir: File? = null,
         customArgs: List<String>? = null,
+        runtimeGenerationId: Long = 0L,
         onLog: ((String) -> Unit)? = null,
         onReady: (() -> Unit)? = null,
         onState: ((ServerState) -> Unit)? = LlamaService.Companion::updateState,
-        onClearServerLogs: (() -> Unit)? = LlamaService.Companion::clearServerLogs,
-        onServerLog: ((String) -> Unit)? = LlamaService.Companion::addServerLog
+        onClearServerLogs: (() -> Unit)? = { LlamaService.clearServerLogs() },
+        onServerLog: ((String) -> Unit)? = { message -> LlamaService.addServerLog(message) },
+        /** New keyed sessions retain output in their own store instead of General Logs. */
+        logNativeOutputToDebug: Boolean = true,
+        /** Lets keyed owners close a stop-before-spawn race without broad process cleanup. */
+        shouldStop: (() -> Boolean)? = null,
+        onOwnedProcessStarted: ((pid: Int, processStartTimeTicks: Long?) -> Unit)? = null
     ): ProcessRunResult = withContext(Dispatchers.IO) {
         stoppedIntentionally = false
+        if (shouldStop?.invoke() == true) {
+            stoppedIntentionally = true
+            return@withContext ProcessRunResult(
+                exitCode = -1,
+                becameReady = false,
+                stoppedIntentionally = true
+            )
+        }
         if (process?.isAlive == true) stop()
+        // Stop the previous generation before allocating the new one. This
+        // keeps stopRequestedGeneration associated with the child that was
+        // actually stopped when callers restart a server quickly.
+        val thisGeneration = synchronized(this@ProcessController) {
+            launchGeneration += 1L
+            launchGeneration
+        }
         
         val args = customArgs ?: getCommand(binaryPath, config)
+        val ownershipWorkingDir = runtimeWorkingDir
+            ?: nativeToolsWorkspaceDir?.takeIf { config.nativeToolsEnabled }
+            ?: filesDir
+        var launchedProcess: Process? = null
         
         try {
+            if (binaryPath.contains("opencl", ignoreCase = true)) {
+                // Local and distributed runtimes may intentionally coexist. Only remove a
+                // packaged server that belongs to the port this generation is about to own.
+                NativeProcessCleanup.cleanupSameUidLlamaServersSync(
+                    reason = "OpenCL pre-launch sweep",
+                    port = config.port
+                )
+                NativeProcessCleanup.cleanupSameUidLlamaServersOwnedByDirectorySync(
+                    reason = "OpenCL owner-directory sweep",
+                    ownerDirectory = ownershipWorkingDir
+                )
+            }
             DebugLog.log("ProcessController: Starting binary: $binaryPath")
             DebugLog.log("ProcessController: Args: ${buildCommandString(args)}")
             
-            // Create a lib directory with symlinks for versioned libraries
+            // Imported custom builds may require their own dynamic library
+            // companions. Built-in tier payloads are self-contained static
+            // executables and must never borrow libllama/GGML files from a
+            // different feature module.
             val libDir = File(filesDir, "lib")
             libDir.mkdirs()
             
             val nativeLibDir = File(binaryPath).parentFile
-            setupLibrarySymlinks(nativeLibDir, libDir, binaryPath)
+            val isBuiltInStaticPayload = NativeModuleCatalog.isBuiltInStaticPayload(File(binaryPath).name)
+            if (!isBuiltInStaticPayload) {
+                setupLibrarySymlinks(nativeLibDir, libDir, binaryPath)
+            } else {
+                DebugLog.log("ProcessController: Using self-contained native module payload; skipping shared-library staging.")
+            }
             
-            val workingDir = nativeToolsWorkspaceDir?.takeIf { config.nativeToolsEnabled } ?: filesDir
+            val workingDir = ownershipWorkingDir
             workingDir.mkdirs()
 
             val pb = ProcessBuilder(args)
@@ -563,17 +936,75 @@ class ProcessController {
             DebugLog.log("ProcessController: Working dir=${workingDir.absolutePath}")
             
             process = pb.start()
+            // A targeted stop can arrive between the preflight check and pb.start(). Close the
+            // just-created child immediately without affecting any other owner.
+            if (shouldStop?.invoke() == true) {
+                stop()
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
+            activeBinaryWasOpenCl = binaryPath.contains("opencl", ignoreCase = true)
+            val reflectedChildPid = runCatching {
+                process?.let { child ->
+                    (java.lang.Process::class.java.getMethod("pid").invoke(child) as? Number)?.toLong()
+                }
+            }.getOrNull() ?: -1L
+            val childPid = if (reflectedChildPid > 0L) reflectedChildPid else {
+                resolveNativeChildPid(binaryPath)?.toLong() ?: -1L
+            }
+            activeChildPid = childPid.coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
+            if (stoppedIntentionally || shouldStop?.invoke() == true || process == null) {
+                if (process != null) stop()
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
+            onOwnedProcessStarted?.invoke(
+                activeChildPid,
+                NativeProcessCleanup.processStartTimeTicks(activeChildPid)
+            )
+            val binaryTier = nativeBinaryTier(binaryPath)
+            val binaryPathHash = MessageDigest.getInstance("SHA-256")
+                .digest(binaryPath.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+                .take(16)
+            DebugLog.log(
+                "ProcessController: Native child started pid=$childPid generation=$runtimeGenerationId " +
+                    "tier=$binaryTier binaryPathHash=$binaryPathHash"
+            )
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "llama_process",
+                event = "native_child_started",
+                details = "pid=$childPid generation=$runtimeGenerationId tier=$binaryTier binaryPathHash=$binaryPathHash"
+            )
             
             // Start log consumer
             onClearServerLogs?.invoke()
-            val reader = BufferedReader(InputStreamReader(process!!.inputStream))
+            if (stoppedIntentionally || shouldStop?.invoke() == true) {
+                stop()
+                return@withContext ProcessRunResult(
+                    exitCode = -1,
+                    becameReady = false,
+                    stoppedIntentionally = true
+                )
+            }
+            val childProcess = process ?: error("Native process disappeared immediately after start")
+            launchedProcess = childProcess
+            val reader = BufferedReader(InputStreamReader(childProcess.inputStream))
             var line: String?
             var modelLoaded = false
             val recentOutput = ArrayDeque<String>()
             while (reader.readLine().also { line = it } != null) {
                 _logs.value = line ?: ""
                 Log.d("LlamaServer", line ?: "")
-                DebugLog.log("Server: ${line ?: ""}")
+                if (logNativeOutputToDebug) {
+                    DebugLog.log("Server: ${line ?: ""}")
+                }
                 line?.let {
                     recentOutput.addLast(it)
                     while (recentOutput.size > RECENT_OUTPUT_LIMIT) {
@@ -611,18 +1042,30 @@ class ProcessController {
                     currentLine.contains("server listening")
                 if (serverReady) {
                     if (!modelLoaded) {
-                        modelLoaded = true
-                        onState?.invoke(ServerState.Running(config.port))
-                        onReady?.invoke()
-                        DebugLog.log("ProcessController: Server is ready and listening on port ${config.port}")
+                        onState?.invoke(ServerState.Loading(-1f, "Verifying server endpoint..."))
+                        if (awaitOwnedHttpReadiness(childProcess, config)) {
+                            modelLoaded = true
+                            onState?.invoke(ServerState.Running(config.port))
+                            onReady?.invoke()
+                            DebugLog.log("ProcessController: Server is ready and healthy on port ${config.port}")
+                        } else {
+                            throw IllegalStateException(
+                                "llama-server listened on port ${config.port} but its owned HTTP endpoint did not become ready"
+                            )
+                        }
                     }
                 }
             }
             
             // Process exited
-            val exitCode = process?.waitFor() ?: -1
+            runCatching { childProcess.inputStream.close() }
+            runCatching { childProcess.errorStream.close() }
+            val exitCode = childProcess.waitFor()
             DebugLog.log("ProcessController: Process exited with code $exitCode")
-            process = null
+            if (process === childProcess) {
+                process = null
+                activeChildPid = -1
+            }
             val appContext = LlamaApplication.instance
             val startupFailureDetail = if (!modelLoaded && !stoppedIntentionally) {
                 classifyNativeLinkerStartupFailure(recentOutput.toList())
@@ -632,19 +1075,25 @@ class ProcessController {
             val exitMessage = startupFailureDetail?.let {
                 appContext.getString(R.string.llama_server_native_linker_failure, it.take(220))
             } ?: appContext.getString(R.string.llama_server_process_exited_unexpectedly, exitCode)
-            onState?.invoke(resolveExitState(exitCode, exitMessage))
+            val intentionallyStopped = stopRequestedGeneration == thisGeneration
+            onState?.invoke(if (intentionallyStopped) ServerState.Stopped else ServerState.Error(exitMessage))
             return@withContext ProcessRunResult(
                 exitCode = exitCode,
                 becameReady = modelLoaded,
-                stoppedIntentionally = stoppedIntentionally,
+                stoppedIntentionally = intentionallyStopped,
                 recentOutput = recentOutput.toList(),
-                startupFailureMessage = if (stoppedIntentionally) null else exitMessage,
+                startupFailureMessage = if (intentionallyStopped) null else exitMessage,
                 nativeLinkerStartupFailure = startupFailureDetail != null
             )
         } catch (e: Exception) {
-            if (stoppedIntentionally) {
+            if (stopRequestedGeneration == thisGeneration || stoppedIntentionally) {
                 DebugLog.log("ProcessController: stopped while reading process output: ${e.message}")
-                process = null
+                runCatching { process?.inputStream?.close() }
+                runCatching { process?.errorStream?.close() }
+                if (process === launchedProcess) {
+                    process = null
+                    activeChildPid = -1
+                }
                 onState?.invoke(ServerState.Stopped)
                 return@withContext ProcessRunResult(
                     exitCode = -1,
@@ -654,6 +1103,8 @@ class ProcessController {
             }
             DebugLog.log("ProcessController: FAILED - ${e.message}")
             Log.e("ProcessController", "Failed to start", e)
+            activeChildPid = -1
+            activeBinaryWasOpenCl = false
             throw e
         }
     }
@@ -688,6 +1139,7 @@ class ProcessController {
         // Infer tier from binary path (e.g. libllama_server_dotprod.so -> dotprod)
         val binaryName = File(binaryPath).name
         val tier = when {
+            binaryName.contains("_i8mm") -> "_i8mm"
             binaryName.contains("_armv9") -> "_armv9"
             binaryName.contains("_dotprod") -> "_dotprod"
             binaryName.contains("_baseline") -> "_baseline"
@@ -704,20 +1156,20 @@ class ProcessController {
             "libmtmd.so.0" to listOf("libmtmd${tier}.so", "libmtmd.so"),
             
             // Standard shared libraries (usually renaming .so.0.so -> .so.0)
-            "libllama.so" to listOf("libllama.so", "libllama.so.0.so"),
-            "libllama.so.0" to listOf("libllama.so.0", "libllama.so", "libllama.so.0.so"),
+            "libllama.so" to listOf("libllama${tier}.so", "libllama.so", "libllama.so.0.so"),
+            "libllama.so.0" to listOf("libllama${tier}.so", "libllama.so.0", "libllama.so", "libllama.so.0.so"),
             
-            "libggml.so" to listOf("libggml.so", "libggml.so.0.so"),
-            "libggml.so.0" to listOf("libggml.so.0", "libggml.so", "libggml.so.0.so"),
+            "libggml.so" to listOf("libggml${tier}.so", "libggml.so", "libggml.so.0.so"),
+            "libggml.so.0" to listOf("libggml${tier}.so", "libggml.so.0", "libggml.so", "libggml.so.0.so"),
             
-            "libggml-cpu.so" to listOf("libggml-cpu.so", "libggml-cpu.so.0.so"),
-            "libggml-cpu.so.0" to listOf("libggml-cpu.so.0", "libggml-cpu.so", "libggml-cpu.so.0.so"),
+            "libggml-cpu.so" to listOf("libggml-cpu${tier}.so", "libggml-cpu.so", "libggml-cpu.so.0.so"),
+            "libggml-cpu.so.0" to listOf("libggml-cpu${tier}.so", "libggml-cpu.so.0", "libggml-cpu.so", "libggml-cpu.so.0.so"),
 
             "libggml-opencl.so" to listOf("libggml-opencl.so", "libggml-opencl.so.0.so"),
             "libggml-opencl.so.0" to listOf("libggml-opencl.so.0", "libggml-opencl.so", "libggml-opencl.so.0.so"),
             
-            "libggml-base.so" to listOf("libggml-base.so", "libggml-base.so.0.so"),
-            "libggml-base.so.0" to listOf("libggml-base.so.0", "libggml-base.so", "libggml-base.so.0.so")
+            "libggml-base.so" to listOf("libggml-base${tier}.so", "libggml-base.so", "libggml-base.so.0.so"),
+            "libggml-base.so.0" to listOf("libggml-base${tier}.so", "libggml-base.so.0", "libggml-base.so", "libggml-base.so.0.so")
         )
         
         for ((linkName, sourceCandidates) in librariesToLink) {
@@ -765,11 +1217,180 @@ class ProcessController {
         }
     }
     
+    @Synchronized
     fun stop() {
+        val current = process
+        val pid = activeChildPid
+        if (current == null && pid <= 0) {
+            stoppedIntentionally = true
+            return
+        }
         stoppedIntentionally = true
-        com.example.llamadroid.util.ProcessUtils.stopProcessSync(process)
+        stopRequestedGeneration = launchGeneration
+        runCatching { current?.inputStream?.close() }
+        runCatching { current?.errorStream?.close() }
+        if (pid > 0) {
+            // Capture and terminate the complete tree before accelerator helpers
+            // are reparented and their ownership becomes invisible.
+            NativeProcessCleanup.cleanupProcessTreeSync(
+                reason = "ProcessController stop",
+                rootPid = pid,
+                includeRoot = true
+            )
+        }
+        com.example.llamadroid.util.ProcessUtils.stopProcessSync(current)
         process = null
+        activeChildPid = -1
     }
-    
+
     fun isAlive(): Boolean = process?.isAlive == true
+
+    /** Clears only the in-memory native-output preview retained by this controller. */
+    fun clearTransientLogs() {
+        _logs.value = ""
+    }
+
+    /** Drops handles after an already-validated external recorded-owner cleanup. It never kills. */
+    @Synchronized
+    fun releaseExternallyStoppedProcess() {
+        stoppedIntentionally = true
+        stopRequestedGeneration = launchGeneration
+        runCatching { process?.inputStream?.close() }
+        runCatching { process?.errorStream?.close() }
+        process = null
+        activeChildPid = -1
+    }
+
+    /** PID captured from the child this controller owns; never use it to sweep other runtimes. */
+    fun ownedChildPid(): Int = activeChildPid
+
+    fun activeProcessWasOpenCl(): Boolean = activeBinaryWasOpenCl
+
+    fun clearActiveBinaryMarker() {
+        activeBinaryWasOpenCl = false
+    }
+
+    internal fun resolveNativeChildPid(
+        binaryPath: String,
+        procRoot: File = File("/proc"),
+        selfPid: Int = android.os.Process.myPid()
+    ): Int? {
+        val childIds = File(procRoot, "$selfPid/task").listFiles().orEmpty()
+            .asSequence()
+            .map { File(it, "children") }
+            .filter(File::isFile)
+            .flatMap { file ->
+                runCatching { file.readText() }.getOrDefault("")
+                    .trim().split(Regex("\\s+"))
+                    .asSequence()
+            }
+            .mapNotNull(String::toIntOrNull)
+            .distinct()
+            .toList()
+        val expectedName = File(binaryPath).name
+        return childIds.filter { pid ->
+            val cmdline = runCatching {
+                File(procRoot, "$pid/cmdline").readBytes().toString(Charsets.UTF_8).replace('\u0000', ' ')
+            }.getOrDefault("")
+            cmdline.contains(binaryPath) || cmdline.contains(expectedName)
+        }.maxOrNull()
+    }
+
+    private fun nativeBinaryTier(binaryPath: String): String {
+        val name = File(binaryPath).name.lowercase()
+        return when {
+            "opencl" in name -> "opencl"
+            "vulkan" in name -> "vulkan"
+            "i8mm" in name -> "i8mm"
+            "armv9" in name -> "armv9"
+            "dotprod" in name -> "dotprod"
+            "baseline" in name -> "baseline"
+            else -> "custom"
+        }
+    }
+}
+
+/**
+ * Removes custom arguments that are already owned by typed settings.
+ *
+ * Keeping this filtering in command construction makes saved commands deterministic and prevents
+ * a custom flag later in the command line from silently overriding the value shown in the UI.
+ */
+internal fun filterManagedLlamaCustomFlags(
+    args: List<String>,
+    config: LlamaConfig
+): List<String> {
+    val valueFlags = buildSet {
+        add("--sleep-idle-seconds")
+        if (config.parallel != null) {
+            add("--parallel")
+            add("-np")
+        }
+        if (config.cacheRam != null) {
+            add("--cache-ram")
+            add("-cram")
+        }
+        if (config.contextCheckpoints != null) {
+            add("--ctx-checkpoints")
+            add("-ctxcp")
+            add("--swa-checkpoints")
+        }
+        if (config.checkpointMinStep != null) {
+            add("--checkpoint-min-step")
+            add("-cms")
+        }
+    }
+    val toggleFlags = setOf(
+        "--cache-prompt",
+        "--no-cache-prompt",
+        "--cache-idle-slots",
+        "--no-cache-idle-slots",
+        "--kv-unified",
+        "-kvu",
+        "--no-kv-unified",
+        "-no-kvu",
+        "--swa-full",
+        "--no-swa-full"
+    )
+    val managed = valueFlags + toggleFlags
+    val filtered = mutableListOf<String>()
+    var index = 0
+    while (index < args.size) {
+        val argument = args[index]
+        val flagName = argument.substringBefore('=')
+        if (flagName in managed) {
+            val consumesFollowingValue = flagName in valueFlags && '=' !in argument
+            index += if (consumesFollowingValue && index + 1 < args.size) 2 else 1
+        } else {
+            filtered += argument
+            index += 1
+        }
+    }
+    return filtered
+}
+
+/**
+ * RPC/fitting arguments belong exclusively to the distributed launch scope. Strip them from
+ * typed custom flags so a local profile cannot inherit distributed arguments and a distributed
+ * profile cannot silently override its validated UI values.
+ */
+internal fun filterDistributedLlamaCustomFlags(
+    args: List<String>,
+    @Suppress("UNUSED_PARAMETER") config: LlamaConfig
+): List<String> {
+    val valueFlags = setOf("--rpc", "--fit", "--fit-target", "--tensor-split", "-ts")
+    val filtered = mutableListOf<String>()
+    var index = 0
+    while (index < args.size) {
+        val argument = args[index]
+        val flagName = argument.substringBefore('=')
+        if (flagName in valueFlags) {
+            val consumesFollowingValue = '=' !in argument
+            index += if (consumesFollowingValue && index + 1 < args.size) 2 else 1
+        } else {
+            filtered += argument
+            index += 1
+        }
+    }
+    return filtered
 }

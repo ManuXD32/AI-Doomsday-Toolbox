@@ -12,6 +12,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -46,6 +50,16 @@ import com.example.llamadroid.sd.SdCacheArchitecture
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdImageInputMode
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
+import com.example.llamadroid.data.model.SdWorkflowOperation
+import com.example.llamadroid.data.model.SdWorkflowPreset
+import com.example.llamadroid.data.model.SdWorkflowPresetCatalog
+import com.example.llamadroid.data.model.SdWorkflowSelection
+import com.example.llamadroid.data.model.installedSdCuratedModel
+import com.example.llamadroid.data.model.evaluateSdWorkflowGate
+import com.example.llamadroid.data.model.verifySdCuratedFilePayloadCached
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
@@ -54,12 +68,15 @@ import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.service.*
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
+import com.example.llamadroid.onnx.OnnxBackgroundRemovalStorage
 import com.example.llamadroid.ui.navigation.Screen
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.DraftLongTextField
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.SdSchedulerPicker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,7 +88,7 @@ import java.util.*
 /**
  * Image Generation Screen using stable-diffusion.cpp
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val context = LocalContext.current
@@ -81,6 +98,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val db = remember { AppDatabase.getDatabase(context) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
+    val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdVaeTiling by settingsRepo.sdVaeTiling.collectAsState()
@@ -90,6 +108,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val sdTensorTypeRules by settingsRepo.sdTensorTypeRules.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
+    val selectedSdNativeBinary by settingsRepo.stableDiffusionNativeBinarySelection.collectAsState()
     val scope = rememberCoroutineScope()
 
     // Available SD models - Classic checkpoints (SD1.5/SDXL)
@@ -113,7 +132,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
     val loraModels by db.modelDao().getModelsByType(ModelType.SD_LORA)
         .collectAsState(initial = emptyList())
+    val textualInversionModels by db.modelDao()
+        .getModelsByType(ModelType.SD_TEXTUAL_INVERSION)
+        .collectAsState(initial = emptyList())
     val photoMakerModels by db.modelDao().getModelsByType(ModelType.SD_PHOTOMAKER)
+        .collectAsState(initial = emptyList())
+    val clipVisionModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_VISION)
+        .collectAsState(initial = emptyList())
+    val ipAdapterModels by db.modelDao().getModelsByType(ModelType.SD_IP_ADAPTER)
+        .collectAsState(initial = emptyList())
+    val adetailerModels by db.modelDao().getModelsByType(ModelType.SD_ADETAILER)
+        .collectAsState(initial = emptyList())
+    val compatibleAdetailerModels = remember(adetailerModels) {
+        adetailerModels.filter { model -> isCompatibleSdADetailerDetector(File(model.path)) }
+    }
+    val backgroundRemovalModels by db.modelDao().getModelsByType(ModelType.ONNX_BACKGROUND_REMOVAL)
         .collectAsState(initial = emptyList())
     val imageSupportModels by db.modelDao().getModelsByTypes(listOf(ModelType.LLM, ModelType.VISION_PROJECTOR))
         .collectAsState(initial = emptyList())
@@ -122,46 +155,120 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER)
         .collectAsState(initial = emptyList())
 
-    // Mode selection: 0 = txt2img, 1 = img2img, 2 = upscale
-    var selectedMode by remember(initialMode) { mutableIntStateOf(if (initialMode == 1) 1 else 0) }
+    // Explicit deep links win over a saved draft; the normal entry point restores the draft.
+    val requestedInitialMode = initialMode.takeIf {
+        it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER
+    } ?: IMAGE_GEN_MODE_TXT2IMG
+    var selectedMode by remember(initialMode) {
+        mutableIntStateOf(
+            if (requestedInitialMode != IMAGE_GEN_MODE_TXT2IMG) requestedInitialMode
+            else restoredDraft?.optInt("mode", IMAGE_GEN_MODE_TXT2IMG)
+                ?.takeIf { it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER }
+                ?: IMAGE_GEN_MODE_TXT2IMG
+        )
+    }
+    var selectedWorkflowPresetId by remember { mutableStateOf(restoredDraft?.optString("workflowPreset").orEmpty().ifBlank { null }) }
+    var workflowHashVerificationFinished by remember { mutableStateOf(false) }
+
+    // Capability probing runs off the UI thread so the workflow gate can use the
+    // actual installed binary without making the picker or Generate button stall.
+    var workflowBinaryCapabilities by remember { mutableStateOf<SdBinaryCapabilities?>(null) }
+    LaunchedEffect(selectedSdNativeBinary) {
+        workflowBinaryCapabilities = null
+        workflowBinaryCapabilities = withContext(Dispatchers.IO) {
+            binaryRepo.getSdBinary()?.let { binary ->
+                probeSdBinaryCapabilities(context, binary, binaryRepo)
+            }
+        }
+    }
 
     // Combined model list for selection (checkpoints + FLUX diffusion)
     val allGenerationModels = (sdCheckpoints + fluxDiffusionModels)
         .filter { it.isSdImageMainModel() }
     // UI State
-    var selectedGenerationModelPath by remember { mutableStateOf<String?>(null) }
-    var selectedUpscalerModelPath by remember { mutableStateOf<String?>(null) }
-    var prompt by remember { mutableStateOf("") }
-    var negativePrompt by remember { mutableStateOf("") }
-    var showAdvanced by remember { mutableStateOf(false) }
+    var selectedGenerationModelPath by remember { mutableStateOf(restoredDraft?.optString("model").orEmpty().ifBlank { null }) }
+    var selectedUpscalerModelPath by remember { mutableStateOf(restoredDraft?.optString("upscaler").orEmpty().ifBlank { null }) }
+    var prompt by remember { mutableStateOf(restoredDraft?.optString("prompt").orEmpty()) }
+    var negativePrompt by remember { mutableStateOf(restoredDraft?.optString("negativePrompt").orEmpty()) }
+    var width by remember { mutableIntStateOf(restoredDraft?.optInt("width", 512) ?: 512) }
+    var height by remember { mutableIntStateOf(restoredDraft?.optInt("height", 512) ?: 512) }
+    var showAdvanced by remember { mutableStateOf(restoredDraft?.optBoolean("advanced", false) ?: false) }
     var showInfoDialog by remember { mutableStateOf(false) }
 
     // Family component selections
-    var selectedVaePath by remember { mutableStateOf<String?>(null) }
-    var selectedTaePath by remember { mutableStateOf<String?>(null) }
-    var selectedClipLPath by remember { mutableStateOf<String?>(null) }
-    var selectedClipGPath by remember { mutableStateOf<String?>(null) }
-    var selectedT5xxlPath by remember { mutableStateOf<String?>(null) }
-    var selectedLlmPath by remember { mutableStateOf<String?>(null) }
-    var selectedLlmVisionPath by remember { mutableStateOf<String?>(null) }
-    var selectedPhotoMakerPath by remember { mutableStateOf<String?>(null) }
+    var selectedVaePath by remember { mutableStateOf(restoredDraft?.optString("vae").orEmpty().ifBlank { null }) }
+    var selectedTaePath by remember { mutableStateOf(restoredDraft?.optString("tae").orEmpty().ifBlank { null }) }
+    var selectedClipLPath by remember { mutableStateOf(restoredDraft?.optString("clipL").orEmpty().ifBlank { null }) }
+    var selectedClipGPath by remember { mutableStateOf(restoredDraft?.optString("clipG").orEmpty().ifBlank { null }) }
+    var selectedT5xxlPath by remember { mutableStateOf(restoredDraft?.optString("t5").orEmpty().ifBlank { null }) }
+    var selectedLlmPath by remember { mutableStateOf(restoredDraft?.optString("llm").orEmpty().ifBlank { null }) }
+    var selectedLlmVisionPath by remember { mutableStateOf(restoredDraft?.optString("llmVision").orEmpty().ifBlank { null }) }
+    var selectedPhotoMakerPath by remember { mutableStateOf(restoredDraft?.optString("photoMaker").orEmpty().ifBlank { null }) }
+
+    val restoredIpAdapterDraft = remember(restoredDraft) {
+        restoredDraft
+            ?.takeIf { it.has("ipAdapter") }
+            ?.readSdIpAdapterDraft()
+            ?: settingsRepo.sdIpAdapterLastUsedDraft()?.readSdIpAdapterDraft()
+            ?: SdIpAdapterDraftState()
+    }
+    var ipAdapterEnabled by remember { mutableStateOf(restoredIpAdapterDraft.enabled) }
+    var selectedIpAdapterPath by remember { mutableStateOf(restoredIpAdapterDraft.adapterPath) }
+    var selectedClipVisionPath by remember { mutableStateOf(restoredIpAdapterDraft.clipVisionPath) }
+    var ipAdapterReferencePath by remember {
+        mutableStateOf(
+            SdIpAdapterReferenceStore.resolveOwnedImagePath(
+                context,
+                restoredIpAdapterDraft.imagePath
+            )
+        )
+    }
+    var ipAdapterStrength by remember { mutableFloatStateOf(restoredIpAdapterDraft.strength) }
 
     // ControlNet settings (optional)
-    var controlNetEnabled by remember { mutableStateOf(false) }
-    var selectedControlNetPath by remember { mutableStateOf<String?>(null) }
-    var controlStrength by remember { mutableFloatStateOf(0.9f) }
+    var controlNetEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("controlEnabled", false) ?: false) }
+    var selectedControlNetPath by remember { mutableStateOf(restoredDraft?.optString("control").orEmpty().ifBlank { null }) }
+    var controlStrength by remember { mutableFloatStateOf((restoredDraft?.optDouble("controlStrength", 0.9) ?: 0.9).toFloat()) }
 
     // LoRA settings (optional)
-    var loraEnabled by remember { mutableStateOf(false) }
-    var selectedLoraPath by remember { mutableStateOf<String?>(null) }
-    var loraStrength by remember { mutableFloatStateOf(1.0f) }
-    var selectedLoraApplyMode by remember { mutableStateOf<SdLoraApplyMode?>(null) }
-    var flowShiftText by remember { mutableStateOf("") }
-    var diffusionFaEnabled by remember { mutableStateOf(false) }
-    var mmapEnabled by remember { mutableStateOf(false) }
-    var vaeConvDirectEnabled by remember { mutableStateOf(false) }
-    var qwenImageZeroCondTEnabled by remember { mutableStateOf(false) }
-    var chromaDisableDitMaskEnabled by remember { mutableStateOf(false) }
+    var loraEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("loraEnabled", false) ?: false) }
+    var selectedLoraPath by remember { mutableStateOf(restoredDraft?.optString("lora").orEmpty().ifBlank { null }) }
+    var loraStrength by remember { mutableFloatStateOf((restoredDraft?.optDouble("loraStrength", 1.0) ?: 1.0).toFloat()) }
+    var selectedLoraApplyMode by remember { mutableStateOf(restoredDraft?.optString("loraApply").orEmpty().let { stored -> SdLoraApplyMode.entries.firstOrNull { it.cliName == stored } }) }
+    val restoredLoraStack = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("loras")?.toSdLoraSpecs().orEmpty().ifEmpty {
+            SdLoraSpec.fromLegacy(
+                restoredDraft?.optString("lora").orEmpty().ifBlank { null },
+                (restoredDraft?.optDouble("loraStrength", 1.0) ?: 1.0).toFloat()
+            )
+        }
+    }
+    var loraStack by remember(restoredDraft) { mutableStateOf(restoredLoraStack) }
+    var textualInversionEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("textualEnabled", false) ?: false) }
+    var selectedTextualInversionPath by remember {
+        mutableStateOf(restoredDraft?.optString("textual").orEmpty().ifBlank { null })
+    }
+    var flowShiftText by remember { mutableStateOf(restoredDraft?.optString("flowShift").orEmpty()) }
+    var selectedScheduler by remember { mutableStateOf(SdScheduler.fromCliName(restoredDraft?.optString("scheduler"))) }
+    var diffusionFaEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("diffusionFa", false) ?: false) }
+    var diffusionConvDirectEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("diffConv", false) ?: false) }
+    var mmapEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("mmap", false) ?: false) }
+    var vaeConvDirectEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("vaeConv", false) ?: false) }
+    var qwenImageZeroCondTEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("qwenZero", false) ?: false) }
+    var chromaDisableDitMaskEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("chromaMask", false) ?: false) }
+    val acceleratorPlacement = when (selectedSdNativeBinary) {
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN -> "vulkan0"
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_OPENCL -> "opencl0"
+        else -> null
+    }
+    var textEncoderPlacement by remember { mutableStateOf(restoredDraft?.optString("tePlacement").orEmpty().ifBlank { "cpu" }) }
+    var diffusionPlacement by remember { mutableStateOf(restoredDraft?.optString("diffusionPlacement").orEmpty().ifBlank { acceleratorPlacement ?: "cpu" }) }
+    var vaePlacement by remember { mutableStateOf(restoredDraft?.optString("vaePlacement").orEmpty().ifBlank { "cpu" }) }
+    LaunchedEffect(acceleratorPlacement) {
+        if (acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
+            diffusionPlacement = acceleratorPlacement
+        }
+    }
 
     // Main tab selection: 0 = Generate, 1 = Gallery
     var mainTab by remember { mutableIntStateOf(0) }
@@ -174,23 +281,127 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         .collectAsState(initial = emptyList())
     val serverImagePathSet = remember(serverImagePaths) { serverImagePaths.toSet() }
 
-    // Image input for img2img/upscale
+    // Image input for img2img/upscale/inpaint and existing-image ADetailer.
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedImagePath by remember { mutableStateOf<String?>(null) }
+    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    // Img2img strength
-    var strength by remember { mutableFloatStateOf(0.75f) }
+    // Img2img/inpaint strength
+    var strength by remember { mutableFloatStateOf((restoredDraft?.optDouble("strength", 0.75) ?: 0.75).toFloat()) }
+    var inpaintCanvasTransform by remember {
+        mutableStateOf(InpaintCanvasTransform.fromStoredValue(restoredDraft?.optString("inpaintTransform")))
+    }
+    var inpaintMaskPath by remember { mutableStateOf(restoredDraft?.optString("inpaintMask").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
+    var inpaintWorkspace by remember {
+        mutableStateOf(
+            selectedImagePath?.let { source ->
+                inpaintMaskPath?.let { mask ->
+                    InpaintWorkspaceManager.fromPaths(source, mask, inpaintCanvasTransform)
+                }
+            }
+        )
+    }
+    var showInpaintMaskEditor by remember { mutableStateOf(false) }
+    var pendingFullInpaintMask by remember { mutableStateOf<InpaintMaskRaster?>(null) }
+    var pendingAutoMaskPolarity by remember { mutableStateOf<InpaintAutoMaskPolarity?>(null) }
+    var selectedAutoMaskModelPath by remember {
+        mutableStateOf(restoredDraft?.optString("inpaintAutoModel").orEmpty().ifBlank { null })
+    }
+    val backgroundRemovalState by OnnxBackgroundRemovalStateStore.state.collectAsState()
+    LaunchedEffect(backgroundRemovalModels) {
+        if (backgroundRemovalModels.none { it.path == selectedAutoMaskModelPath }) {
+            selectedAutoMaskModelPath = backgroundRemovalModels.firstOrNull()?.path
+        }
+    }
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            InpaintWorkspaceManager.sweepOrphans(
+                context = context,
+                referencedWorkspaceIds = setOfNotNull(inpaintWorkspace?.id)
+            )
+        }
+    }
+    var inpaintImgCfgScale by remember { mutableFloatStateOf((restoredDraft?.optDouble("inpaintImgCfg", 1.5) ?: 1.5).toFloat()) }
+    var adetailerModelPath by remember { mutableStateOf(restoredDraft?.optString("adModel").orEmpty().ifBlank { null }) }
+    var adetailerInputMode by remember {
+        mutableStateOf(ADetailerInputMode.fromStoredValue(restoredDraft?.optString("adInputMode")))
+    }
+    var adetailerPrompt by remember { mutableStateOf(restoredDraft?.optString("adPrompt").orEmpty()) }
+    var adetailerNegativePrompt by remember { mutableStateOf(restoredDraft?.optString("adNegativePrompt").orEmpty()) }
+    val restoredAdetailerLoraStack = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("adLoras")?.toSdLoraSpecs().orEmpty()
+    }
+    var adetailerLoraStack by remember(restoredDraft) { mutableStateOf(restoredAdetailerLoraStack) }
+    var adetailerConfidence by remember { mutableFloatStateOf((restoredDraft?.optDouble("adConfidence", 0.30) ?: 0.30).toFloat()) }
+    var adetailerDenoising by remember { mutableFloatStateOf((restoredDraft?.optDouble("adDenoising", 0.40) ?: 0.40).toFloat()) }
+    var adetailerMaskBlur by remember { mutableIntStateOf(restoredDraft?.optInt("adMaskBlur", 4) ?: 4) }
+    var adetailerPadding by remember { mutableIntStateOf(restoredDraft?.optInt("adPadding", 32) ?: 32) }
+    var adetailerMaxDetections by remember { mutableIntStateOf(restoredDraft?.optInt("adMaxDetections", 8) ?: 8) }
+    var adetailerResizeInput by remember {
+        mutableStateOf(restoredDraft?.optBoolean("adResizeInput", false) ?: false)
+    }
+    var adetailerAdvancedArgs by remember { mutableStateOf(restoredDraft?.optString("adAdvanced").orEmpty()) }
+
+    val workflowInstalledModels = allGenerationModels + vaeModels + compatibleAdetailerModels
+    val workflowInstalledModelKey = remember(workflowInstalledModels) {
+        workflowInstalledModels.joinToString("|") { model ->
+            "${model.path}:${model.sizeBytes}:${File(model.path).lastModified()}"
+        }
+    }
+    LaunchedEffect(selectedWorkflowPresetId, workflowInstalledModelKey) {
+        workflowHashVerificationFinished = false
+        val preset = selectedWorkflowPresetId?.let(SdWorkflowPresetCatalog::byId)
+        if (preset != null) {
+            withContext(Dispatchers.IO) {
+                preset.files.forEach { file ->
+                    file.installedSdCuratedModel(preset.bundle, workflowInstalledModels)
+                        ?.let { model ->
+                            runCatching {
+                                verifySdCuratedFilePayloadCached(file, File(model.path))
+                            }
+                        }
+                }
+            }
+        }
+        workflowHashVerificationFinished = true
+    }
+
+    fun applyWorkflowPreset(preset: SdWorkflowPreset) {
+        selectedWorkflowPresetId = preset.id
+        val installedModels = allGenerationModels + vaeModels + compatibleAdetailerModels
+        val installedBase = preset.files.firstOrNull {
+            it.modelType == ModelType.SD_CHECKPOINT || it.modelType == ModelType.SD_DIFFUSION
+        }?.installedSdCuratedModel(preset.bundle, installedModels)
+        val installedDetector = preset.files.firstOrNull { it.modelType == ModelType.SD_ADETAILER }
+            ?.installedSdCuratedModel(preset.bundle, installedModels)
+        val installedVae = preset.files.firstOrNull { it.modelType == ModelType.SD_VAE }
+            ?.installedSdCuratedModel(preset.bundle, installedModels)
+        installedBase?.let {
+            selectedGenerationModelPath = it.path
+        }
+        installedDetector?.let {
+            adetailerModelPath = it.path
+        }
+        installedVae?.let {
+            selectedVaePath = it.path
+        }
+        selectedMode = when (preset.operation) {
+            SdWorkflowOperation.PRECISION_INPAINTING -> IMAGE_GEN_MODE_INPAINT
+            else -> IMAGE_GEN_MODE_ADETAILER
+        }
+        adetailerMaxDetections = preset.defaultMaxDetections
+        adetailerAdvancedArgs = preset.requiredAdvancedArgs
+    }
 
     // Quantization type for --type
-    var selectedQuantType by remember { mutableStateOf("") }
+    var selectedQuantType by remember { mutableStateOf(restoredDraft?.optString("quant").orEmpty()) }
 
     // Upscale factor and repeats
-    var upscaleFactor by remember { mutableIntStateOf(2) } // Default 2, will be auto-detected from model
-    var upscaleRepeats by remember { mutableIntStateOf(1) } // User-controlled repeats (1-4)
+    var upscaleFactor by remember { mutableIntStateOf(restoredDraft?.optInt("upscaleFactor", 2) ?: 2) } // Default 2, will be auto-detected from model
+    var upscaleRepeats by remember { mutableIntStateOf(restoredDraft?.optInt("upscaleRepeats", 1) ?: 1) } // User-controlled repeats (1-4)
 
     // Threads for generation (user-controlled, -1 = auto)
-    var threads by remember { mutableIntStateOf(-1) }
+    var threads by remember { mutableIntStateOf(restoredDraft?.optInt("threads", -1) ?: -1) }
 
     // Keep the generation and upscale selections separate so mode switches do not
     // overwrite the last valid choice for the other mode.
@@ -250,7 +461,24 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     )
     val compatibleControlNetModels = filterSdComponents(controlNetModels, selectedFamily, selectedVariant)
     val compatibleLoraModels = filterSdComponents(loraModels, selectedFamily, selectedVariant)
+    val compatibleTextualInversionModels = filterSdComponents(
+        textualInversionModels,
+        selectedFamily,
+        selectedVariant
+    )
     val compatiblePhotoMakerModels = filterSdComponents(photoMakerModels, selectedFamily, selectedVariant)
+    val compatibleClipVisionModels = filterSdComponents(
+        clipVisionModels,
+        selectedFamily,
+        selectedVariant
+    )
+    val compatibleIpAdapterModels = filterSdComponents(
+        ipAdapterModels,
+        selectedFamily,
+        selectedVariant
+    )
+    val supportsIpAdapter = selectedMode != 2 &&
+        selectedFamilySpec?.supportsIpAdapter == true
     val missingRequiredComponents = selectedFamilySpec?.requiredRoles?.filter { role ->
         when (role) {
             SdComponentRole.VAE -> selectedVaePath.isNullOrBlank()
@@ -272,10 +500,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             try {
-                val targetMode = when (resolveInitialImageGenMode(pendingFile.targetScreen)) {
-                    1 -> 1
-                    else -> 0
-                }
+                val targetMode = resolveInitialImageGenMode(pendingFile.targetScreen)
                 selectedMode = targetMode
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
@@ -322,33 +547,319 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     ) { uri ->
         uri?.let {
             imagePreparationScope.launch {
-                val preparedImage = prepareImageInputForMode(
-                    context = context,
-                    uri = it,
-                    targetMode = latestSelectedMode,
-                    tempFileName = "input_image.png"
-                )
-                preparedImage?.let { prepared ->
-                    imageResolution = prepared.resolution
-                    selectedImagePath = prepared.path
-                    selectedImageUri = prepared.uri
+                val targetMode = latestSelectedMode
+                runCatching {
+                    if (targetMode == IMAGE_GEN_MODE_INPAINT) {
+                        InpaintWorkspaceManager.create(
+                            context = context,
+                            sourceUri = it,
+                            canvasWidth = width,
+                            canvasHeight = height,
+                            transform = inpaintCanvasTransform
+                        )
+                    } else {
+                        prepareImageInputForMode(
+                            context = context,
+                            uri = it,
+                            targetMode = targetMode,
+                            tempFileName = "input_image.png"
+                        ) ?: error("Unable to decode image")
+                    }
+                }.onSuccess { prepared ->
+                    if (prepared is InpaintWorkspace) {
+                        inpaintWorkspace?.let(InpaintWorkspaceManager::delete)
+                        inpaintWorkspace = prepared
+                        inpaintMaskPath = null
+                        imageResolution = prepared.canvasWidth to prepared.canvasHeight
+                        selectedImagePath = prepared.sourcePath
+                        selectedImageUri = it
+                    } else {
+                        prepared as PreparedImageInput
+                        imageResolution = prepared.resolution
+                        selectedImagePath = prepared.path
+                        selectedImageUri = prepared.uri
+                    }
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
     }
 
+    val maskPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        uri?.let {
+            imagePreparationScope.launch {
+                runCatching {
+                    val workspace = inpaintWorkspace ?: selectedImagePath?.let { sourcePath ->
+                        InpaintWorkspaceManager.create(
+                            context = context,
+                            sourceUri = Uri.fromFile(File(sourcePath)),
+                            canvasWidth = width,
+                            canvasHeight = height,
+                            transform = inpaintCanvasTransform
+                        )
+                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                    InpaintWorkspaceManager.importMask(context, workspace, it)
+                }.onSuccess { importedWorkspace ->
+                    inpaintWorkspace = importedWorkspace
+                    selectedImagePath = importedWorkspace.sourcePath
+                    imageResolution = importedWorkspace.canvasWidth to importedWorkspace.canvasHeight
+                    inpaintMaskPath = importedWorkspace.maskPath
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val openInpaintMaskEditor: () -> Unit = {
+        imagePreparationScope.launch {
+            runCatching {
+                inpaintWorkspace ?: selectedImagePath?.let { sourcePath ->
+                    InpaintWorkspaceManager.create(
+                        context = context,
+                        sourceUri = Uri.fromFile(File(sourcePath)),
+                        canvasWidth = width,
+                        canvasHeight = height,
+                        transform = inpaintCanvasTransform
+                    )
+                } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+            }.onSuccess { workspace ->
+                inpaintWorkspace = workspace
+                selectedImagePath = workspace.sourcePath
+                imageResolution = workspace.canvasWidth to workspace.canvasHeight
+                showInpaintMaskEditor = true
+            }.onFailure { failure ->
+                android.widget.Toast.makeText(
+                    context,
+                    failure.message ?: context.getString(R.string.error_generic),
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
+    val commitInpaintMask: (InpaintMaskRaster) -> Unit = { raster ->
+        val workspace = inpaintWorkspace
+        if (workspace != null) {
+            imagePreparationScope.launch {
+                runCatching {
+                    InpaintWorkspaceManager.saveMask(
+                        workspace = workspace,
+                        raster = raster,
+                        provenance = InpaintMaskProvenance.DRAWN
+                    )
+                }.onSuccess { savedWorkspace ->
+                    inpaintWorkspace = savedWorkspace
+                    inpaintMaskPath = savedWorkspace.maskPath
+                    showInpaintMaskEditor = false
+                    pendingFullInpaintMask = null
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    val startAutomaticMask: (InpaintAutoMaskPolarity) -> Unit = { polarity ->
+        val model = backgroundRemovalModels.firstOrNull { it.path == selectedAutoMaskModelPath }
+        if (model == null) {
+            navController.navigate(Screen.OnnxModels.route)
+        } else if (backgroundRemovalState !is OnnxBackgroundRemovalState.Running) {
+            imagePreparationScope.launch {
+                runCatching {
+                    inpaintWorkspace ?: selectedImagePath?.let { sourcePath ->
+                        InpaintWorkspaceManager.create(
+                            context = context,
+                            sourceUri = Uri.fromFile(File(sourcePath)),
+                            canvasWidth = width,
+                            canvasHeight = height,
+                            transform = inpaintCanvasTransform
+                        )
+                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                }.onSuccess { workspace ->
+                    inpaintWorkspace = workspace
+                    selectedImagePath = workspace.sourcePath
+                    imageResolution = workspace.canvasWidth to workspace.canvasHeight
+                    pendingAutoMaskPolarity = polarity
+                    OnnxBackgroundRemovalStateStore.reset()
+                    OnnxBackgroundRemovalService.start(
+                        context,
+                        OnnxBackgroundRemovalConfig(
+                            modelPath = model.path,
+                            modelName = model.filename,
+                            inputPaths = listOf(workspace.sourcePath),
+                            inputNames = listOf(File(workspace.sourcePath).name),
+                            exportMask = true,
+                            resizeBeforeProcessing = false,
+                            preserveSourceNames = false
+                        )
+                    )
+                }.onFailure { failure ->
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(backgroundRemovalState, pendingAutoMaskPolarity, inpaintWorkspace) {
+        val polarity = pendingAutoMaskPolarity ?: return@LaunchedEffect
+        val workspace = inpaintWorkspace ?: return@LaunchedEffect
+        when (val state = backgroundRemovalState) {
+            is OnnxBackgroundRemovalState.Complete -> {
+                val outputFile = state.outputPaths.lastOrNull()?.let(::File)
+                val maskFile = outputFile
+                    ?.let(OnnxBackgroundRemovalStorage::readMetadata)
+                    ?.maskPath
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.canRead() }
+                runCatching {
+                    val foreground = readForegroundMaskExport(
+                        maskFile ?: error(context.getString(R.string.imagegen_inpaint_auto_mask_missing))
+                    )
+                    val raster = foregroundMaskToInpaintRaster(
+                        foregroundMask = foreground,
+                        targetWidth = workspace.canvasWidth,
+                        targetHeight = workspace.canvasHeight,
+                        polarity = polarity
+                    )
+                    InpaintWorkspaceManager.saveMask(
+                        workspace = workspace,
+                        raster = raster,
+                        provenance = if (polarity == InpaintAutoMaskPolarity.AUTO_SUBJECT) {
+                            InpaintMaskProvenance.AUTO_SUBJECT
+                        } else {
+                            InpaintMaskProvenance.AUTO_BACKGROUND
+                        }
+                    )
+                }.onSuccess { savedWorkspace ->
+                    inpaintWorkspace = savedWorkspace
+                    inpaintMaskPath = savedWorkspace.maskPath
+                    pendingAutoMaskPolarity = null
+                    showInpaintMaskEditor = true
+                }.onFailure { failure ->
+                    pendingAutoMaskPolarity = null
+                    android.widget.Toast.makeText(
+                        context,
+                        failure.message ?: context.getString(R.string.error_generic),
+                        android.widget.Toast.LENGTH_LONG
+                    ).show()
+                }
+                outputFile?.let(OnnxBackgroundRemovalStorage::deleteImageWithMetadata)
+            }
+            is OnnxBackgroundRemovalState.Error -> {
+                pendingAutoMaskPolarity = null
+                android.widget.Toast.makeText(context, state.message, android.widget.Toast.LENGTH_LONG).show()
+            }
+            else -> Unit
+        }
+    }
+
+    if (showInpaintMaskEditor) {
+        inpaintWorkspace?.let { workspace ->
+            InpaintMaskEditorDialog(
+                sourcePath = workspace.sourcePath,
+                initialMaskPath = inpaintMaskPath ?: workspace.maskPath,
+                onDismiss = { showInpaintMaskEditor = false },
+                onSave = { raster ->
+                    if (raster.isFull()) pendingFullInpaintMask = raster else commitInpaintMask(raster)
+                }
+            )
+        }
+    }
+
+    pendingFullInpaintMask?.let { fullMask ->
+        AlertDialog(
+            onDismissRequest = { pendingFullInpaintMask = null },
+            title = { Text(stringResource(R.string.imagegen_inpaint_full_mask_title)) },
+            text = { Text(stringResource(R.string.imagegen_inpaint_full_mask_message)) },
+            confirmButton = {
+                TextButton(onClick = { commitInpaintMask(fullMask) }) {
+                    Text(stringResource(R.string.imagegen_inpaint_full_mask_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingFullInpaintMask = null }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
     // Generation parameters
-    var width by remember { mutableIntStateOf(512) }
-    var height by remember { mutableIntStateOf(512) }
-    var steps by remember { mutableIntStateOf(20) }
-    var cfgScale by remember { mutableFloatStateOf(7.0f) }
-    var seed by remember { mutableLongStateOf(-1L) }
-    var selectedSampler by remember { mutableStateOf(SamplingMethod.EULER_A) }
-    var cacheMode by remember { mutableStateOf<SdCacheMode?>(null) }
-    var cacheOption by remember { mutableStateOf("") }
-    var scmMask by remember { mutableStateOf("") }
-    var scmPolicy by remember { mutableStateOf<SdCacheScmPolicy?>(null) }
-    var manualCommandFlags by remember { mutableStateOf("") }
+    var steps by remember { mutableIntStateOf(restoredDraft?.optInt("steps", 20) ?: 20) }
+    var cfgScale by remember { mutableFloatStateOf((restoredDraft?.optDouble("cfg", 7.0) ?: 7.0).toFloat()) }
+    var seed by remember { mutableLongStateOf(restoredDraft?.optLong("seed", -1L) ?: -1L) }
+    var selectedSampler by remember { mutableStateOf(SamplingMethod.entries.firstOrNull { it.name == restoredDraft?.optString("sampler") } ?: SamplingMethod.EULER_A) }
+    var cacheMode by remember { mutableStateOf(SdCacheMode.fromStoredValue(restoredDraft?.optString("cacheMode").orEmpty().ifBlank { null })) }
+    var cacheOption by remember { mutableStateOf(restoredDraft?.optString("cacheOption").orEmpty()) }
+    var scmMask by remember { mutableStateOf(restoredDraft?.optString("scmMask").orEmpty()) }
+    var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
+    var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
+
+    fun currentIpAdapterDraftState(): SdIpAdapterDraftState =
+        SdIpAdapterDraftState(
+            enabled = ipAdapterEnabled,
+            adapterPath = selectedIpAdapterPath,
+            clipVisionPath = selectedClipVisionPath,
+            imagePath = ipAdapterReferencePath,
+            strength = ipAdapterStrength
+        ).normalized()
+
+    LaunchedEffect(
+        ipAdapterEnabled,
+        selectedIpAdapterPath,
+        selectedClipVisionPath,
+        ipAdapterReferencePath,
+        ipAdapterStrength
+    ) {
+        settingsRepo.setSdIpAdapterLastUsedDraft(
+            org.json.JSONObject().putSdIpAdapterDraft(currentIpAdapterDraftState())
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            val imageDraft = org.json.JSONObject().apply {
+                put("mode", selectedMode); put("workflowPreset", selectedWorkflowPresetId); put("model", selectedGenerationModelPath); put("upscaler", selectedUpscalerModelPath)
+                put("prompt", prompt); put("negativePrompt", negativePrompt); put("advanced", showAdvanced)
+                put("vae", selectedVaePath); put("tae", selectedTaePath); put("clipL", selectedClipLPath); put("clipG", selectedClipGPath); put("t5", selectedT5xxlPath); put("llm", selectedLlmPath); put("llmVision", selectedLlmVisionPath); put("photoMaker", selectedPhotoMakerPath)
+                put("controlEnabled", controlNetEnabled); put("control", selectedControlNetPath); put("controlStrength", controlStrength)
+                put("loraEnabled", loraEnabled); put("lora", loraStack.firstOrNull()?.path ?: selectedLoraPath); put("loraStrength", loraStack.firstOrNull()?.strength ?: loraStrength); put("loraApply", selectedLoraApplyMode?.cliName); put("loras", loraStack.toJsonArray())
+                put("textualEnabled", textualInversionEnabled); put("textual", selectedTextualInversionPath); put("flowShift", flowShiftText); put("diffusionFa", diffusionFaEnabled); put("diffConv", diffusionConvDirectEnabled); put("vaeConv", vaeConvDirectEnabled); put("mmap", mmapEnabled); put("qwenZero", qwenImageZeroCondTEnabled); put("chromaMask", chromaDisableDitMaskEnabled)
+                put("input", selectedImagePath); put("strength", strength); put("quant", selectedQuantType); put("upscaleFactor", upscaleFactor); put("upscaleRepeats", upscaleRepeats); put("threads", threads)
+                put("inpaintMask", inpaintMaskPath); put("inpaintTransform", inpaintCanvasTransform.name); put("inpaintImgCfg", inpaintImgCfgScale); put("inpaintAutoModel", selectedAutoMaskModelPath)
+                put("adModel", adetailerModelPath); put("adInputMode", adetailerInputMode.name); put("adPrompt", adetailerPrompt); put("adNegativePrompt", adetailerNegativePrompt); put("adLoras", adetailerLoraStack.toJsonArray())
+                put("adConfidence", adetailerConfidence); put("adDenoising", adetailerDenoising); put("adMaskBlur", adetailerMaskBlur)
+                put("adPadding", adetailerPadding); put("adMaxDetections", adetailerMaxDetections); put("adResizeInput", adetailerResizeInput); put("adAdvanced", adetailerAdvancedArgs)
+                put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
+                put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
+                putSdIpAdapterDraft(currentIpAdapterDraftState())
+            }
+            settingsRepo.setImageGenerationDraft(imageDraft)
+            settingsRepo.setSdIpAdapterLastUsedDraft(
+                org.json.JSONObject().putSdIpAdapterDraft(currentIpAdapterDraftState())
+            )
+        }
+    }
 
     fun clearDiffusionModeState() {
         selectedVaePath = null
@@ -389,72 +900,98 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     val txt2imgModeHolder = remember { SDModeStateHolder.txt2img }
     val img2imgModeHolder = remember { SDModeStateHolder.img2img }
+    val adetailerModeHolder = remember { SDModeStateHolder.adetailer }
     val upscaleModeHolder = remember { SDModeStateHolder.upscale }
 
     val txt2imgGenerationState by txt2imgModeHolder.state.collectAsState()
     val img2imgGenerationState by img2imgModeHolder.state.collectAsState()
+    val adetailerGenerationState by adetailerModeHolder.state.collectAsState()
     val upscaleGenerationState by upscaleModeHolder.state.collectAsState()
 
     val txt2imgProgress by txt2imgModeHolder.progress.collectAsState()
     val img2imgProgress by img2imgModeHolder.progress.collectAsState()
+    val adetailerProgress by adetailerModeHolder.progress.collectAsState()
     val upscaleProgress by upscaleModeHolder.progress.collectAsState()
 
     val txt2imgStatus by txt2imgModeHolder.status.collectAsState()
     val img2imgStatus by img2imgModeHolder.status.collectAsState()
+    val adetailerStatus by adetailerModeHolder.status.collectAsState()
     val upscaleStatus by upscaleModeHolder.status.collectAsState()
 
     val txt2imgGeneratedImages by txt2imgModeHolder.generatedImages.collectAsState()
     val img2imgGeneratedImages by img2imgModeHolder.generatedImages.collectAsState()
+    val adetailerGeneratedImages by adetailerModeHolder.generatedImages.collectAsState()
     val upscaleGeneratedImages by upscaleModeHolder.generatedImages.collectAsState()
 
     val txt2imgTotalSteps by txt2imgModeHolder.totalSteps.collectAsState()
     val img2imgTotalSteps by img2imgModeHolder.totalSteps.collectAsState()
+    val adetailerTotalSteps by adetailerModeHolder.totalSteps.collectAsState()
     val upscaleTotalSteps by upscaleModeHolder.totalSteps.collectAsState()
 
     val txt2imgCurrentStep by txt2imgModeHolder.currentStep.collectAsState()
     val img2imgCurrentStep by img2imgModeHolder.currentStep.collectAsState()
+    val adetailerCurrentStep by adetailerModeHolder.currentStep.collectAsState()
     val upscaleCurrentStep by upscaleModeHolder.currentStep.collectAsState()
 
     val txt2imgPersistedPrompt by txt2imgModeHolder.currentPrompt.collectAsState()
     val img2imgPersistedPrompt by img2imgModeHolder.currentPrompt.collectAsState()
+    val adetailerPersistedPrompt by adetailerModeHolder.currentPrompt.collectAsState()
+    val effectiveSdMode = when (selectedMode) {
+        IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> SDMode.IMG2IMG
+        IMAGE_GEN_MODE_UPSCALE -> SDMode.UPSCALE
+        IMAGE_GEN_MODE_ADETAILER -> if (adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE) {
+            SDMode.ADETAILER
+        } else {
+            SDMode.TXT2IMG
+        }
+        else -> SDMode.TXT2IMG
+    }
     val activeModeHolder = when (selectedMode) {
-        1 -> img2imgModeHolder
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgModeHolder
         2 -> upscaleModeHolder
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerModeHolder else txt2imgModeHolder
         else -> txt2imgModeHolder
     }
     val generationState = when (selectedMode) {
-        1 -> img2imgGenerationState
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgGenerationState
         2 -> upscaleGenerationState
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerGenerationState else txt2imgGenerationState
         else -> txt2imgGenerationState
     }
     val progress = when (selectedMode) {
-        1 -> img2imgProgress
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgProgress
         2 -> upscaleProgress
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerProgress else txt2imgProgress
         else -> txt2imgProgress
     }
     val generationStatus = when (selectedMode) {
-        1 -> img2imgStatus
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgStatus
         2 -> upscaleStatus
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerStatus else txt2imgStatus
         else -> txt2imgStatus
     }
     val generatedImages = when (selectedMode) {
-        1 -> img2imgGeneratedImages
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgGeneratedImages
         2 -> upscaleGeneratedImages
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerGeneratedImages else txt2imgGeneratedImages
         else -> txt2imgGeneratedImages
     }
     val totalStepsVal = when (selectedMode) {
-        1 -> img2imgTotalSteps
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgTotalSteps
         2 -> upscaleTotalSteps
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerTotalSteps else txt2imgTotalSteps
         else -> txt2imgTotalSteps
     }
     val currentStepVal = when (selectedMode) {
-        1 -> img2imgCurrentStep
+        1, IMAGE_GEN_MODE_INPAINT -> img2imgCurrentStep
         2 -> upscaleCurrentStep
+        IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerCurrentStep else txt2imgCurrentStep
         else -> txt2imgCurrentStep
     }
-    LaunchedEffect(selectedMode) {
+    LaunchedEffect(selectedMode, adetailerInputMode) {
         val persistedPrompt = when (selectedMode) {
-            1 -> img2imgPersistedPrompt
+            IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> img2imgPersistedPrompt
+            IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerPersistedPrompt else txt2imgPersistedPrompt
             else -> txt2imgPersistedPrompt
         }
         if (selectedMode != 2 && persistedPrompt.isNotBlank()) {
@@ -465,6 +1002,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             mode = when (selectedMode) {
                 1 -> SDMode.IMG2IMG.name
                 2 -> SDMode.UPSCALE.name
+                IMAGE_GEN_MODE_ADETAILER -> effectiveSdMode.name
                 else -> SDMode.TXT2IMG.name
             },
             event = "mode_entered",
@@ -489,15 +1027,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     LaunchedEffect(allGenerationModels) {
-        selectedGenerationModelPath = selectedGenerationModelPath?.takeIf { selectedPath ->
-            allGenerationModels.any { it.path == selectedPath }
+        // Room-backed model flows start with an empty Compose value. Do not erase the
+        // restored selection before the first real database emission arrives.
+        if (allGenerationModels.isNotEmpty()) {
+            selectedGenerationModelPath = selectedGenerationModelPath?.takeIf { selectedPath ->
+                allGenerationModels.any { it.path == selectedPath }
+            }
         }
     }
 
     LaunchedEffect(upscalerModels) {
-        selectedUpscalerModelPath = selectedUpscalerModelPath?.takeIf { selectedPath ->
-            upscalerModels.any { it.path == selectedPath }
-        } ?: upscalerModels.firstOrNull()?.path
+        if (upscalerModels.isNotEmpty()) {
+            selectedUpscalerModelPath = selectedUpscalerModelPath?.takeIf { selectedPath ->
+                upscalerModels.any { it.path == selectedPath }
+            } ?: upscalerModels.firstOrNull()?.path
+        }
     }
 
     // Output directory for generated images
@@ -507,6 +1051,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             outputDir,
             File(outputDir, "txt2img"),
             File(outputDir, "img2img"),
+            File(outputDir, "adetailer"),
             File(outputDir, "upscaled"),
             File(outputDir, "workflow")
         )
@@ -526,10 +1071,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         diskImages = allImages.sortedByDescending { it.lastModified() }
     }
 
-    LaunchedEffect(txt2imgGenerationState, img2imgGenerationState, upscaleGenerationState, selectedMode) {
+    LaunchedEffect(txt2imgGenerationState, img2imgGenerationState, adetailerGenerationState, upscaleGenerationState, selectedMode, adetailerInputMode) {
         val activeState = when (selectedMode) {
-            1 -> img2imgGenerationState
-            2 -> upscaleGenerationState
+            IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> img2imgGenerationState
+            IMAGE_GEN_MODE_UPSCALE -> upscaleGenerationState
+            IMAGE_GEN_MODE_ADETAILER -> if (effectiveSdMode == SDMode.ADETAILER) adetailerGenerationState else txt2imgGenerationState
             else -> txt2imgGenerationState
         }
         when (val state = activeState) {
@@ -553,20 +1099,69 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         (generatedImages + diskImages).distinctBy { it.absolutePath }
     }
 
+    val imageGenOperation = resolveImageGenOperation(selectedMode, adetailerInputMode)
+    val imageGenReadiness = resolveImageGenReadiness(
+        ImageGenReadinessInput(
+            operation = imageGenOperation,
+            hasReadableModel = selectedModelPath?.let { File(it).isFile && File(it).canRead() } == true,
+            hasPrompt = when (imageGenOperation) {
+                ImageGenOperation.ADETAILER_EXISTING -> adetailerPrompt.isNotBlank()
+                else -> prompt.isNotBlank()
+            },
+            hasReadableSourceImage = selectedImagePath?.let { File(it).isFile && File(it).canRead() } == true,
+            hasReadableMask = inpaintMaskPath?.let { File(it).isFile && File(it).canRead() } == true,
+            hasReadableDetector = adetailerModelPath?.let { path ->
+                isCompatibleSdADetailerDetector(File(path))
+            } == true,
+            supportsTxt2Img = supportsTxt2Img,
+            supportsImg2Img = supportsImg2Img,
+            hasRequiredComponents = missingRequiredComponents.isEmpty()
+        )
+    )
+
     // Generate function - handles all modes
     val generate: () -> Unit = generate@{
+        selectedWorkflowPresetId?.let { presetId ->
+            SdWorkflowPresetCatalog.byId(presetId)?.let { preset ->
+                val gate = evaluateSdWorkflowGate(
+                    preset = preset,
+                    installedModels = workflowInstalledModels,
+                    binaryCapabilities = workflowBinaryCapabilities,
+                    // Hashes are verified in the IO LaunchedEffect above. The gate
+                    // only consults the cache, so Generate never hashes multi-GB
+                    // checkpoints on the main thread.
+                    verifyHashes = true,
+                    selection = SdWorkflowSelection(
+                        mode = when (selectedMode) {
+                            IMAGE_GEN_MODE_INPAINT -> "inpaint"
+                            IMAGE_GEN_MODE_ADETAILER -> "adetailer"
+                            else -> "other"
+                        },
+                        modelPath = selectedGenerationModelPath,
+                        detectorPath = adetailerModelPath,
+                        vaePath = selectedVaePath,
+                        maxDetections = adetailerMaxDetections,
+                        advancedArgs = adetailerAdvancedArgs
+                    )
+                )
+                if (!gate.ready) {
+                    errorMessage = context.getString(R.string.sd_workflow_gate_missing)
+                    return@generate
+                }
+            }
+        }
         val modelPath = selectedModelPath
         val inputImagePath = selectedImagePath
-        val mode = when (selectedMode) {
-            1 -> SDMode.IMG2IMG
-            2 -> SDMode.UPSCALE
-            else -> SDMode.TXT2IMG
+        val effectiveInputImagePath = inputImagePath.takeIf {
+            selectedMode != IMAGE_GEN_MODE_ADETAILER ||
+                adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE
         }
+        val mode = effectiveSdMode
         val sdBinaryPath = binaryRepo.getSdBinary()?.absolutePath
         val launchIssue = validateSdLaunchInputs(
             mode = mode,
             modelPath = modelPath,
-            inputImagePath = inputImagePath,
+            inputImagePath = effectiveInputImagePath,
             sdBinaryPath = sdBinaryPath
         )
         if (launchIssue != null) {
@@ -580,28 +1175,79 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             )
             return@generate
         }
-        val modelFileExists = modelPath?.let { File(it).exists() } ?: false
-        val inputImageExists = inputImagePath?.let { File(it).exists() } ?: false
-        val canGenerate = when (selectedMode) {
-            0 -> modelPath != null && modelFileExists && prompt.isNotBlank() && supportsTxt2Img && missingRequiredComponents.isEmpty()
-            1 -> selectedModelPath != null &&
-                modelFileExists &&
-                prompt.isNotBlank() &&
-                inputImagePath != null &&
-                inputImageExists &&
-                supportsImg2Img &&
-                missingRequiredComponents.isEmpty()
-            2 -> modelPath != null && modelFileExists && inputImagePath != null && inputImageExists
-            else -> false
+        val effectiveIpAdapter = if (
+            selectedMode !in setOf(IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER) &&
+            ipAdapterEnabled
+        ) {
+            try {
+                validateSdIpAdapterConfig(
+                    config = SdIpAdapterConfig(
+                        adapterPath = selectedIpAdapterPath.orEmpty(),
+                        clipVisionPath = selectedClipVisionPath.orEmpty(),
+                        imagePath = ipAdapterReferencePath.orEmpty(),
+                        strength = ipAdapterStrength
+                    ),
+                    supportsIpAdapter = supportsIpAdapter,
+                    adapterCompatible = compatibleIpAdapterModels.any {
+                        it.path == selectedIpAdapterPath
+                    },
+                    clipVisionCompatible = compatibleClipVisionModels.any {
+                        it.path == selectedClipVisionPath
+                    }
+                )
+            } catch (error: SdIpAdapterConfigurationException) {
+                errorMessage = sdIpAdapterErrorMessage(context, error)
+                return@generate
+            }
+        } else {
+            null
         }
 
-        if (canGenerate) {
+        try {
+            if (selectedMode == IMAGE_GEN_MODE_INPAINT) {
+                validateSdInpaintInputs(
+                    sourceImagePath = inputImagePath,
+                    maskImagePath = inpaintMaskPath,
+                    strength = strength,
+                    width = width,
+                    height = height
+                )
+            }
+            if (selectedMode == IMAGE_GEN_MODE_ADETAILER) {
+                validateSdADetailerConfig(
+                    SdADetailerConfig(
+                        modelPath = adetailerModelPath.orEmpty(),
+                        prompt = adetailerPrompt.ifBlank { prompt },
+                        negativePrompt = adetailerNegativePrompt,
+                        confidence = adetailerConfidence,
+                        denoisingStrength = adetailerDenoising,
+                        maskBlur = adetailerMaskBlur,
+                        padding = adetailerPadding,
+                        maxDetections = adetailerMaxDetections,
+                        advancedArgs = adetailerAdvancedArgs,
+                        loras = adetailerLoraStack
+                    )
+                )
+            }
+        } catch (configurationError: SdADetailerConfigurationException) {
+            errorMessage = sdADetailerErrorMessage(context, configurationError)
+            return@generate
+        } catch (configurationError: IllegalArgumentException) {
+            errorMessage = configurationError.message ?: context.getString(R.string.error_generic)
+            return@generate
+        }
+
+        if (imageGenReadiness.isReady) {
             errorMessage = null
 
-            val subfolder = when (mode) {
+            val subfolder = when (imageGenOperation) {
+                ImageGenOperation.ADETAILER_EXISTING, ImageGenOperation.ADETAILER_GENERATED -> "adetailer"
+                else -> when (mode) {
                 SDMode.TXT2IMG -> "txt2img"
                 SDMode.IMG2IMG -> "img2img"
+                SDMode.ADETAILER -> "adetailer"
                 SDMode.UPSCALE -> "upscaled"
+                }
             }
 
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -612,6 +1258,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             val threadCount = if (threads > 0) threads else when (mode) {
                 SDMode.TXT2IMG -> settingsRepo.sdTxt2imgThreads.value
                 SDMode.IMG2IMG -> settingsRepo.sdImg2imgThreads.value
+                SDMode.ADETAILER -> if (adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE) {
+                    settingsRepo.sdImg2imgThreads.value
+                } else {
+                    settingsRepo.sdTxt2imgThreads.value
+                }
                 SDMode.UPSCALE -> settingsRepo.sdUpscaleThreads.value
             }
 
@@ -623,7 +1274,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
                     sdParamsBackendMode = selectedActiveModel?.sdParamsBackendMode ?: "auto",
-                    sdRuntimeBackendMode = selectedActiveModel?.sdRuntimeBackendMode ?: "auto",
+                    sdRuntimeBackendMode = acceleratorPlacement?.let {
+                        "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
+                    } ?: selectedActiveModel?.sdRuntimeBackendMode ?: "auto",
                     maxVramCpuGiB = localMaxVramCpuGiB,
                     customFlags = manualCommandFlags
                 )
@@ -668,7 +1321,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 val config = SDConfig(
                     mode = mode,
                     modelPath = modelPath ?: "",
-                    prompt = prompt,
+                    prompt = if (imageGenOperation == ImageGenOperation.ADETAILER_EXISTING) adetailerPrompt else prompt,
                     negativePrompt = negativePrompt,
                     width = width,
                     height = height,
@@ -676,9 +1329,15 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     cfgScale = cfgScale,
                     seed = seed,
                     samplingMethod = selectedSampler,
+                    scheduler = selectedScheduler,
                     outputPath = outputFile.absolutePath,
-                    initImage = inputImagePath,
+                    initImage = effectiveInputImagePath,
+                    maskImage = if (selectedMode == IMAGE_GEN_MODE_INPAINT) inpaintMaskPath else null,
                     strength = strength,
+                    imgCfgScale = if (
+                        selectedMode == IMAGE_GEN_MODE_INPAINT &&
+                        selectedFamilySpec?.supportsImgCfgScale == true
+                    ) inpaintImgCfgScale else null,
                     upscaleModel = null,
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
@@ -695,18 +1354,41 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     controlNetPath = if (controlNetEnabled) selectedControlNetPath else null,
                     controlImagePath = if (controlNetEnabled) selectedImagePath else null,
                     controlStrength = controlStrength,
-                    loraPath = if (loraEnabled) selectedLoraPath else null,
-                    loraStrength = loraStrength,
+                    loraPath = if (loraEnabled) loraStack.firstOrNull()?.path ?: selectedLoraPath else null,
+                    loraStrength = loraStack.firstOrNull()?.strength ?: loraStrength,
                     loraApplyMode = if (loraEnabled) selectedLoraApplyMode else null,
+                    loras = if (loraEnabled) loraStack else emptyList(),
+                    textualInversionPath = if (textualInversionEnabled) {
+                        selectedTextualInversionPath
+                    } else {
+                        null
+                    },
                     photoMakerPath = selectedPhotoMakerPath,
+                    ipAdapter = if (selectedMode in setOf(IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER)) null else effectiveIpAdapter,
+                    adetailer = if (selectedMode == IMAGE_GEN_MODE_ADETAILER) SdADetailerConfig(
+                        modelPath = adetailerModelPath.orEmpty(),
+                        prompt = adetailerPrompt.ifBlank { prompt },
+                        negativePrompt = adetailerNegativePrompt,
+                        confidence = adetailerConfidence,
+                        denoisingStrength = adetailerDenoising,
+                        maskBlur = adetailerMaskBlur,
+                        padding = adetailerPadding,
+                        maxDetections = adetailerMaxDetections,
+                        advancedArgs = adetailerAdvancedArgs,
+                        loras = adetailerLoraStack
+                    ) else null,
+                    adetailerResizeInput = adetailerResizeInput,
                     flowShift = flowShiftText.toFloatOrNull(),
                     diffusionFa = diffusionFaEnabled,
+                    diffusionConvDirect = diffusionConvDirectEnabled,
                     mmap = mmapEnabled,
                     vaeConvDirect = vaeConvDirectEnabled,
                     qwenImageZeroCondT = qwenImageZeroCondTEnabled,
                     chromaDisableDitMask = chromaDisableDitMaskEnabled,
                     sdParamsBackendMode = selectedMainModel?.sdParamsBackendMode ?: "auto",
-                    sdRuntimeBackendMode = selectedMainModel?.sdRuntimeBackendMode ?: "auto",
+                    sdRuntimeBackendMode = acceleratorPlacement?.let {
+                        "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
+                    } ?: selectedMainModel?.sdRuntimeBackendMode ?: "auto",
                     maxVramCpuGiB = localMaxVramCpuGiB,
                     vaeTiling = sdVaeTiling,
                     vaeTileOverlap = sdVaeTileOverlap,
@@ -718,7 +1400,20 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     cacheOption = cacheOption,
                     scmMask = scmMask,
                     scmPolicy = scmPolicy,
-                    customFlags = manualCommandFlags
+                    customFlags = manualCommandFlags,
+                    operation = imageGenOperation.name,
+                    sourceTransform = inpaintWorkspace?.transform?.name,
+                    maskProvenance = inpaintWorkspace?.provenance?.name,
+                    maskPolarity = if (selectedMode == IMAGE_GEN_MODE_INPAINT) "WHITE_REGENERATES" else null,
+                    workflowPresetId = selectedWorkflowPresetId,
+                    workflowBundleId = selectedWorkflowPresetId
+                        ?.let(SdWorkflowPresetCatalog::byId)
+                        ?.bundle
+                        ?.id,
+                    workflowRevision = selectedWorkflowPresetId
+                        ?.let(SdWorkflowPresetCatalog::byId)
+                        ?.files
+                        ?.joinToString(",") { file -> "${file.id}@${file.revision}" }
                 )
 
                 batteryGateState.runAfterCheck {
@@ -759,9 +1454,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     // Cancel function - cancels only the current mode's generation
     val cancelGeneration: () -> Unit = {
         val mode = when (selectedMode) {
-            0 -> SDMode.TXT2IMG
-            1 -> SDMode.IMG2IMG
-            else -> SDMode.UPSCALE
+            IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> SDMode.IMG2IMG
+            IMAGE_GEN_MODE_UPSCALE -> SDMode.UPSCALE
+            IMAGE_GEN_MODE_ADETAILER -> SDMode.ADETAILER
+            else -> SDMode.TXT2IMG
         }
         context.startService(StableDiffusionService.createCancelModeIntent(context, mode))
     }
@@ -772,6 +1468,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             mode = when (selectedMode) {
                 1 -> SDMode.IMG2IMG.name
                 2 -> SDMode.UPSCALE.name
+                IMAGE_GEN_MODE_ADETAILER -> SDMode.ADETAILER.name
                 else -> SDMode.TXT2IMG.name
             },
             event = "pane_rendered",
@@ -779,10 +1476,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         )
     }
 
-    @Composable
-    fun GenerationModePaneContent() {
-        // Image Input (for img2img and upscale modes)
-        if (selectedMode > 0) {
+    fun LazyListScope.generationModePaneContent() {
+        // Image input is required for transform, inpaint, upscale, and existing-image ADetailer.
+        if (selectedMode in setOf(IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT) ||
+            (selectedMode == IMAGE_GEN_MODE_ADETAILER && adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE)
+        ) item(key = "input") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -792,6 +1490,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     Text(
                         when {
                             selectedMode == 2 -> stringResource(R.string.imagegen_mode_upscale)
+                            selectedMode == IMAGE_GEN_MODE_INPAINT -> stringResource(R.string.imagegen_inpaint_step_source)
+                            selectedMode == IMAGE_GEN_MODE_ADETAILER -> stringResource(R.string.imagegen_adetailer_step_source)
                             selectedFamilySpec?.img2imgInputMode == SdImageInputMode.REFERENCE_IMAGE ->
                                 stringResource(R.string.imagegen_reference_image_title)
                             else -> stringResource(R.string.imagegen_mode_img2img)
@@ -799,6 +1499,47 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    if (selectedMode == IMAGE_GEN_MODE_INPAINT) {
+                        Text(
+                            stringResource(R.string.imagegen_inpaint_transform_title),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            stringResource(R.string.imagegen_inpaint_transform_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            SegmentedButton(
+                                selected = inpaintCanvasTransform == InpaintCanvasTransform.FIT,
+                                onClick = { inpaintCanvasTransform = InpaintCanvasTransform.FIT },
+                                enabled = inpaintWorkspace == null,
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                            ) {
+                                Text(
+                                    stringResource(R.string.imagegen_inpaint_transform_fit),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            SegmentedButton(
+                                selected = inpaintCanvasTransform == InpaintCanvasTransform.CENTER_CROP,
+                                onClick = { inpaintCanvasTransform = InpaintCanvasTransform.CENTER_CROP },
+                                enabled = inpaintWorkspace == null,
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                            ) {
+                                Text(
+                                    stringResource(R.string.imagegen_inpaint_transform_center_crop),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
 
                     if (selectedImagePath != null && imageResolution != null) {
                         val resolution = imageResolution
@@ -844,7 +1585,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         }
                     }
 
-                    if (selectedMode == 1 && selectedFamilySpec?.img2imgInputMode != SdImageInputMode.REFERENCE_IMAGE) {
+                    if ((selectedMode in setOf(IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT) ||
+                        (selectedMode == IMAGE_GEN_MODE_ADETAILER && adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE)) &&
+                        selectedFamilySpec?.img2imgInputMode != SdImageInputMode.REFERENCE_IMAGE
+                    ) {
                         Spacer(modifier = Modifier.height(12.dp))
                         SliderWithInput(
                             value = strength,
@@ -989,7 +1733,142 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
             Spacer(modifier = Modifier.height(12.dp))
         }
-        Card(
+        if (selectedMode == IMAGE_GEN_MODE_INPAINT) item(key = "inpaint_options") {
+            ImageGenInpaintOptionsCard(
+                maskPath = inpaintMaskPath,
+                hasSourceImage = selectedImagePath?.let { File(it).isFile && File(it).canRead() } == true,
+                onDrawMask = openInpaintMaskEditor,
+                onImportMask = { maskPicker.launch("image/*") },
+                automaticSelectionModels = backgroundRemovalModels,
+                automaticSelectionModelPath = selectedAutoMaskModelPath,
+                onAutomaticSelectionModelPathChange = { selectedAutoMaskModelPath = it },
+                automaticSelectionRunning = pendingAutoMaskPolarity != null,
+                onAutoSelectSubject = { startAutomaticMask(InpaintAutoMaskPolarity.AUTO_SUBJECT) },
+                onAutoSelectBackground = { startAutomaticMask(InpaintAutoMaskPolarity.AUTO_BACKGROUND) },
+                onInstallAutomaticModel = { navController.navigate(Screen.OnnxModels.route) },
+                strength = strength,
+                onStrengthChange = { strength = it },
+                supportsImgCfgScale = selectedFamilySpec?.supportsImgCfgScale == true,
+                imgCfgScale = inpaintImgCfgScale,
+                onImgCfgScaleChange = { inpaintImgCfgScale = it }
+            )
+        }
+        if (selectedMode == IMAGE_GEN_MODE_ADETAILER) item(key = "adetailer_options") {
+            ImageGenADetailerOptionsCard(
+                inputMode = adetailerInputMode,
+                onInputModeChange = { adetailerInputMode = it },
+                supportsExistingImage = supportsImg2Img,
+                supportsGeneratedImage = supportsTxt2Img,
+                detectors = compatibleAdetailerModels,
+                detectorPath = adetailerModelPath,
+                onDetectorPathChange = { adetailerModelPath = it },
+                onInstallDetector = { navController.navigate(Screen.SDModels.route) },
+                detailPrompt = adetailerPrompt,
+                onDetailPromptChange = { adetailerPrompt = it },
+                detailNegativePrompt = adetailerNegativePrompt,
+                onDetailNegativePromptChange = { adetailerNegativePrompt = it },
+                confidence = adetailerConfidence,
+                onConfidenceChange = { adetailerConfidence = it },
+                denoising = adetailerDenoising,
+                onDenoisingChange = { adetailerDenoising = it },
+                maskBlur = adetailerMaskBlur,
+                onMaskBlurChange = { adetailerMaskBlur = it },
+                padding = adetailerPadding,
+                onPaddingChange = { adetailerPadding = it },
+                maxDetections = adetailerMaxDetections,
+                onMaxDetectionsChange = { adetailerMaxDetections = it },
+                detailWidth = width,
+                detailHeight = height,
+                resizeInput = adetailerResizeInput,
+                onResizeInputChange = { adetailerResizeInput = it },
+                advancedArgs = adetailerAdvancedArgs,
+                onAdvancedArgsChange = { adetailerAdvancedArgs = it },
+                loraModels = compatibleLoraModels,
+                loraStack = adetailerLoraStack,
+                onLoraStackChange = { adetailerLoraStack = it }
+            )
+        }
+        if (selectedMode != IMAGE_GEN_MODE_UPSCALE) item(key = "workflow-preset") {
+            val selectedWorkflowPreset = SdWorkflowPresetCatalog.byId(selectedWorkflowPresetId.orEmpty())
+            var workflowExpanded by remember { mutableStateOf(false) }
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.sd_workflow_preset_label),
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.sd_workflow_preset_help),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (selectedWorkflowPreset != null && !workflowHashVerificationFinished) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            stringResource(R.string.sd_workflow_hash_verifying),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ExposedDropdownMenuBox(
+                        expanded = workflowExpanded,
+                        onExpandedChange = { workflowExpanded = !workflowExpanded }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedWorkflowPreset?.let { stringResource(it.bundle.titleRes) }
+                                ?: stringResource(R.string.sd_workflow_preset_none),
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier.fillMaxWidth().menuAnchor(),
+                            maxLines = 1,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = workflowExpanded) }
+                        )
+                        ExposedDropdownMenu(
+                            expanded = workflowExpanded,
+                            onDismissRequest = { workflowExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.sd_workflow_preset_none)) },
+                                onClick = {
+                                    selectedWorkflowPresetId = null
+                                    workflowExpanded = false
+                                }
+                            )
+                            SdWorkflowPresetCatalog.presets.forEach { preset ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            stringResource(preset.bundle.titleRes),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    onClick = {
+                                        applyWorkflowPreset(preset)
+                                        workflowExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    selectedWorkflowPreset?.let { preset ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(preset.bundle.descriptionRes),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+        item(key = "model") { Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -1072,9 +1951,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     }
                 }
             }
-        }
+        } }
 
-        if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) {
+        if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) item(key = "components") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1217,7 +2096,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || compatibleLoraModels.isNotEmpty())) {
+        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || compatibleLoraModels.isNotEmpty())) item(key = "adapters") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1278,26 +2157,131 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                 if (!it) {
                                     selectedLoraPath = null
                                     selectedLoraApplyMode = null
+                                    loraStack = emptyList()
+                                } else if (loraStack.isEmpty()) {
+                                    compatibleLoraModels.firstOrNull()?.let { model ->
+                                        selectedLoraPath = model.path
+                                        loraStack = listOf(SdLoraSpec(model.path, loraStrength))
+                                    }
                                 }
                             }
                         )
                         if (loraEnabled) {
                             Spacer(modifier = Modifier.height(8.dp))
-                            SdComponentPickerField(
-                                label = componentRoleLabel(SdComponentRole.LORA),
-                                models = compatibleLoraModels,
-                                selectedPath = selectedLoraPath,
-                                onSelectionChange = { selectedLoraPath = it },
-                                allowNone = false,
-                                emptyMessage = stringResource(R.string.imagegen_no_lora)
-                            )
+                            if (loraStack.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.imagegen_no_lora),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            loraStack.forEachIndexed { index, item ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                                    )
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.imagegen_lora_item, index + 1),
+                                                style = MaterialTheme.typography.labelLarge,
+                                                modifier = Modifier.weight(1f),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            IconButton(
+                                                onClick = {
+                                                    loraStack = loraStack.filterIndexed { itemIndex, _ -> itemIndex != index }
+                                                    if (index == 0) selectedLoraPath = loraStack.firstOrNull()?.path
+                                                }
+                                            ) {
+                                                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.imagegen_lora_remove))
+                                            }
+                                        }
+                                        SdComponentPickerField(
+                                            label = componentRoleLabel(SdComponentRole.LORA),
+                                            models = compatibleLoraModels,
+                                            selectedPath = item.path,
+                                            onSelectionChange = { path ->
+                                                path?.let {
+                                                    loraStack = loraStack.mapIndexed { itemIndex, current ->
+                                                        if (itemIndex == index) current.copy(path = it) else current
+                                                    }
+                                                    if (index == 0) selectedLoraPath = it
+                                                }
+                                            },
+                                            allowNone = false,
+                                            emptyMessage = stringResource(R.string.imagegen_no_lora)
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        SliderWithInput(
+                                            value = item.strength,
+                                            onValueChange = { strengthValue ->
+                                                loraStack = loraStack.mapIndexed { itemIndex, current ->
+                                                    if (itemIndex == index) current.copy(strength = strengthValue) else current
+                                                }
+                                                if (index == 0) loraStrength = strengthValue
+                                            },
+                                            valueRange = -4f..4f,
+                                            label = stringResource(R.string.imagegen_lora_strength_label),
+                                            decimalPlaces = 2
+                                        )
+                                    }
+                                }
+                                if (index < loraStack.lastIndex) Spacer(modifier = Modifier.height(8.dp))
+                            }
                             Spacer(modifier = Modifier.height(8.dp))
-                            SliderWithInput(
-                                value = loraStrength,
-                                onValueChange = { loraStrength = it },
-                                valueRange = 0f..2f,
-                                label = stringResource(R.string.imagegen_lora_strength_label),
-                                decimalPlaces = 2
+                            OutlinedButton(
+                                onClick = {
+                                    compatibleLoraModels.firstOrNull { model -> loraStack.none { it.path == model.path } }?.let { model ->
+                                        loraStack = loraStack + SdLoraSpec(model.path, 1.0f)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = compatibleLoraModels.any { model -> loraStack.none { it.path == model.path } }
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.imagegen_lora_add))
+                            }
+                        }
+                    }
+
+                    if (compatibleTextualInversionModels.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LabeledSwitchRow(
+                            label = stringResource(
+                                R.string.imagegen_textual_inversion
+                            ),
+                            checked = textualInversionEnabled,
+                            onCheckedChange = {
+                                textualInversionEnabled = it
+                                if (!it) {
+                                    selectedTextualInversionPath = null
+                                }
+                            }
+                        )
+                        if (textualInversionEnabled) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            SdComponentPickerField(
+                                label = stringResource(
+                                    R.string.imagegen_textual_inversion
+                                ),
+                                models = compatibleTextualInversionModels,
+                                selectedPath = selectedTextualInversionPath,
+                                onSelectionChange = {
+                                    selectedTextualInversionPath = it
+                                },
+                                allowNone = false,
+                                emptyMessage = stringResource(
+                                    R.string.imagegen_no_textual_inversion
+                                )
                             )
                         }
                     }
@@ -1305,7 +2289,37 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) {
+                if (selectedMode !in setOf(IMAGE_GEN_MODE_UPSCALE, IMAGE_GEN_MODE_INPAINT, IMAGE_GEN_MODE_ADETAILER)) {
+                    item(key = "ip-adapter") {
+                        SdIpAdapterCard(
+                            supported = supportsIpAdapter,
+                            enabled = ipAdapterEnabled,
+                            onEnabledChange = { ipAdapterEnabled = it },
+                            adapterModels = compatibleIpAdapterModels,
+                            clipVisionModels = compatibleClipVisionModels,
+                            selectedAdapterPath = selectedIpAdapterPath,
+                            onAdapterPathChange = { selectedIpAdapterPath = it },
+                            selectedClipVisionPath = selectedClipVisionPath,
+                            onClipVisionPathChange = { selectedClipVisionPath = it },
+                            referenceImagePath = ipAdapterReferencePath,
+                            onReferenceImagePathChange = { ipAdapterReferencePath = it },
+                            strength = ipAdapterStrength,
+                            onStrengthChange = { ipAdapterStrength = it },
+                            onClearConfiguration = {
+                                ipAdapterEnabled = false
+                                selectedIpAdapterPath = null
+                                selectedClipVisionPath = null
+                                ipAdapterReferencePath = null
+                                ipAdapterStrength = SdIpAdapterDraftState.DEFAULT_STRENGTH
+                            },
+                            onOpenModels = {
+                                navController.navigate(Screen.SDModels.route)
+                            }
+                        )
+                    }
+                }
+
+        if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) item(key = "tensor-types") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1343,7 +2357,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2) {
+        if (selectedMode != 2) item(key = "prompts-and-parameters") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -1385,7 +2399,16 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(100.dp),
-                        placeholder = { Text(stringResource(R.string.imagegen_prompt_placeholder)) },
+                        placeholder = {
+                            val promptContext = when {
+                                selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
+                                selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
+                                else -> null
+                            }
+                            val promptText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).positiveRes) }
+                                ?: stringResource(R.string.imagegen_prompt_placeholder)
+                            Text(promptText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+                        },
                         shape = RoundedCornerShape(12.dp)
                     )
 
@@ -1419,7 +2442,16 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             value = negativePrompt,
                             onValueChange = { negativePrompt = it },
                             modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text(stringResource(R.string.imagegen_negative_prompt_placeholder)) },
+                            placeholder = {
+                                val promptContext = when {
+                                    selectedMode == IMAGE_GEN_MODE_INPAINT -> SdWorkflowPromptContext.INPAINT
+                                    selectedMode == IMAGE_GEN_MODE_ADETAILER -> sdWorkflowPromptContextForDetector(adetailerModelPath)
+                                    else -> null
+                                }
+                                val negativeText = promptContext?.let { stringResource(sdWorkflowPromptExample(it).negativeRes) }
+                                    ?: stringResource(R.string.imagegen_negative_prompt_placeholder)
+                                Text(negativeText, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f))
+                            },
                             shape = RoundedCornerShape(12.dp)
                         )
 
@@ -1499,6 +2531,12 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
+                        SdSchedulerPicker(
+                            value = selectedScheduler,
+                            onValueChange = { selectedScheduler = it }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1564,9 +2602,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        if (selectedMode != 2 && selectedFamilySpec != null) {
+        if (selectedMode != 2 && selectedFamilySpec != null) item(key = "runtime") {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -1653,6 +2689,26 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         )
                     }
 
+                    acceleratorPlacement?.let { accelerator ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        SdBackendPlacementControls(
+                            accelerator = accelerator,
+                            textEncoder = textEncoderPlacement,
+                            diffusion = diffusionPlacement,
+                            vae = vaePlacement,
+                            onTextEncoderChange = { textEncoderPlacement = it },
+                            onDiffusionChange = { diffusionPlacement = it },
+                            onVaeChange = { vaePlacement = it }
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LabeledSwitchRow(
+                        label = stringResource(R.string.imagegen_diffusion_conv_direct_label),
+                        checked = diffusionConvDirectEnabled,
+                        onCheckedChange = { diffusionConvDirectEnabled = it }
+                    )
+
                     if (selectedFamilySpec.supportsMmap) {
                         Spacer(modifier = Modifier.height(12.dp))
                         LabeledSwitchRow(
@@ -1737,7 +2793,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             Spacer(modifier = Modifier.height(12.dp))
         }
 
-        GenerationCachingCard(
+        item(key = "cache") { GenerationCachingCard(
             title = stringResource(R.string.gen_cache_title),
             cacheMode = if (selectedMode == 2) null else cacheMode,
             onCacheModeChange = { cacheMode = it },
@@ -1754,11 +2810,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             },
             enabled = selectedMode != 2,
             disabledMessage = stringResource(R.string.gen_cache_disabled_for_upscale)
-        )
+        ) }
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Card(
+        item(key = "manual-flags") { Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(16.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -1784,11 +2838,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     shape = RoundedCornerShape(12.dp)
                 )
             }
-        }
+        } }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        if (isGenerating) {
+        item(key = "run-state") { if (isGenerating) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
@@ -1841,42 +2893,84 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }
             }
         } else {
-            val buttonEnabled = when (selectedMode) {
-                0 -> selectedModelPath != null &&
-                    prompt.isNotBlank() &&
-                    supportsTxt2Img &&
-                    missingRequiredComponents.isEmpty()
-                1 -> selectedModelPath != null &&
-                    prompt.isNotBlank() &&
-                    selectedImagePath != null &&
-                    supportsImg2Img &&
-                    missingRequiredComponents.isEmpty()
-                2 -> selectedModelPath != null && selectedImagePath != null
-                else -> false
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (!imageGenReadiness.isReady) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    ) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                stringResource(R.string.imagegen_readiness_title),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            imageGenReadiness.issues.forEach { issue ->
+                                Text(
+                                    "• " + stringResource(
+                                        when (issue) {
+                                            ImageGenReadinessIssue.MODEL -> R.string.imagegen_readiness_model
+                                            ImageGenReadinessIssue.PROMPT -> R.string.imagegen_readiness_prompt
+                                            ImageGenReadinessIssue.SOURCE_IMAGE -> R.string.imagegen_readiness_source
+                                            ImageGenReadinessIssue.MASK -> R.string.imagegen_readiness_mask
+                                            ImageGenReadinessIssue.DETECTOR -> R.string.imagegen_readiness_detector
+                                            ImageGenReadinessIssue.FAMILY_SUPPORT -> R.string.imagegen_readiness_family
+                                            ImageGenReadinessIssue.REQUIRED_COMPONENTS -> R.string.imagegen_readiness_components
+                                        }
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (ImageGenReadinessIssue.SOURCE_IMAGE in imageGenReadiness.issues) {
+                                    TextButton(onClick = { imagePicker.launch("image/*") }) {
+                                        Text(stringResource(R.string.imagegen_fix_choose_image))
+                                    }
+                                }
+                                if (ImageGenReadinessIssue.MASK in imageGenReadiness.issues) {
+                                    TextButton(onClick = openInpaintMaskEditor) {
+                                        Text(stringResource(R.string.imagegen_inpaint_draw_mask))
+                                    }
+                                }
+                                if (ImageGenReadinessIssue.DETECTOR in imageGenReadiness.issues) {
+                                    TextButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
+                                        Text(stringResource(R.string.imagegen_adetailer_install_detector))
+                                    }
+                                }
+                                if (ImageGenReadinessIssue.MODEL in imageGenReadiness.issues ||
+                                    ImageGenReadinessIssue.REQUIRED_COMPONENTS in imageGenReadiness.issues
+                                ) {
+                                    TextButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
+                                        Text(stringResource(R.string.imagegen_fix_models))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Button(
+                    onClick = generate,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp),
+                    enabled = imageGenReadiness.isReady,
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Icon(Icons.Default.Create, null)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        when (selectedMode) {
+                            2 -> stringResource(R.string.imagegen_upscale_btn)
+                            else -> stringResource(R.string.imagegen_generate_btn)
+                        },
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
-            Button(
-                onClick = generate,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                enabled = buttonEnabled,
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Icon(Icons.Default.Create, null)
-                Spacer(modifier = Modifier.width(12.dp))
-                Text(
-                    when (selectedMode) {
-                        2 -> stringResource(R.string.imagegen_upscale_btn)
-                        else -> stringResource(R.string.imagegen_generate_btn)
-                    },
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        }
+        } }
 
         errorMessage?.let { error ->
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
+            item(key = "error") { Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer
                 ),
@@ -1887,12 +2981,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     modifier = Modifier.padding(12.dp),
                     color = MaterialTheme.colorScheme.onErrorContainer
                 )
-            }
+            } }
         }
 
         if (generationState is SDGenerationState.Complete) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Card(
+            item(key = "complete") { Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 ),
@@ -1909,10 +3002,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 }
-            }
+            } }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
     }
 
     @Composable
@@ -2146,49 +3237,41 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         }
 
         if (mainTab == 0) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                val modes = listOf(
-                    stringResource(R.string.imagegen_mode_txt2img),
-                    stringResource(R.string.imagegen_mode_img2img),
-                    stringResource(R.string.imagegen_mode_upscale)
-                )
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    modes.forEachIndexed { index, mode ->
-                        val modeEnabled = when (index) {
-                            0 -> supportsTxt2Img
-                            1 -> supportsImg2Img
-                            else -> true
-                        }
-                        SegmentedButton(
-                            selected = selectedMode == index,
-                            onClick = {
-                                if (index == 2) {
-                                    navController.navigate(Screen.ImageGenUpscale.route)
-                                } else {
-                                    switchGenerationMode(index)
-                                }
-                            },
-                            enabled = modeEnabled,
-                            shape = SegmentedButtonDefaults.itemShape(
-                                index = index,
-                                count = modes.size
+                item(key = "mode") {
+                    val modes = listOf(
+                        IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
+                        IMAGE_GEN_MODE_IMG2IMG to stringResource(R.string.imagegen_task_transform),
+                        IMAGE_GEN_MODE_INPAINT to stringResource(R.string.imagegen_task_repair),
+                        IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
+                        IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(modes, key = { it.first }) { (modeIndex, modeLabel) ->
+                            val modeEnabled = when (modeIndex) {
+                                IMAGE_GEN_MODE_TXT2IMG -> supportsTxt2Img
+                                IMAGE_GEN_MODE_IMG2IMG, IMAGE_GEN_MODE_INPAINT -> supportsImg2Img
+                                IMAGE_GEN_MODE_ADETAILER -> supportsTxt2Img || supportsImg2Img
+                                else -> true
+                            }
+                            FilterChip(
+                                selected = selectedMode == modeIndex,
+                                onClick = {
+                                    switchGenerationMode(modeIndex)
+                                },
+                                enabled = modeEnabled,
+                                label = { Text(modeLabel, maxLines = 1) }
                             )
-                        ) {
-                            Text(mode)
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                GenerationModePaneContent()
+                generationModePaneContent()
             }
         } else {
             key("gallery") {
@@ -2214,6 +3297,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     // Fullscreen image viewer dialog
     if (fullscreenImage != null) {
         val bitmap by rememberPreviewImageBitmap(fullscreenImage?.absolutePath, maxDimension = 1600)
+        val imageMetadata = remember(fullscreenImage?.absolutePath) {
+            fullscreenImage?.let { SdGeneratedImageMetadata.fromFile(SdGeneratedImageMetadata.metadataFileForImage(it)) }
+        }
 
         AlertDialog(
             onDismissRequest = { fullscreenImage = null },
@@ -2298,11 +3384,10 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }
             },
             text = {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
+                Column(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 520.dp).verticalScroll(rememberScrollState())
                 ) {
+                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
                     bitmap?.let {
                         Image(
                             bitmap = it,
@@ -2310,6 +3395,20 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit
                         )
+                    }
+                    }
+                    imageMetadata?.let { metadata ->
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(metadata.prompt, style = MaterialTheme.typography.bodyMedium)
+                        if (metadata.negativePrompt.isNotBlank()) Text(metadata.negativePrompt, style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(stringResource(R.string.sd_gallery_image_details, metadata.modelName, metadata.width, metadata.height, metadata.steps, metadata.samplingMethod.cliName), style = MaterialTheme.typography.bodySmall)
+                        Text("${Date(metadata.createdAt)} • ${metadata.generationDurationMs?.let { formatGenerationDuration(it) } ?: stringResource(R.string.sd_gallery_unavailable)}", style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.sd_gallery_image_runtime, metadata.sdRuntimeBackendMode, metadata.quantizationType.ifBlank { stringResource(R.string.sd_gallery_default) }), style = MaterialTheme.typography.bodySmall)
+                        metadata.conditioningDurationMs?.let { Text(stringResource(R.string.sd_stage_conditioning, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
+                        metadata.samplingDurationMs?.let { Text(stringResource(R.string.sd_stage_sampling, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
+                        metadata.decodingDurationMs?.let { Text(stringResource(R.string.sd_stage_decoding, formatGenerationDuration(it)), style = MaterialTheme.typography.bodySmall) }
+                        Text(stringResource(R.string.sd_gallery_image_components, metadata.vaeName ?: metadata.taeName ?: stringResource(R.string.sd_gallery_unavailable), metadata.cacheMode?.cliName ?: stringResource(R.string.gen_cache_mode_off), metadata.diffusionConvDirect, metadata.vaeConvDirect), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -2324,6 +3423,12 @@ private data class PreparedImageInput(
 )
 
 private const val IMAGE_GEN_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
+
+private fun formatGenerationDuration(durationMs: Long): String = when {
+    durationMs < 1_000L -> "${durationMs} ms"
+    durationMs < 60_000L -> String.format(Locale.getDefault(), "%.1f s", durationMs / 1_000.0)
+    else -> String.format(Locale.getDefault(), "%dm %02ds", durationMs / 60_000L, (durationMs / 1_000L) % 60L)
+}
 
 private suspend fun prepareImageInputForMode(
     context: Context,
@@ -2396,6 +3501,8 @@ private fun componentRoleLabelRes(role: SdComponentRole): Int = when (role) {
     SdComponentRole.CONTROLNET -> R.string.imagegen_component_controlnet
     SdComponentRole.LORA -> R.string.imagegen_component_lora
     SdComponentRole.PHOTOMAKER -> R.string.imagegen_component_photomaker
+    SdComponentRole.CLIP_VISION -> R.string.sd_type_clip_vision
+    SdComponentRole.IP_ADAPTER -> R.string.sd_type_ip_adapter
     SdComponentRole.UPSCALER -> R.string.imagegen_component_upscaler
 }
 
@@ -2436,6 +3543,7 @@ private fun SdComponentPickerField(
                 ?: if (allowNone) stringResource(R.string.imagegen_none_builtin) else "",
             onValueChange = {},
             readOnly = true,
+            singleLine = true,
             modifier = Modifier.fillMaxWidth().menuAnchor(),
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             shape = RoundedCornerShape(12.dp)
@@ -2455,7 +3563,7 @@ private fun SdComponentPickerField(
             }
             models.forEach { model ->
                 DropdownMenuItem(
-                    text = { Text(model.filename) },
+                    text = { Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     onClick = {
                         onSelectionChange(model.path)
                         expanded = false

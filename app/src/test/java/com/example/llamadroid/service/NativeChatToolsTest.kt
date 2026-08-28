@@ -3,6 +3,10 @@ package com.example.llamadroid.service
 import com.example.llamadroid.data.db.NoteDao
 import com.example.llamadroid.data.db.NoteEntity
 import com.example.llamadroid.data.db.NoteType
+import com.example.llamadroid.data.db.OrganizerAlarmEntity
+import com.example.llamadroid.data.db.OrganizerDao
+import com.example.llamadroid.data.db.OrganizerEventEntity
+import com.example.llamadroid.data.db.OrganizerLlmSettingsEntity
 import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
@@ -21,6 +25,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 class NativeChatToolsTest {
     @Test
@@ -848,6 +854,103 @@ class NativeChatToolsTest {
         assertTrue(removeResult.contains("removed: call Ana"))
         assertEquals("- [x] send docs", noteDao.notes.getValue(11).content)
     }
+
+    @Test
+    fun `calendar event retrieval includes localized weekday names`() = runBlocking {
+        val madrid = ZoneId.of("Europe/Madrid")
+        val event = OrganizerEventEntity(
+            id = 7L,
+            title = "Planning",
+            startAtMillis = ZonedDateTime.of(2026, 7, 20, 9, 0, 0, 0, madrid).toInstant().toEpochMilli(),
+            endAtMillis = ZonedDateTime.of(2026, 7, 21, 10, 0, 0, 0, madrid).toInstant().toEpochMilli(),
+            timezoneId = madrid.id
+        )
+        val runtime = NativeChatToolRuntime(organizerDao = FakeOrganizerDao(events = listOf(event)))
+
+        val result = runtime.executeToolCall(
+            toolCall = OllamaService.ToolCall(
+                NativeChatToolRuntime.TOOL_LIST_CALENDAR_EVENTS,
+                mapOf("query" to "Planning")
+            ),
+            config = NativeChatToolConfig(toolsEnabled = true, calendarToolsEnabled = true)
+        ).getOrThrow().content
+
+        assertTrue(result.contains("start_datetime: 2026-07-20T09:00:00+02:00"))
+        assertTrue(result.contains("start_day_of_week: Monday"))
+        assertTrue(result.contains("start_day_of_week_es: lunes"))
+        assertTrue(result.contains("end_datetime: 2026-07-21T10:00:00+02:00"))
+        assertTrue(result.contains("end_day_of_week: Tuesday"))
+        assertTrue(result.contains("end_day_of_week_es: martes"))
+    }
+
+    @Test
+    fun `pinned note config exposes only pinned note tool for note access`() {
+        val effective = NativeChatToolConfig(
+            toolsEnabled = true,
+            noteToolsEnabled = true,
+            todoToolsEnabled = true,
+            pinnedNoteId = 42
+        ).effectiveWithServerDefaults(
+            NativeChatToolConfig(
+                toolsEnabled = true,
+                noteToolsEnabled = true,
+                todoToolsEnabled = true
+            )
+        )
+
+        val names = NativeChatToolRuntime().availableTools(effective).map { it.name }.toSet()
+
+        assertTrue(names.contains(NativeChatToolRuntime.TOOL_MODIFY_PINNED_NOTE))
+        assertFalse(names.contains(NativeChatToolRuntime.TOOL_CREATE_NOTE))
+        assertFalse(names.contains(NativeChatToolRuntime.TOOL_UPDATE_NOTE))
+        assertFalse(names.contains(NativeChatToolRuntime.TOOL_REPLACE_NOTE_TEXT))
+        assertFalse(names.contains(NativeChatToolRuntime.TOOL_LIST_NOTES))
+        assertFalse(names.contains(NativeChatToolRuntime.TOOL_CREATE_TODO_LIST))
+    }
+
+    @Test
+    fun `pinned note config rejects normal note mutation tools`() = runBlocking {
+        val noteDao = FakeNoteDao(
+            listOf(
+                NoteEntity(
+                    id = 42,
+                    title = "Pinned",
+                    content = "old text",
+                    type = NoteType.MANUAL,
+                    isLlmWhitelisted = true
+                )
+            )
+        )
+        val runtime = NativeChatToolRuntime(noteDao = noteDao)
+        val config = NativeChatToolConfig(
+            toolsEnabled = true,
+            noteToolsEnabled = true,
+            pinnedNoteId = 42
+        )
+
+        val createResult = runtime.executeToolCall(
+            OllamaService.ToolCall(
+                NativeChatToolRuntime.TOOL_CREATE_NOTE,
+                mapOf("title" to "Other", "content" to "Nope")
+            ),
+            config
+        )
+        val pinnedResult = runtime.executeToolCall(
+            OllamaService.ToolCall(
+                NativeChatToolRuntime.TOOL_MODIFY_PINNED_NOTE,
+                mapOf(
+                    "operation" to "replace_text",
+                    "find_text" to "old",
+                    "replacement_text" to "new"
+                )
+            ),
+            config
+        )
+
+        assertTrue(createResult.isFailure)
+        assertTrue(pinnedResult.isSuccess)
+        assertEquals("new text", noteDao.notes.getValue(42).content)
+    }
 }
 
 private class FakeNoteDao(initialNotes: List<NoteEntity>) : NoteDao {
@@ -901,4 +1004,104 @@ private class FakeNoteDao(initialNotes: List<NoteEntity>) : NoteDao {
     override fun getNoteCount(): Flow<Int> = flowOf(notes.size)
 
     override fun getNoteCountByType(type: NoteType): Flow<Int> = flowOf(notes.values.count { it.type == type })
+}
+
+private class FakeOrganizerDao(
+    events: List<OrganizerEventEntity> = emptyList(),
+    alarms: List<OrganizerAlarmEntity> = emptyList(),
+    private var settings: OrganizerLlmSettingsEntity? = null
+) : OrganizerDao {
+    private val eventsById: MutableMap<Long, OrganizerEventEntity> = events.associateBy { it.id }.toMutableMap()
+    private val alarmsById: MutableMap<Long, OrganizerAlarmEntity> = alarms.associateBy { it.id }.toMutableMap()
+    private var nextEventId: Long = (eventsById.keys.maxOrNull() ?: 0L) + 1L
+    private var nextAlarmId: Long = (alarmsById.keys.maxOrNull() ?: 0L) + 1L
+
+    override fun getAllEvents(): Flow<List<OrganizerEventEntity>> = flowOf(sortedEvents())
+
+    override suspend fun getAllEventsOnce(): List<OrganizerEventEntity> = sortedEvents()
+
+    override fun getEventsInRange(
+        rangeStartMillis: Long,
+        rangeEndMillis: Long
+    ): Flow<List<OrganizerEventEntity>> = flowOf(eventsInRange(rangeStartMillis, rangeEndMillis))
+
+    override suspend fun getEventsInRangeOnce(
+        rangeStartMillis: Long,
+        rangeEndMillis: Long
+    ): List<OrganizerEventEntity> = eventsInRange(rangeStartMillis, rangeEndMillis)
+
+    override suspend fun getEventById(id: Long): OrganizerEventEntity? = eventsById[id]
+
+    override suspend fun insertEvent(event: OrganizerEventEntity): Long {
+        val id = if (event.id == 0L) nextEventId++ else event.id
+        eventsById[id] = event.copy(id = id)
+        return id
+    }
+
+    override suspend fun updateEvent(event: OrganizerEventEntity) {
+        eventsById[event.id] = event
+    }
+
+    override suspend fun deleteEvent(event: OrganizerEventEntity) {
+        eventsById.remove(event.id)
+    }
+
+    override suspend fun deleteEventById(id: Long) {
+        eventsById.remove(id)
+    }
+
+    override fun getAllAlarms(): Flow<List<OrganizerAlarmEntity>> = flowOf(sortedAlarms())
+
+    override suspend fun getAllAlarmsOnce(): List<OrganizerAlarmEntity> = sortedAlarms()
+
+    override suspend fun getAlarmsForEventOnce(eventId: Long): List<OrganizerAlarmEntity> =
+        sortedAlarms().filter { it.eventId == eventId }
+
+    override suspend fun getAlarmById(id: Long): OrganizerAlarmEntity? = alarmsById[id]
+
+    override suspend fun getEnabledFutureAlarms(nowMillis: Long): List<OrganizerAlarmEntity> =
+        sortedAlarms().filter { it.enabled && it.triggerAtMillis >= nowMillis }
+
+    override suspend fun insertAlarm(alarm: OrganizerAlarmEntity): Long {
+        val id = if (alarm.id == 0L) nextAlarmId++ else alarm.id
+        alarmsById[id] = alarm.copy(id = id)
+        return id
+    }
+
+    override suspend fun updateAlarm(alarm: OrganizerAlarmEntity) {
+        alarmsById[alarm.id] = alarm
+    }
+
+    override suspend fun deleteAlarm(alarm: OrganizerAlarmEntity) {
+        alarmsById.remove(alarm.id)
+    }
+
+    override suspend fun deleteAlarmById(id: Long) {
+        alarmsById.remove(id)
+    }
+
+    override suspend fun markAlarmDelivered(id: Long, deliveredAt: Long) {
+        alarmsById[id]?.let { alarm ->
+            alarmsById[id] = alarm.copy(enabled = false, deliveredAt = deliveredAt, updatedAt = deliveredAt)
+        }
+    }
+
+    override fun getLlmSettings(): Flow<OrganizerLlmSettingsEntity?> = flowOf(settings)
+
+    override suspend fun getLlmSettingsOnce(): OrganizerLlmSettingsEntity? = settings
+
+    override suspend fun upsertLlmSettings(settings: OrganizerLlmSettingsEntity) {
+        this.settings = settings
+    }
+
+    private fun sortedEvents(): List<OrganizerEventEntity> =
+        eventsById.values.sortedWith(compareBy<OrganizerEventEntity> { it.startAtMillis }.thenBy { it.id })
+
+    private fun eventsInRange(rangeStartMillis: Long, rangeEndMillis: Long): List<OrganizerEventEntity> =
+        sortedEvents().filter { event ->
+            event.startAtMillis <= rangeEndMillis && (event.endAtMillis ?: event.startAtMillis) >= rangeStartMillis
+        }
+
+    private fun sortedAlarms(): List<OrganizerAlarmEntity> =
+        alarmsById.values.sortedWith(compareBy<OrganizerAlarmEntity> { it.triggerAtMillis }.thenBy { it.id })
 }

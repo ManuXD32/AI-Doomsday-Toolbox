@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import kotlinx.coroutines.CancellationException
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -8,6 +9,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LlamaServerChatServiceTest {
+    @Test
+    fun `SSE failure classification never labels cancellation as malformed JSON`() {
+        assertEquals(
+            SseProcessingFailureKind.CANCELLATION,
+            classifySseProcessingFailure(CancellationException("cancelled"))
+        )
+        assertEquals(
+            SseProcessingFailureKind.MALFORMED_JSON,
+            classifySseProcessingFailure(org.json.JSONException("bad chunk"))
+        )
+        assertEquals(
+            SseProcessingFailureKind.PROCESSING,
+            classifySseProcessingFailure(IllegalStateException("callback failed"))
+        )
+    }
+
     @Test
     fun `generationElapsedMs starts from first token when present`() {
         assertEquals(
@@ -92,7 +109,7 @@ class LlamaServerChatServiceTest {
     }
 
     @Test
-    fun `buildLlamaServerChatRequestPayload drops assistant prefill when thinking is enabled`() {
+    fun `buildLlamaServerChatRequestPayload preserves nonempty assistant history when thinking is enabled`() {
         val payload = buildLlamaServerChatRequestPayload(
             messages = listOf(
                 OllamaService.ChatMessage(role = "system", content = "system"),
@@ -105,8 +122,8 @@ class LlamaServerChatServiceTest {
         )
 
         val messages = payload["messages"] as List<*>
-        assertEquals(2, messages.size)
-        assertEquals("user", (messages.last() as Map<*, *>)["role"])
+        assertEquals(3, messages.size)
+        assertEquals("assistant", (messages.last() as Map<*, *>)["role"])
     }
 
     @Test
@@ -141,7 +158,7 @@ class LlamaServerChatServiceTest {
     }
 
     @Test
-    fun `buildLlamaServerChatRequestPayload moves transient system reminders to the beginning`() {
+    fun `buildLlamaServerChatRequestPayload keeps runtime system reminders in place`() {
         val payload = buildLlamaServerChatRequestPayload(
             messages = listOf(
                 OllamaService.ChatMessage(role = "system", content = "Base prompt"),
@@ -156,14 +173,53 @@ class LlamaServerChatServiceTest {
         )
 
         val messages = payload["messages"] as List<*>
-        assertEquals(4, messages.size)
+        assertEquals(5, messages.size)
         val first = messages.first() as Map<*, *>
         assertEquals("system", first["role"])
-        assertEquals("Base prompt\n\nTool reminder", first["content"])
+        assertEquals("Base prompt", first["content"])
         assertEquals(
-            listOf("system", "user", "assistant", "user"),
+            listOf("system", "user", "assistant", "user", "user"),
             messages.map { (it as Map<*, *>)["role"] }
         )
+        assertEquals(
+            "[Runtime context]\nTool reminder",
+            (messages[3] as Map<*, *>)["content"]
+        )
+    }
+
+    @Test
+    fun `request carries cache prompt and optional slot id`() {
+        val payload = buildLlamaServerChatRequestPayload(
+            messages = listOf(OllamaService.ChatMessage(role = "user", content = "hello")),
+            tools = emptyList(),
+            thinkingEnabled = false,
+            maxTokens = 8096,
+            requestOptions = LlamaServerRequestOptions(cachePrompt = true, slotId = 2)
+        )
+        assertEquals(true, payload["cache_prompt"])
+        assertEquals(2, payload["id_slot"])
+        assertEquals(true, payload["return_progress"])
+        assertEquals(2, payload["sse_ping_interval"])
+    }
+
+    @Test
+    fun `prompt progress is parsed and clamped`() {
+        val progress = parseLlamaPromptProcessingProgress(
+            JSONObject(
+                """{"prompt_progress":{"total":4096,"cache":2048,"processed":5000,"time_ms":1234}}"""
+            )
+        )
+
+        assertNotNull(progress)
+        assertEquals(4096, progress?.total)
+        assertEquals(2048, progress?.cached)
+        assertEquals(4096, progress?.processed)
+        assertEquals(1f, progress?.fraction)
+    }
+
+    @Test
+    fun `missing prompt progress is ignored`() {
+        assertEquals(null, parseLlamaPromptProcessingProgress(JSONObject("""{"choices":[]}""")))
     }
 
     @Test

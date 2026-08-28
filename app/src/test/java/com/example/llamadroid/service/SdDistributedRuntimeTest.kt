@@ -1,6 +1,7 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.data.db.SdDistributedMasterSettingsEntity
+import com.example.llamadroid.data.db.SdDistributedWorkerEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -47,7 +48,7 @@ class SdDistributedRuntimeTest {
     }
 
     @Test
-    fun `component placement can split diffusion and place vae separately`() {
+    fun `component placement can split diffusion and place vae separately using layer split`() {
         val args = buildSdDistributedPreviewArgs(
             SdDistributedRuntimeConfig(
                 enabled = true,
@@ -64,7 +65,8 @@ class SdDistributedRuntimeTest {
         assertTrue(args.contains("--rpc-servers"))
         assertTrue(args.contains("host-a:50062,host-b:50062,host-c:50062"))
         assertTrue(args.contains("--split-mode"))
-        assertTrue(args.contains("row"))
+        assertTrue(args.contains("layer"))
+        assertFalse(args.contains("row"))
         assertFalse(args.contains("--auto-fit"))
     }
 
@@ -80,6 +82,35 @@ class SdDistributedRuntimeTest {
         )
 
         assertEquals(listOf("--split-mode", "layer", "--foo", "bar baz", "--flag"), args)
+    }
+
+    @Test
+    fun `distributed custom flags reject row split override`() {
+        try {
+            buildSdDistributedPreviewArgs(
+                SdDistributedRuntimeConfig(
+                    enabled = true,
+                    placementMode = SdDistributedPlacementMode.MANUAL,
+                    customFlags = "--split-mode row"
+                )
+            )
+            fail("Expected disallowed flag exception")
+        } catch (error: SdDisallowedDistributedFlagException) {
+            assertEquals("--split-mode row", error.flag)
+        }
+    }
+
+    @Test
+    fun `tensor type rule presets map expected values`() {
+        assertEquals(SdTensorTypeRulesPreset.AUTO, SdTensorTypeRules.presetFor(""))
+        assertEquals("", SdTensorTypeRules.valueFor(SdTensorTypeRulesPreset.AUTO))
+        assertEquals(SdTensorTypeRulesPreset.VAE_F16, SdTensorTypeRules.presetFor(SdTensorTypeRules.VAE_F16))
+        assertEquals(
+            "^vae\\.=f16,^first_stage_model\\.=f16",
+            SdTensorTypeRules.valueFor(SdTensorTypeRulesPreset.VAE_F16)
+        )
+        assertEquals(SdTensorTypeRulesPreset.CUSTOM, SdTensorTypeRules.presetFor("model.diffusion*=q8_0"))
+        assertEquals("model.diffusion*=q8_0", SdTensorTypeRules.valueFor(SdTensorTypeRulesPreset.CUSTOM, "model.diffusion*=q8_0"))
     }
 
     @Test
@@ -126,7 +157,8 @@ class SdDistributedRuntimeTest {
         )
 
         assertEquals("10.0.0.2:50062,10.0.0.3:50062", plan.rpcServers)
-        assertTrue(plan.backendSpec.contains("diffusion=RPC0&RPC1") || plan.backendSpec.contains("diffusion=RPC1&RPC0"))
+        assertEquals("RPC0=7.5,RPC1=2", plan.maxVramSpec)
+        assertTrue(plan.backendSpec.contains("diffusion=RPC0&RPC1"))
         assertFalse(plan.backendSpec.contains("vae="))
         assertFalse(plan.backendSpec.contains("te="))
         assertFalse(plan.backendSpec.contains("upscaler="))
@@ -149,20 +181,84 @@ class SdDistributedRuntimeTest {
     }
 
     @Test
-    fun `auto ram settings emit backend spec and omit max vram by default`() {
+    fun `auto ram settings emit auto fit and generated per rpc max vram budgets`() {
         val plan = buildRamWeightedSdPlacementPlan(
             listOf(
                 SdDistributedPlanningWorker(host = "a", port = 50062, displayName = "A", ramMB = 4096, threads = 4, rpcIndex = 0),
-                SdDistributedPlanningWorker(host = "b", port = 50062, displayName = "B", ramMB = 4096, threads = 4, rpcIndex = 1)
+                SdDistributedPlanningWorker(host = "b", port = 50062, displayName = "B", ramMB = 8192, threads = 4, rpcIndex = 1)
             )
         )
         val config = SdDistributedMasterSettingsEntity(enabled = true).toRuntimeConfig(plan)
         val args = buildSdDistributedPreviewArgs(config)
 
         assertTrue(args.contains("--rpc-servers"))
+        assertTrue(args.contains("--auto-fit"))
+        assertTrue(args.contains("--max-vram"))
+        assertTrue(args.contains("RPC0=7.5,RPC1=4"))
+        assertFalse(args.contains("--backend"))
+        assertFalse(args.contains("--params-backend"))
+    }
+
+    @Test
+    fun `worker entities map rpc order from higher ram to lower ram`() {
+        val workers = listOf(
+            SdDistributedWorkerEntity(host = "10.0.0.3", port = 50062, deviceName = "Small", ramMB = 2048, threads = 4, sortOrder = 0),
+            SdDistributedWorkerEntity(host = "10.0.0.2", port = 50062, deviceName = "Large", ramMB = 8192, threads = 8, sortOrder = 1)
+        ).toSdPlanningWorkers()
+
+        assertEquals("Large", workers[0].displayName)
+        assertEquals("RPC0", workers[0].rpcName)
+        assertEquals("Small", workers[1].displayName)
+        assertEquals("RPC1", workers[1].rpcName)
+    }
+
+    @Test
+    fun `component settings keep explicit backend and drop incompatible max vram`() {
+        val plan = buildRamWeightedSdPlacementPlan(
+            listOf(
+                SdDistributedPlanningWorker(host = "a", port = 50062, displayName = "A", ramMB = 4096, threads = 4, rpcIndex = 0),
+                SdDistributedPlanningWorker(host = "b", port = 50062, displayName = "B", ramMB = 4096, threads = 4, rpcIndex = 1)
+            )
+        )
+        val config = SdDistributedMasterSettingsEntity(
+            enabled = true,
+            placementMode = SdDistributedPlacementMode.COMPONENTS.name,
+            backendSpec = "diffusion=RPC0&RPC1,vae=RPC0",
+            paramsBackendSpec = "vae=cpu",
+            maxVramEnabled = true,
+            maxVramSpec = "RPC0=4,RPC1=4"
+        ).toRuntimeConfig(plan)
+        val args = buildSdDistributedPreviewArgs(config)
+
         assertTrue(args.contains("--backend"))
+        assertTrue(args.contains("diffusion=RPC0&RPC1,vae=RPC0"))
+        assertTrue(args.contains("--params-backend"))
         assertFalse(args.contains("--auto-fit"))
         assertFalse(args.contains("--max-vram"))
+    }
+
+    @Test
+    fun `manual settings keep rpc list and raw flags only`() {
+        val plan = buildRamWeightedSdPlacementPlan(
+            listOf(
+                SdDistributedPlanningWorker(host = "a", port = 50062, displayName = "A", ramMB = 4096, threads = 4, rpcIndex = 0)
+            )
+        )
+        val config = SdDistributedMasterSettingsEntity(
+            enabled = true,
+            placementMode = SdDistributedPlacementMode.MANUAL.name,
+            backendSpec = "diffusion=RPC0",
+            paramsBackendSpec = "disk",
+            maxVramEnabled = true,
+            maxVramSpec = "RPC0=4",
+            customFlags = "--backend diffusion=RPC0"
+        ).toRuntimeConfig(plan)
+        val args = buildSdDistributedPreviewArgs(config)
+
+        assertEquals(
+            listOf("--rpc-servers", "a:50062", "--split-mode", "layer", "--backend", "diffusion=RPC0"),
+            args
+        )
     }
 
     @Test
@@ -229,8 +325,20 @@ class SdDistributedRuntimeTest {
             placementMode = "MANUAL",
             autoRamScope = "FULL_PIPELINE",
             backendSpec = "diffusion=RPC0,vae=RPC1",
+            splitMode = "row",
+            tensorRules = "model.diffusion*=q8_0",
             steps = "32",
             sampler = "dpmpp2m",
+            imagePrompt = "image prompt",
+            imageNegativePrompt = "image negative",
+            imageWidth = "640",
+            imageHeight = "512",
+            imageSteps = "28",
+            imageCfg = "7.5",
+            imageSeed = "123",
+            imageSampler = "euler_a",
+            imageScheduler = "karras",
+            imageFlowShift = "3.0",
             imageVaePath = "/models/vae.gguf",
             imageClipLPath = "/models/clip_l.gguf",
             imageT5xxlPath = "/models/t5xxl.gguf",
@@ -239,6 +347,16 @@ class SdDistributedRuntimeTest {
             imageLoraEnabled = true,
             imageLoraPath = "/models/lora.gguf",
             imageLoraApplyMode = "at_runtime",
+            videoPrompt = "video prompt",
+            videoNegativePrompt = "video negative",
+            videoWidth = "480",
+            videoHeight = "832",
+            videoSteps = "18",
+            videoCfg = "6.0",
+            videoSeed = "456",
+            videoSampler = "euler",
+            videoScheduler = "exponential",
+            videoFlowShift = "5.0",
             videoUseVae = true,
             videoVaePath = "/models/video-vae.gguf",
             videoUseT5xxl = true,
@@ -251,8 +369,20 @@ class SdDistributedRuntimeTest {
         assertEquals("MANUAL", restored.placementMode)
         assertEquals("FULL_PIPELINE", restored.autoRamScope)
         assertEquals("diffusion=RPC0,vae=RPC1", restored.backendSpec)
+        assertEquals("layer", restored.splitMode)
+        assertEquals("model.diffusion*=q8_0", restored.tensorRules)
         assertEquals("32", restored.steps)
         assertEquals("dpmpp2m", restored.sampler)
+        assertEquals("image prompt", restored.imagePrompt)
+        assertEquals("image negative", restored.imageNegativePrompt)
+        assertEquals("640", restored.imageWidth)
+        assertEquals("512", restored.imageHeight)
+        assertEquals("28", restored.imageSteps)
+        assertEquals("7.5", restored.imageCfg)
+        assertEquals("123", restored.imageSeed)
+        assertEquals("euler_a", restored.imageSampler)
+        assertEquals("karras", restored.imageScheduler)
+        assertEquals("3.0", restored.imageFlowShift)
         assertEquals("/models/vae.gguf", restored.imageVaePath)
         assertEquals("/models/clip_l.gguf", restored.imageClipLPath)
         assertEquals("/models/t5xxl.gguf", restored.imageT5xxlPath)
@@ -261,9 +391,59 @@ class SdDistributedRuntimeTest {
         assertTrue(restored.imageLoraEnabled)
         assertEquals("/models/lora.gguf", restored.imageLoraPath)
         assertEquals("at_runtime", restored.imageLoraApplyMode)
+        assertEquals("video prompt", restored.videoPrompt)
+        assertEquals("video negative", restored.videoNegativePrompt)
+        assertEquals("480", restored.videoWidth)
+        assertEquals("832", restored.videoHeight)
+        assertEquals("18", restored.videoSteps)
+        assertEquals("6.0", restored.videoCfg)
+        assertEquals("456", restored.videoSeed)
+        assertEquals("euler", restored.videoSampler)
+        assertEquals("exponential", restored.videoScheduler)
+        assertEquals("5.0", restored.videoFlowShift)
         assertTrue(restored.videoUseVae)
         assertEquals("/models/video-vae.gguf", restored.videoVaePath)
         assertTrue(restored.videoUseT5xxl)
         assertEquals("/models/video-t5xxl.gguf", restored.videoT5xxlPath)
+    }
+
+    @Test
+    fun `legacy settings template hydrates split image and video values`() {
+        val restored = settingsFromJson(
+            """
+            {
+              "prompt": "legacy prompt",
+              "negativePrompt": "legacy negative",
+              "dimensions": "704 x 384",
+              "steps": "24",
+              "cfg": "8.0",
+              "seed": "999",
+              "sampler": "heun",
+              "scheduler": "karras",
+              "flowShift": "4.5"
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("legacy prompt", restored.imagePrompt)
+        assertEquals("legacy prompt", restored.videoPrompt)
+        assertEquals("legacy negative", restored.imageNegativePrompt)
+        assertEquals("legacy negative", restored.videoNegativePrompt)
+        assertEquals("704", restored.imageWidth)
+        assertEquals("384", restored.imageHeight)
+        assertEquals("704", restored.videoWidth)
+        assertEquals("384", restored.videoHeight)
+        assertEquals("24", restored.imageSteps)
+        assertEquals("24", restored.videoSteps)
+        assertEquals("8.0", restored.imageCfg)
+        assertEquals("8.0", restored.videoCfg)
+        assertEquals("999", restored.imageSeed)
+        assertEquals("999", restored.videoSeed)
+        assertEquals("heun", restored.imageSampler)
+        assertEquals("heun", restored.videoSampler)
+        assertEquals("karras", restored.imageScheduler)
+        assertEquals("karras", restored.videoScheduler)
+        assertEquals("4.5", restored.imageFlowShift)
+        assertEquals("4.5", restored.videoFlowShift)
     }
 }

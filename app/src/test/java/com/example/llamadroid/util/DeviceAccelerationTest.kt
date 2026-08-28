@@ -19,7 +19,10 @@ class DeviceAccelerationTest {
             DeviceAcceleration.modulesFor(AccelerationWorkload.LLM)
         )
         assertEquals(
-            listOf(DeviceAcceleration.MODULE_MEDIA_SNAPDRAGON_VULKAN),
+            listOf(
+                DeviceAcceleration.MODULE_MEDIA_SNAPDRAGON_VULKAN,
+                DeviceAcceleration.MODULE_MEDIA_SNAPDRAGON_OPENCL
+            ),
             DeviceAcceleration.modulesFor(AccelerationWorkload.STABLE_DIFFUSION)
         )
     }

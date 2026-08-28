@@ -25,6 +25,9 @@ object ProcessUtils {
     ): Boolean = withContext(Dispatchers.IO) {
         if (process == null) return@withContext true
         if (!process.isAlive) return@withContext true
+        runCatching { process.outputStream.close() }
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
         
         DebugLog.log("[ProcessUtils] Sending SIGTERM...")
         
@@ -72,6 +75,9 @@ object ProcessUtils {
     ): Boolean {
         if (process == null) return true
         if (!process.isAlive) return true
+        runCatching { process.outputStream.close() }
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
         
         DebugLog.log("[ProcessUtils] Sending SIGTERM (sync)...")
         

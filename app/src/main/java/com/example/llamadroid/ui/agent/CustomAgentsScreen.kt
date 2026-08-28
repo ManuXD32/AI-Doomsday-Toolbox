@@ -8,7 +8,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -17,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
@@ -24,6 +24,14 @@ import androidx.compose.ui.window.Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.CustomAgentEntity
+import com.example.llamadroid.data.db.AgentRuntimeBackend
+import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
+import com.example.llamadroid.data.db.AgentRuntimeProfile
+import com.example.llamadroid.data.db.AgentRuntimeProfileKeys
+import com.example.llamadroid.data.runtime.AgentRuntimeProfileStore
+import com.example.llamadroid.data.runtime.AgentRuntimeContinueAction
+import com.example.llamadroid.data.runtime.EmptyAgentRuntimeProfileStore
+import com.example.llamadroid.data.runtime.ManagedLlamaServerDescriptor
 import kotlinx.coroutines.launch
 
 /**
@@ -32,13 +40,33 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomAgentsScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    runtimeProfileStore: AgentRuntimeProfileStore = EmptyAgentRuntimeProfileStore,
+    managedLlamaServers: List<ManagedLlamaServerDescriptor> = emptyList(),
+    ollamaModels: List<String> = emptyList(),
+    llamaSwapModels: List<String> = emptyList(),
+    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
     
     val agents by db.customAgentDao().getAllAgents().collectAsState(initial = emptyList())
+    val runtimeProfiles by runtimeProfileStore.observeProfiles().collectAsState(initial = emptyList())
+    val runtimeEndpointConfigs by runtimeProfileStore.observeEndpointConfigs().collectAsState(initial = emptyList())
+    val runtimeProfilesByKey = remember(runtimeProfiles) {
+        runtimeProfiles.associateBy { it.agentKey }
+    }
+    val liteRtModels by db.liteRtModelDao().observeAll().collectAsState(initial = emptyList())
+    val liteRtOptions = remember(liteRtModels) {
+        liteRtModels.map { model ->
+            AgentLiteRtProfileOption(
+                id = model.id,
+                displayName = model.displayName,
+                filename = model.filename
+            )
+        }
+    }
     var showEditor by remember { mutableStateOf(false) }
     var editingAgent by remember { mutableStateOf<CustomAgentEntity?>(null) }
     
@@ -86,8 +114,18 @@ fun CustomAgentsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(agents, key = { it.name }) { agent ->
+                    val profile = runtimeProfilesByKey[AgentRuntimeProfileKeys.custom(agent.name)]
+                        ?: AgentRuntimeProfile(
+                            agentKey = AgentRuntimeProfileKeys.custom(agent.name),
+                            backend = AgentRuntimeBackend.OLLAMA.id,
+                            model = agent.model
+                        )
                     CustomAgentCard(
                         agent = agent,
+                        runtimeProfile = profile,
+                        endpointConfigs = runtimeEndpointConfigs,
+                        managedLlamaServers = managedLlamaServers,
+                        liteRtModels = liteRtOptions,
                         onEdit = {
                             editingAgent = agent
                             showEditor = true
@@ -95,6 +133,7 @@ fun CustomAgentsScreen(
                         onDelete = {
                             scope.launch {
                                 db.customAgentDao().deleteAgent(agent)
+                                runtimeProfileStore.delete(AgentRuntimeProfileKeys.custom(agent.name))
                             }
                         },
                         onToggle = { enabled ->
@@ -111,10 +150,35 @@ fun CustomAgentsScreen(
     if (showEditor) {
         CustomAgentEditorDialog(
             agent = editingAgent,
+            runtimeProfile = editingAgent?.let { current ->
+                runtimeProfilesByKey[AgentRuntimeProfileKeys.custom(current.name)]
+                    ?: AgentRuntimeProfile(
+                        agentKey = AgentRuntimeProfileKeys.custom(current.name),
+                        backend = AgentRuntimeBackend.OLLAMA.id,
+                        model = current.model
+                    )
+            },
+            endpointConfigs = runtimeEndpointConfigs,
+            managedLlamaServers = managedLlamaServers,
+            ollamaModels = ollamaModels,
+            llamaSwapModels = llamaSwapModels,
+            liteRtModels = liteRtOptions,
+            onRuntimeContinue = onRuntimeContinue,
+            onSaveEndpointConfig = { config ->
+                scope.launch { runtimeProfileStore.saveEndpointConfig(config) }
+            },
+            onDeleteEndpointConfig = { endpointId ->
+                scope.launch { runtimeProfileStore.deleteEndpointConfig(endpointId) }
+            },
             onDismiss = { showEditor = false },
-            onSave = { savedAgent ->
+            onSave = { savedAgent, savedProfile ->
                 scope.launch {
+                    editingAgent?.takeIf { previous -> previous.name != savedAgent.name }?.let { previous ->
+                        db.customAgentDao().deleteAgent(previous)
+                        runtimeProfileStore.delete(AgentRuntimeProfileKeys.custom(previous.name))
+                    }
                     db.customAgentDao().insertAgent(savedAgent)
+                    runtimeProfileStore.save(savedProfile)
                     showEditor = false
                 }
             }
@@ -125,6 +189,10 @@ fun CustomAgentsScreen(
 @Composable
 private fun CustomAgentCard(
     agent: CustomAgentEntity,
+    runtimeProfile: AgentRuntimeProfile,
+    endpointConfigs: List<AgentRuntimeEndpointConfig>,
+    managedLlamaServers: List<ManagedLlamaServerDescriptor>,
+    liteRtModels: List<AgentLiteRtProfileOption>,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onToggle: (Boolean) -> Unit
@@ -143,19 +211,26 @@ private fun CustomAgentCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(agent.emoji, fontSize = 24.sp)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             agent.displayName,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp
+                            fontSize = 16.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             agent.name.uppercase(),
                             fontSize = 10.sp,
-                            color = Color.Gray
+                            color = Color.Gray,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -181,23 +256,20 @@ private fun CustomAgentCard(
                 )
             }
             
-            if (agent.model != null) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "${stringResource(R.string.agent_model_label)}: ${agent.model}",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
+            AgentRuntimeProfileSummary(
+                profile = runtimeProfile,
+                endpointConfigs = endpointConfigs,
+                managedLlamaServers = managedLlamaServers,
+                liteRtModels = liteRtModels,
+                modifier = Modifier.padding(top = 4.dp)
+            )
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onEdit,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
@@ -205,7 +277,7 @@ private fun CustomAgentCard(
                 }
                 OutlinedButton(
                     onClick = onDelete,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.outlinedButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
                     )
@@ -223,18 +295,35 @@ private fun CustomAgentCard(
 @Composable
 private fun CustomAgentEditorDialog(
     agent: CustomAgentEntity?,
+    runtimeProfile: AgentRuntimeProfile?,
+    endpointConfigs: List<AgentRuntimeEndpointConfig>,
+    managedLlamaServers: List<ManagedLlamaServerDescriptor>,
+    ollamaModels: List<String>,
+    llamaSwapModels: List<String>,
+    liteRtModels: List<AgentLiteRtProfileOption>,
+    onRuntimeContinue: ((AgentRuntimeContinueAction) -> Unit)?,
+    onSaveEndpointConfig: (AgentRuntimeEndpointConfig) -> Unit,
+    onDeleteEndpointConfig: (Long) -> Unit,
     onDismiss: () -> Unit,
-    onSave: (CustomAgentEntity) -> Unit
+    onSave: (CustomAgentEntity, AgentRuntimeProfile) -> Unit
 ) {
     var name by remember { mutableStateOf(agent?.name ?: "") }
     var displayName by remember { mutableStateOf(agent?.displayName ?: "") }
     var emoji by remember { mutableStateOf(agent?.emoji ?: "🤖") }
     var systemPrompt by remember { mutableStateOf(agent?.systemPrompt ?: "") }
-    var modelOverride by remember { mutableStateOf(agent?.model ?: "") }
     var allowedToolsJson by remember { mutableStateOf(agent?.allowedToolsJson ?: "[]") }
     var exampleUsage by remember { mutableStateOf(agent?.exampleUsage ?: "") }
     var canDelegate by remember { mutableStateOf(agent?.canDelegateToOthers ?: false) }
     var visionEnabled by remember { mutableStateOf(agent?.visionEnabled ?: false) }
+    var editedRuntimeProfile by remember(agent?.name, runtimeProfile?.updatedAt) {
+        mutableStateOf(
+            runtimeProfile ?: AgentRuntimeProfile(
+                agentKey = AgentRuntimeProfileKeys.custom(agent?.name ?: "NEW_AGENT"),
+                backend = AgentRuntimeBackend.OLLAMA.id,
+                model = agent?.model
+            )
+        )
+    }
     
     val isEditing = agent != null
     
@@ -268,26 +357,6 @@ private fun CustomAgentEditorDialog(
                 
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                 
-                if (!isEditing) {
-                    OutlinedButton(
-                        onClick = {
-                            name = "RESEARCHER"
-                            displayName = "Internet Researcher"
-                            emoji = "🌐"
-                            systemPrompt = "You are the Internet Researcher agent. Your job is to search the web for information and provide concise summaries to the Orchestrator."
-                            allowedToolsJson = "[\"web_search\", \"fetch_url\", \"read_file\", \"read_memory\", \"write_memory\", \"list_memory\", \"finish_task\"]"
-                            exampleUsage = "Use the RESEARCHER agent when you need up-to-date information from the internet."
-                            canDelegate = false
-                            visionEnabled = false
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                    ) {
-                        Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(stringResource(R.string.agent_agent_example_template_title))
-                    }
-                }
-                
                 // Form
                 Column(
                     modifier = Modifier
@@ -295,6 +364,42 @@ private fun CustomAgentEditorDialog(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    AgentRuntimeProfileControls(
+                        profile = editedRuntimeProfile,
+                        // The parent can supply a model-aware profile store/catalog. A free-form
+                        // model field remains available for Ollama/llama-swap during migration.
+                        ollamaModels = ollamaModels,
+                        llamaSwapModels = llamaSwapModels,
+                        managedLlamaServers = managedLlamaServers,
+                        liteRtModels = liteRtModels,
+                        endpointConfigs = endpointConfigs,
+                        onSaveEndpointConfig = onSaveEndpointConfig,
+                        onDeleteEndpointConfig = onDeleteEndpointConfig,
+                        onProfileChange = { editedRuntimeProfile = it },
+                        onContinue = onRuntimeContinue,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (!isEditing) {
+                        OutlinedButton(
+                            onClick = {
+                                name = "RESEARCHER"
+                                displayName = "Internet Researcher"
+                                emoji = "🌐"
+                                systemPrompt = "You are the Internet Researcher agent. Your job is to search the web for information and provide concise summaries to the Orchestrator."
+                                allowedToolsJson = "[\"web_search\", \"fetch_url\", \"read_file\", \"read_memory\", \"write_memory\", \"list_memory\", \"finish_task\"]"
+                                exampleUsage = "Use the RESEARCHER agent when you need up-to-date information from the internet."
+                                canDelegate = false
+                                visionEnabled = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.agent_agent_example_template_title))
+                        }
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedTextField(
                             value = emoji,
@@ -336,16 +441,6 @@ private fun CustomAgentEditorDialog(
                     )
                     
                     OutlinedTextField(
-                        value = modelOverride,
-                        onValueChange = { modelOverride = it },
-                        label = { Text(stringResource(R.string.agent_model_label)) },
-                        placeholder = { Text(stringResource(R.string.agent_agent_model_hint)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        supportingText = { Text("e.g., qwen2.5-coder:7b") } // This is an example model name, keeping as literal but could be localized if needed.
-                    )
-
-                    OutlinedTextField(
                         value = allowedToolsJson,
                         onValueChange = { allowedToolsJson = it },
                         label = { Text(stringResource(R.string.agent_agent_allowed_tools_label)) },
@@ -359,7 +454,7 @@ private fun CustomAgentEditorDialog(
                         value = exampleUsage,
                         onValueChange = { exampleUsage = it },
                         label = { Text(stringResource(R.string.agent_agent_example_label)) },
-                        placeholder = { Text("call_agent(agent=\"$name\", task=\"Debug the crash\")") },
+                        placeholder = { Text("call_agent(agent=\"$name\", name=\"Darwin\", task=\"Debug the crash\")") },
                         modifier = Modifier.fillMaxWidth(),
                         maxLines = 2,
                         supportingText = { Text(stringResource(R.string.agent_agent_example_desc)) }
@@ -400,7 +495,8 @@ private fun CustomAgentEditorDialog(
                             displayName = displayName.trim(),
                             emoji = emoji.ifBlank { "🤖" },
                             systemPrompt = systemPrompt,
-                            model = modelOverride.ifBlank { null },
+                            // Compatibility mirror only. Runtime dispatch reads the profile store.
+                            model = editedRuntimeProfile.model?.takeIf { it.isNotBlank() },
                             allowedToolsJson = allowedToolsJson.ifBlank { "[]" },
                             exampleUsage = exampleUsage,
                             canDelegateToOthers = canDelegate,
@@ -409,7 +505,13 @@ private fun CustomAgentEditorDialog(
                             createdAt = agent?.createdAt ?: System.currentTimeMillis(),
                             updatedAt = System.currentTimeMillis()
                         )
-                        onSave(newAgent)
+                        onSave(
+                            newAgent,
+                            editedRuntimeProfile.copy(
+                                agentKey = AgentRuntimeProfileKeys.custom(name),
+                                updatedAt = System.currentTimeMillis()
+                            )
+                        )
                     },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = name.isNotBlank() && displayName.isNotBlank() && systemPrompt.isNotBlank()

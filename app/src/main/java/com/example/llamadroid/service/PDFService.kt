@@ -17,6 +17,10 @@ import android.text.TextPaint
 import android.util.Base64
 import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
+import com.example.llamadroid.data.LlamaOcrPromptPreset
+import com.example.llamadroid.data.LlamaOcrSettingsSnapshot
+import com.example.llamadroid.data.PdfOcrProvider
+import com.example.llamadroid.data.PdfTranslationOptionsSnapshot
 import com.example.llamadroid.data.PdfTranslationQualityMode
 import com.example.llamadroid.data.RemoteSummarySettingsSnapshot
 import com.example.llamadroid.data.SettingsRepository
@@ -47,17 +51,21 @@ import com.tom_roush.pdfbox.pdmodel.graphics.state.RenderingMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.InterruptedIOException
 import java.io.File
 import java.io.FileOutputStream
 import java.io.ByteArrayOutputStream
+import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.math.abs
@@ -79,7 +87,10 @@ data class PdfExtractionProgress(
     val textLayerPages: Int,
     val ocrPages: Int,
     val emptyPages: Int,
-    val textCharacters: Int
+    val textCharacters: Int,
+    val currentRegion: Int = 0,
+    val totalRegions: Int = 0,
+    val detailText: String? = null
 )
 
 data class PdfOcrTranslationProgress(
@@ -87,7 +98,10 @@ data class PdfOcrTranslationProgress(
     val processedPages: Int,
     val totalPages: Int,
     val translatedBlocks: Int,
-    val totalBlocks: Int
+    val totalBlocks: Int,
+    val currentRegion: Int = 0,
+    val totalRegions: Int = 0,
+    val detailText: String? = null
 )
 
 enum class PdfOcrTranslationStage {
@@ -122,7 +136,14 @@ private data class PdfOcrPageResult(
     val bitmapHeight: Int,
     val pdfWidth: Float,
     val pdfHeight: Float,
-    val blocks: List<PdfOcrBlock>
+    val blocks: List<PdfOcrBlock>,
+    val ungroundedResponses: Int = 0,
+    val regionalFallbacks: Int = 0,
+    val promptLeakRejections: Int = 0,
+    val skippedLlamaCropRequests: Int = 0,
+    val llamaOcrRequests: Int = 0,
+    val llamaOcrElapsedMs: Long = 0L,
+    val reconciledOcrAlternatives: Int = 0
 )
 
 private data class PdfOcrBlock(
@@ -132,12 +153,21 @@ private data class PdfOcrBlock(
     val box: PdfOcrBox,
     val lineBoxes: List<PdfOcrLine>,
     val backgroundColor: Int,
-    val textColor: Int
+    val textColor: Int,
+    val provenance: MangaOcrRegionProvenance = MangaOcrRegionProvenance.ML_KIT_TEXT_BLOCK,
+    val containingRegionId: String? = null,
+    val safeRegionBox: PdfOcrBox? = null,
+    val recognitionPass: MangaOcrRecognitionPass = MangaOcrRecognitionPass.FULL_PAGE_ML_KIT
 )
 
 private data class PdfOcrLine(
     val text: String,
     val box: PdfOcrBox
+)
+
+private data class BubbleOcrRegion(
+    val rect: Rect,
+    val score: Float
 )
 
 private data class PdfTextLayerDocumentResult(
@@ -192,7 +222,11 @@ private data class PdfTranslationSourceBlock(
     val backgroundColor: Int,
     val textColor: Int,
     val lineCount: Int,
-    val sourceLines: List<String>
+    val sourceLines: List<String>,
+    val containingRegionId: String? = null,
+    val safeRegionRect: PdfMappedRect? = null,
+    val provenance: MangaOcrRegionProvenance = MangaOcrRegionProvenance.ML_KIT_TEXT_BLOCK,
+    val textRole: MangaOcrTextRole = MangaOcrTextRole.UNKNOWN
 )
 
 private data class PdfTranslationUnit(
@@ -201,20 +235,57 @@ private data class PdfTranslationUnit(
     val unitIndex: Int,
     val text: String,
     val rect: PdfMappedRect,
+    val sourceRect: PdfMappedRect,
     val backgroundColor: Int,
     val textColor: Int,
     val sourceBlockIds: List<String>,
     val sourceLineCount: Int,
-    val sourceLines: List<String>
+    val sourceLines: List<String>,
+    val containingRegionId: String? = null,
+    val safeRegionRect: PdfMappedRect? = null,
+    val textRole: MangaOcrTextRole = MangaOcrTextRole.UNKNOWN
 ) {
     val sourceBlockCount: Int get() = sourceBlockIds.size
 }
 
+private data class LlamaOcrRegionRequest(
+    val rect: Rect,
+    val regionId: String?,
+    val fullPageContext: Boolean,
+    val originalRegionIndex: Int = -1
+)
+
 private data class PreparedOcrTranslation(
     val pageUnits: Map<Int, List<PdfTranslationUnit>>,
     val translations: LinkedHashMap<String, String>,
-    val totalSourceBlocks: Int
+    val totalSourceBlocks: Int,
+    val resolvedReadingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT
 )
+
+class MangaTranslationQualityAccumulator {
+    var weakTranslationsRetried: Int = 0
+    var textOnlyFallbacks: Int = 0
+    var jsonRepairs: Int = 0
+    var plainTextFallbacks: Int = 0
+    var untranslatedUnits: Int = 0
+    var visionFallbacks: Int = 0
+    var blankOverlayUnits: Int = 0
+    var clippedOverlayUnits: Int = 0
+    var ungroundedOcrResponses: Int = 0
+    var regionalOcrFallbacks: Int = 0
+    var promptLeakRejections: Int = 0
+    var skippedLlamaCropRequests: Int = 0
+    var llamaOcrRequests: Int = 0
+    var llamaOcrElapsedMs: Long = 0L
+    var decorativeTextPreserved: Int = 0
+    var rejectedCrossRegionMerges: Int = 0
+    var skippedOverlayUnits: Int = 0
+    var liteRtRuntimeFallbacks: Int = 0
+    var reconciledOcrAlternatives: Int = 0
+    var coalescedBubbleFragments: Int = 0
+    var incompleteTranslationRetries: Int = 0
+    var wholeBubblesPreserved: Int = 0
+}
 
 private data class PdfTranslationDisplayError(
     val message: String,
@@ -238,7 +309,8 @@ data class MangaTranslationFileResult(
     val pdfUri: Uri? = null,
     val cbzUri: Uri? = null,
     val errorMessage: String? = null,
-    val errorDetails: String? = null
+    val errorDetails: String? = null,
+    val qualityReport: MangaTranslationQualityReport = MangaTranslationQualityReport()
 ) {
     val isSuccess: Boolean get() = (pdfUri != null || cbzUri != null) && errorMessage == null
 }
@@ -256,6 +328,7 @@ internal class PDFTranslationDisplayException(
 
 private const val BUNDLED_JAPANESE_FONT_ASSET = "fonts/DroidSansJapanese.ttf"
 private const val BUNDLED_JAPANESE_FONT_LABEL = "bundled:DroidSansJapanese.ttf"
+private val mangaVisionCapabilityCache = ConcurrentHashMap<String, Boolean>()
 
 /**
  * Service for PDF operations: merge, split, extract text
@@ -516,9 +589,14 @@ class PDFService(private val context: Context) {
 
     suspend fun performOcrOnPdf(
         pdfUri: Uri,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfExtractionResult> = withContext(Dispatchers.IO) {
-        collectPdfOcrText(pdfUri, onProgress).map { result ->
+        collectPdfOcrText(
+            pdfUri = pdfUri,
+            optionsOverride = optionsOverride,
+            onProgress = onProgress
+        ).map { result ->
             PdfExtractionResult(
                 text = result.text,
                 totalPages = result.totalPages,
@@ -531,11 +609,16 @@ class PDFService(private val context: Context) {
 
     suspend fun exportSearchableOcrPdf(
         pdfUri: Uri,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<Uri> = withContext(Dispatchers.IO) {
         try {
             DebugLog.log("[PDF] Exporting OCR-searchable PDF")
-            val ocrResult = collectPdfOcrText(pdfUri, onProgress).getOrThrow()
+            val ocrResult = collectPdfOcrText(
+                pdfUri = pdfUri,
+                optionsOverride = optionsOverride,
+                onProgress = onProgress
+            ).getOrThrow()
             val cachedPdf = copyPdfToCache(pdfUri)
             try {
                 val doc = PDDocument.load(cachedPdf)
@@ -567,6 +650,7 @@ class PDFService(private val context: Context) {
         pdfUri: Uri,
         outputFileName: String = "translated_ocr_${System.currentTimeMillis()}.pdf",
         settingsOverride: RemoteSummarySettingsSnapshot? = null,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
         executionController: PDFTranslationExecutionController? = null,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
     ): Result<Uri> = withContext(Dispatchers.IO) {
@@ -582,6 +666,7 @@ class PDFService(private val context: Context) {
                     pdfUri = pdfUri,
                     outputFile = tempFile,
                     settingsOverride = settingsOverride,
+                    optionsOverride = optionsOverride,
                     executionController = executionController,
                     onProgress = onProgress,
                     notificationId = notificationId
@@ -611,12 +696,13 @@ class PDFService(private val context: Context) {
         pdfUri: Uri,
         outputFile: File,
         settingsOverride: RemoteSummarySettingsSnapshot?,
+        optionsOverride: PdfTranslationOptionsSnapshot?,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int
     ): File {
         ensureTranslationActive(executionController)
-        val ocrResult = collectPdfOcrText(pdfUri) { progress ->
+        val ocrResult = collectPdfOcrText(pdfUri, optionsOverride = optionsOverride) { progress ->
             onProgress?.invoke(
                 PdfOcrTranslationProgress(
                     stage = PdfOcrTranslationStage.OCR,
@@ -636,6 +722,7 @@ class PDFService(private val context: Context) {
                 ocrResult = ocrResult,
                 outputFile = outputFile,
                 settingsOverride = settingsOverride,
+                optionsOverride = optionsOverride,
                 executionController = executionController,
                 onProgress = onProgress,
                 notificationId = notificationId
@@ -651,6 +738,7 @@ class PDFService(private val context: Context) {
         ocrResult: PdfOcrDocumentResult,
         outputFile: File,
         settingsOverride: RemoteSummarySettingsSnapshot?,
+        optionsOverride: PdfTranslationOptionsSnapshot?,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int
@@ -659,6 +747,7 @@ class PDFService(private val context: Context) {
             sourcePdfUri = sourcePdfUri,
             ocrResult = ocrResult,
             settingsOverride = settingsOverride,
+            optionsOverride = optionsOverride,
             executionController = executionController,
             onProgress = onProgress,
             notificationId = notificationId
@@ -678,15 +767,27 @@ class PDFService(private val context: Context) {
         sourcePdfUri: Uri,
         ocrResult: PdfOcrDocumentResult,
         settingsOverride: RemoteSummarySettingsSnapshot?,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
+        mangaConfig: MangaTranslationRunConfig? = null,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int,
         initialTranslations: Map<String, String> = emptyMap(),
         onCheckpoint: ((Map<String, String>, Set<Int>) -> Unit)? = null,
-        pageScreenshotProvider: (suspend (Int) -> RemoteSummaryImageAttachment?)? = null
+        pageScreenshotProvider: (suspend (Int) -> RemoteSummaryImageAttachment?)? = null,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): PreparedOcrTranslation {
-        val qualityMode = settingsRepo.pdfTranslationOptionsSnapshot().qualityMode
-        val pageUnits = buildOcrTranslationUnits(ocrResult.pages, qualityMode)
+        val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
+        val qualityMode = options.qualityMode
+        val readingDirection = mangaConfig?.readingDirection ?: MangaReadingDirection.LEFT_TO_RIGHT
+        val pageUnits = buildOcrTranslationUnits(
+            pages = ocrResult.pages,
+            qualityMode = qualityMode,
+            readingDirection = readingDirection,
+            preserveIndependentRegions = mangaConfig != null,
+            translateDecorativeText = mangaConfig?.behavior?.translateDecorativeText ?: true,
+            qualityAccumulator = qualityAccumulator
+        )
         val translatableUnits = pageUnits.values.flatten()
         if (translatableUnits.isEmpty()) {
             throw IllegalStateException("No OCR text found")
@@ -699,18 +800,55 @@ class PDFService(private val context: Context) {
             pageUnits = pageUnits,
             totalSourceBlocks = totalSourceBlocks,
             settingsOverride = settingsOverride,
+            optionsOverride = options,
+            mangaConfig = mangaConfig,
             executionController = executionController,
             onProgress = onProgress,
             notificationId = notificationId,
             initialTranslations = initialTranslations,
             onCheckpoint = onCheckpoint,
-            pageScreenshotProvider = pageScreenshotProvider
+            pageScreenshotProvider = pageScreenshotProvider,
+            qualityAccumulator = qualityAccumulator
         )
+
+        val firstPageBoxes = ocrResult.pages.firstOrNull()?.let { page ->
+            page.blocks.map { block ->
+                MangaReadingOrderBox(
+                    id = "p${page.pageIndex + 1}_b${block.blockIndex + 1}",
+                    rect = PDFTranslationLogic.mapBitmapBoxToPdfRect(
+                        block.box,
+                        page.bitmapWidth,
+                        page.bitmapHeight,
+                        page.pdfWidth,
+                        page.pdfHeight
+                    ),
+                    text = block.text
+                )
+            }
+        }.orEmpty()
+        val resolvedDirection = MangaTranslationSupport.resolveReadingDirection(readingDirection, firstPageBoxes)
+        qualityAccumulator?.let { report ->
+            translatableUnits.forEach { unit ->
+                val translated = translations[unit.id].orEmpty().trim()
+                if (translated.isBlank()) {
+                    report.blankOverlayUnits += 1
+                } else {
+                    val approximateCapacity = (
+                        (unit.rect.width / 7.5f).coerceAtLeast(1f) *
+                            (unit.rect.height / 12f).coerceAtLeast(1f)
+                        ).toInt()
+                    if (translated.length > approximateCapacity * 2) {
+                        report.clippedOverlayUnits += 1
+                    }
+                }
+            }
+        }
 
         return PreparedOcrTranslation(
             pageUnits = pageUnits,
             translations = translations,
-            totalSourceBlocks = totalSourceBlocks
+            totalSourceBlocks = totalSourceBlocks,
+            resolvedReadingDirection = resolvedDirection
         )
     }
 
@@ -832,6 +970,7 @@ class PDFService(private val context: Context) {
         translations: Map<String, String>,
         totalSourceBlocks: Int,
         outputFileName: String,
+        saveToConfiguredOutput: Boolean,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?
     ): Uri {
@@ -858,7 +997,11 @@ class PDFService(private val context: Context) {
             }
             val rasterPdf = File(workDir, outputFileName)
             createPdfFromImageFiles(renderedPages, rasterPdf)
-            return saveFileToOutputFolder(rasterPdf, "pdfs", "application/pdf", outputFileName)
+            return if (saveToConfiguredOutput) {
+                saveFileToOutputFolder(rasterPdf, "pdfs", "application/pdf", outputFileName)
+            } else {
+                saveFileToCache(rasterPdf, "manga_intermediate", outputFileName)
+            }
         } finally {
             runCatching { workDir.deleteRecursively() }
         }
@@ -868,7 +1011,11 @@ class PDFService(private val context: Context) {
         pdfUri: Uri,
         outputFileName: String = "translated_text_layer_${System.currentTimeMillis()}.pdf",
         settingsOverride: RemoteSummarySettingsSnapshot? = null,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
+        mangaConfig: MangaTranslationRunConfig? = null,
+        saveToConfiguredOutput: Boolean = true,
         executionController: PDFTranslationExecutionController? = null,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
     ): Result<Uri> = withContext(Dispatchers.IO) {
         val notificationId = UnifiedNotificationManager.startTask(
@@ -882,8 +1029,13 @@ class PDFService(private val context: Context) {
                 onProgress?.invoke(progress)
             }
             val translatableBlocks = textLayerResult.blocks.filter { it.text.isNotBlank() }
-            val qualityMode = settingsRepo.pdfTranslationOptionsSnapshot().qualityMode
-            val pageUnits = buildTextLayerTranslationUnits(textLayerResult.pages, qualityMode)
+            val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
+            val qualityMode = options.qualityMode
+            val pageUnits = buildTextLayerTranslationUnits(
+                pages = textLayerResult.pages,
+                qualityMode = qualityMode,
+                readingDirection = mangaConfig?.readingDirection ?: MangaReadingDirection.LEFT_TO_RIGHT
+            )
             val translatableUnits = pageUnits.values.flatten()
             if (translatableUnits.isEmpty() || translatableBlocks.isEmpty()) {
                 throw IllegalStateException("No searchable text layer found")
@@ -896,9 +1048,12 @@ class PDFService(private val context: Context) {
                 pageUnits = pageUnits,
                 totalSourceBlocks = totalSourceBlocks,
                 settingsOverride = settingsOverride,
+                optionsOverride = options,
+                mangaConfig = mangaConfig,
                 executionController = executionController,
                 onProgress = onProgress,
-                notificationId = notificationId
+                notificationId = notificationId,
+                qualityAccumulator = qualityAccumulator
             )
 
             val doc = PDDocument.load(cachedPdf)
@@ -918,6 +1073,7 @@ class PDFService(private val context: Context) {
                         translations = translations,
                         totalSourceBlocks = totalSourceBlocks,
                         outputFileName = outputFileName,
+                        saveToConfiguredOutput = saveToConfiguredOutput,
                         executionController = executionController,
                         onProgress = onProgress
                     )
@@ -977,6 +1133,7 @@ class PDFService(private val context: Context) {
                             translations = translations,
                             totalSourceBlocks = totalSourceBlocks,
                             outputFileName = outputFileName,
+                            saveToConfiguredOutput = saveToConfiguredOutput,
                             executionController = executionController,
                             onProgress = onProgress
                         )
@@ -987,7 +1144,11 @@ class PDFService(private val context: Context) {
                         return@withContext Result.success(outputUri)
                     }
                 }
-                val outputUri = saveToOutputFolder(doc, outputFileName)
+                val outputUri = if (saveToConfiguredOutput) {
+                    saveToOutputFolder(doc, outputFileName)
+                } else {
+                    saveToCacheAndGetUri(doc, outputFileName)
+                }
                 DebugLog.log("[PDF] Text-layer translated PDF saved: $outputUri")
                 UnifiedNotificationManager.completeTask(
                     notificationId,
@@ -1016,15 +1177,18 @@ class PDFService(private val context: Context) {
         pageUnits: Map<Int, List<PdfTranslationUnit>>,
         totalSourceBlocks: Int,
         settingsOverride: RemoteSummarySettingsSnapshot?,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
+        mangaConfig: MangaTranslationRunConfig? = null,
         executionController: PDFTranslationExecutionController?,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
         notificationId: Int,
         initialTranslations: Map<String, String> = emptyMap(),
         onCheckpoint: ((Map<String, String>, Set<Int>) -> Unit)? = null,
-        pageScreenshotProvider: (suspend (Int) -> RemoteSummaryImageAttachment?)? = null
+        pageScreenshotProvider: (suspend (Int) -> RemoteSummaryImageAttachment?)? = null,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): LinkedHashMap<String, String> {
         val snapshot = settingsOverride ?: settingsRepo.pdfTranslationSettings.snapshot()
-        val options = settingsRepo.pdfTranslationOptionsSnapshot()
+        val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
         val qualityMode = options.qualityMode
         val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
         executionController?.registerRemoteClient(client)
@@ -1038,6 +1202,11 @@ class PDFService(private val context: Context) {
             .keys
             .toMutableSet()
         val pageContexts = linkedMapOf<Int, String>()
+        val pageScreenshotContextAllowed = options.usePageScreenshotContext &&
+            (mangaConfig?.pageImageContextAvailable ?: canUsePageScreenshotContext(snapshot))
+        if (options.usePageScreenshotContext && !pageScreenshotContextAllowed) {
+            DebugLog.log("[PDF] Page screenshot context disabled; selected ${snapshot.backend} model is not vision-capable or no vision projector is configured. Continuing text-only.")
+        }
 
         try {
             for (pageIndex in 0 until totalPages) {
@@ -1045,7 +1214,7 @@ class PDFService(private val context: Context) {
                 val units = pageUnits[pageIndex].orEmpty()
                 if (units.isEmpty()) continue
                 val pageChunks = chunkPageBlocks(units, snapshot.chunkContext, qualityMode)
-                val imageAttachment = if (options.usePageScreenshotContext && canUsePageScreenshotContext(snapshot)) {
+                val imageAttachment = if (pageScreenshotContextAllowed) {
                     runCatching {
                         pageScreenshotProvider?.invoke(pageIndex)
                             ?: pdfUri?.let {
@@ -1065,7 +1234,10 @@ class PDFService(private val context: Context) {
                 } else {
                     null
                 }
-                val pageContext = if (qualityMode == PdfTranslationQualityMode.BEST_QUALITY) {
+                val pageContext = if (
+                    mangaConfig?.behavior?.pageUnderstandingEnabled
+                        ?: (qualityMode == PdfTranslationQualityMode.BEST_QUALITY)
+                ) {
                     buildPageUnderstandingContext(
                         pageIndex = pageIndex,
                         totalPages = totalPages,
@@ -1082,7 +1254,20 @@ class PDFService(private val context: Context) {
                         }
                     }
                 } else {
-                    pageContexts[pageIndex - 1]?.takeIf { qualityMode == PdfTranslationQualityMode.BALANCED }
+                    pageContexts[pageIndex - 1]?.takeIf {
+                        mangaConfig?.behavior?.continuityEnabled == true ||
+                            qualityMode == PdfTranslationQualityMode.BALANCED
+                    }
+                }
+                val continuityContext = if (
+                    mangaConfig?.behavior?.continuityEnabled == true && pageIndex > 0
+                ) {
+                    buildBoundedTranslationContinuity(
+                        previousUnits = pageUnits[pageIndex - 1].orEmpty(),
+                        translations = translations
+                    )
+                } else {
+                    null
                 }
                 val progress = 0.25f + pageIndex.toFloat() / totalPages.toFloat() * 0.55f
                 onProgress?.invoke(
@@ -1116,9 +1301,15 @@ class PDFService(private val context: Context) {
                             fallbackToTextOnly = options.textOnlyFallbackEnabled,
                             imageAttachment = imageAttachment,
                             pageContext = pageContext,
+                            continuityContext = continuityContext,
                             qualityMode = qualityMode,
+                            readingDirection = resolveReadingDirectionForUnits(
+                                mangaConfig?.readingDirection ?: MangaReadingDirection.LEFT_TO_RIGHT,
+                                units
+                            ),
                             client = client,
-                            executionController = executionController
+                            executionController = executionController,
+                            qualityAccumulator = qualityAccumulator
                         )
                     }
                     chunk.units.forEach { unit ->
@@ -1149,28 +1340,69 @@ class PDFService(private val context: Context) {
                     onCheckpoint?.invoke(translations, completedPageIndexes)
                 }
             }
-            applyTranslationCorrectionPass(
-                pageUnits = pageUnits,
-                translations = translations,
-                totalSourceBlocks = totalSourceBlocks,
-                snapshot = snapshot,
-                targetLanguage = targetLanguage,
-                qualityMode = qualityMode,
-                pageContexts = pageContexts,
-                client = client,
-                executionController = executionController,
-                onProgress = onProgress,
-                notificationId = notificationId
-            )
+            if (mangaConfig?.behavior?.correctionEnabled != false) {
+                applyTranslationCorrectionPass(
+                    pageUnits = pageUnits,
+                    translations = translations,
+                    totalSourceBlocks = totalSourceBlocks,
+                    snapshot = snapshot,
+                    targetLanguage = targetLanguage,
+                    qualityMode = qualityMode,
+                    pageContexts = pageContexts,
+                    client = client,
+                    executionController = executionController,
+                    onProgress = onProgress,
+                    notificationId = notificationId
+                )
+            }
             return translations
         } finally {
             executionController?.clearRemoteClient(client)
         }
     }
 
+    private fun buildBoundedTranslationContinuity(
+        previousUnits: List<PdfTranslationUnit>,
+        translations: Map<String, String>
+    ): String? {
+        val entries = previousUnits.mapNotNull { unit ->
+            val translated = translations[unit.id]?.trim().orEmpty()
+            if (translated.isBlank()) {
+                null
+            } else {
+                "${unit.text.replace(Regex("""\s+"""), " ").trim().take(120)} → " +
+                    translated.replace(Regex("""\s+"""), " ").trim().take(160)
+            }
+        }.takeLast(10)
+        return entries
+            .joinToString("\n")
+            .take(1_200)
+            .trim()
+            .takeIf { it.isNotBlank() }
+    }
+
+    private fun resolveReadingDirectionForUnits(
+        requested: MangaReadingDirection,
+        units: List<PdfTranslationUnit>
+    ): MangaReadingDirection =
+        MangaTranslationSupport.resolveReadingDirection(
+            requested = requested,
+            boxes = units.map { unit ->
+                MangaReadingOrderBox(
+                    id = unit.id,
+                    rect = unit.rect,
+                    text = unit.text
+                )
+            }
+        )
+
     private fun buildOcrTranslationUnits(
         pages: List<PdfOcrPageResult>,
-        qualityMode: PdfTranslationQualityMode
+        qualityMode: PdfTranslationQualityMode,
+        readingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT,
+        preserveIndependentRegions: Boolean = false,
+        translateDecorativeText: Boolean = true,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): Map<Int, List<PdfTranslationUnit>> {
         return pages.associate { page ->
             val sourceBlocks = page.blocks.mapNotNull { block ->
@@ -1195,7 +1427,36 @@ class PDFService(private val context: Context) {
                     backgroundColor = block.backgroundColor,
                     textColor = block.textColor,
                     lineCount = sourceLines.size.coerceAtLeast(1),
-                    sourceLines = sourceLines
+                    sourceLines = sourceLines,
+                    containingRegionId = block.containingRegionId
+                        ?: if (preserveIndependentRegions) {
+                            "p${page.pageIndex + 1}_block${block.blockIndex + 1}"
+                        } else {
+                            null
+                        },
+                    safeRegionRect = block.safeRegionBox?.let { safeBox ->
+                        PDFTranslationLogic.mapBitmapBoxToPdfRect(
+                            box = safeBox,
+                            bitmapWidth = page.bitmapWidth,
+                            bitmapHeight = page.bitmapHeight,
+                            pdfWidth = page.pdfWidth,
+                            pdfHeight = page.pdfHeight
+                        )
+                    },
+                    provenance = block.provenance,
+                    textRole = MangaTranslationSupport.classifyMangaOcrTextRole(
+                        text = text,
+                        rect = PDFTranslationLogic.mapBitmapBoxToPdfRect(
+                            box = block.box,
+                            bitmapWidth = page.bitmapWidth,
+                            bitmapHeight = page.bitmapHeight,
+                            pdfWidth = page.pdfWidth,
+                            pdfHeight = page.pdfHeight
+                        ),
+                        pageWidth = page.pdfWidth,
+                        pageHeight = page.pdfHeight,
+                        provenance = block.provenance
+                    )
                 )
             }
             page.pageIndex to buildTranslationUnitsForPage(
@@ -1203,20 +1464,24 @@ class PDFService(private val context: Context) {
                 pdfWidth = page.pdfWidth,
                 pdfHeight = page.pdfHeight,
                 sourceBlocks = sourceBlocks,
-                qualityMode = qualityMode
+                qualityMode = qualityMode,
+                readingDirection = readingDirection,
+                translateDecorativeText = translateDecorativeText,
+                qualityAccumulator = qualityAccumulator
             )
         }
     }
 
     private fun toPageTranslationBlocks(units: List<PdfTranslationUnit>): List<PDFTranslationLogic.PageTranslationBlock> {
         return units.mapIndexed { promptIndex, unit ->
+            val sourceRect = unit.sourceRect
             PDFTranslationLogic.PageTranslationBlock(
                 id = unit.id,
                 text = unit.text,
-                x = unit.rect.x,
-                y = unit.rect.y,
-                width = unit.rect.width,
-                height = unit.rect.height,
+                x = sourceRect.x,
+                y = sourceRect.y,
+                width = sourceRect.width,
+                height = sourceRect.height,
                 readingOrder = promptIndex + 1,
                 sourceBlockCount = unit.sourceBlockCount,
                 sourceLineCount = unit.sourceLineCount,
@@ -1227,7 +1492,8 @@ class PDFService(private val context: Context) {
 
     private fun buildTextLayerTranslationUnits(
         pages: List<PdfTextLayerPageResult>,
-        qualityMode: PdfTranslationQualityMode
+        qualityMode: PdfTranslationQualityMode,
+        readingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT
     ): Map<Int, List<PdfTranslationUnit>> {
         return pages.associate { page ->
             val sourceBlocks = page.blocks.mapNotNull { block ->
@@ -1251,7 +1517,8 @@ class PDFService(private val context: Context) {
                 pdfWidth = page.pdfWidth,
                 pdfHeight = page.pdfHeight,
                 sourceBlocks = sourceBlocks,
-                qualityMode = qualityMode
+                qualityMode = qualityMode,
+                readingDirection = readingDirection
             )
         }
     }
@@ -1261,47 +1528,203 @@ class PDFService(private val context: Context) {
         pdfWidth: Float,
         pdfHeight: Float,
         sourceBlocks: List<PdfTranslationSourceBlock>,
-        qualityMode: PdfTranslationQualityMode
+        qualityMode: PdfTranslationQualityMode,
+        readingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT,
+        translateDecorativeText: Boolean = true,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): List<PdfTranslationUnit> {
         if (sourceBlocks.isEmpty()) return emptyList()
-        val sorted = sourceBlocks.sortedWith(
-            compareBy<PdfTranslationSourceBlock> { pdfTextRectTop(it.rect, pdfHeight) }.thenBy { it.rect.x }
-        )
-        val grouped = mutableListOf<MutableList<PdfTranslationSourceBlock>>()
-        sorted.forEach { block ->
-            val current = grouped.lastOrNull()
-            val previous = current?.lastOrNull()
-            if (current != null && previous != null && translationGroupsShouldMerge(current, block, pdfWidth, pdfHeight, qualityMode)) {
-                current += block
+        val sourceById = sourceBlocks.associateBy { it.sourceId }
+        val sorted = MangaTranslationSupport.orderReadingBoxes(
+            boxes = sourceBlocks.map { block ->
+                MangaReadingOrderBox(block.sourceId, block.rect, block.text)
+            },
+            pageHeight = pdfHeight,
+            requested = readingDirection
+        ).mapNotNull { sourceById[it.id] }
+        val regionGroups = linkedMapOf<String, MutableList<PdfTranslationSourceBlock>>()
+        val regionFirstOrder = mutableMapOf<String, Int>()
+        val orphanGroups = mutableListOf<Pair<Int, MutableList<PdfTranslationSourceBlock>>>()
+        sorted.forEachIndexed { orderIndex, block ->
+            val regionId = block.containingRegionId
+            if (regionId != null) {
+                regionFirstOrder.putIfAbsent(regionId, orderIndex)
+                regionGroups.getOrPut(regionId) { mutableListOf() } += block
             } else {
-                grouped += mutableListOf(block)
+                val current = orphanGroups.lastOrNull()?.second
+                val previous = current?.lastOrNull()
+                if (
+                    current != null &&
+                    previous != null &&
+                    translationGroupsShouldMerge(current, block, pdfWidth, pdfHeight, qualityMode)
+                ) {
+                    current += block
+                } else {
+                    orphanGroups += orderIndex to mutableListOf(block)
+                }
             }
         }
-        val merged = mergeAdjacentTranslationGroups(grouped, pdfWidth, pdfHeight, qualityMode)
-        return merged.mapIndexedNotNull { unitIndex, group ->
-            val ordered = group.sortedWith(
-                compareBy<PdfTranslationSourceBlock> { pdfTextRectTop(it.rect, pdfHeight) }.thenBy { it.rect.x }
-            )
+        val merged = buildList {
+            regionGroups.forEach { (regionId, blocks) ->
+                val deduped = dedupeTranslationSourceBlocks(blocks)
+                if (deduped.size > 1) {
+                    qualityAccumulator?.let { it.coalescedBubbleFragments += deduped.size - 1 }
+                }
+                add(regionFirstOrder.getValue(regionId) to deduped)
+            }
+            orphanGroups.forEach { (orderIndex, blocks) ->
+                add(orderIndex to blocks.toList())
+            }
+        }.sortedBy { it.first }.map { it.second }
+        val units = merged.mapIndexedNotNull { unitIndex, group ->
+            val groupById = group.associateBy { it.sourceId }
+            val ordered = MangaTranslationSupport.orderReadingBoxes(
+                boxes = group.map { block ->
+                    MangaReadingOrderBox(block.sourceId, block.rect, block.text)
+                },
+                pageHeight = pdfHeight,
+                requested = readingDirection
+            ).mapNotNull { groupById[it.id] }
             val text = ordered.joinToString("\n") { it.text.trim() }.trim()
             if (text.isBlank()) return@mapIndexedNotNull null
+            val textRole = dominantMangaTextRole(ordered)
+            if (!translateDecorativeText && textRole in setOf(
+                    MangaOcrTextRole.DECORATIVE,
+                    MangaOcrTextRole.CREDIT,
+                    MangaOcrTextRole.PAGE_NUMBER
+                )
+            ) {
+                qualityAccumulator?.let { it.decorativeTextPreserved += 1 }
+                DebugLog.log(
+                    "[PDF] Preserved manga ${textRole.name.lowercase(Locale.US)} region on page ${pageIndex + 1}; original artwork kept."
+                )
+                return@mapIndexedNotNull null
+            }
             val backgroundColor = dominantBackgroundColor(ordered.map { it.backgroundColor })
+            val sourceRect = unionPdfRects(ordered.map { it.rect }).padded(1.5f, pdfWidth, pdfHeight)
+            val containingRegionId = ordered.mapNotNull { it.containingRegionId }.distinct().singleOrNull()
+            if (MangaTranslationSupport.mergedRegionIsTooLarge(sourceRect, pdfWidth, pdfHeight)) {
+                qualityAccumulator?.let {
+                    it.skippedOverlayUnits += 1
+                    if (containingRegionId != null) it.wholeBubblesPreserved += 1
+                }
+                return@mapIndexedNotNull null
+            }
+            val safeRegion = ordered.mapNotNull { it.safeRegionRect }.distinct().singleOrNull()
+            val overlayRect = MangaTranslationSupport.expandedBubbleRect(
+                rect = sourceRect,
+                pageWidth = pdfWidth,
+                pageHeight = pdfHeight
+            ).let { expanded ->
+                safeRegion?.let { safe -> constrainOverlayRect(expanded, safe, sourceRect) } ?: expanded
+            }
             PdfTranslationUnit(
                 id = "p${pageIndex + 1}_u${unitIndex + 1}",
                 pageIndex = pageIndex,
                 unitIndex = unitIndex,
                 text = text,
-                rect = MangaTranslationSupport.expandedBubbleRect(
-                    rect = unionPdfRects(ordered.map { it.rect }).padded(1.5f, pdfWidth, pdfHeight),
-                    pageWidth = pdfWidth,
-                    pageHeight = pdfHeight
-                ),
+                rect = overlayRect,
+                sourceRect = sourceRect,
                 backgroundColor = backgroundColor,
                 textColor = contrastingTextColor(backgroundColor),
                 sourceBlockIds = ordered.map { it.sourceId },
                 sourceLineCount = ordered.sumOf { it.lineCount },
-                sourceLines = ordered.flatMap { it.sourceLines }
+                sourceLines = ordered.flatMap { it.sourceLines },
+                containingRegionId = containingRegionId,
+                safeRegionRect = ordered.mapNotNull { it.safeRegionRect }.distinct().singleOrNull(),
+                textRole = textRole
             )
         }
+        return reconcileTranslationUnitOverlaps(units, qualityAccumulator)
+    }
+
+    private fun dedupeTranslationSourceBlocks(
+        blocks: List<PdfTranslationSourceBlock>
+    ): List<PdfTranslationSourceBlock> {
+        val accepted = mutableListOf<PdfTranslationSourceBlock>()
+        blocks.forEach { candidate ->
+            val normalizedCandidate = candidate.text.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+            val duplicateIndex = accepted.indexOfFirst { existing ->
+                val normalizedExisting = existing.text.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+                val overlap = MangaTranslationSupport.overlayOverlapRatio(existing.rect, candidate.rect)
+                overlap >= 0.35f &&
+                    normalizedCandidate.length >= 5 &&
+                    normalizedExisting.length >= 5 &&
+                    (normalizedCandidate == normalizedExisting ||
+                        normalizedCandidate.contains(normalizedExisting) ||
+                        normalizedExisting.contains(normalizedCandidate))
+            }
+            if (duplicateIndex < 0) {
+                accepted += candidate
+            } else if (candidate.text.length > accepted[duplicateIndex].text.length) {
+                accepted[duplicateIndex] = candidate
+            }
+        }
+        return accepted
+    }
+
+    private fun dominantMangaTextRole(blocks: List<PdfTranslationSourceBlock>): MangaOcrTextRole {
+        val roles = blocks.map { it.textRole }
+        return when {
+            roles.any { it == MangaOcrTextRole.DIALOGUE } -> MangaOcrTextRole.DIALOGUE
+            roles.any { it == MangaOcrTextRole.NARRATION } -> MangaOcrTextRole.NARRATION
+            roles.all { it == MangaOcrTextRole.PAGE_NUMBER } -> MangaOcrTextRole.PAGE_NUMBER
+            roles.any { it == MangaOcrTextRole.CREDIT } -> MangaOcrTextRole.CREDIT
+            roles.any { it == MangaOcrTextRole.DECORATIVE } -> MangaOcrTextRole.DECORATIVE
+            else -> MangaOcrTextRole.UNKNOWN
+        }
+    }
+
+    private fun reconcileTranslationUnitOverlaps(
+        units: List<PdfTranslationUnit>,
+        qualityAccumulator: MangaTranslationQualityAccumulator?
+    ): List<PdfTranslationUnit> {
+        if (units.size <= 1) return units
+        val accepted = mutableListOf<PdfTranslationUnit>()
+        units.forEach { unit ->
+            val preferredCollides = accepted.any { existing ->
+                MangaTranslationSupport.overlayOverlapRatio(unit.rect, existing.rect) > 0.12f
+            }
+            val resolved = if (!preferredCollides) {
+                unit
+            } else {
+                val sourceCollides = accepted.any { existing ->
+                    MangaTranslationSupport.overlayOverlapRatio(unit.sourceRect, existing.rect) > 0.08f
+                }
+                if (!sourceCollides) unit.copy(rect = unit.sourceRect) else null
+            }
+            if (resolved == null) {
+                qualityAccumulator?.let {
+                    it.skippedOverlayUnits += 1
+                    if (unit.containingRegionId != null) it.wholeBubblesPreserved += 1
+                }
+                DebugLog.log(
+                    "[PDF] Rejected overlapping manga overlay ${unit.id} on page ${unit.pageIndex + 1}; original artwork preserved"
+                )
+            } else {
+                accepted += resolved
+            }
+        }
+        return accepted
+    }
+
+    private fun constrainOverlayRect(
+        proposed: PdfMappedRect,
+        safeRegion: PdfMappedRect,
+        sourceRect: PdfMappedRect
+    ): PdfMappedRect {
+        val safeLeft = safeRegion.x
+        val safeBottom = safeRegion.y
+        val safeRight = safeRegion.x + safeRegion.width
+        val safeTop = safeRegion.y + safeRegion.height
+        val left = proposed.x.coerceAtLeast(safeLeft)
+        val bottom = proposed.y.coerceAtLeast(safeBottom)
+        val right = (proposed.x + proposed.width).coerceAtMost(safeRight)
+        val top = (proposed.y + proposed.height).coerceAtMost(safeTop)
+        if (right - left >= sourceRect.width * 0.85f && top - bottom >= sourceRect.height * 0.85f) {
+            return PdfMappedRect(left, bottom, right - left, top - bottom)
+        }
+        return sourceRect
     }
 
     private fun mergeAdjacentTranslationGroups(
@@ -1335,6 +1758,16 @@ class PDFService(private val context: Context) {
         qualityMode: PdfTranslationQualityMode,
         allowNarrationJoin: Boolean = true
     ): Boolean {
+        val currentRegionIds = currentGroup.mapNotNull { it.containingRegionId }.distinct()
+        if (currentRegionIds.isNotEmpty() || nextBlock.containingRegionId != null) {
+            if (
+                currentRegionIds.size != 1 ||
+                nextBlock.containingRegionId == null ||
+                currentRegionIds.single() != nextBlock.containingRegionId
+            ) {
+                return false
+            }
+        }
         val currentRect = unionPdfRects(currentGroup.map { it.rect })
         val nextRect = nextBlock.rect
         val verticalGap = pdfTextRectTop(nextRect, pdfHeight) - pdfTextRectBottom(currentRect, pdfHeight)
@@ -1354,10 +1787,12 @@ class PDFService(private val context: Context) {
         val inlineContinuation = abs(pdfTextRectTop(currentRect, pdfHeight) - pdfTextRectTop(nextRect, pdfHeight)) <= maxOf(12f, heightScale * 0.75f) &&
             horizontalGap <= maxOf(22f * qualityMultiplier, widthScale * 0.28f * qualityMultiplier)
         val closeNarrationFragments = allowNarrationJoin &&
+            currentRegionIds.isNotEmpty() &&
             tinyFragments &&
             verticalGap <= maxOf(30f * qualityMultiplier, heightScale * 3.1f * qualityMultiplier) &&
             horizontalGap <= maxOf(36f * qualityMultiplier, widthScale * 0.4f * qualityMultiplier)
-        val mangaBubbleFragments = qualityMode == PdfTranslationQualityMode.BEST_QUALITY &&
+        val mangaBubbleFragments = currentRegionIds.isNotEmpty() &&
+            qualityMode == PdfTranslationQualityMode.BEST_QUALITY &&
             tinyFragments &&
             verticalGap in -8f..maxOf(42f, heightScale * 3.8f) &&
             horizontalGap <= maxOf(48f, widthScale * 0.52f)
@@ -1582,9 +2017,12 @@ class PDFService(private val context: Context) {
         fallbackToTextOnly: Boolean,
         imageAttachment: RemoteSummaryImageAttachment?,
         pageContext: String?,
+        continuityContext: String?,
         qualityMode: PdfTranslationQualityMode,
+        readingDirection: MangaReadingDirection,
         client: RemoteSummaryClient,
-        executionController: PDFTranslationExecutionController?
+        executionController: PDFTranslationExecutionController?,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): Map<String, String> {
         val promptBlocks = toPageTranslationBlocks(pageChunk.units)
         suspend fun requestTranslation(
@@ -1604,7 +2042,9 @@ class PDFService(private val context: Context) {
                 totalChunks = pageChunk.totalChunks,
                 totalPageBlocks = pageChunk.totalPageUnits,
                 pageContext = pageContext,
-                qualityMode = qualityMode
+                qualityMode = qualityMode,
+                readingDirection = readingDirection,
+                continuityContext = continuityContext
             )
             return runWithTranslationRetries(
                 label = "page ${pageIndex + 1} chunk ${pageChunk.index}/${pageChunk.totalChunks}",
@@ -1625,6 +2065,7 @@ class PDFService(private val context: Context) {
                         imageAttachments = if (withImage && imageAttachment != null) listOf(imageAttachment) else emptyList()
                     )
                 )
+                qualityAccumulator?.let { it.liteRtRuntimeFallbacks += response.runtimeFallbacks }
                 parseOrRecoverPageTranslation(
                     pageNumber = pageIndex + 1,
                     totalPages = totalPages,
@@ -1636,7 +2077,8 @@ class PDFService(private val context: Context) {
                     pageContext = pageContext,
                     qualityMode = qualityMode,
                     client = client,
-                    executionController = executionController
+                    executionController = executionController,
+                    qualityAccumulator = qualityAccumulator
                 )
             }
         }
@@ -1652,6 +2094,7 @@ class PDFService(private val context: Context) {
                 .getOrElse { imageError ->
                     if (imageError is CancellationException) throw imageError
                     if (imageAttachment != null && fallbackToTextOnly) {
+                        qualityAccumulator?.let { it.textOnlyFallbacks += 1 }
                         DebugLog.log("[PDF] Image-context translation failed on page ${pageIndex + 1} chunk ${pageChunk.index}; retrying text-only: ${imageError.message}")
                         requestTranslation(
                             requestedBlocks = promptBlocks,
@@ -1698,9 +2141,12 @@ class PDFService(private val context: Context) {
                             fallbackToTextOnly = fallbackToTextOnly,
                             imageAttachment = imageAttachment,
                             pageContext = pageContext,
+                            continuityContext = continuityContext,
                             qualityMode = qualityMode,
+                            readingDirection = readingDirection,
                             client = client,
-                            executionController = executionController
+                            executionController = executionController,
+                            qualityAccumulator = qualityAccumulator
                         )
                     )
                     putAll(
@@ -1713,9 +2159,12 @@ class PDFService(private val context: Context) {
                             fallbackToTextOnly = fallbackToTextOnly,
                             imageAttachment = imageAttachment,
                             pageContext = pageContext,
+                            continuityContext = continuityContext,
                             qualityMode = qualityMode,
+                            readingDirection = readingDirection,
                             client = client,
-                            executionController = executionController
+                            executionController = executionController,
+                            qualityAccumulator = qualityAccumulator
                         )
                     )
                 }
@@ -1733,19 +2182,51 @@ class PDFService(private val context: Context) {
         pageContext: String?,
         qualityMode: PdfTranslationQualityMode,
         client: RemoteSummaryClient,
-        executionController: PDFTranslationExecutionController?
+        executionController: PDFTranslationExecutionController?,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): Map<String, String> {
         val expectedIds = requestedBlocks.map { it.id }.toSet()
         val partial = PDFTranslationLogic.parsePartialPageTranslationJson(responseOutput, expectedIds)
-        if (partial.missingIds.isEmpty()) {
+        val blockById = requestedBlocks.associateBy { it.id }
+        fun translationNeedsRetry(id: String, translatedText: String): Boolean {
+            val block = blockById[id] ?: return false
+            return PDFTranslationLogic.isWeakPageTranslation(block.text, translatedText, targetLanguage) ||
+                PDFTranslationLogic.isIncompleteMultiFragmentTranslation(block, translatedText, targetLanguage)
+        }
+        val weakIds = partial.translations
+            .filter { (id, translatedText) ->
+                blockById[id]?.let { block ->
+                    PDFTranslationLogic.isWeakPageTranslation(block.text, translatedText, targetLanguage)
+                } == true
+            }
+            .keys
+            .toSet()
+        val incompleteIds = partial.translations
+            .filter { (id, translatedText) ->
+                val block = blockById[id]
+                block != null &&
+                    id !in weakIds &&
+                    PDFTranslationLogic.isIncompleteMultiFragmentTranslation(block, translatedText, targetLanguage)
+            }
+            .keys
+            .toSet()
+        if (partial.missingIds.isEmpty() && weakIds.isEmpty() && incompleteIds.isEmpty()) {
             return partial.translations
         }
 
-        val missingBlocks = requestedBlocks.filter { it.id in partial.missingIds }
-        val recovered = linkedMapOf<String, String>().apply { putAll(partial.translations) }
+        val retryIds = partial.missingIds + weakIds + incompleteIds
+        qualityAccumulator?.let { it.weakTranslationsRetried += weakIds.size }
+        qualityAccumulator?.let { it.incompleteTranslationRetries += incompleteIds.size }
+        val missingBlocks = requestedBlocks.filter { it.id in retryIds }
+        val recovered = linkedMapOf<String, String>().apply {
+            partial.translations
+                .filterKeys { it !in weakIds && it !in incompleteIds }
+                .forEach { (id, translation) -> put(id, translation) }
+        }
+        qualityAccumulator?.let { it.jsonRepairs += 1 }
         val promptCompletedTranslations = linkedMapOf<String, String>().apply {
             putAll(completedTranslations)
-            putAll(partial.translations)
+            putAll(recovered)
         }
         ensureTranslationActive(executionController)
         val repairResponse = client.summarize(
@@ -1767,13 +2248,21 @@ class PDFService(private val context: Context) {
                 thinkingEnabled = false
             )
         )
-        val repaired = PDFTranslationLogic.parsePartialPageTranslationJson(repairResponse.output, partial.missingIds)
-        recovered.putAll(repaired.translations)
+        qualityAccumulator?.let { it.liteRtRuntimeFallbacks += repairResponse.runtimeFallbacks }
+        val repaired = PDFTranslationLogic.parsePartialPageTranslationJson(repairResponse.output, retryIds)
+        repaired.translations.forEach { (id, translation) ->
+            if (!translationNeedsRetry(id, translation)) {
+                recovered[id] = translation
+            }
+        }
         val refillContextTranslations = linkedMapOf<String, String>().apply {
             putAll(completedTranslations)
             putAll(recovered)
         }
-        val stillMissing = expectedIds - recovered.keys
+        val stillMissing = expectedIds.filter { id ->
+            val translation = recovered[id]
+            translation == null || translationNeedsRetry(id, translation)
+        }.toSet()
         if (stillMissing.isEmpty()) {
             return recovered
         }
@@ -1803,12 +2292,53 @@ class PDFService(private val context: Context) {
                 thinkingEnabled = snapshot.thinkingEnabled
             )
         )
+        qualityAccumulator?.let { it.liteRtRuntimeFallbacks += refillResponse.runtimeFallbacks }
         val refill = PDFTranslationLogic.parsePartialPageTranslationJson(refillResponse.output, stillMissing)
-        recovered.putAll(refill.translations)
-        val unresolved = expectedIds - recovered.keys
-        if (unresolved.isNotEmpty()) {
-            throw IllegalStateException(refill.parseError ?: partial.parseError ?: "translation_json_missing_ids")
+        refill.translations.forEach { (id, translation) ->
+            if (!translationNeedsRetry(id, translation)) {
+                recovered[id] = translation
+            }
         }
+        val unresolvedAfterJson = expectedIds.filter { id ->
+            val translation = recovered[id]
+            translation == null || translationNeedsRetry(id, translation)
+        }
+        unresolvedAfterJson.forEach { id ->
+            val block = blockById[id] ?: return@forEach
+            ensureTranslationActive(executionController)
+            qualityAccumulator?.let { it.plainTextFallbacks += 1 }
+            val plainText = runCatching {
+                val response = client.summarize(
+                    RemoteSummaryRequest(
+                        systemPrompt = PDFTranslationLogic.DEFAULT_TRANSLATION_SYSTEM_PROMPT,
+                        userPrompt = PDFTranslationLogic.buildSingleUnitPlainTextPrompt(targetLanguage, block),
+                        contextSize = snapshot.chunkContext,
+                        maxTokens = PDFTranslationLogic.estimateTranslationMaxTokens(
+                            block.text,
+                            snapshot.chunkMaxTokens
+                        ),
+                        temperature = deterministicTranslationTemperature(snapshot.temperature),
+                        thinkingEnabled = false
+                    )
+                )
+                qualityAccumulator?.let { it.liteRtRuntimeFallbacks += response.runtimeFallbacks }
+                response.output
+            }.getOrNull()
+                ?.let(PDFTranslationLogic::cleanTranslationOutput)
+                ?.trim()
+                .orEmpty()
+            if (
+                plainText.isNotBlank() &&
+                !translationNeedsRetry(id, plainText)
+            ) {
+                recovered[id] = plainText
+            }
+        }
+        val unresolved = expectedIds.count { id ->
+            val translation = recovered[id]
+            translation == null || translationNeedsRetry(id, translation)
+        }
+        qualityAccumulator?.let { it.untranslatedUnits += unresolved }
         return recovered
     }
 
@@ -2038,7 +2568,12 @@ class PDFService(private val context: Context) {
     private suspend fun extractBlocksWithOcr(
         renderer: PdfRenderer,
         recognizers: List<TextRecognizer>,
-        pageIndex: Int
+        pageIndex: Int,
+        ocrStrategy: MangaOcrStrategy = if (settingsRepo.pdfOcrBubbleGuided.value) {
+            MangaOcrStrategy.HYBRID
+        } else {
+            MangaOcrStrategy.FULL_PAGE
+        }
     ): PdfOcrPageResult {
         val page = renderer.openPage(pageIndex)
         try {
@@ -2057,7 +2592,8 @@ class PDFService(private val context: Context) {
                     bitmap = bitmap,
                     pageIndex = pageIndex,
                     pdfWidth = page.width.toFloat(),
-                    pdfHeight = page.height.toFloat()
+                    pdfHeight = page.height.toFloat(),
+                    ocrStrategy = ocrStrategy
                 )
             } finally {
                 bitmap.recycle()
@@ -2070,7 +2606,12 @@ class PDFService(private val context: Context) {
     private suspend fun extractBlocksFromImageFile(
         imageFile: File,
         recognizers: List<TextRecognizer>,
-        pageIndex: Int
+        pageIndex: Int,
+        ocrStrategy: MangaOcrStrategy = if (settingsRepo.pdfOcrBubbleGuided.value) {
+            MangaOcrStrategy.HYBRID
+        } else {
+            MangaOcrStrategy.FULL_PAGE
+        }
     ): PdfOcrPageResult {
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath, bounds)
@@ -2117,7 +2658,8 @@ class PDFService(private val context: Context) {
                     bitmap = ocrBitmap,
                     pageIndex = pageIndex,
                     pdfWidth = originalWidth.toFloat(),
-                    pdfHeight = originalHeight.toFloat()
+                    pdfHeight = originalHeight.toFloat(),
+                    ocrStrategy = ocrStrategy
                 )
             } finally {
                 if (ocrBitmap !== normalized) {
@@ -2131,8 +2673,28 @@ class PDFService(private val context: Context) {
 
     private suspend fun collectPdfOcrText(
         pdfUri: Uri,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
+        ocrStrategy: MangaOcrStrategy? = null,
+        ocrExecutionMode: MangaOcrExecutionMode = MangaOcrExecutionMode.BATCH,
+        exhaustiveLlamaOcrRegions: Boolean = false,
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
+        val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
+        val resolvedStrategy = ocrStrategy ?: if (options.bubbleGuidedOcrEnabled) {
+            MangaOcrStrategy.HYBRID
+        } else {
+            MangaOcrStrategy.FULL_PAGE
+        }
+        if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
+            return@withContext collectPdfOcrTextWithLlama(
+                pdfUri,
+                options.llamaOcr,
+                resolvedStrategy,
+                ocrExecutionMode,
+                exhaustiveLlamaOcrRegions,
+                onProgress
+            )
+        }
         try {
             DebugLog.log("[PDF] Performing OCR on PDF pages")
             val cachedPdf = copyPdfToCache(pdfUri)
@@ -2163,7 +2725,9 @@ class PDFService(private val context: Context) {
 
                     for (pageIndex in 0 until totalPages) {
                         currentCoroutineContext().ensureActive()
-                        val pageResult = runCatching { extractBlocksWithOcr(renderer, recognizers, pageIndex) }
+                        val pageResult = runCatching {
+                            extractBlocksWithOcr(renderer, recognizers, pageIndex, resolvedStrategy)
+                        }
                             .onFailure { DebugLog.log("[PDF] Page ${pageIndex + 1} OCR failed: ${it.message}") }
                             .getOrElse {
                                 PdfOcrPageResult(
@@ -2228,8 +2792,28 @@ class PDFService(private val context: Context) {
 
     private suspend fun collectImageOcrText(
         imageFiles: List<File>,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null,
+        ocrStrategy: MangaOcrStrategy? = null,
+        ocrExecutionMode: MangaOcrExecutionMode = MangaOcrExecutionMode.BATCH,
+        exhaustiveLlamaOcrRegions: Boolean = false,
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
+        val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
+        val resolvedStrategy = ocrStrategy ?: if (options.bubbleGuidedOcrEnabled) {
+            MangaOcrStrategy.HYBRID
+        } else {
+            MangaOcrStrategy.FULL_PAGE
+        }
+        if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
+            return@withContext collectImageOcrTextWithLlama(
+                imageFiles,
+                options.llamaOcr,
+                resolvedStrategy,
+                ocrExecutionMode,
+                exhaustiveLlamaOcrRegions,
+                onProgress
+            )
+        }
         try {
             DebugLog.log("[PDF] Performing OCR directly on ${imageFiles.size} comic images")
             val recognizers = createOcrRecognizers()
@@ -2256,7 +2840,9 @@ class PDFService(private val context: Context) {
 
                 imageFiles.forEachIndexed { pageIndex, imageFile ->
                     currentCoroutineContext().ensureActive()
-                    val pageResult = runCatching { extractBlocksFromImageFile(imageFile, recognizers, pageIndex) }
+                    val pageResult = runCatching {
+                        extractBlocksFromImageFile(imageFile, recognizers, pageIndex, resolvedStrategy)
+                    }
                         .onFailure { DebugLog.log("[PDF] Comic page ${pageIndex + 1} OCR failed: ${it.message}") }
                         .getOrElse {
                             PdfOcrPageResult(
@@ -2312,6 +2898,885 @@ class PDFService(private val context: Context) {
             DebugLog.log("[PDF] Comic image OCR failed: ${e.message}")
             Result.failure(e)
         }
+    }
+
+    private suspend fun collectPdfOcrTextWithLlama(
+        pdfUri: Uri,
+        llamaSettings: LlamaOcrSettingsSnapshot,
+        ocrStrategy: MangaOcrStrategy,
+        ocrExecutionMode: MangaOcrExecutionMode,
+        exhaustiveLlamaOcrRegions: Boolean,
+        onProgress: ((PdfExtractionProgress) -> Unit)? = null
+    ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            withLlamaOcrClient(llamaSettings) { client ->
+                DebugLog.log("[PDF] Performing llama.cpp GGUF OCR on PDF pages with ${llamaSettings.promptPreset.label}")
+                val cachedPdf = copyPdfToCache(pdfUri)
+                try {
+                    val pfd = ParcelFileDescriptor.open(cachedPdf, ParcelFileDescriptor.MODE_READ_ONLY)
+                    val renderer = PdfRenderer(pfd)
+                    try {
+                        val totalPages = renderer.pageCount
+                        if (totalPages == 0) throw IllegalStateException("PDF has no pages")
+                        onProgress?.invoke(PdfExtractionProgress(0, totalPages, 0, 0, 0, 0))
+                        val pages = mutableListOf<PdfOcrPageResult>()
+                        var ocrPages = 0
+                        var emptyPages = 0
+                        var textCharacters = 0
+                        for (pageIndex in 0 until totalPages) {
+                            currentCoroutineContext().ensureActive()
+                            val page = renderer.openPage(pageIndex)
+                            try {
+                                val scale = computeOcrScale(page.width, page.height)
+                                val bitmap = Bitmap.createBitmap(
+                                    (page.width * scale).roundToInt().coerceAtLeast(page.width),
+                                    (page.height * scale).roundToInt().coerceAtLeast(page.height),
+                                    Bitmap.Config.ARGB_8888
+                                )
+                                try {
+                                    Canvas(bitmap).drawColor(Color.WHITE)
+                                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                    val result = recognizeBitmapWithLlamaOcr(
+                                        client = client,
+                                        llamaSettings = llamaSettings,
+                                        bitmap = bitmap,
+                                        pageIndex = pageIndex,
+                                        pdfWidth = page.width.toFloat(),
+                                        pdfHeight = page.height.toFloat(),
+                                        ocrStrategy = ocrStrategy,
+                                        ocrExecutionMode = ocrExecutionMode,
+                                        exhaustiveLlamaOcrRegions = exhaustiveLlamaOcrRegions
+                                    ) { currentRegion, totalRegions ->
+                                        onProgress?.invoke(
+                                            PdfExtractionProgress(
+                                                processedPages = pageIndex,
+                                                totalPages = totalPages,
+                                                textLayerPages = 0,
+                                                ocrPages = ocrPages,
+                                                emptyPages = emptyPages,
+                                                textCharacters = textCharacters,
+                                                currentRegion = currentRegion,
+                                                totalRegions = totalRegions,
+                                                detailText = context.getString(
+                                                    R.string.workflow_manga_stage_ocr_region,
+                                                    pageIndex + 1,
+                                                    totalPages,
+                                                    currentRegion,
+                                                    totalRegions
+                                                )
+                                            )
+                                        )
+                                    }
+                                    pages += result
+                                    val pageText = result.blocks.joinToString("\n\n") { it.text }.trim()
+                                    if (pageText.isNotBlank()) {
+                                        ocrPages += 1
+                                        textCharacters += pageText.length
+                                    } else {
+                                        emptyPages += 1
+                                    }
+                                } finally {
+                                    bitmap.recycle()
+                                }
+                            } finally {
+                                page.close()
+                            }
+                            onProgress?.invoke(PdfExtractionProgress(pageIndex + 1, totalPages, 0, ocrPages, emptyPages, textCharacters))
+                        }
+                        buildOcrDocumentResult(pages, totalPages, ocrPages, emptyPages)
+                    } finally {
+                        runCatching { renderer.close() }
+                        runCatching { pfd.close() }
+                    }
+                } finally {
+                    cachedPdf.delete()
+                }
+            }
+        }.onFailure { DebugLog.log("[PDF] llama.cpp GGUF PDF OCR failed: ${it.message}") }
+    }
+
+    private suspend fun collectImageOcrTextWithLlama(
+        imageFiles: List<File>,
+        llamaSettings: LlamaOcrSettingsSnapshot,
+        ocrStrategy: MangaOcrStrategy,
+        ocrExecutionMode: MangaOcrExecutionMode,
+        exhaustiveLlamaOcrRegions: Boolean,
+        onProgress: ((PdfExtractionProgress) -> Unit)? = null
+    ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            withLlamaOcrClient(llamaSettings) { client ->
+                DebugLog.log("[PDF] Performing llama.cpp GGUF OCR on ${imageFiles.size} comic images with ${llamaSettings.promptPreset.label}")
+                val totalPages = imageFiles.size
+                if (totalPages == 0) throw IllegalStateException("Comic has no image pages")
+                onProgress?.invoke(PdfExtractionProgress(0, totalPages, 0, 0, 0, 0))
+                val pages = mutableListOf<PdfOcrPageResult>()
+                var ocrPages = 0
+                var emptyPages = 0
+                var textCharacters = 0
+                imageFiles.forEachIndexed { pageIndex, imageFile ->
+                    currentCoroutineContext().ensureActive()
+                    val bitmap = loadComicImageBitmapForOcr(imageFile)
+                    try {
+                        val result = recognizeBitmapWithLlamaOcr(
+                            client = client,
+                            llamaSettings = llamaSettings,
+                            bitmap = bitmap,
+                            pageIndex = pageIndex,
+                            pdfWidth = bitmap.width.toFloat(),
+                            pdfHeight = bitmap.height.toFloat(),
+                            ocrStrategy = ocrStrategy,
+                            ocrExecutionMode = ocrExecutionMode,
+                            exhaustiveLlamaOcrRegions = exhaustiveLlamaOcrRegions
+                        ) { currentRegion, totalRegions ->
+                            onProgress?.invoke(
+                                PdfExtractionProgress(
+                                    processedPages = pageIndex,
+                                    totalPages = totalPages,
+                                    textLayerPages = 0,
+                                    ocrPages = ocrPages,
+                                    emptyPages = emptyPages,
+                                    textCharacters = textCharacters,
+                                    currentRegion = currentRegion,
+                                    totalRegions = totalRegions,
+                                    detailText = context.getString(
+                                        R.string.workflow_manga_stage_ocr_region,
+                                        pageIndex + 1,
+                                        totalPages,
+                                        currentRegion,
+                                        totalRegions
+                                    )
+                                )
+                            )
+                        }
+                        pages += result
+                        val pageText = result.blocks.joinToString("\n\n") { it.text }.trim()
+                        if (pageText.isNotBlank()) {
+                            ocrPages += 1
+                            textCharacters += pageText.length
+                        } else {
+                            emptyPages += 1
+                        }
+                    } finally {
+                        bitmap.recycle()
+                    }
+                    onProgress?.invoke(PdfExtractionProgress(pageIndex + 1, totalPages, 0, ocrPages, emptyPages, textCharacters))
+                }
+                buildOcrDocumentResult(pages, totalPages, ocrPages, emptyPages)
+            }
+        }.onFailure { DebugLog.log("[PDF] llama.cpp GGUF image OCR failed: ${it.message}") }
+    }
+
+    private fun buildOcrDocumentResult(
+        pages: List<PdfOcrPageResult>,
+        totalPages: Int,
+        ocrPages: Int,
+        emptyPages: Int
+    ): PdfOcrDocumentResult {
+        val text = pages
+            .flatMap { page -> page.blocks.map { it.text } }
+            .filter { it.isNotBlank() }
+            .joinToString("\n\n")
+            .trim()
+        if (text.isBlank()) throw IllegalStateException("No OCR text found")
+        return PdfOcrDocumentResult(
+            pages = pages,
+            text = text,
+            totalPages = totalPages,
+            ocrPages = ocrPages,
+            emptyPages = emptyPages
+        )
+    }
+
+    private suspend fun <T> withLlamaOcrClient(
+        llamaSettings: LlamaOcrSettingsSnapshot,
+        block: suspend (RemoteSummaryClient) -> T
+    ): T {
+        val modelPath = requireNotNull(llamaSettings.modelPath?.takeIf { it.isNotBlank() }) {
+            context.getString(R.string.pdf_ocr_llama_error_missing_model)
+        }
+        require(java.io.File(modelPath).isFile) {
+            context.getString(R.string.pdf_ocr_llama_error_missing_model)
+        }
+        val mmprojPath = requireNotNull(llamaSettings.mmprojPath?.takeIf { it.isNotBlank() }) {
+            context.getString(R.string.pdf_ocr_llama_error_missing_mmproj)
+        }
+        require(java.io.File(mmprojPath).isFile) {
+            context.getString(R.string.pdf_ocr_llama_error_missing_mmproj)
+        }
+
+        val wasRunning = LlamaService.state.value is ServerState.Running
+        val shouldRestoreGeneral = wasRunning &&
+            SettingsRepository.isLlamaServerBackend(settingsRepo.pdfTranslationBackend.value) &&
+            !settingsRepo.selectedModelPath.value.isNullOrBlank()
+        if (llamaSettings.temporarilyReplaceRunningServer) {
+            if (wasRunning) {
+                LlamaServerLauncher.reconfigureForOcr(context, llamaSettings).getOrThrow()
+            } else {
+                LlamaServerLauncher.startForOcr(context, llamaSettings).getOrThrow()
+            }
+            waitForLlamaServerRunning(llamaSettings.port)
+        }
+
+        val snapshot = RemoteSummarySettingsSnapshot(
+            backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
+            ollamaUrl = "",
+            llamaServerUrl = llamaSettings.baseUrl,
+            llamaSwapUrl = "",
+            ollamaModel = null,
+            llamaSwapModel = null,
+            thinkingEnabled = false,
+            llamaServerModelLabel = modelPath.substringAfterLast('/'),
+            llamaServerContextTokens = llamaSettings.contextSize,
+            llamaServerContextLabel = "${llamaSettings.contextSize} tokens",
+            chunkContext = llamaSettings.contextSize,
+            chunkMaxTokens = llamaSettings.maxTokens,
+            mergeContext = llamaSettings.contextSize,
+            mergeMaxTokens = llamaSettings.maxTokens,
+            temperature = 0f,
+            timeoutMinutes = settingsRepo.pdfTranslationTimeoutMinutes.value.coerceAtLeast(2),
+            targetLanguage = settingsRepo.pdfTranslationTargetLanguage.value,
+            summaryPrompt = null,
+            mergePrompt = null
+        )
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
+        try {
+            validateLlamaOcrVisionMetadata(client)
+            return block(client)
+        } finally {
+            client.cancelActiveCall()
+            if (llamaSettings.temporarilyReplaceRunningServer) {
+                if (shouldRestoreGeneral) {
+                    settingsRepo.selectedModelPath.value?.let {
+                        LlamaServerLauncher.reconfigureGeneral(context, it)
+                    }
+                } else {
+                    LlamaServerLauncher.stop(context)
+                    waitForLlamaServerStopped()
+                }
+            }
+        }
+    }
+
+    private suspend fun waitForLlamaServerRunning(port: Int) {
+        val ready = withTimeoutOrNull(180_000L) {
+            var serverReady = false
+            while (!serverReady) {
+                when (val state = LlamaService.state.value) {
+                    is ServerState.Running -> if (state.port == port) serverReady = true
+                    is ServerState.Error -> throw IllegalStateException(state.message)
+                    else -> Unit
+                }
+                if (!serverReady) {
+                    delay(500L)
+                }
+            }
+            true
+        } == true
+        check(ready) { context.getString(R.string.pdf_ocr_llama_error_server_not_ready) }
+    }
+
+    private suspend fun waitForLlamaServerStopped() {
+        withTimeoutOrNull(30_000L) {
+            while (LlamaService.state.value !is ServerState.Stopped) {
+                delay(250L)
+            }
+            true
+        }
+    }
+
+    private suspend fun validateLlamaOcrVisionMetadata(client: RemoteSummaryClient) {
+        val metadata = client.fetchMetadata().getOrElse { error ->
+            DebugLog.log("[PDF] llama.cpp OCR metadata unavailable before OCR; continuing: ${error.message}")
+            return
+        }
+        DebugLog.log(
+            "[PDF] llama.cpp OCR metadata: vision=${metadata.visionSupported?.toString() ?: "unknown"}, " +
+                "mediaMarker=${metadata.llamaMediaMarker?.takeIf { it.isNotBlank() } ?: "default"}"
+        )
+        if (metadata.visionSupported == false) {
+            throw IllegalStateException(context.getString(R.string.pdf_ocr_llama_error_vision_unavailable))
+        }
+    }
+
+    private suspend fun recognizeBitmapWithLlamaOcr(
+        client: RemoteSummaryClient,
+        llamaSettings: LlamaOcrSettingsSnapshot,
+        bitmap: Bitmap,
+        pageIndex: Int,
+        pdfWidth: Float,
+        pdfHeight: Float,
+        ocrStrategy: MangaOcrStrategy,
+        ocrExecutionMode: MangaOcrExecutionMode = MangaOcrExecutionMode.BATCH,
+        exhaustiveLlamaOcrRegions: Boolean = false,
+        onRegionProgress: (suspend (Int, Int) -> Unit)? = null
+    ): PdfOcrPageResult {
+        check(!bitmap.isRecycled) { context.getString(R.string.pdf_ocr_llama_error_recycled_bitmap) }
+        val fullPage = Rect(0, 0, bitmap.width, bitmap.height)
+        val detectedRegions = if (ocrStrategy != MangaOcrStrategy.FULL_PAGE) {
+            detectBubbleOcrRegions(bitmap).map { it.rect }
+        } else {
+            emptyList()
+        }
+
+        // Even when llama.cpp is the selected recognizer, ML Kit supplies conservative text
+        // geometry. Its text is retained only for regions where the VLM cannot return usable text.
+        val locatorRecognizers = createOcrRecognizers()
+        val locatorPage = try {
+            recognizeTextBlocks(
+                recognizers = locatorRecognizers,
+                image = InputImage.fromBitmap(bitmap, 0),
+                bitmap = bitmap,
+                pageIndex = pageIndex,
+                pdfWidth = pdfWidth,
+                pdfHeight = pdfHeight,
+                ocrStrategy = MangaOcrStrategy.FULL_PAGE
+            )
+        } finally {
+            locatorRecognizers.forEach { recognizer -> runCatching { recognizer.close() } }
+        }
+        val locatorBlocks = locatorPage.blocks.mapIndexed { locatorIndex, block ->
+            val containingIndex = detectedRegions.indexOfFirst { region ->
+                val centerX = (block.box.left + block.box.right) / 2
+                val centerY = (block.box.top + block.box.bottom) / 2
+                region.contains(centerX, centerY)
+            }
+            if (containingIndex >= 0) {
+                block.copy(
+                    containingRegionId = "p${pageIndex + 1}_r${containingIndex + 1}",
+                    safeRegionBox = detectedRegions[containingIndex].toPdfOcrBox()
+                )
+            } else {
+                block.copy(
+                    containingRegionId = "p${pageIndex + 1}_mlkit${locatorIndex + 1}",
+                    provenance = MangaOcrRegionProvenance.ML_KIT_TEXT_BLOCK
+                )
+            }
+        }
+
+        val regionalCandidates = when (ocrStrategy) {
+            MangaOcrStrategy.FULL_PAGE -> emptyList()
+            MangaOcrStrategy.BUBBLE_ONLY,
+            MangaOcrStrategy.HYBRID -> detectedRegions
+            MangaOcrStrategy.ADAPTIVE -> detectedRegions.take(24)
+        }
+        val locatorBlocksByRegionId = locatorBlocks
+            .filter { block -> block.text.isNotBlank() && !block.containingRegionId.isNullOrBlank() }
+            .groupBy { block -> block.containingRegionId.orEmpty() }
+        val llamaBudget = MangaTranslationSupport.llamaOcrBudget(
+            executionMode = ocrExecutionMode,
+            exhaustiveRegions = exhaustiveLlamaOcrRegions
+        )
+        val prioritizedRegionalRequests = regionalCandidates.mapIndexed { index, region ->
+            val regionId = "p${pageIndex + 1}_r${index + 1}"
+            val mlKitText = locatorBlocksByRegionId[regionId].orEmpty()
+                .joinToString("\n") { block -> block.text }
+                .trim()
+            Triple(region, regionId, mlKitText)
+        }.sortedWith(
+            compareByDescending<Triple<Rect, String, String>> { (_, _, text) -> text.isBlank() }
+                .thenByDescending { (_, _, text) -> MangaTranslationSupport.mlKitRegionTextLooksWeak(text) }
+                .thenBy { (region, _, _) -> region.top }
+                .thenBy { (region, _, _) -> region.left }
+        ).filterIndexed { requestIndex, (_, _, mlKitText) ->
+            MangaTranslationSupport.shouldRunLlamaRegionRequest(
+                mlKitText = mlKitText,
+                regionIndex = requestIndex,
+                budget = llamaBudget
+            )
+        }
+        val skippedCropRequests = (regionalCandidates.size - prioritizedRegionalRequests.size).coerceAtLeast(0)
+        if (skippedCropRequests > 0) {
+            DebugLog.log(
+                "[PDF] llama.cpp OCR skipped $skippedCropRequests regional crop request(s) on page ${pageIndex + 1} " +
+                    "for ${ocrExecutionMode.name.lowercase(Locale.US)} budget; ML Kit fallback remains active."
+            )
+        }
+        val requestRegions = listOf(LlamaOcrRegionRequest(fullPage, null, fullPageContext = true)) +
+            prioritizedRegionalRequests.map { (region, regionId, _) ->
+                LlamaOcrRegionRequest(
+                    rect = region,
+                    regionId = regionId,
+                    fullPageContext = false,
+                    originalRegionIndex = regionId.substringAfterLast("_r").toIntOrNull() ?: -1
+                )
+            }
+        val llamaBlocks = mutableListOf<PdfOcrBlock>()
+        val successfulRegionIds = mutableSetOf<String>()
+        var ungroundedResponses = 0
+        var regionalFallbacks = 0
+        var plainFallbacksAttempted = 0
+        var imageRequestRejected = false
+        var promptLeakRejections = 0
+        var llamaOcrRequests = 0
+        var llamaOcrElapsedMs = 0L
+        val totalRequests = requestRegions.size
+        requestRegions.forEachIndexed { requestIndex, request ->
+            currentCoroutineContext().ensureActive()
+            val isFullPageContext = request.fullPageContext
+            val regionId = request.regionId
+            val regionLabel = regionId ?: "full-page context"
+            onRegionProgress?.invoke(requestIndex + 1, totalRequests)
+            try {
+                withOcrRegionBitmap(bitmap, request.rect) { crop, borrowedFullPage ->
+                    val encoded = bitmapToJpegBase64WithStats(crop, 1600, 88)
+                    val prompt = llamaOcrPromptForRegion(llamaSettings)
+                    val maxTokens = MangaTranslationSupport.llamaOcrRequestMaxTokens(
+                        configuredMaxTokens = llamaSettings.maxTokens,
+                        fullPageContext = isFullPageContext,
+                        plainFallback = false
+                    )
+                    DebugLog.log(
+                        "[PDF] llama.cpp OCR $regionLabel request: " +
+                            "image=${crop.width}x${crop.height}, jpegBytes=${encoded.byteCount}, " +
+                            "preset=${llamaSettings.promptPreset.label}, borrowedFullPage=$borrowedFullPage, " +
+                            "maxTokens=$maxTokens"
+                    )
+                    val startedAt = System.currentTimeMillis()
+                    llamaOcrRequests += 1
+                    val response = try {
+                        requestLlamaOcr(
+                            client = client,
+                            llamaSettings = llamaSettings,
+                            prompt = prompt,
+                            encoded = encoded,
+                            maxTokensOverride = maxTokens
+                        )
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        if (isLikelyLlamaImageRequestRejection(error)) {
+                            imageRequestRejected = true
+                        }
+                        if (requestIndex > 0) {
+                            regionalFallbacks += 1
+                        }
+                        DebugLog.log(
+                            "[PDF] llama.cpp OCR $regionLabel failed; " +
+                                "using ML Kit fallback when available: ${error.message}"
+                        )
+                        null
+                    }.also {
+                        llamaOcrElapsedMs += (System.currentTimeMillis() - startedAt).coerceAtLeast(0L)
+                    } ?: return@withOcrRegionBitmap
+                    DebugLog.log(
+                        "[PDF] llama.cpp OCR $regionLabel response: " +
+                            "promptTokens=${response.promptTokens ?: "unknown"}, " +
+                            "completionTokens=${response.completionTokens ?: "unknown"}, " +
+                            "stop=${response.stopType ?: "unknown"}, chars=${response.output.length}"
+                    )
+                    val grounded = MangaTranslationSupport.parseGroundedOcrSpans(
+                        rawOutput = response.output,
+                        imageWidth = crop.width,
+                        imageHeight = crop.height
+                    )
+                    if (grounded.isNotEmpty()) {
+                        grounded.forEachIndexed { spanIndex, span ->
+                            val mappedBox = span.box.offsetBy(request.rect.left, request.rect.top)
+                            val containingIndex = detectedRegions.indexOfFirst { candidate ->
+                                val centerX = (mappedBox.left + mappedBox.right) / 2
+                                val centerY = (mappedBox.top + mappedBox.bottom) / 2
+                                candidate.contains(centerX, centerY)
+                            }
+                            val groundedRegionId = if (containingIndex >= 0) {
+                                "p${pageIndex + 1}_r${containingIndex + 1}"
+                            } else {
+                                regionId ?: "p${pageIndex + 1}_grounded${spanIndex + 1}"
+                            }
+                            val safeRegion = if (containingIndex >= 0) {
+                                detectedRegions[containingIndex].toPdfOcrBox()
+                            } else if (requestIndex > 0) {
+                                request.rect.toPdfOcrBox()
+                            } else {
+                                null
+                            }
+                            val background = sampleBackgroundColor(bitmap, mappedBox.toRect())
+                            llamaBlocks += PdfOcrBlock(
+                                pageIndex = pageIndex,
+                                blockIndex = llamaBlocks.size,
+                                text = span.text,
+                                box = mappedBox,
+                                lineBoxes = listOf(PdfOcrLine(span.text, mappedBox)),
+                                backgroundColor = background,
+                                textColor = contrastingTextColor(background),
+                                provenance = MangaOcrRegionProvenance.GROUNDED_VLM_SPAN,
+                                containingRegionId = groundedRegionId,
+                                safeRegionBox = safeRegion,
+                                recognitionPass = MangaOcrRecognitionPass.GROUNDED_LLAMA
+                            )
+                            successfulRegionIds += groundedRegionId
+                        }
+                    } else {
+                        var sanitized = MangaTranslationSupport.sanitizeLlamaOcrText(
+                            rawOutput = response.output,
+                            prompt = prompt,
+                            stopType = response.stopType,
+                            imageWidth = crop.width,
+                            imageHeight = crop.height
+                        )
+                        if (sanitized.rejected) {
+                            promptLeakRejections += 1
+                            DebugLog.log(
+                                "[PDF] ${context.getString(
+                                    R.string.pdf_ocr_llama_warning_prompt_leak_rejected,
+                                    regionLabel,
+                                    sanitized.reason ?: "unsafe_output"
+                                )}"
+                            )
+                        }
+                        var text = sanitized.text
+                        if (looksLikeMalformedGrounding(response.output)) {
+                            DebugLog.log(
+                                "[PDF] ${context.getString(R.string.pdf_ocr_llama_warning_malformed_grounding, regionLabel)}"
+                            )
+                        }
+                        if (requestIndex > 0 && text.isBlank()) {
+                            val mlKitFallbackAvailable = regionId?.let { id ->
+                                locatorBlocksByRegionId[id].orEmpty().any { block -> block.text.isNotBlank() }
+                            } == true
+                            val canTryPlainFallback = MangaTranslationSupport.shouldRunLlamaOcrPlainFallback(
+                                mlKitFallbackAvailable = mlKitFallbackAvailable,
+                                attemptedPlainFallbacks = plainFallbacksAttempted,
+                                maxPlainFallbacks = llamaBudget.maxPlainFallbacksPerPage
+                            )
+                            if (!canTryPlainFallback) {
+                                val message = if (mlKitFallbackAvailable) {
+                                    context.getString(
+                                        R.string.pdf_ocr_llama_warning_skip_plain_fallback_mlkit,
+                                        regionLabel
+                                    )
+                                } else {
+                                    context.getString(
+                                        R.string.pdf_ocr_llama_warning_skip_plain_fallback_limit,
+                                        regionLabel,
+                                        llamaBudget.maxPlainFallbacksPerPage
+                                    )
+                                }
+                                DebugLog.log("[PDF] $message")
+                            } else {
+                                plainLlamaOcrFallbackPrompt(llamaSettings)?.let { fallbackPrompt ->
+                                    plainFallbacksAttempted += 1
+                                    val fallbackMaxTokens = MangaTranslationSupport.llamaOcrRequestMaxTokens(
+                                        configuredMaxTokens = llamaSettings.maxTokens,
+                                        fullPageContext = false,
+                                        plainFallback = true
+                                    )
+                                    DebugLog.log(
+                                        "[PDF] llama.cpp OCR plain fallback for $regionLabel request: " +
+                                            "attempt=$plainFallbacksAttempted/" +
+                                            "${llamaBudget.maxPlainFallbacksPerPage}, " +
+                                            "maxTokens=$fallbackMaxTokens"
+                                    )
+                                    val fallbackStartedAt = System.currentTimeMillis()
+                                    llamaOcrRequests += 1
+                                    val fallbackResponse = runCatching {
+                                        requestLlamaOcr(
+                                            client = client,
+                                            llamaSettings = llamaSettings,
+                                            prompt = fallbackPrompt,
+                                            encoded = encoded,
+                                            maxTokensOverride = fallbackMaxTokens
+                                        )
+                                    }.onFailure { error ->
+                                        if (error is CancellationException) throw error
+                                        DebugLog.log(
+                                            "[PDF] llama.cpp OCR plain fallback for $regionLabel failed: ${error.message}"
+                                        )
+                                    }.also {
+                                        llamaOcrElapsedMs += (System.currentTimeMillis() - fallbackStartedAt).coerceAtLeast(0L)
+                                    }.getOrNull()
+                                    if (fallbackResponse != null) {
+                                        sanitized = MangaTranslationSupport.sanitizeLlamaOcrText(
+                                            rawOutput = fallbackResponse.output,
+                                            prompt = fallbackPrompt,
+                                            stopType = fallbackResponse.stopType,
+                                            imageWidth = crop.width,
+                                            imageHeight = crop.height
+                                        )
+                                        if (sanitized.rejected) {
+                                            promptLeakRejections += 1
+                                            DebugLog.log(
+                                                "[PDF] ${context.getString(
+                                                    R.string.pdf_ocr_llama_warning_prompt_leak_rejected,
+                                                    regionLabel,
+                                                    sanitized.reason ?: "unsafe_output"
+                                                )}"
+                                            )
+                                        }
+                                        text = sanitized.text
+                                        DebugLog.log(
+                                            "[PDF] llama.cpp OCR plain fallback for $regionLabel " +
+                                                "chars=${text.length}, stop=${fallbackResponse.stopType ?: "unknown"}"
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        if (requestIndex == 0) {
+                            if (text.isNotBlank()) {
+                                ungroundedResponses += 1
+                            } else {
+                                DebugLog.log("[PDF] llama.cpp OCR full-page context was blank; continuing with regional OCR and ML Kit.")
+                            }
+                        } else if (text.isNotBlank()) {
+                            val background = sampleBackgroundColor(bitmap, request.rect)
+                            llamaBlocks += PdfOcrBlock(
+                                pageIndex = pageIndex,
+                                blockIndex = llamaBlocks.size,
+                                text = text,
+                                box = request.rect.toPdfOcrBox(),
+                                lineBoxes = text.lines()
+                                    .filter { it.isNotBlank() }
+                                    .ifEmpty { listOf(text) }
+                                    .map { PdfOcrLine(it.trim(), request.rect.toPdfOcrBox()) },
+                                backgroundColor = background,
+                                textColor = contrastingTextColor(background),
+                                provenance = MangaOcrRegionProvenance.DETECTED_BUBBLE,
+                                containingRegionId = regionId,
+                                safeRegionBox = request.rect.toPdfOcrBox(),
+                                recognitionPass = MangaOcrRecognitionPass.REGIONAL_LLAMA
+                            )
+                            regionId?.let(successfulRegionIds::add)
+                        } else {
+                            regionalFallbacks += 1
+                            DebugLog.log(
+                                "[PDF] ${context.getString(R.string.pdf_ocr_llama_warning_blank_fallback, regionLabel)}"
+                            )
+                        }
+                    }
+                }
+            } catch (error: Throwable) {
+                if (error is CancellationException) throw error
+                if (requestIndex > 0) {
+                    regionalFallbacks += 1
+                }
+                DebugLog.log(
+                    "[PDF] ${context.getString(
+                        R.string.pdf_ocr_llama_warning_region_fallback,
+                        regionLabel,
+                        error.message ?: error.javaClass.simpleName
+                    )}"
+                )
+            }
+        }
+        val fallbackBlocks = locatorBlocks.filterNot { block ->
+            block.containingRegionId != null && block.containingRegionId in successfulRegionIds
+        }
+        if (imageRequestRejected && llamaBlocks.isEmpty() && fallbackBlocks.isEmpty()) {
+            throw IllegalStateException(context.getString(R.string.pdf_ocr_llama_error_image_request_rejected))
+        }
+        if (llamaBlocks.isEmpty() && fallbackBlocks.isNotEmpty() && regionalFallbacks > 0) {
+            DebugLog.log(
+                "[PDF] llama.cpp OCR returned no usable regional text; completed page ${pageIndex + 1} with ML Kit fallback blocks."
+            )
+        }
+        return mergeOcrRecognizerResults(
+            results = listOf(
+                PdfOcrPageResult(
+                    pageIndex = pageIndex,
+                    bitmapWidth = bitmap.width,
+                    bitmapHeight = bitmap.height,
+                    pdfWidth = pdfWidth,
+                    pdfHeight = pdfHeight,
+                    blocks = fallbackBlocks + llamaBlocks,
+                    ungroundedResponses = ungroundedResponses,
+                    regionalFallbacks = regionalFallbacks,
+                    promptLeakRejections = promptLeakRejections,
+                    skippedLlamaCropRequests = skippedCropRequests,
+                    llamaOcrRequests = llamaOcrRequests,
+                    llamaOcrElapsedMs = llamaOcrElapsedMs
+                )
+            ),
+            pageIndex = pageIndex,
+            bitmapWidth = bitmap.width,
+            bitmapHeight = bitmap.height,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight
+        ).copy(
+            ungroundedResponses = ungroundedResponses,
+            regionalFallbacks = regionalFallbacks,
+            promptLeakRejections = promptLeakRejections,
+            skippedLlamaCropRequests = skippedCropRequests,
+            llamaOcrRequests = llamaOcrRequests,
+            llamaOcrElapsedMs = llamaOcrElapsedMs
+        )
+    }
+
+    private fun isLikelyLlamaImageRequestRejection(error: Throwable): Boolean {
+        val message = generateSequence(error) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+            .lowercase()
+        return listOf(
+            "multimodal",
+            "media marker",
+            "number of media markers",
+            "mtmd",
+            "image input",
+            "vision"
+        ).any { message.contains(it) }
+    }
+
+    private data class EncodedOcrBitmap(
+        val base64: String,
+        val byteCount: Int
+    )
+
+    private suspend fun <T> withOcrRegionBitmap(
+        source: Bitmap,
+        region: Rect,
+        block: suspend (Bitmap, Boolean) -> T
+    ): T {
+        check(!source.isRecycled) { context.getString(R.string.pdf_ocr_llama_error_recycled_bitmap) }
+        val safeRegion = sanitizedOcrRegion(source, region)
+        val isFullPage = safeRegion.left == 0 &&
+            safeRegion.top == 0 &&
+            safeRegion.right == source.width &&
+            safeRegion.bottom == source.height
+        val regionBitmap = if (isFullPage) {
+            source
+        } else {
+            Bitmap.createBitmap(
+                source,
+                safeRegion.left,
+                safeRegion.top,
+                safeRegion.width().coerceAtLeast(1),
+                safeRegion.height().coerceAtLeast(1)
+            )
+        }
+        val ownsBitmap = regionBitmap !== source
+        try {
+            check(!regionBitmap.isRecycled) { context.getString(R.string.pdf_ocr_llama_error_recycled_bitmap) }
+            return block(regionBitmap, isFullPage)
+        } finally {
+            if (ownsBitmap && !regionBitmap.isRecycled) {
+                regionBitmap.recycle()
+            }
+        }
+    }
+
+    private fun sanitizedOcrRegion(source: Bitmap, region: Rect): Rect {
+        check(source.width > 0 && source.height > 0) { context.getString(R.string.pdf_ocr_llama_error_recycled_bitmap) }
+        val left = region.left.coerceIn(0, source.width - 1)
+        val top = region.top.coerceIn(0, source.height - 1)
+        val right = region.right.coerceIn(left + 1, source.width)
+        val bottom = region.bottom.coerceIn(top + 1, source.height)
+        return Rect(left, top, right, bottom)
+    }
+
+    private suspend fun requestLlamaOcr(
+        client: RemoteSummaryClient,
+        llamaSettings: LlamaOcrSettingsSnapshot,
+        prompt: String,
+        encoded: EncodedOcrBitmap,
+        maxTokensOverride: Int? = null
+    ): RemoteSummaryResponse {
+        return client.summarize(
+            RemoteSummaryRequest(
+                systemPrompt = "You are a precise OCR engine. Return only recognized text. Preserve reading order and line breaks.",
+                userPrompt = prompt,
+                contextSize = llamaSettings.contextSize,
+                maxTokens = maxTokensOverride ?: llamaSettings.maxTokens,
+                temperature = 0f,
+                thinkingEnabled = false,
+                imageAttachments = listOf(RemoteSummaryImageAttachment(encoded.base64)),
+                preferLlamaMultimodalCompletion = true,
+                allowBlankOutput = true
+            )
+        )
+    }
+
+    private fun llamaOcrPromptForRegion(llamaSettings: LlamaOcrSettingsSnapshot): String {
+        val prompt = llamaSettings.prompt.trim()
+        val needsGroundedOverlayPrompt = llamaSettings.promptPreset == LlamaOcrPromptPreset.UNLIMITED_OCR ||
+            llamaSettings.promptPreset == LlamaOcrPromptPreset.DEEPSEEK_OCR
+        return if (needsGroundedOverlayPrompt && !prompt.contains("<|grounding|>", ignoreCase = true)) {
+            "<|grounding|>Convert the document to markdown."
+        } else {
+            prompt
+        }
+    }
+
+    private fun plainLlamaOcrFallbackPrompt(llamaSettings: LlamaOcrSettingsSnapshot): String? {
+        val supportsPlainFallback = llamaSettings.promptPreset == LlamaOcrPromptPreset.UNLIMITED_OCR ||
+            llamaSettings.promptPreset == LlamaOcrPromptPreset.DEEPSEEK_OCR
+        if (!supportsPlainFallback) return null
+        val fallback = "Free OCR."
+        return fallback.takeUnless { it.equals(llamaSettings.prompt.trim(), ignoreCase = true) }
+    }
+
+    private fun looksLikeMalformedGrounding(raw: String): Boolean {
+        val lower = raw.lowercase(Locale.ROOT)
+        return "<|det|>" in lower ||
+            "<|grounding|>" in lower ||
+            Regex("""\[[\s-]*\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?\s*]""")
+                .containsMatchIn(raw)
+    }
+
+    private fun loadComicImageBitmapForOcr(imageFile: File): Bitmap {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(imageFile.absolutePath, bounds)
+        val originalWidth = bounds.outWidth.takeIf { it > 0 } ?: 1
+        val originalHeight = bounds.outHeight.takeIf { it > 0 } ?: 1
+        val longestSide = maxOf(originalWidth, originalHeight)
+        var sampleSize = 1
+        while (longestSide / (sampleSize * 2) >= 3200) {
+            sampleSize *= 2
+        }
+        val decoded = android.graphics.BitmapFactory.decodeFile(
+            imageFile.absolutePath,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        ) ?: throw IllegalStateException("Could not decode image page: ${imageFile.name}")
+        return if (decoded.config == Bitmap.Config.ARGB_8888 && !decoded.hasAlpha()) {
+            decoded
+        } else {
+            Bitmap.createBitmap(decoded.width, decoded.height, Bitmap.Config.ARGB_8888).also { flattened ->
+                Canvas(flattened).drawColor(Color.WHITE)
+                Canvas(flattened).drawBitmap(decoded, 0f, 0f, null)
+                decoded.recycle()
+            }
+        }
+    }
+
+    private fun bitmapToJpegBase64(bitmap: Bitmap, maxSide: Int, quality: Int): String {
+        return bitmapToJpegBase64WithStats(bitmap, maxSide, quality).base64
+    }
+
+    private fun bitmapToJpegBase64WithStats(bitmap: Bitmap, maxSide: Int, quality: Int): EncodedOcrBitmap {
+        check(!bitmap.isRecycled) { context.getString(R.string.pdf_ocr_llama_error_recycled_bitmap) }
+        val scale = (maxSide.toFloat() / maxOf(bitmap.width, bitmap.height).coerceAtLeast(1)).coerceAtMost(1f)
+        val encodedBitmap = if (scale < 0.995f) {
+            Bitmap.createScaledBitmap(
+                bitmap,
+                (bitmap.width * scale).roundToInt().coerceAtLeast(1),
+                (bitmap.height * scale).roundToInt().coerceAtLeast(1),
+                true
+            )
+        } else {
+            bitmap
+        }
+        try {
+            check(!encodedBitmap.isRecycled) { context.getString(R.string.pdf_ocr_llama_error_recycled_bitmap) }
+            val output = ByteArrayOutputStream()
+            encodedBitmap.compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(40, 95), output)
+            val bytes = output.toByteArray()
+            return EncodedOcrBitmap(
+                base64 = Base64.encodeToString(bytes, Base64.NO_WRAP),
+                byteCount = bytes.size
+            )
+        } finally {
+            if (encodedBitmap !== bitmap) encodedBitmap.recycle()
+        }
+    }
+
+    private fun cleanLlamaOcrText(raw: String): String {
+        return PDFSummaryLogic.cleanLlamaOutput(raw)
+            .replace(Regex("""```(?:\w+)?"""), "")
+            .replace("```", "")
+            .replace(Regex("""<\|[^>]+>"""), "")
+            .lines()
+            .map { line -> line.trim() }
+            .dropWhile { it.equals("text", ignoreCase = true) || it.equals("ocr", ignoreCase = true) }
+            .joinToString("\n")
+            .trim()
     }
 
     private suspend fun collectPdfTextLayerBlocks(
@@ -2677,7 +4142,8 @@ class PDFService(private val context: Context) {
         bitmap: Bitmap,
         pageIndex: Int,
         pdfWidth: Float,
-        pdfHeight: Float
+        pdfHeight: Float,
+        ocrStrategy: MangaOcrStrategy = MangaOcrStrategy.FULL_PAGE
     ): PdfOcrPageResult {
         val results = mutableListOf<PdfOcrPageResult>()
         var lastError: Throwable? = null
@@ -2700,7 +4166,226 @@ class PDFService(private val context: Context) {
         if (results.isEmpty()) {
             throw lastError ?: IllegalStateException("OCR failed")
         }
-        return mergeOcrRecognizerResults(results, pageIndex, bitmap.width, bitmap.height, pdfWidth, pdfHeight)
+        val fullPage = mergeOcrRecognizerResults(
+            results,
+            pageIndex,
+            bitmap.width,
+            bitmap.height,
+            pdfWidth,
+            pdfHeight
+        )
+        if (ocrStrategy == MangaOcrStrategy.FULL_PAGE) return fullPage
+
+        val shouldRunGuided = when (ocrStrategy) {
+            MangaOcrStrategy.HYBRID,
+            MangaOcrStrategy.BUBBLE_ONLY -> true
+            MangaOcrStrategy.ADAPTIVE ->
+                fullPage.blocks.size < 4 || fullPage.blocks.sumOf { it.text.length } < 48
+            MangaOcrStrategy.FULL_PAGE -> false
+        }
+        if (!shouldRunGuided) return fullPage
+
+        val detectedRegions = detectBubbleOcrRegions(bitmap)
+        val guided = recognizeTextBlocksWithBubbleGuidance(
+            recognizers = recognizers,
+            bitmap = bitmap,
+            pageIndex = pageIndex,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight,
+            regions = detectedRegions
+        )
+        if (guided.blocks.isEmpty()) return fullPage
+        DebugLog.log(
+            "[PDF] Hybrid OCR page ${pageIndex + 1}: " +
+                "${fullPage.blocks.size} full-page + ${guided.blocks.size} regional block(s)"
+        )
+        return if (ocrStrategy == MangaOcrStrategy.BUBBLE_ONLY) {
+            guided
+        } else {
+            reconcileMlKitOcrResults(
+                fullPage = fullPage,
+                guided = guided,
+                regions = detectedRegions,
+                pageIndex = pageIndex,
+                bitmapWidth = bitmap.width,
+                bitmapHeight = bitmap.height,
+                pdfWidth = pdfWidth,
+                pdfHeight = pdfHeight
+            )
+        }
+    }
+
+    private suspend fun recognizeTextBlocksWithBubbleGuidance(
+        recognizers: List<TextRecognizer>,
+        bitmap: Bitmap,
+        pageIndex: Int,
+        pdfWidth: Float,
+        pdfHeight: Float,
+        regions: List<BubbleOcrRegion> = detectBubbleOcrRegions(bitmap)
+    ): PdfOcrPageResult {
+        if (regions.isEmpty()) {
+            return PdfOcrPageResult(pageIndex, bitmap.width, bitmap.height, pdfWidth, pdfHeight, emptyList())
+        }
+        val blocks = mutableListOf<PdfOcrBlock>()
+        regions.forEachIndexed { regionIndex, region ->
+            currentCoroutineContext().ensureActive()
+            val crop = Bitmap.createBitmap(
+                bitmap,
+                region.rect.left,
+                region.rect.top,
+                region.rect.width().coerceAtLeast(1),
+                region.rect.height().coerceAtLeast(1)
+            )
+            try {
+                val result = recognizeTextBlocks(
+                    recognizers = recognizers,
+                    image = InputImage.fromBitmap(crop, 0),
+                    bitmap = crop,
+                    pageIndex = pageIndex,
+                    pdfWidth = region.rect.width().toFloat(),
+                    pdfHeight = region.rect.height().toFloat(),
+                    ocrStrategy = MangaOcrStrategy.FULL_PAGE
+                )
+                result.blocks.forEach { block ->
+                    blocks += block.copy(
+                        box = block.box.offsetBy(region.rect.left, region.rect.top),
+                        lineBoxes = block.lineBoxes.map { line -> line.copy(box = line.box.offsetBy(region.rect.left, region.rect.top)) },
+                        backgroundColor = sampleBackgroundColor(bitmap, region.rect),
+                        textColor = contrastingTextColor(sampleBackgroundColor(bitmap, region.rect)),
+                        provenance = MangaOcrRegionProvenance.DETECTED_BUBBLE,
+                        containingRegionId = "p${pageIndex + 1}_r${regionIndex + 1}",
+                        safeRegionBox = region.rect.toPdfOcrBox(),
+                        recognitionPass = MangaOcrRecognitionPass.REGIONAL_ML_KIT
+                    )
+                }
+            } finally {
+                crop.recycle()
+            }
+        }
+        return mergeOcrRecognizerResults(
+            results = listOf(
+                PdfOcrPageResult(
+                    pageIndex = pageIndex,
+                    bitmapWidth = bitmap.width,
+                    bitmapHeight = bitmap.height,
+                    pdfWidth = pdfWidth,
+                    pdfHeight = pdfHeight,
+                    blocks = blocks
+                )
+            ),
+            pageIndex = pageIndex,
+            bitmapWidth = bitmap.width,
+            bitmapHeight = bitmap.height,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight
+        )
+    }
+
+    private fun reconcileMlKitOcrResults(
+        fullPage: PdfOcrPageResult,
+        guided: PdfOcrPageResult,
+        regions: List<BubbleOcrRegion>,
+        pageIndex: Int,
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        pdfWidth: Float,
+        pdfHeight: Float
+    ): PdfOcrPageResult {
+        val assignedFullPage = fullPage.blocks.mapIndexed { orphanIndex, block ->
+            val regionIndex = bestContainingRegionIndex(block.box, regions)
+            if (regionIndex >= 0) {
+                block.copy(
+                    containingRegionId = "p${pageIndex + 1}_r${regionIndex + 1}",
+                    safeRegionBox = regions[regionIndex].rect.toPdfOcrBox(),
+                    recognitionPass = MangaOcrRecognitionPass.FULL_PAGE_ML_KIT
+                )
+            } else {
+                block.copy(
+                    containingRegionId = "p${pageIndex + 1}_orphan${orphanIndex + 1}",
+                    recognitionPass = MangaOcrRecognitionPass.FULL_PAGE_ML_KIT
+                )
+            }
+        }
+        val fullByRegion = assignedFullPage.groupBy { it.containingRegionId.orEmpty() }
+        val guidedByRegion = guided.blocks.groupBy { it.containingRegionId.orEmpty() }
+        val selected = mutableListOf<PdfOcrBlock>()
+        val regionIds = (fullByRegion.keys + guidedByRegion.keys).filter { it.isNotBlank() }.distinct()
+        regionIds.forEach { regionId ->
+            val fullCandidates = fullByRegion[regionId].orEmpty()
+            val guidedCandidates = guidedByRegion[regionId].orEmpty()
+            val preferred = MangaTranslationSupport.preferredMlKitRecognitionPass(
+                fullPageTexts = fullCandidates.map { it.text },
+                regionalTexts = guidedCandidates.map { it.text }
+            )
+            val chosen = when (preferred) {
+                MangaOcrRecognitionPass.REGIONAL_ML_KIT -> guidedCandidates
+                MangaOcrRecognitionPass.FULL_PAGE_ML_KIT -> fullCandidates
+                else -> fullCandidates.ifEmpty { guidedCandidates }
+            }
+            selected += dedupeOcrBlocksWithinRegion(chosen)
+        }
+        val reconciledCount = (assignedFullPage.size + guided.blocks.size - selected.size).coerceAtLeast(0)
+        if (reconciledCount > 0) {
+            DebugLog.log(
+                "[PDF] Reconciled $reconciledCount overlapping full-page/regional ML Kit OCR alternative(s) " +
+                    "on page ${pageIndex + 1}."
+            )
+        }
+        return PdfOcrPageResult(
+            pageIndex = pageIndex,
+            bitmapWidth = bitmapWidth,
+            bitmapHeight = bitmapHeight,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight,
+            blocks = selected
+                .sortedWith(compareBy<PdfOcrBlock> { it.box.top }.thenBy { it.box.left })
+                .mapIndexed { index, block -> block.copy(blockIndex = index) },
+            reconciledOcrAlternatives = reconciledCount
+        )
+    }
+
+    private fun bestContainingRegionIndex(
+        box: PdfOcrBox,
+        regions: List<BubbleOcrRegion>
+    ): Int {
+        if (regions.isEmpty()) return -1
+        val centerX = (box.left + box.right) / 2
+        val centerY = (box.top + box.bottom) / 2
+        return regions.indices
+            .map { index ->
+                val regionBox = regions[index].rect.toPdfOcrBox()
+                val containsCenter = regions[index].rect.contains(centerX, centerY)
+                val overlap = ocrBoxOverlapRatio(box, regionBox)
+                Triple(index, containsCenter, overlap)
+            }
+            .filter { (_, containsCenter, overlap) -> containsCenter || overlap >= 0.22f }
+            .maxWithOrNull(
+                compareBy<Triple<Int, Boolean, Float>> { if (it.second) 1 else 0 }
+                    .thenBy { it.third }
+            )
+            ?.first
+            ?: -1
+    }
+
+    private fun dedupeOcrBlocksWithinRegion(blocks: List<PdfOcrBlock>): List<PdfOcrBlock> {
+        val accepted = mutableListOf<PdfOcrBlock>()
+        blocks.sortedWith(compareBy<PdfOcrBlock> { it.box.top }.thenBy { it.box.left }).forEach { candidate ->
+            val normalizedCandidate = candidate.text.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+            val duplicateIndex = accepted.indexOfFirst { existing ->
+                val normalizedExisting = existing.text.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+                ocrBlocksLookDuplicate(existing, candidate) ||
+                    normalizedCandidate.length >= 5 &&
+                    normalizedExisting.length >= 5 &&
+                    (normalizedCandidate.contains(normalizedExisting) ||
+                        normalizedExisting.contains(normalizedCandidate))
+            }
+            if (duplicateIndex < 0) {
+                accepted += candidate
+            } else if (candidate.text.length > accepted[duplicateIndex].text.length) {
+                accepted[duplicateIndex] = candidate
+            }
+        }
+        return accepted
     }
 
     private suspend fun recognizeTextBlocksWithSingleRecognizer(
@@ -2767,8 +4452,18 @@ class PDFService(private val context: Context) {
                 val existingIndex = merged.indexOfFirst { existing -> ocrBlocksLookDuplicate(existing, candidate) }
                 if (existingIndex < 0) {
                     merged += candidate
-                } else if (candidate.text.length > merged[existingIndex].text.length) {
-                    merged[existingIndex] = candidate
+                } else {
+                    val existing = merged[existingIndex]
+                    val candidateHasGeometry = candidate.containingRegionId != null ||
+                        candidate.provenance == MangaOcrRegionProvenance.GROUNDED_VLM_SPAN
+                    val existingHasGeometry = existing.containingRegionId != null ||
+                        existing.provenance == MangaOcrRegionProvenance.GROUNDED_VLM_SPAN
+                    if (
+                        candidateHasGeometry && !existingHasGeometry ||
+                        candidateHasGeometry == existingHasGeometry && candidate.text.length > existing.text.length
+                    ) {
+                        merged[existingIndex] = candidate
+                    }
                 }
             }
         return PdfOcrPageResult(
@@ -2782,14 +4477,23 @@ class PDFService(private val context: Context) {
     }
 
     private fun ocrBlocksLookDuplicate(first: PdfOcrBlock, second: PdfOcrBlock): Boolean {
+        if (
+            first.containingRegionId != null &&
+            second.containingRegionId != null &&
+            first.containingRegionId != second.containingRegionId
+        ) {
+            return false
+        }
         val overlap = ocrBoxOverlapRatio(first.box, second.box)
-        if (overlap >= 0.72f) return true
         val firstText = first.text.filterNot(Char::isWhitespace)
         val secondText = second.text.filterNot(Char::isWhitespace)
-        return firstText.isNotBlank() &&
+        val sameText = firstText.isNotBlank() &&
             secondText.isNotBlank() &&
-            firstText.equals(secondText, ignoreCase = true) &&
-            overlap >= 0.35f
+            firstText.equals(secondText, ignoreCase = true)
+        if ((first.containingRegionId == null) != (second.containingRegionId == null)) {
+            return sameText && overlap >= 0.35f
+        }
+        return overlap >= 0.72f || sameText && overlap >= 0.35f
     }
 
     private fun ocrBoxOverlapRatio(first: PdfOcrBox, second: PdfOcrBox): Float {
@@ -2804,11 +4508,143 @@ class PDFService(private val context: Context) {
         return intersection.toFloat() / minOf(firstArea, secondArea).coerceAtLeast(1).toFloat()
     }
 
+    private fun detectBubbleOcrRegions(bitmap: Bitmap): List<BubbleOcrRegion> {
+        val targetLongSide = 640
+        val scale = (targetLongSide.toFloat() / maxOf(bitmap.width, bitmap.height).coerceAtLeast(1)).coerceAtMost(1f)
+        val sampleWidth = (bitmap.width * scale).roundToInt().coerceAtLeast(1)
+        val sampleHeight = (bitmap.height * scale).roundToInt().coerceAtLeast(1)
+        val sample = if (sampleWidth == bitmap.width && sampleHeight == bitmap.height) {
+            bitmap
+        } else {
+            Bitmap.createScaledBitmap(bitmap, sampleWidth, sampleHeight, true)
+        }
+        try {
+            val mask = BooleanArray(sampleWidth * sampleHeight)
+            for (y in 0 until sampleHeight) {
+                for (x in 0 until sampleWidth) {
+                    val color = sample.getPixel(x, y)
+                    val red = Color.red(color)
+                    val green = Color.green(color)
+                    val blue = Color.blue(color)
+                    val maxChannel = maxOf(red, green, blue)
+                    val minChannel = minOf(red, green, blue)
+                    val brightness = (red + green + blue) / 3
+                    mask[y * sampleWidth + x] = brightness >= 205 && maxChannel - minChannel <= 42
+                }
+            }
+
+            val visited = BooleanArray(mask.size)
+            val queue = IntArray(mask.size)
+            val regions = mutableListOf<BubbleOcrRegion>()
+            for (start in mask.indices) {
+                if (!mask[start] || visited[start]) continue
+                var head = 0
+                var tail = 0
+                queue[tail++] = start
+                visited[start] = true
+                var minX = sampleWidth
+                var minY = sampleHeight
+                var maxX = 0
+                var maxY = 0
+                var area = 0
+                while (head < tail) {
+                    val index = queue[head++]
+                    val x = index % sampleWidth
+                    val y = index / sampleWidth
+                    area += 1
+                    minX = minOf(minX, x)
+                    minY = minOf(minY, y)
+                    maxX = maxOf(maxX, x)
+                    maxY = maxOf(maxY, y)
+                    tail = addBubbleMaskNeighbor(x - 1, y, sampleWidth, sampleHeight, mask, visited, queue, tail)
+                    tail = addBubbleMaskNeighbor(x + 1, y, sampleWidth, sampleHeight, mask, visited, queue, tail)
+                    tail = addBubbleMaskNeighbor(x, y - 1, sampleWidth, sampleHeight, mask, visited, queue, tail)
+                    tail = addBubbleMaskNeighbor(x, y + 1, sampleWidth, sampleHeight, mask, visited, queue, tail)
+                }
+                val width = maxX - minX + 1
+                val height = maxY - minY + 1
+                val imageArea = sampleWidth * sampleHeight
+                val areaRatio = area.toFloat() / imageArea.coerceAtLeast(1)
+                val rectArea = (width * height).coerceAtLeast(1)
+                val fillRatio = area.toFloat() / rectArea.toFloat()
+                val aspect = width.toFloat() / height.coerceAtLeast(1).toFloat()
+                val plausibleSize = areaRatio in 0.0015f..0.18f &&
+                    width >= sampleWidth * 0.035f &&
+                    height >= sampleHeight * 0.012f &&
+                    width <= sampleWidth * 0.72f &&
+                    height <= sampleHeight * 0.38f
+                val plausibleShape = aspect in 0.18f..8.0f && fillRatio >= 0.34f
+                if (plausibleSize && plausibleShape) {
+                    val padX = maxOf(4, (width * 0.08f).roundToInt())
+                    val padY = maxOf(4, (height * 0.10f).roundToInt())
+                    val sourceRect = Rect(
+                        ((minX - padX) / scale).roundToInt().coerceIn(0, bitmap.width - 1),
+                        ((minY - padY) / scale).roundToInt().coerceIn(0, bitmap.height - 1),
+                        ((maxX + 1 + padX) / scale).roundToInt().coerceIn(1, bitmap.width),
+                        ((maxY + 1 + padY) / scale).roundToInt().coerceIn(1, bitmap.height)
+                    )
+                    if (sourceRect.width() > 2 && sourceRect.height() > 2) {
+                        regions += BubbleOcrRegion(sourceRect, score = fillRatio * areaRatio)
+                    }
+                }
+            }
+            return regions
+                .sortedWith(compareBy<BubbleOcrRegion> { it.rect.top }.thenBy { it.rect.left })
+                .let(::dedupeBubbleRegions)
+                .take(96)
+                .also { DebugLog.log("[PDF] Bubble-guided OCR detected ${it.size} region(s)") }
+        } finally {
+            if (sample !== bitmap) sample.recycle()
+        }
+    }
+
+    private fun addBubbleMaskNeighbor(
+        x: Int,
+        y: Int,
+        width: Int,
+        height: Int,
+        mask: BooleanArray,
+        visited: BooleanArray,
+        queue: IntArray,
+        tail: Int
+    ): Int {
+        if (x !in 0 until width || y !in 0 until height) return tail
+        val index = y * width + x
+        if (!mask[index] || visited[index] || tail >= queue.size) return tail
+        visited[index] = true
+        queue[tail] = index
+        return tail + 1
+    }
+
+    private fun dedupeBubbleRegions(regions: List<BubbleOcrRegion>): List<BubbleOcrRegion> {
+        val accepted = mutableListOf<BubbleOcrRegion>()
+        regions.sortedByDescending { it.score }.forEach { candidate ->
+            val duplicate = accepted.any { existing ->
+                ocrBoxOverlapRatio(candidate.rect.toPdfOcrBox(), existing.rect.toPdfOcrBox()) > 0.38f
+            }
+            if (!duplicate) accepted += candidate
+        }
+        return accepted.sortedWith(
+            compareBy<BubbleOcrRegion> { it.rect.top }.thenBy { it.rect.left }
+        )
+    }
+
+    private fun PdfOcrBox.offsetBy(dx: Int, dy: Int): PdfOcrBox =
+        PdfOcrBox(left = left + dx, top = top + dy, right = right + dx, bottom = bottom + dy)
+
     private fun Rect.toPdfOcrBox(): PdfOcrBox {
         return PdfOcrBox(left = left, top = top, right = right, bottom = bottom)
     }
 
+    private fun PdfOcrBox.toRect(): Rect {
+        return Rect(left, top, right, bottom)
+    }
+
     private fun sampleBackgroundColor(bitmap: Bitmap, rawRect: Rect?): Int {
+        if (bitmap.isRecycled) {
+            DebugLog.log("[PDF] ${context.getString(R.string.pdf_ocr_llama_warning_recycled_bitmap_background)}")
+            return Color.WHITE
+        }
         val rect = rawRect ?: return Color.WHITE
         val left = rect.left.coerceIn(0, bitmap.width - 1)
         val top = rect.top.coerceIn(0, bitmap.height - 1)
@@ -3369,7 +5205,11 @@ class PDFService(private val context: Context) {
         FileOutputStream(outputFile).use { fos ->
             doc.save(fos)
         }
-        return Uri.fromFile(outputFile)
+        return androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            outputFile
+        )
     }
     
     /**
@@ -3447,7 +5287,10 @@ class PDFService(private val context: Context) {
         exportPdf: Boolean = true,
         exportCbz: Boolean = true,
         settingsOverride: RemoteSummarySettingsSnapshot? = null,
+        runConfig: MangaTranslationRunConfig? = null,
+        jobId: String? = null,
         executionController: PDFTranslationExecutionController? = null,
+        onFileStarted: ((Int, Int, String) -> Unit)? = null,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
     ): Result<List<MangaTranslationFileResult>> = withContext(Dispatchers.IO) {
         if (!exportPdf && !exportCbz) {
@@ -3466,12 +5309,19 @@ class PDFService(private val context: Context) {
                     name = sourceName,
                     mimeType = context.contentResolver.getType(cbzUri)
                 ) ?: MangaTranslationSourceKind.CBZ
+                onFileStarted?.invoke(fileIndex + 1, cbzUris.size, sourceName)
                 UnifiedNotificationManager.updateProgress(
                     notificationId,
                     fileIndex.toFloat() / cbzUris.size.toFloat(),
                     context.getString(R.string.workflow_manga_notification_file, fileIndex + 1, cbzUris.size, sourceName)
                 )
                 val result = runCatching {
+                    val resumeWorkDir = jobId?.let {
+                        File(
+                            context.filesDir,
+                            "manga_translation_jobs/$it/runtime/${Integer.toHexString(cbzUri.toString().hashCode())}"
+                        )
+                    }
                     when (sourceKind) {
                         MangaTranslationSourceKind.PDF -> translateSingleMangaPdf(
                             pdfUri = cbzUri,
@@ -3479,6 +5329,8 @@ class PDFService(private val context: Context) {
                             exportPdf = exportPdf,
                             exportCbz = exportCbz,
                             settingsOverride = settingsOverride,
+                            runConfig = runConfig,
+                            workDirOverride = resumeWorkDir,
                             executionController = executionController,
                             notificationId = notificationId,
                             onProgress = onProgress
@@ -3489,6 +5341,8 @@ class PDFService(private val context: Context) {
                             exportPdf = exportPdf,
                             exportCbz = exportCbz,
                             settingsOverride = settingsOverride,
+                            runConfig = runConfig,
+                            workDirOverride = resumeWorkDir,
                             executionController = executionController,
                             notificationId = notificationId,
                             onProgress = onProgress
@@ -3534,19 +5388,428 @@ class PDFService(private val context: Context) {
         }
     }
 
+    suspend fun translateMangaBatch(
+        spec: MangaTranslationJobSpec,
+        executionController: PDFTranslationExecutionController? = null,
+        onFileStarted: ((Int, Int, String) -> Unit)? = null,
+        onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
+    ): Result<List<MangaTranslationFileResult>> {
+        val preflight = MangaTranslationSupport.preflight(spec)
+        if (!preflight.canRun) {
+            return Result.failure(
+                IllegalArgumentException(
+                    preflight.blockers.joinToString { issue -> issue.code.name }
+                )
+            )
+        }
+        val resolvedOptions = spec.config.resolvedTranslationOptions()
+        val resolvedConfig = spec.config.copy(
+            translationConfig = spec.config.translationConfig.copy(
+                settings = spec.config.resolvedTranslationSettings(),
+                usePageImageContext = resolvedOptions.usePageScreenshotContext,
+                pageImageMaxSide = resolvedOptions.screenshotMaxSide,
+                pageImageJpegQuality = resolvedOptions.screenshotJpegQuality,
+                textOnlyFallbackEnabled = resolvedOptions.textOnlyFallbackEnabled,
+                qualityMode = resolvedOptions.qualityMode
+            ),
+            ocrConfig = spec.config.ocrConfig.copy(
+                provider = resolvedOptions.ocrProvider,
+                strategy = spec.config.behavior.ocrStrategy,
+                llamaOcr = resolvedOptions.llamaOcr
+            )
+        )
+        runCatching { verifyMangaTranslationBackend(resolvedConfig.translationSettings) }
+            .getOrElse { error ->
+                return Result.failure(
+                    PDFTranslationDisplayException(
+                        displayMessage = error.message ?: "Translation backend is unavailable",
+                        displayDetails = error.cause?.message
+                    )
+                )
+            }
+        val runtimeConfig = resolveMangaVisionCapability(resolvedConfig)
+        val jobsRoot = File(context.filesDir, "manga_translation_jobs")
+        val manifestFile = File(jobsRoot, "${spec.jobId}/manifest.json")
+        val existingManifest = MangaTranslationSupport.readManifest(manifestFile, runtimeConfig)
+        var manifest = existingManifest?.copy(
+            spec = spec.copy(config = runtimeConfig),
+            status = MangaTranslationSupport.STATUS_RUNNING,
+            updatedAt = System.currentTimeMillis()
+        ) ?: MangaTranslationJobManifest(spec = spec.copy(config = runtimeConfig))
+        MangaTranslationSupport.writeManifest(manifestFile, manifest)
+        val pendingSources = spec.sources.filterNot { it.uri.toString() in manifest.completedSourceUris }
+        if (pendingSources.isEmpty()) {
+            manifest = manifest.copy(
+                status = MangaTranslationSupport.STATUS_COMPLETE,
+                updatedAt = System.currentTimeMillis()
+            )
+            MangaTranslationSupport.writeManifest(manifestFile, manifest)
+            return Result.success(emptyList())
+        }
+        val result = translateMangaCbzBatch(
+            cbzUris = pendingSources.map { it.uri },
+            exportPdf = spec.exportPdf,
+            exportCbz = spec.exportCbz,
+            settingsOverride = runtimeConfig.translationSettings,
+            runConfig = runtimeConfig,
+            jobId = spec.jobId,
+            executionController = executionController,
+            onFileStarted = { index, total, name ->
+                manifest = manifest.copy(
+                    currentFileIndex = index,
+                    updatedAt = System.currentTimeMillis()
+                )
+                MangaTranslationSupport.writeManifest(manifestFile, manifest)
+                onFileStarted?.invoke(index, total, name)
+            },
+            onProgress = onProgress
+        )
+        val completedUris = manifest.completedSourceUris.toMutableSet()
+        val finishedResults = result.getOrNull()
+            ?: (result.exceptionOrNull() as? PDFTranslationCancelledException)?.mangaResults
+            ?: emptyList()
+        finishedResults.forEachIndexed { index, fileResult ->
+            if (fileResult.isSuccess) {
+                pendingSources.getOrNull(index)?.uri?.toString()?.let(completedUris::add)
+            }
+        }
+        manifest = manifest.copy(
+            completedSourceUris = completedUris,
+            status = if (completedUris.containsAll(spec.sources.map { it.uri.toString() })) {
+                MangaTranslationSupport.STATUS_COMPLETE
+            } else if (result.isFailure) {
+                MangaTranslationSupport.STATUS_FAILED
+            } else {
+                MangaTranslationSupport.STATUS_RUNNING
+            },
+            updatedAt = System.currentTimeMillis()
+        )
+        MangaTranslationSupport.writeManifest(manifestFile, manifest)
+        return result
+    }
+
+    suspend fun previewMangaFirstPage(
+        spec: MangaTranslationJobSpec,
+        executionController: PDFTranslationExecutionController? = null,
+        onProgress: ((PdfOcrTranslationProgress) -> Unit)? = null
+    ): Result<MangaTranslationPreviewResult> = withContext(Dispatchers.IO) {
+        runCatching {
+            val source = spec.sources.firstOrNull()
+                ?: throw IllegalArgumentException("Select a manga/comic file first")
+            val preflight = MangaTranslationSupport.preflight(spec)
+            if (!preflight.canRun) {
+                throw IllegalArgumentException(preflight.blockers.joinToString { it.code.name })
+            }
+            val resolvedOptions = spec.config.resolvedTranslationOptions()
+            val config = spec.config.copy(
+                translationConfig = spec.config.translationConfig.copy(
+                    settings = spec.config.resolvedTranslationSettings(),
+                    usePageImageContext = resolvedOptions.usePageScreenshotContext,
+                    pageImageMaxSide = resolvedOptions.screenshotMaxSide,
+                    pageImageJpegQuality = resolvedOptions.screenshotJpegQuality,
+                    textOnlyFallbackEnabled = resolvedOptions.textOnlyFallbackEnabled,
+                    qualityMode = resolvedOptions.qualityMode
+                ),
+                ocrConfig = spec.config.ocrConfig.copy(
+                    provider = resolvedOptions.ocrProvider,
+                    strategy = spec.config.behavior.ocrStrategy,
+                    llamaOcr = resolvedOptions.llamaOcr
+                )
+            )
+            verifyMangaTranslationBackend(config.translationSettings)
+            val runtimeConfig = resolveMangaVisionCapability(config)
+            val workDir = File(
+                context.cacheDir,
+                "manga_preview_work/${spec.jobId}_${System.currentTimeMillis()}"
+            ).apply { mkdirs() }
+            val previewDir = File(context.cacheDir, "manga_previews").apply { mkdirs() }
+            val notificationId = UnifiedNotificationManager.startTask(
+                UnifiedNotificationManager.TaskType.PDF_TRANSLATION,
+                context.getString(R.string.workflow_manga_preview_action)
+            )
+            try {
+                onProgress?.invoke(PdfOcrTranslationProgress(PdfOcrTranslationStage.EXTRACTING, 0, 1, 0, 0))
+                val sourceKind = MangaTranslationSupport.sourceKindFor(source.displayName, source.mimeType)
+                    ?: throw IllegalArgumentException("Unsupported manga/comic file")
+                val originalPage = when (sourceKind) {
+                    MangaTranslationSourceKind.CBZ ->
+                        extractCbzImages(source.uri, workDir).firstOrNull()
+                    MangaTranslationSourceKind.PDF ->
+                        renderFirstPdfPageToPng(source.uri, File(workDir, "preview_source.png"))
+                } ?: throw IllegalStateException(context.getString(R.string.workflow_manga_error_no_rendered_pages))
+
+                val quality = MangaTranslationQualityAccumulator()
+                val ocrResult = collectImageOcrText(
+                    imageFiles = listOf(originalPage),
+                    optionsOverride = runtimeConfig.translationOptions,
+                    ocrStrategy = runtimeConfig.behavior.ocrStrategy,
+                    ocrExecutionMode = MangaOcrExecutionMode.PREVIEW,
+                    exhaustiveLlamaOcrRegions = runtimeConfig.behavior.exhaustiveLlamaOcrRegions
+                ) { progress ->
+                    onProgress?.invoke(
+                        PdfOcrTranslationProgress(
+                            PdfOcrTranslationStage.OCR,
+                            progress.processedPages,
+                            progress.totalPages,
+                            0,
+                            0,
+                            currentRegion = progress.currentRegion,
+                            totalRegions = progress.totalRegions,
+                            detailText = progress.detailText
+                        )
+                    )
+                }.getOrThrow()
+                quality.ungroundedOcrResponses += ocrResult.pages.sumOf { it.ungroundedResponses }
+                quality.regionalOcrFallbacks += ocrResult.pages.sumOf { it.regionalFallbacks }
+                quality.reconciledOcrAlternatives += ocrResult.pages.sumOf { it.reconciledOcrAlternatives }
+                quality.promptLeakRejections += ocrResult.pages.sumOf { it.promptLeakRejections }
+                quality.skippedLlamaCropRequests += ocrResult.pages.sumOf { it.skippedLlamaCropRequests }
+                quality.llamaOcrRequests += ocrResult.pages.sumOf { it.llamaOcrRequests }
+                quality.llamaOcrElapsedMs += ocrResult.pages.sumOf { it.llamaOcrElapsedMs }
+                val previewOcrBlocks = ocrResult.blocks.count { it.text.isNotBlank() }.coerceAtLeast(1)
+                DebugLog.log(
+                    "[PDF] Manga preview OCR complete with $previewOcrBlocks text block(s); starting translation."
+                )
+                onProgress?.invoke(
+                    PdfOcrTranslationProgress(
+                        stage = PdfOcrTranslationStage.TRANSLATING,
+                        processedPages = 0,
+                        totalPages = 1,
+                        translatedBlocks = 0,
+                        totalBlocks = previewOcrBlocks
+                    )
+                )
+                val prepared = prepareOcrTranslation(
+                    sourcePdfUri = Uri.EMPTY,
+                    ocrResult = ocrResult,
+                    settingsOverride = runtimeConfig.translationSettings,
+                    optionsOverride = runtimeConfig.translationOptions,
+                    mangaConfig = runtimeConfig,
+                    executionController = executionController,
+                    onProgress = onProgress,
+                    notificationId = notificationId,
+                    pageScreenshotProvider = {
+                        RemoteSummaryImageAttachment(
+                            base64 = renderImagePageScreenshotBase64(
+                                originalPage,
+                                runtimeConfig.translationOptions.screenshotMaxSide,
+                                runtimeConfig.translationOptions.screenshotJpegQuality
+                            )
+                        )
+                    },
+                    qualityAccumulator = quality
+                )
+                val translatedPage = renderTranslatedComicPagesToPng(
+                    imageFiles = listOf(originalPage),
+                    ocrResult = ocrResult,
+                    prepared = prepared,
+                    workDir = workDir,
+                    baseName = "preview",
+                    executionController = executionController,
+                    onProgress = onProgress,
+                    qualityAccumulator = quality
+                ).firstOrNull() ?: throw IllegalStateException(
+                    context.getString(R.string.workflow_manga_error_no_rendered_pages)
+                )
+                if (runtimeConfig.pageImageContextReason == "vision_probe_failed") {
+                    quality.visionFallbacks += 1
+                }
+                val fingerprint = config.fingerprint()
+                val originalCopy = File(previewDir, "${spec.jobId}_${fingerprint.take(10)}_original.png")
+                val translatedCopy = File(previewDir, "${spec.jobId}_${fingerprint.take(10)}_translated.png")
+                originalPage.copyTo(originalCopy, overwrite = true)
+                translatedPage.copyTo(translatedCopy, overwrite = true)
+                UnifiedNotificationManager.completeTask(
+                    notificationId,
+                    context.getString(R.string.workflow_manga_preview_ready)
+                )
+                MangaTranslationPreviewResult(
+                    sourceName = source.displayName,
+                    originalPageUri = Uri.fromFile(originalCopy),
+                    translatedPageUri = Uri.fromFile(translatedCopy),
+                    configFingerprint = fingerprint,
+                    qualityReport = MangaTranslationQualityReport(
+                        totalPages = 1,
+                        emptyOcrPages = ocrResult.emptyPages,
+                        weakTranslationsRetried = quality.weakTranslationsRetried,
+                        textOnlyFallbacks = quality.textOnlyFallbacks,
+                        jsonRepairs = quality.jsonRepairs,
+                        plainTextFallbacks = quality.plainTextFallbacks,
+                        untranslatedUnits = quality.untranslatedUnits,
+                        visionFallbacks = quality.visionFallbacks,
+                        blankOverlayUnits = quality.blankOverlayUnits,
+                        clippedOverlayUnits = quality.clippedOverlayUnits,
+                        ungroundedOcrResponses = quality.ungroundedOcrResponses,
+                        regionalOcrFallbacks = quality.regionalOcrFallbacks,
+                        rejectedCrossRegionMerges = quality.rejectedCrossRegionMerges,
+                        promptLeakRejections = quality.promptLeakRejections,
+                        skippedLlamaCropRequests = quality.skippedLlamaCropRequests,
+                        llamaOcrRequests = quality.llamaOcrRequests,
+                        llamaOcrElapsedMs = quality.llamaOcrElapsedMs,
+                        decorativeTextPreserved = quality.decorativeTextPreserved,
+                        skippedOverlayUnits = quality.skippedOverlayUnits,
+                        liteRtRuntimeFallbacks = quality.liteRtRuntimeFallbacks,
+                        reconciledOcrAlternatives = quality.reconciledOcrAlternatives,
+                        coalescedBubbleFragments = quality.coalescedBubbleFragments,
+                        incompleteTranslationRetries = quality.incompleteTranslationRetries,
+                        wholeBubblesPreserved = quality.wholeBubblesPreserved,
+                        resolvedReadingDirection = prepared.resolvedReadingDirection
+                    )
+                )
+            } finally {
+                runCatching { workDir.deleteRecursively() }
+            }
+        }
+    }
+
+    private fun renderFirstPdfPageToPng(pdfUri: Uri, outputFile: File): File {
+        val cachedPdf = copyPdfToCache(pdfUri)
+        try {
+            ParcelFileDescriptor.open(cachedPdf, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                PdfRenderer(pfd).use { renderer ->
+                    check(renderer.pageCount > 0) { "PDF has no pages" }
+                    renderer.openPage(0).use { page ->
+                        val scale = computeOcrScale(page.width, page.height)
+                        val bitmap = Bitmap.createBitmap(
+                            (page.width * scale).roundToInt().coerceAtLeast(page.width),
+                            (page.height * scale).roundToInt().coerceAtLeast(page.height),
+                            Bitmap.Config.ARGB_8888
+                        )
+                        try {
+                            Canvas(bitmap).drawColor(Color.WHITE)
+                            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                            FileOutputStream(outputFile).use { output ->
+                                bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                            }
+                        } finally {
+                            bitmap.recycle()
+                        }
+                    }
+                }
+            }
+            return outputFile
+        } finally {
+            cachedPdf.delete()
+        }
+    }
+
+    private suspend fun verifyMangaTranslationBackend(snapshot: RemoteSummarySettingsSnapshot) {
+        val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
+        try {
+            val isLiteRt = SettingsRepository.isLiteRtBackend(snapshot.backend)
+            if (isLiteRt) {
+                val metadata = client.fetchMetadata().getOrThrow()
+                check(!metadata.selectedModel.isNullOrBlank()) {
+                    context.getString(R.string.workflow_manga_model_required)
+                }
+                DebugLog.log(
+                    "[PDF] LiteRT manga readiness validated from metadata: " +
+                        "model=${metadata.selectedModel}, vision=${metadata.visionSupported ?: "unknown"}"
+                )
+                return
+            }
+            val response = client.summarize(
+                RemoteSummaryRequest(
+                    systemPrompt = "Reply with OK only.",
+                    userPrompt = "OK",
+                    contextSize = minOf(snapshot.chunkContext, 512).coerceAtLeast(128),
+                    maxTokens = 8,
+                    temperature = 0f,
+                    thinkingEnabled = false
+                )
+            )
+            check(response.output.isNotBlank()) { "Translation backend returned an empty readiness response" }
+        } finally {
+            client.cancelActiveCall()
+        }
+    }
+
+    private suspend fun resolveMangaVisionCapability(
+        config: MangaTranslationRunConfig
+    ): MangaTranslationRunConfig {
+        if (!config.behavior.pageImageContextEnabled) return config
+        val snapshot = config.translationSettings
+        val isLiteRt = SettingsRepository.isLiteRtBackend(snapshot.backend)
+        val cacheKey = MangaTranslationSupport.visionCapabilityCacheKey(config)
+        val supported = mangaVisionCapabilityCache[cacheKey] ?: run {
+            if (isLiteRt) {
+                val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
+                val metadataSupported = try {
+                    client.fetchMetadata().getOrNull()?.visionSupported == true
+                } catch (error: Throwable) {
+                    DebugLog.log("[PDF] LiteRT vision metadata check failed; using text-only translation: ${error.message}")
+                    false
+                } finally {
+                    client.cancelActiveCall()
+                }
+                DebugLog.log(
+                    "[PDF] LiteRT manga vision readiness from metadata: " +
+                        if (metadataSupported) "vision supported" else "text-only fallback"
+                )
+                mangaVisionCapabilityCache[cacheKey] = metadataSupported
+                return@run metadataSupported
+            }
+            val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888).apply {
+                eraseColor(Color.WHITE)
+            }
+            val attachment = try {
+                RemoteSummaryImageAttachment(
+                    base64 = bitmapToJpegBase64(bitmap, 2, 75),
+                    mimeType = "image/jpeg"
+                )
+            } finally {
+                bitmap.recycle()
+            }
+            val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
+            val result = try {
+                client.summarize(
+                    RemoteSummaryRequest(
+                        systemPrompt = "Reply with OK only.",
+                        userPrompt = "Reply with OK if you can read the attached image.",
+                        contextSize = if (isLiteRt) 0 else minOf(snapshot.chunkContext, 512).coerceAtLeast(128),
+                        maxTokens = if (isLiteRt) 32 else 8,
+                        temperature = 0f,
+                        thinkingEnabled = false,
+                        imageAttachments = listOf(attachment)
+                    )
+                ).output.isNotBlank()
+            } catch (error: Throwable) {
+                DebugLog.log("[PDF] Image capability probe failed; using text-only translation: ${error.message}")
+                false
+            } finally {
+                client.cancelActiveCall()
+            }
+            mangaVisionCapabilityCache[cacheKey] = result
+            result
+        }
+        return config.copy(
+            pageImageContextAvailable = supported,
+            pageImageContextReason = if (supported) null else "vision_probe_failed"
+        )
+    }
+
     private suspend fun translateSingleMangaPdf(
         pdfUri: Uri,
         sourceName: String,
         exportPdf: Boolean,
         exportCbz: Boolean,
         settingsOverride: RemoteSummarySettingsSnapshot?,
+        runConfig: MangaTranslationRunConfig?,
+        workDirOverride: File?,
         executionController: PDFTranslationExecutionController?,
         notificationId: Int,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?
     ): MangaTranslationFileResult {
+        val quality = MangaTranslationQualityAccumulator()
+        if (runConfig?.pageImageContextReason == "vision_probe_failed") {
+            quality.visionFallbacks += 1
+        }
+        val options = runConfig?.resolvedTranslationOptions()
         val timestamp = System.currentTimeMillis()
         val baseName = sourceName.substringBeforeLast('.').replace(Regex("""[^A-Za-z0-9._-]+"""), "_").ifBlank { "comic" }
-        val workDir = File(context.filesDir, "manga_translation_runtime/pdf_${baseName}_$timestamp").apply { mkdirs() }
+        val workDir = (workDirOverride
+            ?: File(context.filesDir, "manga_translation_runtime/pdf_${baseName}_$timestamp"))
+            .apply { mkdirs() }
         var completed = false
         try {
             ensureTranslationActive(executionController)
@@ -3556,8 +5819,12 @@ class PDFService(private val context: Context) {
                 pdfUri = pdfUri,
                 outputFileName = translatedPdfName,
                 settingsOverride = settingsOverride,
+                optionsOverride = options,
+                mangaConfig = runConfig,
+                saveToConfiguredOutput = exportPdf,
                 executionController = executionController,
-                onProgress = onProgress
+                onProgress = onProgress,
+                qualityAccumulator = quality
             ).getOrThrow()
 
             val savedPdfUri = if (exportPdf) translatedPdfUri else null
@@ -3575,7 +5842,39 @@ class PDFService(private val context: Context) {
                 null
             }
             completed = true
-            return MangaTranslationFileResult(sourceName = sourceName, pdfUri = savedPdfUri, cbzUri = savedCbzUri)
+            return MangaTranslationFileResult(
+                sourceName = sourceName,
+                pdfUri = savedPdfUri,
+                cbzUri = savedCbzUri,
+                qualityReport = MangaTranslationQualityReport(
+                    weakTranslationsRetried = quality.weakTranslationsRetried,
+                    textOnlyFallbacks = quality.textOnlyFallbacks,
+                    jsonRepairs = quality.jsonRepairs,
+                    plainTextFallbacks = quality.plainTextFallbacks,
+                    untranslatedUnits = quality.untranslatedUnits,
+                    visionFallbacks = quality.visionFallbacks,
+                    blankOverlayUnits = quality.blankOverlayUnits,
+                    clippedOverlayUnits = quality.clippedOverlayUnits,
+                    ungroundedOcrResponses = quality.ungroundedOcrResponses,
+                    regionalOcrFallbacks = quality.regionalOcrFallbacks,
+                    rejectedCrossRegionMerges = quality.rejectedCrossRegionMerges,
+                    promptLeakRejections = quality.promptLeakRejections,
+                    skippedLlamaCropRequests = quality.skippedLlamaCropRequests,
+                    llamaOcrRequests = quality.llamaOcrRequests,
+                    llamaOcrElapsedMs = quality.llamaOcrElapsedMs,
+                    decorativeTextPreserved = quality.decorativeTextPreserved,
+                    skippedOverlayUnits = quality.skippedOverlayUnits,
+                    liteRtRuntimeFallbacks = quality.liteRtRuntimeFallbacks,
+                    reconciledOcrAlternatives = quality.reconciledOcrAlternatives,
+                    coalescedBubbleFragments = quality.coalescedBubbleFragments,
+                    incompleteTranslationRetries = quality.incompleteTranslationRetries,
+                    wholeBubblesPreserved = quality.wholeBubblesPreserved,
+                    resolvedReadingDirection = when (runConfig?.readingDirection) {
+                        MangaReadingDirection.RIGHT_TO_LEFT -> MangaReadingDirection.RIGHT_TO_LEFT
+                        else -> MangaReadingDirection.LEFT_TO_RIGHT
+                    }
+                )
+            )
         } finally {
             if (completed) runCatching { workDir.deleteRecursively() }
         }
@@ -3587,13 +5886,22 @@ class PDFService(private val context: Context) {
         exportPdf: Boolean,
         exportCbz: Boolean,
         settingsOverride: RemoteSummarySettingsSnapshot?,
+        runConfig: MangaTranslationRunConfig?,
+        workDirOverride: File?,
         executionController: PDFTranslationExecutionController?,
         notificationId: Int,
         onProgress: ((PdfOcrTranslationProgress) -> Unit)?
     ): MangaTranslationFileResult {
+        val quality = MangaTranslationQualityAccumulator()
+        if (runConfig?.pageImageContextReason == "vision_probe_failed") {
+            quality.visionFallbacks += 1
+        }
+        val options = runConfig?.resolvedTranslationOptions()
         val timestamp = System.currentTimeMillis()
         val baseName = sourceName.substringBeforeLast('.').replace(Regex("""[^A-Za-z0-9._-]+"""), "_").ifBlank { "comic" }
-        val workDir = File(context.filesDir, "manga_translation_runtime/cbz_${baseName}_$timestamp").apply { mkdirs() }
+        val workDir = (workDirOverride
+            ?: File(context.filesDir, "manga_translation_runtime/cbz_${baseName}_$timestamp"))
+            .apply { mkdirs() }
         val checkpointFile = File(workDir, "checkpoint.json")
         val jobId = "manga_${baseName}_$timestamp"
         var completed = false
@@ -3619,25 +5927,53 @@ class PDFService(private val context: Context) {
             val pdfName = "translated_${baseName}_$timestamp.pdf"
             val cbzName = "translated_${baseName}_$timestamp.cbz"
             val translatedPdfFile = File(workDir, pdfName)
-            val ocrResult = collectImageOcrText(imageFiles) { progress ->
+            val ocrResult = collectImageOcrText(
+                imageFiles = imageFiles,
+                optionsOverride = options,
+                ocrStrategy = runConfig?.behavior?.ocrStrategy,
+                ocrExecutionMode = MangaOcrExecutionMode.BATCH,
+                exhaustiveLlamaOcrRegions = runConfig?.behavior?.exhaustiveLlamaOcrRegions == true
+            ) { progress ->
                 onProgress?.invoke(
                     PdfOcrTranslationProgress(
                         stage = PdfOcrTranslationStage.OCR,
                         processedPages = progress.processedPages,
                         totalPages = progress.totalPages,
                         translatedBlocks = 0,
-                        totalBlocks = 0
+                        totalBlocks = 0,
+                        currentRegion = progress.currentRegion,
+                        totalRegions = progress.totalRegions,
+                        detailText = progress.detailText
                     )
                 )
             }.getOrThrow()
+            quality.ungroundedOcrResponses += ocrResult.pages.sumOf { it.ungroundedResponses }
+            quality.regionalOcrFallbacks += ocrResult.pages.sumOf { it.regionalFallbacks }
+            quality.reconciledOcrAlternatives += ocrResult.pages.sumOf { it.reconciledOcrAlternatives }
+            quality.promptLeakRejections += ocrResult.pages.sumOf { it.promptLeakRejections }
+            quality.skippedLlamaCropRequests += ocrResult.pages.sumOf { it.skippedLlamaCropRequests }
+            quality.llamaOcrRequests += ocrResult.pages.sumOf { it.llamaOcrRequests }
+            quality.llamaOcrElapsedMs += ocrResult.pages.sumOf { it.llamaOcrElapsedMs }
             DebugLog.log(
                 "[PDF] Comic OCR produced ${ocrResult.blocks.count { it.text.isNotBlank() }} blocks " +
                     "across ${ocrResult.totalPages} pages for $sourceName"
+            )
+            val ocrTextBlocks = ocrResult.blocks.count { it.text.isNotBlank() }.coerceAtLeast(1)
+            onProgress?.invoke(
+                PdfOcrTranslationProgress(
+                    stage = PdfOcrTranslationStage.TRANSLATING,
+                    processedPages = 0,
+                    totalPages = ocrResult.totalPages.coerceAtLeast(1),
+                    translatedBlocks = 0,
+                    totalBlocks = ocrTextBlocks
+                )
             )
             val prepared = prepareOcrTranslation(
                 sourcePdfUri = Uri.EMPTY,
                 ocrResult = ocrResult,
                 settingsOverride = settingsOverride,
+                optionsOverride = options,
+                mangaConfig = runConfig,
                 executionController = executionController,
                 onProgress = onProgress,
                 notificationId = notificationId,
@@ -3658,17 +5994,18 @@ class PDFService(private val context: Context) {
                     )
                 },
                 pageScreenshotProvider = { pageIndex ->
-                    val options = settingsRepo.pdfTranslationOptionsSnapshot()
+                    val capturedOptions = options ?: settingsRepo.pdfTranslationOptionsSnapshot()
                     imageFiles.getOrNull(pageIndex)?.let { imageFile ->
                         RemoteSummaryImageAttachment(
                             base64 = renderImagePageScreenshotBase64(
                                 imageFile = imageFile,
-                                maxSide = options.screenshotMaxSide,
-                                jpegQuality = options.screenshotJpegQuality
+                                maxSide = capturedOptions.screenshotMaxSide,
+                                jpegQuality = capturedOptions.screenshotJpegQuality
                             )
                         )
                     }
-                }
+                },
+                qualityAccumulator = quality
             )
 
             val renderedPages = if (exportPdf || exportCbz) {
@@ -3681,7 +6018,8 @@ class PDFService(private val context: Context) {
                     workDir = workDir,
                     baseName = baseName,
                     executionController = executionController,
-                    onProgress = onProgress
+                    onProgress = onProgress,
+                    qualityAccumulator = quality
                 ).also { pages ->
                     if (pages.isEmpty()) throw IllegalStateException(context.getString(R.string.workflow_manga_error_no_rendered_pages))
                 }
@@ -3727,7 +6065,38 @@ class PDFService(private val context: Context) {
                 )
             )
             completed = true
-            return MangaTranslationFileResult(sourceName = sourceName, pdfUri = savedPdfUri, cbzUri = savedCbzUri)
+            return MangaTranslationFileResult(
+                sourceName = sourceName,
+                pdfUri = savedPdfUri,
+                cbzUri = savedCbzUri,
+                qualityReport = MangaTranslationQualityReport(
+                    totalPages = ocrResult.totalPages,
+                    emptyOcrPages = ocrResult.emptyPages,
+                    weakTranslationsRetried = quality.weakTranslationsRetried,
+                    textOnlyFallbacks = quality.textOnlyFallbacks,
+                    jsonRepairs = quality.jsonRepairs,
+                    plainTextFallbacks = quality.plainTextFallbacks,
+                    untranslatedUnits = quality.untranslatedUnits,
+                    visionFallbacks = quality.visionFallbacks,
+                    blankOverlayUnits = quality.blankOverlayUnits,
+                    clippedOverlayUnits = quality.clippedOverlayUnits,
+                    ungroundedOcrResponses = quality.ungroundedOcrResponses,
+                regionalOcrFallbacks = quality.regionalOcrFallbacks,
+                rejectedCrossRegionMerges = quality.rejectedCrossRegionMerges,
+                promptLeakRejections = quality.promptLeakRejections,
+                skippedLlamaCropRequests = quality.skippedLlamaCropRequests,
+                llamaOcrRequests = quality.llamaOcrRequests,
+                llamaOcrElapsedMs = quality.llamaOcrElapsedMs,
+                decorativeTextPreserved = quality.decorativeTextPreserved,
+                skippedOverlayUnits = quality.skippedOverlayUnits,
+                liteRtRuntimeFallbacks = quality.liteRtRuntimeFallbacks,
+                reconciledOcrAlternatives = quality.reconciledOcrAlternatives,
+                coalescedBubbleFragments = quality.coalescedBubbleFragments,
+                incompleteTranslationRetries = quality.incompleteTranslationRetries,
+                wholeBubblesPreserved = quality.wholeBubblesPreserved,
+                resolvedReadingDirection = prepared.resolvedReadingDirection
+                )
+            )
         } finally {
             if (completed) {
                 runCatching { workDir.deleteRecursively() }
@@ -3911,7 +6280,8 @@ class PDFService(private val context: Context) {
         workDir: File,
         baseName: String,
         executionController: PDFTranslationExecutionController?,
-        onProgress: ((PdfOcrTranslationProgress) -> Unit)?
+        onProgress: ((PdfOcrTranslationProgress) -> Unit)?,
+        qualityAccumulator: MangaTranslationQualityAccumulator? = null
     ): List<File> {
         val pngDir = File(workDir, "translated_pages").apply { mkdirs() }
         val pagesByIndex = ocrResult.pages.associateBy { it.pageIndex }
@@ -3927,23 +6297,42 @@ class PDFService(private val context: Context) {
                     val page = pagesByIndex[pageIndex]
                     val units = prepared.pageUnits[pageIndex].orEmpty()
                     if (page != null && units.isNotEmpty()) {
+                        val paintedRects = mutableListOf<RectF>()
                         units.forEach { unit ->
                             val translated = prepared.translations[unit.id]?.trim().orEmpty()
                             if (translated.isBlank()) {
                                 DebugLog.log(context.getString(R.string.pdf_translation_diagnostic_blank_unit, unit.id, unit.pageIndex + 1))
                                 return@forEach
                             }
-                            val rect = unit.rect.toBitmapRect(
+                            if (!translationNeedsVisibleOverlay(unit.text, translated)) {
+                                return@forEach
+                            }
+                            val rect = unit.safeBitmapOverlayRect(
                                 bitmapWidth = bitmap.width,
                                 bitmapHeight = bitmap.height,
                                 pdfWidth = page.pdfWidth,
                                 pdfHeight = page.pdfHeight
-                            ).expanded(
-                                padding = maxOf(4f, minOf(bitmap.width, bitmap.height) * 0.006f),
-                                maxWidth = bitmap.width.toFloat(),
-                                maxHeight = bitmap.height.toFloat()
-                            )
-                            val clipped = drawTranslatedTextOnBitmap(
+                            ) ?: run {
+                                qualityAccumulator?.let {
+                                    it.skippedOverlayUnits += 1
+                                    if (unit.containingRegionId != null) it.wholeBubblesPreserved += 1
+                                }
+                                DebugLog.log(
+                                    "[PDF] Skipped manga overlay ${unit.id} on page ${unit.pageIndex + 1}; source geometry no longer fits its detected region"
+                                )
+                                return@forEach
+                            }
+                            if (paintedRects.any { existing -> bitmapOverlayOverlapRatio(rect, existing) > 0.08f }) {
+                                qualityAccumulator?.let {
+                                    it.skippedOverlayUnits += 1
+                                    if (unit.containingRegionId != null) it.wholeBubblesPreserved += 1
+                                }
+                                DebugLog.log(
+                                    "[PDF] Skipped overlapping manga overlay ${unit.id} on page ${unit.pageIndex + 1}; original artwork preserved"
+                                )
+                                return@forEach
+                            }
+                            val overlayResult = drawTranslatedTextOnBitmap(
                                 canvas = canvas,
                                 text = translated,
                                 rect = rect,
@@ -3951,8 +6340,20 @@ class PDFService(private val context: Context) {
                                 textColor = unit.textColor,
                                 typeface = typeface
                             )
-                            if (clipped) {
-                                DebugLog.log(context.getString(R.string.pdf_translation_diagnostic_clipped_unit, unit.id, unit.pageIndex + 1))
+                            if (overlayResult.skipped) {
+                                qualityAccumulator?.let {
+                                    it.skippedOverlayUnits += 1
+                                    if (unit.containingRegionId != null) it.wholeBubblesPreserved += 1
+                                }
+                                DebugLog.log(
+                                    "[PDF] Skipped unreadable manga overlay ${unit.id} on page ${unit.pageIndex + 1}; original artwork preserved"
+                                )
+                            } else {
+                                paintedRects += RectF(rect)
+                                if (overlayResult.clipped) {
+                                    qualityAccumulator?.let { it.clippedOverlayUnits += 1 }
+                                    DebugLog.log(context.getString(R.string.pdf_translation_diagnostic_clipped_unit, unit.id, unit.pageIndex + 1))
+                                }
                             }
                         }
                     }
@@ -4161,23 +6562,34 @@ class PDFService(private val context: Context) {
     ) {
         if (units.isEmpty()) return
         val canvas = Canvas(bitmap)
+        val paintedRects = mutableListOf<RectF>()
         units.forEach { unit ->
             val translated = translations[unit.id]?.trim().orEmpty()
             if (translated.isBlank()) {
                 DebugLog.log(context.getString(R.string.pdf_translation_diagnostic_blank_unit, unit.id, unit.pageIndex + 1))
                 return@forEach
             }
-            val rect = unit.rect.toBitmapRect(
+            if (!translationNeedsVisibleOverlay(unit.text, translated)) {
+                return@forEach
+            }
+            val rect = unit.safeBitmapOverlayRect(
                 bitmapWidth = bitmap.width,
                 bitmapHeight = bitmap.height,
                 pdfWidth = pdfWidth,
                 pdfHeight = pdfHeight
-            ).expanded(
-                padding = maxOf(4f, minOf(bitmap.width, bitmap.height) * 0.006f),
-                maxWidth = bitmap.width.toFloat(),
-                maxHeight = bitmap.height.toFloat()
-            )
-            val clipped = drawTranslatedTextOnBitmap(
+            ) ?: run {
+                DebugLog.log(
+                    "[PDF] Skipped raster overlay ${unit.id} on page ${unit.pageIndex + 1}; source geometry no longer fits its detected region"
+                )
+                return@forEach
+            }
+            if (paintedRects.any { existing -> bitmapOverlayOverlapRatio(rect, existing) > 0.08f }) {
+                DebugLog.log(
+                    "[PDF] Skipped overlapping raster overlay ${unit.id} on page ${unit.pageIndex + 1}; original artwork preserved"
+                )
+                return@forEach
+            }
+            val overlayResult = drawTranslatedTextOnBitmap(
                 canvas = canvas,
                 text = translated,
                 rect = rect,
@@ -4185,10 +6597,89 @@ class PDFService(private val context: Context) {
                 textColor = unit.textColor,
                 typeface = typeface
             )
-            if (clipped) {
+            if (overlayResult.skipped) {
+                DebugLog.log(
+                    "[PDF] Skipped unreadable raster overlay ${unit.id} on page ${unit.pageIndex + 1}; original artwork preserved"
+                )
+            } else {
+                paintedRects += RectF(rect)
+            }
+            if (!overlayResult.skipped && overlayResult.clipped) {
                 DebugLog.log(context.getString(R.string.pdf_translation_diagnostic_clipped_unit, unit.id, unit.pageIndex + 1))
             }
         }
+    }
+
+    private fun PdfTranslationUnit.safeBitmapOverlayRect(
+        bitmapWidth: Int,
+        bitmapHeight: Int,
+        pdfWidth: Float,
+        pdfHeight: Float
+    ): RectF? {
+        val maxWidth = bitmapWidth.toFloat()
+        val maxHeight = bitmapHeight.toFloat()
+        val padding = maxOf(4f, minOf(bitmapWidth, bitmapHeight) * 0.006f)
+        val proposed = rect.toBitmapRect(
+            bitmapWidth = bitmapWidth,
+            bitmapHeight = bitmapHeight,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight
+        ).expanded(
+            padding = padding,
+            maxWidth = maxWidth,
+            maxHeight = maxHeight
+        )
+        val safeRegion = safeRegionRect?.toBitmapRect(
+            bitmapWidth = bitmapWidth,
+            bitmapHeight = bitmapHeight,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight
+        )?.expanded(
+            padding = maxOf(1f, padding * 0.35f),
+            maxWidth = maxWidth,
+            maxHeight = maxHeight
+        ) ?: return proposed
+        val constrained = proposed.intersectionOrNull(safeRegion)
+        val proposedMinWidth = proposed.width().coerceAtLeast(1f) * 0.62f
+        val proposedMinHeight = proposed.height().coerceAtLeast(1f) * 0.62f
+        if (constrained != null && constrained.width() >= proposedMinWidth && constrained.height() >= proposedMinHeight) {
+            return constrained
+        }
+
+        val sourceFallback = sourceRect.toBitmapRect(
+            bitmapWidth = bitmapWidth,
+            bitmapHeight = bitmapHeight,
+            pdfWidth = pdfWidth,
+            pdfHeight = pdfHeight
+        ).expanded(
+            padding = maxOf(2f, padding * 0.5f),
+            maxWidth = maxWidth,
+            maxHeight = maxHeight
+        )
+        return sourceFallback.intersectionOrNull(safeRegion)?.takeIf { it.width() >= 4f && it.height() >= 4f }
+    }
+
+    private fun RectF.intersectionOrNull(other: RectF): RectF? {
+        val left = maxOf(this.left, other.left)
+        val top = maxOf(this.top, other.top)
+        val right = minOf(this.right, other.right)
+        val bottom = minOf(this.bottom, other.bottom)
+        if (right - left < 1f || bottom - top < 1f) return null
+        return RectF(left, top, right, bottom)
+    }
+
+    private fun bitmapOverlayOverlapRatio(first: RectF, second: RectF): Float {
+        val left = maxOf(first.left, second.left)
+        val top = maxOf(first.top, second.top)
+        val right = minOf(first.right, second.right)
+        val bottom = minOf(first.bottom, second.bottom)
+        val width = (right - left).coerceAtLeast(0f)
+        val height = (bottom - top).coerceAtLeast(0f)
+        if (width <= 0f || height <= 0f) return 0f
+        val overlapArea = width * height
+        val firstArea = (first.width() * first.height()).coerceAtLeast(1f)
+        val secondArea = (second.width() * second.height()).coerceAtLeast(1f)
+        return overlapArea / minOf(firstArea, secondArea)
     }
 
     private fun decodeComicPageForEditing(imageFile: File): Bitmap {
@@ -4201,6 +6692,17 @@ class PDFService(private val context: Context) {
         }
         decoded.recycle()
         return flattened
+    }
+
+    private fun translationNeedsVisibleOverlay(sourceText: String, translatedText: String): Boolean {
+        val compactSource = sourceText
+            .lowercase(Locale.ROOT)
+            .filter(Char::isLetterOrDigit)
+        val compactTranslation = translatedText
+            .lowercase(Locale.ROOT)
+            .filter(Char::isLetterOrDigit)
+        if (compactSource.isBlank() || sourceText.none(Char::isLetter)) return false
+        return compactSource != compactTranslation
     }
 
     private fun writeOriginalComicPageFallback(
@@ -4287,6 +6789,11 @@ class PDFService(private val context: Context) {
         )
     }
 
+    private data class BitmapOverlayResult(
+        val clipped: Boolean = false,
+        val skipped: Boolean = false
+    )
+
     private fun drawTranslatedTextOnBitmap(
         canvas: Canvas,
         text: String,
@@ -4294,14 +6801,10 @@ class PDFService(private val context: Context) {
         backgroundColor: Int,
         textColor: Int,
         typeface: Typeface
-    ): Boolean {
-        if (rect.width() < 4f || rect.height() < 4f || text.isBlank()) return false
-        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = backgroundColor
+    ): BitmapOverlayResult {
+        if (rect.width() < 4f || rect.height() < 4f || text.isBlank()) {
+            return BitmapOverlayResult(skipped = true)
         }
-        canvas.drawRect(rect, backgroundPaint)
-
         val inset = maxOf(2f, minOf(rect.width(), rect.height()) * 0.06f)
         val textRect = RectF(
             rect.left + inset,
@@ -4309,7 +6812,9 @@ class PDFService(private val context: Context) {
             rect.right - inset,
             rect.bottom - inset
         )
-        if (textRect.width() < 4f || textRect.height() < 4f) return true
+        if (textRect.width() < 4f || textRect.height() < 4f) {
+            return BitmapOverlayResult(skipped = true)
+        }
 
         val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = textColor
@@ -4319,18 +6824,31 @@ class PDFService(private val context: Context) {
         val fontSize = findBitmapTextSize(text, textPaint, textRect.width(), textRect.height())
         textPaint.textSize = fontSize
         val layout = buildBitmapTextLayout(text, textPaint, textRect.width().roundToInt().coerceAtLeast(1))
-        val clipped = layout.height > textRect.height()
+        val readableMinimum = 8f
+        if (fontSize < readableMinimum || layout.height > textRect.height()) {
+            return BitmapOverlayResult(skipped = true)
+        }
+        val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = backgroundColor
+        }
+        val cornerRadius = minOf(rect.width(), rect.height()) * 0.18f
+        canvas.drawRoundRect(rect, cornerRadius, cornerRadius, backgroundPaint)
         canvas.save()
         canvas.clipRect(textRect)
         val topOffset = ((textRect.height() - layout.height).coerceAtLeast(0f) / 2f)
         canvas.translate(textRect.left, textRect.top + topOffset)
         layout.draw(canvas)
         canvas.restore()
-        return clipped
+        return BitmapOverlayResult()
     }
 
     private fun findBitmapTextSize(text: String, paint: TextPaint, maxWidth: Float, maxHeight: Float): Float {
-        val estimatedLines = text.split(Regex("""\s+""")).size.coerceAtLeast(text.lines().size)
+        val normalizedText = text.replace(Regex("""\s+"""), " ").trim()
+        val estimatedLines = maxOf(
+            text.lines().size,
+            kotlin.math.ceil(normalizedText.length / 13f).toInt()
+        )
         val upper = MangaTranslationSupport.fittedTextSize(
             lineCount = estimatedLines.coerceAtMost(12),
             maxWidth = maxWidth,
@@ -4440,7 +6958,11 @@ class PDFService(private val context: Context) {
         sourceFile.inputStream().use { input ->
             FileOutputStream(output).use { input.copyTo(it) }
         }
-        return Uri.fromFile(output)
+        return androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            output
+        )
     }
 
     private fun displayNameForUri(uri: Uri): String {
@@ -4451,7 +6973,10 @@ class PDFService(private val context: Context) {
      * Perform OCR on an image using ML Kit Text Recognition
      * Note: Requires ML Kit dependency: com.google.mlkit:text-recognition
      */
-    suspend fun performOCR(imageUri: Uri): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun performOCR(
+        imageUri: Uri,
+        optionsOverride: PdfTranslationOptionsSnapshot? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         try {
             DebugLog.log("[PDF] Performing OCR on image")
             
@@ -4459,6 +6984,33 @@ class PDFService(private val context: Context) {
             val bitmap = context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
                 android.graphics.BitmapFactory.decodeStream(inputStream)
             } ?: return@withContext Result.failure(Exception("Could not load image"))
+
+            val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
+            if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
+                return@withContext runCatching {
+                    try {
+                        withLlamaOcrClient(options.llamaOcr) { client ->
+                            recognizeBitmapWithLlamaOcr(
+                                client = client,
+                                llamaSettings = options.llamaOcr,
+                                bitmap = bitmap,
+                                pageIndex = 0,
+                                pdfWidth = bitmap.width.toFloat(),
+                                pdfHeight = bitmap.height.toFloat(),
+                                ocrStrategy = if (options.bubbleGuidedOcrEnabled) {
+                                    MangaOcrStrategy.HYBRID
+                                } else {
+                                    MangaOcrStrategy.FULL_PAGE
+                                }
+                            ).blocks.joinToString("\n\n") { it.text }.trim()
+                        }.also { text ->
+                            if (text.isBlank()) throw IllegalStateException("No OCR text found")
+                        }
+                    } finally {
+                        bitmap.recycle()
+                    }
+                }
+            }
             
             // Use ML Kit Text Recognition
             val image = InputImage.fromBitmap(bitmap, 0)
@@ -4680,10 +7232,19 @@ class PDFService(private val context: Context) {
 
     private suspend fun canUsePageScreenshotContext(snapshot: RemoteSummarySettingsSnapshot): Boolean {
         val normalizedBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(snapshot.backend)
-        if (normalizedBackend != SettingsRepository.PDF_BACKEND_LITERT) return true
-        val modelId = snapshot.liteRtModelId ?: return false
-        val model = AppDatabase.getDatabase(context).liteRtModelDao().getById(modelId) ?: return false
-        return model.supportsLiteRtVision()
+        return when (normalizedBackend) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER ->
+                settingsRepo.enableVision.value && !settingsRepo.selectedMmprojPath.value.isNullOrBlank()
+            SettingsRepository.PDF_BACKEND_LITERT -> {
+                val modelId = snapshot.liteRtModelId ?: return false
+                val model = AppDatabase.getDatabase(context).liteRtModelDao().getById(modelId) ?: return false
+                model.supportsLiteRtVision()
+            }
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP ->
+                PDFTranslationLogic.modelNameLikelySupportsVision(snapshot.llamaSwapModel)
+            else ->
+                PDFTranslationLogic.modelNameLikelySupportsVision(snapshot.ollamaModel)
+        }
     }
 
     private fun chunkPageBlocks(

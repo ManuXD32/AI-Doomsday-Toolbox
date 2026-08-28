@@ -20,8 +20,9 @@ class ModelManagerViewModel(
     private val repository: ModelRepository
 ) : ViewModel() {
 
-    // Installed text-model family rows shown by this manager. Quadtrix is displayed
-    // here, but runtime llama.cpp pickers still use repository.getLLMModels().
+    // Installed llama.cpp model-family rows shown by this manager. MTP/draft,
+    // LoRA, embeddings, and legacy vision/projector rows stay actionable here;
+    // Quadtrix and Whisper assets have their own managers.
     val installedModels: StateFlow<List<ModelEntity>> = repository.getModelManagerModels()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
@@ -35,6 +36,7 @@ class ModelManagerViewModel(
     
     private val _isSearching = MutableStateFlow(false)
     val isSearching = _isSearching.asStateFlow()
+    private var searchRequestId = 0
 
     // For file selection dialog
     private val _selectedRepoId = MutableStateFlow<String?>(null)
@@ -62,6 +64,12 @@ class ModelManagerViewModel(
     val pendingVisionDownload = _pendingVisionDownload.asStateFlow()
 
     fun search(query: String, type: ModelType) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isBlank()) {
+            clearSearchResults()
+            return
+        }
+        val requestId = ++searchRequestId
         viewModelScope.launch {
             _isSearching.value = true
             val filter = when {
@@ -71,7 +79,8 @@ class ModelManagerViewModel(
                 else -> "gguf" // Default for LLM
             }
             // Pass filter to repo for LLM/GGUF/SD filtering
-            val results = repository.searchModels(query, filter)
+            val results = repository.searchModels(normalizedQuery, filter)
+            if (requestId != searchRequestId) return@launch
             _searchResults.value = results
             _isSearching.value = false
             
@@ -86,6 +95,12 @@ class ModelManagerViewModel(
                 }
             }
         }
+    }
+
+    fun clearSearchResults() {
+        searchRequestId += 1
+        _searchResults.value = emptyList()
+        _isSearching.value = false
     }
     
     private suspend fun checkRepoForVision(repoId: String): Boolean {
@@ -179,6 +194,12 @@ class ModelManagerViewModel(
             repository.deleteModel(model)
         }
     }
+
+    fun updateVisionSupport(model: ModelEntity, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.updateVisionSupport(model.filename, enabled)
+        }
+    }
     
     /**
      * Import a local model file with user-specified type and badges
@@ -198,9 +219,10 @@ class ModelManagerViewModel(
                 val sizeBytes = if (file.exists()) file.length() else 0L
                 
                 // Determine effective type based on badges
-                val effectiveType = when {
-                    hasEmbedding -> ModelType.EMBEDDING
-                    else -> modelType
+                val effectiveType = if (modelType == ModelType.LLM && hasEmbedding) {
+                    ModelType.EMBEDDING
+                } else {
+                    modelType
                 }
                 
                 val modelEntity = ModelEntity(
@@ -209,7 +231,7 @@ class ModelManagerViewModel(
                     path = path,
                     sizeBytes = sizeBytes,
                     type = effectiveType,
-                    isVision = hasVision,
+                    isVision = effectiveType == ModelType.LLM && hasVision,
                     sdCapabilities = sdCapabilities,
                     layerCount = layerCount
                 )

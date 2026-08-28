@@ -25,6 +25,7 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftNullableIntTextField
+import com.example.llamadroid.ui.components.SdTensorTypeRulesPicker
 
 /**
  * Image Generation Settings - Thread controls and output folder
@@ -260,35 +261,10 @@ fun ImageGenSettingsContent(
                         
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        // Tensor Type Rules
-                        OutlinedTextField(
+                        SdTensorTypeRulesPicker(
                             value = sdTensorTypeRules,
                             onValueChange = { settingsRepo.setSdTensorTypeRules(it) },
-                            label = { Text(stringResource(R.string.imagegen_tensor_type_rules)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            placeholder = { Text("e.g. *:q8_0,attn*:f16") },
-                            supportingText = {
-                                Column {
-                                    Text(stringResource(R.string.imagegen_vae_gguf_note))
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(stringResource(R.string.imagegen_presets), style = MaterialTheme.typography.labelSmall)
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        listOf("f16", "q8_0", "q4_0").forEach { quant ->
-                                            AssistChip(
-                                                onClick = { settingsRepo.setSdTensorTypeRules("*: $quant") },
-                                                label = { Text(quant) }
-                                            )
-                                        }
-                                        AssistChip(
-                                            onClick = { settingsRepo.setSdTensorTypeRules("") },
-                                            label = { Text(stringResource(R.string.imagegen_default)) }
-                                        )
-                                    }
-                                }
-                            }
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }

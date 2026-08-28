@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -14,7 +15,12 @@ import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdLoraConfigurationException
+import com.example.llamadroid.sd.validateSdLoraModelCompatibility
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
@@ -51,11 +57,17 @@ class StableDiffusionService : Service() {
     private val modeLifecycleLock = Any()
     private val modeDiagnostics = mutableMapOf<SDMode, ActivityDiagnostics>()
     private val modeSessionIds = mutableMapOf<SdWorkLane, String>()
+    private val foregroundTimeoutGate = ForegroundTimeoutGate()
+    private val timedOutLanes = mutableSetOf<SdWorkLane>()
     private var workflowJob: Job? = null
+    @Volatile
+    private var workflowTimedOut = false
     private var notificationTaskId: Int? = null
     private lateinit var powerManager: PowerManager
     private var wakeLock: PowerManager.WakeLock? = null
     private var stallMonitorJob: Job? = null
+    @Volatile
+    private var latestStageTimings = SdStageTimings()
 
     private val _generationState = kotlinx.coroutines.flow.MutableStateFlow<SDGenerationState>(SDGenerationState.Idle)
     val generationState: kotlinx.coroutines.flow.StateFlow<SDGenerationState> = _generationState
@@ -119,6 +131,10 @@ class StableDiffusionService : Service() {
 
     private fun hasActiveModeJob(mode: SDMode, useDistributedStateHolder: Boolean): Boolean = synchronized(modeLifecycleLock) {
         modeJobs[laneFor(mode, useDistributedStateHolder)]?.isActive == true
+    }
+
+    private fun isModeProcessAlive(mode: SDMode): Boolean = synchronized(modeLifecycleLock) {
+        modeProcesses.any { (lane, process) -> lane.mode == mode && process.isAlive }
     }
 
     override fun onCreate() {
@@ -326,6 +342,7 @@ class StableDiffusionService : Service() {
         markActivity(config.mode, "starting")
         ensureStallMonitorRunning()
 
+        val lane = laneFor(config.mode, useDistributedStateHolder)
         storeModeJob(config.mode, useDistributedStateHolder, serviceScope.launch {
             try {
                 val result = executeGeneration(
@@ -341,20 +358,35 @@ class StableDiffusionService : Service() {
                 finishModeSession(config.mode, useDistributedStateHolder, "complete", File(config.modelPath).name)
                 completeForegroundTask(getString(R.string.imagegen_notification_complete))
             } catch (cancelled: CancellationException) {
-                markActivity(config.mode, "cancelled")
-                finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
-                DebugLog.log("[StableDiffusionService] ${config.mode} cancelled")
+                if (isTimedOutLane(lane)) {
+                    val message = timeoutMessage(cancelled)
+                    publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
+                    DebugLog.log("[StableDiffusionService] ${config.mode} stopped after foreground timeout")
+                } else {
+                    markActivity(config.mode, "cancelled")
+                    finishModeSession(config.mode, useDistributedStateHolder, "cancelled")
+                    DebugLog.log("[StableDiffusionService] ${config.mode} cancelled")
+                }
             } catch (e: Exception) {
-                val message = e.message ?: getString(R.string.error_generic)
-                markActivity(config.mode, "failed")
-                DebugLog.log("[StableDiffusionService] ${config.mode} failed: $message")
-                _generationState.value = SDGenerationState.Error(message)
-                modeStateHolder.updateState(SDGenerationState.Error(message))
-                finishModeSession(config.mode, useDistributedStateHolder, "failed", message)
-                failForegroundTask(message)
+                if (isTimedOutLane(lane)) {
+                    val message = getString(R.string.imagegen_error_media_processing_timeout)
+                    publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
+                    DebugLog.log(
+                        "[StableDiffusionService] ${config.mode} native process exited during foreground timeout: ${e.message}"
+                    )
+                } else {
+                    val message = e.message ?: getString(R.string.error_generic)
+                    markActivity(config.mode, "failed")
+                    DebugLog.log("[StableDiffusionService] ${config.mode} failed: $message")
+                    _generationState.value = SDGenerationState.Error(message)
+                    modeStateHolder.updateState(SDGenerationState.Error(message))
+                    finishModeSession(config.mode, useDistributedStateHolder, "failed", message)
+                    failForegroundTask(message)
+                }
             } finally {
                 removeModeProcess(config.mode, useDistributedStateHolder)
                 removeModeJob(config.mode, useDistributedStateHolder)
+                clearTimedOutLane(lane)
                 clearDiagnostics(config.mode)
                 cleanupAfterWork()
             }
@@ -378,6 +410,7 @@ class StableDiffusionService : Service() {
         markActivity(SDMode.UPSCALE, "starting")
         ensureStallMonitorRunning()
 
+        val lane = laneFor(SDMode.UPSCALE, useDistributedStateHolder)
         storeModeJob(SDMode.UPSCALE, useDistributedStateHolder, serviceScope.launch {
             try {
                 val result = executeUpscaleGeneration(
@@ -392,20 +425,35 @@ class StableDiffusionService : Service() {
                 finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "complete", File(config.modelPath).name)
                 completeForegroundTask(getString(R.string.imagegen_notification_complete))
             } catch (cancelled: CancellationException) {
-                markActivity(SDMode.UPSCALE, "cancelled")
-                finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "cancelled")
-                DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} cancelled")
+                if (isTimedOutLane(lane)) {
+                    val message = timeoutMessage(cancelled)
+                    publishTimeoutForLane(lane, message, event = "foreground_timeout_cancelled")
+                    DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} stopped after foreground timeout")
+                } else {
+                    markActivity(SDMode.UPSCALE, "cancelled")
+                    finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "cancelled")
+                    DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} cancelled")
+                }
             } catch (e: Exception) {
-                val message = e.message ?: getString(R.string.error_generic)
-                markActivity(SDMode.UPSCALE, "failed")
-                DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} failed: $message")
-                _generationState.value = SDGenerationState.Error(message)
-                modeStateHolder.updateState(SDGenerationState.Error(message))
-                finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "failed", message)
-                failForegroundTask(message)
+                if (isTimedOutLane(lane)) {
+                    val message = getString(R.string.imagegen_error_media_processing_timeout)
+                    publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
+                    DebugLog.log(
+                        "[StableDiffusionService] ${SDMode.UPSCALE} native process exited during foreground timeout: ${e.message}"
+                    )
+                } else {
+                    val message = e.message ?: getString(R.string.error_generic)
+                    markActivity(SDMode.UPSCALE, "failed")
+                    DebugLog.log("[StableDiffusionService] ${SDMode.UPSCALE} failed: $message")
+                    _generationState.value = SDGenerationState.Error(message)
+                    modeStateHolder.updateState(SDGenerationState.Error(message))
+                    finishModeSession(SDMode.UPSCALE, useDistributedStateHolder, "failed", message)
+                    failForegroundTask(message)
+                }
             } finally {
                 removeModeProcess(SDMode.UPSCALE, useDistributedStateHolder)
                 removeModeJob(SDMode.UPSCALE, useDistributedStateHolder)
+                clearTimedOutLane(lane)
                 clearDiagnostics(SDMode.UPSCALE)
                 cleanupAfterWork()
             }
@@ -468,26 +516,41 @@ class StableDiffusionService : Service() {
                 finishModeSession(SDMode.UPSCALE, false, "complete", File(workflowConfig.upscaleConfig.modelPath).name)
                 completeForegroundTask(getString(R.string.workflow_complete))
             } catch (cancelled: CancellationException) {
-                markActivity(SDMode.TXT2IMG, "workflow-cancelled")
-                markActivity(SDMode.UPSCALE, "workflow-cancelled")
-                finishModeSession(SDMode.TXT2IMG, false, "cancelled")
-                finishModeSession(SDMode.UPSCALE, false, "cancelled")
-                DebugLog.log("[StableDiffusionService] Workflow cancelled")
-            } catch (e: Exception) {
-                val message = e.message ?: getString(R.string.error_generic)
-                markActivity(SDMode.TXT2IMG, "workflow-failed")
-                markActivity(SDMode.UPSCALE, "workflow-failed")
-                finishModeSession(SDMode.TXT2IMG, false, "failed", message)
-                finishModeSession(SDMode.UPSCALE, false, "failed", message)
-                DebugLog.log("[StableDiffusionService] Workflow failed: $message")
-                val activeHolder = when {
-                    upscaleHolder.state.value is SDGenerationState.Generating -> upscaleHolder
-                    else -> txt2imgHolder
+                if (workflowTimedOut) {
+                    val message = timeoutMessage(cancelled)
+                    publishWorkflowTimeout(message, event = "foreground_timeout_cancelled")
+                    DebugLog.log("[StableDiffusionService] Workflow stopped after foreground timeout")
+                } else {
+                    markActivity(SDMode.TXT2IMG, "workflow-cancelled")
+                    markActivity(SDMode.UPSCALE, "workflow-cancelled")
+                    finishModeSession(SDMode.TXT2IMG, false, "cancelled")
+                    finishModeSession(SDMode.UPSCALE, false, "cancelled")
+                    DebugLog.log("[StableDiffusionService] Workflow cancelled")
                 }
-                activeHolder.updateState(SDGenerationState.Error(message))
-                failForegroundTask(message)
+            } catch (e: Exception) {
+                if (workflowTimedOut) {
+                    val message = getString(R.string.imagegen_error_media_processing_timeout)
+                    publishWorkflowTimeout(message, event = "foreground_timeout_failed")
+                    DebugLog.log(
+                        "[StableDiffusionService] Workflow native process exited during foreground timeout: ${e.message}"
+                    )
+                } else {
+                    val message = e.message ?: getString(R.string.error_generic)
+                    markActivity(SDMode.TXT2IMG, "workflow-failed")
+                    markActivity(SDMode.UPSCALE, "workflow-failed")
+                    finishModeSession(SDMode.TXT2IMG, false, "failed", message)
+                    finishModeSession(SDMode.UPSCALE, false, "failed", message)
+                    DebugLog.log("[StableDiffusionService] Workflow failed: $message")
+                    val activeHolder = when {
+                        upscaleHolder.state.value is SDGenerationState.Generating -> upscaleHolder
+                        else -> txt2imgHolder
+                    }
+                    activeHolder.updateState(SDGenerationState.Error(message))
+                    failForegroundTask(message)
+                }
             } finally {
                 workflowJob = null
+                workflowTimedOut = false
                 clearDiagnostics(SDMode.TXT2IMG)
                 clearDiagnostics(SDMode.UPSCALE)
                 cleanupAfterWork()
@@ -501,6 +564,8 @@ class StableDiffusionService : Service() {
         exportSubfolder: String?,
         useDistributedStateHolder: Boolean
     ): String = withContext(Dispatchers.IO) {
+        val startedAtMs = SystemClock.elapsedRealtime()
+        latestStageTimings = SdStageTimings()
         val startingSnapshot = buildStartingSnapshot(config)
         _generationState.value = SDGenerationState.Generating(startingSnapshot)
         _progress.value = 0f
@@ -515,6 +580,7 @@ class StableDiffusionService : Service() {
         postProcessOutputIfNeeded(config, outputFile)
         markActivity(config.mode, "exporting")
         exportImageIfConfigured(outputFile, exportSubfolder)
+        writeImageMetadata(config, outputFile, SystemClock.elapsedRealtime() - startedAtMs, latestStageTimings)
         markActivity(config.mode, "generated")
         clearDiagnostics(config.mode)
         result
@@ -525,6 +591,7 @@ class StableDiffusionService : Service() {
         modeStateHolder: SDModeStateHolder,
         useDistributedStateHolder: Boolean
     ): String = withContext(Dispatchers.IO) {
+        val startedAtMs = SystemClock.elapsedRealtime()
         val startingSnapshot = buildStartingSnapshot(config.upscaleRepeats.coerceAtLeast(1))
         _generationState.value = SDGenerationState.Generating(startingSnapshot)
         _progress.value = 0f
@@ -537,6 +604,7 @@ class StableDiffusionService : Service() {
         val outputFile = File(result)
         markActivity(SDMode.UPSCALE, "exporting")
         exportImageIfConfigured(outputFile, subfolderForMode(SDMode.UPSCALE))
+        writeUpscaleImageMetadata(config, outputFile, SystemClock.elapsedRealtime() - startedAtMs)
         markActivity(SDMode.UPSCALE, "generated")
         clearDiagnostics(SDMode.UPSCALE)
         result
@@ -575,12 +643,18 @@ class StableDiffusionService : Service() {
         sdBinary: File,
         useDistributedStateHolder: Boolean
     ): String = coroutineScope {
+        validateSdLoraLaunch(config)
+        validateOptionalComponentFile(
+            config.textualInversionPath,
+            getString(R.string.sd_type_textual_inversion)
+        )
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, sdBinary)
 
         val binaryCapabilities = probeSdBinaryCapabilities(applicationContext, sdBinary, binaryRepo)
         val args = mutableListOf(sdBinary.absolutePath)
         val effectiveConfig = config.copy(
-            maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB)
+            maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB),
+            sdRuntimeBackendMode = effectiveSdRuntimeBackendModeForBinary(sdBinary, config.sdRuntimeBackendMode)
         )
         try {
             args.addAll(
@@ -589,6 +663,10 @@ class StableDiffusionService : Service() {
                     binaryCapabilities = binaryCapabilities
                 )
             )
+        } catch (e: SdIpAdapterConfigurationException) {
+            throw SdConfigurationException(sdIpAdapterErrorMessage(this@StableDiffusionService, e))
+        } catch (e: SdADetailerConfigurationException) {
+            throw SdConfigurationException(sdADetailerErrorMessage(this@StableDiffusionService, e))
         } catch (e: SdMissingComponentsException) {
             throw IllegalStateException(
                 getString(
@@ -603,6 +681,15 @@ class StableDiffusionService : Service() {
                     e.flags.joinToString(", ")
                 )
             )
+        } catch (e: SdUnsupportedModesException) {
+            throw IllegalStateException(
+                getString(
+                    R.string.imagegen_error_binary_missing_modes,
+                    e.modes.joinToString(", ")
+                )
+            )
+        } catch (e: SdDisallowedDistributedFlagException) {
+            throw IllegalStateException(getString(R.string.sd_dist_error_row_split_not_supported))
         }
         DebugLog.log("[StableDiffusionService] Running command: ${args.joinToString(" ")}")
         if (config.mode == SDMode.UPSCALE) {
@@ -627,7 +714,7 @@ class StableDiffusionService : Service() {
         val progressTracker = SdProgressTracker(
             totalStepsHint = when (config.mode) {
                 SDMode.UPSCALE -> config.upscaleRepeats.coerceAtLeast(1)
-                else -> config.steps.coerceAtLeast(1)
+                SDMode.TXT2IMG, SDMode.IMG2IMG, SDMode.ADETAILER -> config.steps.coerceAtLeast(1)
             },
             startedAtMs = SystemClock.elapsedRealtime()
         )
@@ -636,7 +723,7 @@ class StableDiffusionService : Service() {
                 delay(1000)
                 progressTracker.tick(SystemClock.elapsedRealtime())?.let { liveSnapshot ->
                     val snapshot = liveSnapshot.copy(
-                        statusText = buildImageProgressStatus(liveSnapshot)
+                        statusText = withStageTimings(buildImageProgressStatus(liveSnapshot), latestStageTimings)
                     )
                     _progress.value = snapshot.progress
                     _generationState.value = SDGenerationState.Generating(snapshot)
@@ -654,11 +741,13 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
-                    markActivity(config.mode, "generating")
+                    markNativeOutput(config.mode)
                     DebugLog.log("SD: $line")
+                    latestStageTimings = latestStageTimings.withLine(line)
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
+                        markProgressActivity(config.mode, parsedSnapshot)
                         val snapshot = parsedSnapshot.copy(
-                            statusText = buildImageProgressStatus(parsedSnapshot)
+                            statusText = withStageTimings(buildImageProgressStatus(parsedSnapshot), latestStageTimings)
                         )
                         _progress.value = snapshot.progress
                         _generationState.value = SDGenerationState.Generating(snapshot)
@@ -686,6 +775,9 @@ class StableDiffusionService : Service() {
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
             throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
+        }
+        if (!File(config.outputPath).isFile) {
+            throw RuntimeException(getString(R.string.imagegen_error_output_missing))
         }
 
         config.outputPath
@@ -717,6 +809,64 @@ class StableDiffusionService : Service() {
         }
     }
 
+    private suspend fun validateSdLoraLaunch(config: SDConfig) {
+        val baseLoras = config.resolvedLoras()
+        val detailLoras = config.adetailer?.loras.orEmpty()
+        val allLoras = baseLoras + detailLoras
+        if (allLoras.isEmpty()) return
+
+        val validated = try {
+            // The base and ADetailer passes are independent native scopes. Reusing
+            // one adapter in both is valid; duplicates remain rejected within
+            // either ordered stack.
+            validateSdLoras(baseLoras, requireReadableFiles = true) +
+                validateSdLoras(detailLoras, requireReadableFiles = true)
+        } catch (error: SdLoraConfigurationException) {
+            throw IllegalStateException(
+                getString(R.string.imagegen_error_lora_invalid, error.message.orEmpty())
+            )
+        }
+
+        // The AI-tool API and the bundled pickers select installed model rows,
+        // but old saved commands can still contain a readable external path.
+        // Validate compatibility whenever the database has provenance for the
+        // selected adapter; do not reject legacy external files merely because
+        // an older database cannot describe their family.
+        val database = AppDatabase.getDatabase(applicationContext)
+        val models = database.modelDao().getModelsByTypesSync(
+            listOf(ModelType.SD_CHECKPOINT, ModelType.SD_DIFFUSION, ModelType.SD_LORA)
+        )
+        val baseModel = models.firstOrNull { it.path == config.modelPath }
+        if (baseModel != null) {
+            val knownLoras = models.filter { model ->
+                model.type == ModelType.SD_LORA && validated.any { it.path == model.path }
+            }
+            val issues = validateSdLoraModelCompatibility(baseModel, knownLoras)
+            if (issues.isNotEmpty()) {
+                val details = issues.joinToString(", ") { issue ->
+                    "${issue.index}:${issue.code.name.lowercase()}"
+                }
+                throw IllegalStateException(
+                    getString(R.string.imagegen_error_lora_invalid, details)
+                )
+            }
+        }
+    }
+
+    private fun validateOptionalComponentFile(path: String?, label: String) {
+        val selectedPath = path?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        val selectedFile = File(selectedPath)
+        if (!selectedFile.isFile || !selectedFile.canRead()) {
+            throw IllegalStateException(
+                getString(
+                    R.string.imagegen_error_component_file_missing,
+                    label,
+                    selectedPath
+                )
+            )
+        }
+    }
+
     private suspend fun runUpscaleGenerationWithBinary(
         config: SDUpscaleConfig,
         modeStateHolder: SDModeStateHolder,
@@ -740,6 +890,8 @@ class StableDiffusionService : Service() {
                     e.flags.joinToString(", ")
                 )
             )
+        } catch (e: SdDisallowedDistributedFlagException) {
+            throw IllegalStateException(getString(R.string.sd_dist_error_row_split_not_supported))
         }
 
         DebugLog.log("[StableDiffusionService] Running upscale command: ${args.joinToString(" ")}")
@@ -787,9 +939,10 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
-                    markActivity(SDMode.UPSCALE, "generating")
+                    markNativeOutput(SDMode.UPSCALE)
                     DebugLog.log("SD: $line")
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
+                        markProgressActivity(SDMode.UPSCALE, parsedSnapshot)
                         val snapshot = parsedSnapshot.copy(
                             statusText = buildImageProgressStatus(parsedSnapshot)
                         )
@@ -883,7 +1036,7 @@ class StableDiffusionService : Service() {
     private fun buildStartingSnapshot(config: SDConfig): SdProgressSnapshot {
         val totalSteps = when (config.mode) {
             SDMode.UPSCALE -> config.upscaleRepeats.coerceAtLeast(1)
-            else -> config.steps.coerceAtLeast(1)
+            SDMode.TXT2IMG, SDMode.IMG2IMG, SDMode.ADETAILER -> config.steps.coerceAtLeast(1)
         }
         return buildStartingSnapshot(totalSteps)
     }
@@ -896,14 +1049,21 @@ class StableDiffusionService : Service() {
     }
 
     private fun buildImageProgressStatus(snapshot: SdProgressSnapshot): String {
-        return if (snapshot.etaSeconds == null) {
-            getString(R.string.gen_status_calculating_eta)
-        } else {
-            getString(
-                R.string.gen_status_progress_with_eta,
-                SdProgressTracker.progressPercent(snapshot),
-                formatEtaShort(snapshot.etaSeconds)
-            )
+        val percent = SdProgressTracker.progressPercent(snapshot)
+        return when (snapshot.phase) {
+            SdProgressPhase.PREPARING -> getString(R.string.gen_status_preparing)
+            SdProgressPhase.VAE_ENCODING -> getString(R.string.gen_status_vae_encoding)
+            SdProgressPhase.CONDITIONING -> getString(R.string.gen_status_conditioning)
+            SdProgressPhase.DIFFUSION -> snapshot.etaSeconds?.let { eta ->
+                getString(
+                    R.string.gen_status_diffusion_progress_with_eta,
+                    percent,
+                    formatEtaShort(eta)
+                )
+            } ?: getString(R.string.gen_status_diffusion_progress, percent)
+            SdProgressPhase.VAE_DECODING -> getString(R.string.gen_status_vae_decoding)
+            SdProgressPhase.COMPOSITING -> getString(R.string.gen_status_compositing)
+            SdProgressPhase.SAVING -> getString(R.string.gen_status_saving)
         }
     }
 
@@ -935,7 +1095,7 @@ class StableDiffusionService : Service() {
     private fun completeForegroundTask(message: String) {
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.completeTask(taskId, message)
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundSafely("complete")
             notificationTaskId = null
             recordServiceBreadcrumb("foreground_completed", message)
         }
@@ -944,7 +1104,7 @@ class StableDiffusionService : Service() {
     private fun failForegroundTask(message: String) {
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.failTask(taskId, message)
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundSafely("fail")
             notificationTaskId = null
             recordServiceBreadcrumb("foreground_failed", message)
         }
@@ -953,10 +1113,17 @@ class StableDiffusionService : Service() {
     private fun dismissForegroundTask() {
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.dismissTask(taskId)
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopForegroundSafely("dismiss")
             notificationTaskId = null
             recordServiceBreadcrumb("foreground_dismissed", "taskId=$taskId")
         }
+    }
+
+    private fun stopForegroundSafely(reason: String) {
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+            .onFailure { error ->
+                DebugLog.log("[StableDiffusionService] stopForeground failed during $reason: ${error.message}")
+            }
     }
 
     private fun surfaceStartFailure(
@@ -1004,20 +1171,26 @@ class StableDiffusionService : Service() {
                 val now = SystemClock.elapsedRealtime()
                 modeDiagnostics.toMap().forEach { (mode, diagnostics) ->
                     val gapMs = now - diagnostics.lastActivityElapsedMs
-                    val bucket = stallBucketForGap(gapMs)
+                    val bucket = SdNativeLivenessPolicy.noOutputBucket(
+                        gapMs = gapMs,
+                        expectedWindowMs = diagnostics.expectedNoOutputWindowMs
+                    )
                     if (bucket > diagnostics.lastLoggedStallBucket) {
+                        if (!isModeProcessAlive(mode)) return@forEach
                         diagnostics.lastLoggedStallBucket = bucket
                         val message =
-                            "gap=${formatDuration(gapMs)} wakeLockHeld=${wakeLock?.isHeld == true} " +
+                            "gap=${formatDuration(gapMs)} " +
+                                "expectedWindow=${formatDuration(diagnostics.expectedNoOutputWindowMs)} " +
+                                "processAlive=true wakeLockHeld=${wakeLock?.isHeld == true} " +
                                 "workflowActive=${workflowJob?.isActive == true} " +
                                 "batteryExempt=${powerManager.isIgnoringBatteryOptimizations(packageName)} " +
                                 "interactive=${powerManager.isInteractive} powerSave=${powerManager.isPowerSaveMode}"
                         DebugLog.log(
-                            "[StableDiffusionService] Stall detected: mode=${mode.name} phase=${diagnostics.phase} $message"
+                            "[StableDiffusionService] No native output yet: mode=${mode.name} phase=${diagnostics.phase} $message"
                         )
                         recordModeBreadcrumb(
                             mode = mode,
-                            event = "stall_detected",
+                            event = "native_output_gap",
                             phase = diagnostics.phase,
                             details = message
                         )
@@ -1052,24 +1225,15 @@ class StableDiffusionService : Service() {
         if (diagnostics == null) {
             modeDiagnostics[mode] = ActivityDiagnostics(
                 phase = phase,
-                lastActivityElapsedMs = now
+                lastActivityElapsedMs = now,
+                expectedNoOutputWindowMs = DEFAULT_NATIVE_OUTPUT_WINDOW_MS
             )
             recordModeBreadcrumb(mode, "phase_changed", phase = phase)
             return
         }
 
         val gapMs = now - diagnostics.lastActivityElapsedMs
-        if (diagnostics.lastLoggedStallBucket > 0 && gapMs >= STALL_THRESHOLD_MS_1) {
-            val message =
-                "afterGap=${formatDuration(gapMs)} wakeLockHeld=${wakeLock?.isHeld == true} " +
-                    "workflowActive=${workflowJob?.isActive == true} " +
-                    "batteryExempt=${powerManager.isIgnoringBatteryOptimizations(packageName)} " +
-                    "interactive=${powerManager.isInteractive} powerSave=${powerManager.isPowerSaveMode}"
-            DebugLog.log(
-                "[StableDiffusionService] Activity resumed: mode=${mode.name} phase=$phase $message"
-            )
-            recordModeBreadcrumb(mode, "activity_resumed", phase = phase, details = message)
-        }
+        recordNativeOutputResumedIfNeeded(mode, diagnostics, gapMs, phase)
 
         val phaseChanged = diagnostics.phase != phase
         diagnostics.phase = phase
@@ -1080,15 +1244,58 @@ class StableDiffusionService : Service() {
         }
     }
 
-    private fun clearDiagnostics(mode: SDMode) {
-        modeDiagnostics.remove(mode)
+    /** Records real native output. The one-second ETA ticker never calls this. */
+    private fun markNativeOutput(mode: SDMode) {
+        val now = SystemClock.elapsedRealtime()
+        val diagnostics = modeDiagnostics[mode]
+        if (diagnostics == null) {
+            modeDiagnostics[mode] = ActivityDiagnostics(
+                phase = "generating",
+                lastActivityElapsedMs = now,
+                expectedNoOutputWindowMs = DEFAULT_NATIVE_OUTPUT_WINDOW_MS
+            )
+            return
+        }
+        val gapMs = now - diagnostics.lastActivityElapsedMs
+        recordNativeOutputResumedIfNeeded(mode, diagnostics, gapMs, diagnostics.phase)
+        diagnostics.lastActivityElapsedMs = now
+        diagnostics.lastLoggedStallBucket = 0
     }
 
-    private fun stallBucketForGap(gapMs: Long): Int = when {
-        gapMs >= STALL_THRESHOLD_MS_3 -> 3
-        gapMs >= STALL_THRESHOLD_MS_2 -> 2
-        gapMs >= STALL_THRESHOLD_MS_1 -> 1
-        else -> 0
+    private fun markProgressActivity(mode: SDMode, snapshot: SdProgressSnapshot) {
+        val diagnostics = modeDiagnostics[mode] ?: return
+        val phase = snapshot.phase.diagnosticName
+        val phaseChanged = diagnostics.phase != phase
+        diagnostics.phase = phase
+        diagnostics.expectedNoOutputWindowMs =
+            SdNativeLivenessPolicy.expectedNoOutputWindowMs(snapshot)
+        if (phaseChanged) {
+            recordModeBreadcrumb(mode, "phase_changed", phase = phase)
+        }
+    }
+
+    private fun recordNativeOutputResumedIfNeeded(
+        mode: SDMode,
+        diagnostics: ActivityDiagnostics,
+        gapMs: Long,
+        phase: String
+    ) {
+        if (diagnostics.lastLoggedStallBucket <= 0 ||
+            gapMs < diagnostics.expectedNoOutputWindowMs
+        ) return
+        val message =
+            "afterGap=${formatDuration(gapMs)} wakeLockHeld=${wakeLock?.isHeld == true} " +
+                "workflowActive=${workflowJob?.isActive == true} " +
+                "batteryExempt=${powerManager.isIgnoringBatteryOptimizations(packageName)} " +
+                "interactive=${powerManager.isInteractive} powerSave=${powerManager.isPowerSaveMode}"
+        DebugLog.log(
+            "[StableDiffusionService] Native output resumed: mode=${mode.name} phase=$phase $message"
+        )
+        recordModeBreadcrumb(mode, "native_output_resumed", phase = phase, details = message)
+    }
+
+    private fun clearDiagnostics(mode: SDMode) {
+        modeDiagnostics.remove(mode)
     }
 
     private fun formatDuration(durationMs: Long): String {
@@ -1114,6 +1321,7 @@ class StableDiffusionService : Service() {
                 SDMode.TXT2IMG -> SDModeStateHolder.workflowTxt2img
                 SDMode.UPSCALE -> SDModeStateHolder.workflowUpscale
                 SDMode.IMG2IMG -> SDModeStateHolder.getForMode(mode)
+                SDMode.ADETAILER -> SDModeStateHolder.getForMode(mode)
             }
         } else {
             SDModeStateHolder.getForMode(mode)
@@ -1122,19 +1330,21 @@ class StableDiffusionService : Service() {
     private fun subfolderForMode(mode: SDMode): String = when (mode) {
         SDMode.TXT2IMG -> "txt2img"
         SDMode.IMG2IMG -> "img2img"
+        SDMode.ADETAILER -> "adetailer"
         SDMode.UPSCALE -> "upscaled"
     }
 
     private fun modeLabel(mode: SDMode): String = when (mode) {
         SDMode.TXT2IMG -> getString(R.string.imagegen_mode_txt2img)
         SDMode.IMG2IMG -> getString(R.string.imagegen_mode_img2img)
+        SDMode.ADETAILER -> getString(R.string.imagegen_mode_adetailer)
         SDMode.UPSCALE -> getString(R.string.imagegen_mode_upscale)
     }
 
     private fun postProcessOutputIfNeeded(config: SDConfig, outputFile: File) {
         if (!outputFile.exists()) return
         val initImagePath = config.initImage ?: return
-        if (config.mode != SDMode.IMG2IMG) return
+        if (config.mode !in setOf(SDMode.IMG2IMG, SDMode.ADETAILER)) return
 
         try {
             val (origWidth, origHeight) = decodeImageBounds(initImagePath) ?: return
@@ -1247,6 +1457,199 @@ class StableDiffusionService : Service() {
             DebugLog.log("[StableDiffusionService] Failed to copy to custom folder: ${e.message}")
         }
     }
+
+    private fun writeImageMetadata(
+        config: SDConfig,
+        outputFile: File,
+        generationDurationMs: Long,
+        stageTimings: SdStageTimings
+    ) {
+        if (!outputFile.exists()) return
+        runCatching {
+            SdGeneratedImageMetadata.fromConfig(config, outputFile, generationDurationMs, stageTimings)
+                .writeToFile()
+        }.onFailure { error ->
+            DebugLog.log("[StableDiffusionService] Failed to write image metadata: ${error.message}")
+        }
+    }
+
+    private fun withStageTimings(status: String, timings: SdStageTimings): String {
+        val values = listOfNotNull(
+            timings.conditioningMs?.let { getString(R.string.sd_stage_conditioning, formatStageDuration(it)) },
+            timings.samplingMs?.let { getString(R.string.sd_stage_sampling, formatStageDuration(it)) },
+            timings.decodingMs?.let { getString(R.string.sd_stage_decoding, formatStageDuration(it)) }
+        )
+        return if (values.isEmpty()) status else "$status • ${values.joinToString(" • ")}"
+    }
+
+    private fun formatStageDuration(durationMs: Long): String = "${durationMs / 1_000.0}s"
+
+    private fun writeUpscaleImageMetadata(config: SDUpscaleConfig, outputFile: File, generationDurationMs: Long) {
+        if (!outputFile.exists()) return
+        runCatching {
+            SdGeneratedImageMetadata.fromUpscaleConfig(config, outputFile, generationDurationMs)
+                .writeToFile()
+        }.onFailure { error ->
+            DebugLog.log("[StableDiffusionService] Failed to write upscale metadata: ${error.message}")
+        }
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        if (!isMediaProcessingForegroundTimeout(
+                fgsType,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+            )
+        ) {
+            super.onTimeout(startId, fgsType)
+            return
+        }
+        handleMediaProcessingForegroundTimeout(startId, fgsType)
+    }
+
+    private fun handleMediaProcessingForegroundTimeout(startId: Int, fgsType: Int) {
+        if (!foregroundTimeoutGate.tryEnter()) {
+            recordServiceBreadcrumb(
+                "foreground_timeout_duplicate",
+                "startId=$startId fgsType=$fgsType"
+            )
+            stopSelf()
+            return
+        }
+
+        val message = getString(R.string.imagegen_error_media_processing_timeout)
+        DebugLog.log(
+            "[StableDiffusionService] Foreground media-processing timeout: startId=$startId fgsType=$fgsType"
+        )
+        recordServiceBreadcrumb("foreground_timeout", "startId=$startId fgsType=$fgsType")
+
+        val workflowJobSnapshot = workflowJob
+        val workflowActive = workflowJobSnapshot?.isActive == true
+        val activeLanes = snapshotTimeoutLanes()
+        markTimedOut(activeLanes, workflowActive)
+
+        if (workflowActive) {
+            publishWorkflowTimeout(message, event = "foreground_timeout")
+        } else {
+            activeLanes.forEach { lane ->
+                publishTimeoutForLane(lane, message, event = "foreground_timeout")
+            }
+        }
+
+        val jobs = clearAllModeJobs()
+        val processes = clearAllModeProcesses()
+        workflowJob = null
+        jobs.forEach { job ->
+            job.cancel(MediaProcessingForegroundTimeoutCancellation(message))
+        }
+        workflowJobSnapshot?.cancel(MediaProcessingForegroundTimeoutCancellation(message))
+        forceStopProcesses(processes, "foreground_timeout")
+
+        stallMonitorJob?.cancel()
+        stallMonitorJob = null
+        modeDiagnostics.clear()
+        failForegroundTask(message)
+        releaseWakeLocksForTimeout()
+        stopSelf()
+    }
+
+    private fun snapshotTimeoutLanes(): List<SdWorkLane> = synchronized(modeLifecycleLock) {
+        (modeJobs.keys + modeProcesses.keys + modeSessionIds.keys).distinct()
+    }
+
+    private fun markTimedOut(lanes: List<SdWorkLane>, workflow: Boolean) {
+        synchronized(modeLifecycleLock) {
+            timedOutLanes.addAll(lanes)
+            if (workflow) workflowTimedOut = true
+        }
+    }
+
+    private fun isTimedOutLane(lane: SdWorkLane): Boolean = synchronized(modeLifecycleLock) {
+        lane in timedOutLanes
+    }
+
+    private fun clearTimedOutLane(lane: SdWorkLane) {
+        synchronized(modeLifecycleLock) {
+            timedOutLanes.remove(lane)
+        }
+    }
+
+    private fun publishTimeoutForLane(
+        lane: SdWorkLane,
+        message: String,
+        event: String
+    ) {
+        markActivity(lane.mode, "timeout")
+        recordModeBreadcrumb(
+            mode = lane.mode,
+            event = event,
+            phase = "timeout",
+            details = message
+        )
+        _generationState.value = SDGenerationState.Error(message)
+        _progress.value = 0f
+        getModeStateHolder(
+            mode = lane.mode,
+            useWorkflowStateHolder = false,
+            useDistributedStateHolder = lane.useDistributedStateHolder
+        ).updateState(SDGenerationState.Error(message))
+        finishModeSession(
+            mode = lane.mode,
+            useDistributedStateHolder = lane.useDistributedStateHolder,
+            outcome = "timeout",
+            details = message
+        )
+    }
+
+    private fun publishWorkflowTimeout(message: String, event: String) {
+        markActivity(SDMode.TXT2IMG, "workflow-timeout")
+        markActivity(SDMode.UPSCALE, "workflow-timeout")
+        recordModeBreadcrumb(
+            mode = SDMode.TXT2IMG,
+            event = event,
+            phase = "timeout",
+            details = message
+        )
+        recordModeBreadcrumb(
+            mode = SDMode.UPSCALE,
+            event = event,
+            phase = "timeout",
+            details = message
+        )
+        _generationState.value = SDGenerationState.Error(message)
+        _progress.value = 0f
+        SDModeStateHolder.workflowTxt2img.updateState(SDGenerationState.Error(message))
+        SDModeStateHolder.workflowUpscale.updateState(SDGenerationState.Error(message))
+        finishModeSession(SDMode.TXT2IMG, false, "timeout", message)
+        finishModeSession(SDMode.UPSCALE, false, "timeout", message)
+    }
+
+    private fun forceStopProcesses(processes: Iterable<Process>, reason: String) {
+        processes.forEach { process ->
+            runCatching {
+                if (process.isAlive) {
+                    DebugLog.log("[StableDiffusionService] Force-stopping native process for $reason")
+                    process.destroyForcibly()
+                }
+            }.onFailure { error ->
+                DebugLog.log("[StableDiffusionService] Failed to force-stop native process: ${error.message}")
+            }
+        }
+    }
+
+    private fun releaseWakeLocksForTimeout() {
+        if (wakeLock?.isHeld == true) {
+            runCatching { wakeLock?.release() }
+                .onSuccess {
+                    DebugLog.log("[StableDiffusionService] WakeLock released after foreground timeout")
+                    recordServiceBreadcrumb("wake_lock_released", "foreground_timeout")
+                }
+        }
+        WakeLockManager.releaseWifiLock("StableDiffusionService")
+    }
+
+    private fun timeoutMessage(cancelled: CancellationException): String =
+        (cancelled as? MediaProcessingForegroundTimeoutCancellation)?.userMessage
+            ?: getString(R.string.imagegen_error_media_processing_timeout)
 
     override fun onDestroy() {
         recordServiceBreadcrumb("service_destroyed")
@@ -1397,6 +1800,8 @@ class StableDiffusionService : Service() {
         SdComponentRole.CONTROLNET -> getString(R.string.imagegen_component_controlnet)
         SdComponentRole.LORA -> getString(R.string.imagegen_component_lora)
         SdComponentRole.PHOTOMAKER -> getString(R.string.imagegen_component_photomaker)
+        SdComponentRole.CLIP_VISION -> getString(R.string.sd_type_clip_vision)
+        SdComponentRole.IP_ADAPTER -> getString(R.string.sd_type_ip_adapter)
         SdComponentRole.UPSCALER -> getString(R.string.imagegen_component_upscaler)
         SdComponentRole.MAIN_MODEL -> getString(R.string.imagegen_component_main_model)
     }
@@ -1427,7 +1832,9 @@ class StableDiffusionService : Service() {
                 output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
             }.getOrNull()
         }
-        val capabilities = helpCapabilities.maxByOrNull { it.supportedFlags.size } ?: return@withContext null
+        val capabilities = helpCapabilities.maxByOrNull {
+            it.supportedFlags.size + it.supportedModes.size
+        } ?: return@withContext null
 
         capabilities.also {
             cachedSdCapabilityBinaryPath = sdBinary.absolutePath
@@ -1442,13 +1849,7 @@ class StableDiffusionService : Service() {
         if (sourceDir == null) return
 
         val binaryName = File(binaryPath).name
-        val tier = when {
-            binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"
-            binaryName.contains("_armv9") -> "_armv9"
-            binaryName.contains("_dotprod") -> "_dotprod"
-            binaryName.contains("_baseline") -> "_baseline"
-            else -> ""
-        }
+        val tier = inferSdRuntimeTierSuffix(binaryName)
 
         DebugLog.log("StableDiffusionService: Inferred tier '$tier' from $binaryName")
 
@@ -1513,9 +1914,7 @@ class StableDiffusionService : Service() {
         private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_sd_use_distributed_holder"
         private const val WORKFLOW_OUTPUT_SUBFOLDER = "workflow"
         private const val STALL_MONITOR_INTERVAL_MS = 15_000L
-        private const val STALL_THRESHOLD_MS_1 = 60_000L
-        private const val STALL_THRESHOLD_MS_2 = 120_000L
-        private const val STALL_THRESHOLD_MS_3 = 300_000L
+        private const val DEFAULT_NATIVE_OUTPUT_WINDOW_MS = 5 * 60_000L
         private const val DIAGNOSTIC_SOURCE = "image_generation"
         private const val COMMAND_BREADCRUMB_LIMIT = 768
         private var cachedSdCapabilityBinaryPath: String? = null
@@ -1581,6 +1980,7 @@ class StableDiffusionService : Service() {
     private data class ActivityDiagnostics(
         var phase: String,
         var lastActivityElapsedMs: Long,
+        var expectedNoOutputWindowMs: Long,
         var lastLoggedStallBucket: Int = 0
     )
 }
@@ -1601,7 +2001,9 @@ sealed class SDGenerationState {
 enum class SDMode {
     TXT2IMG,
     IMG2IMG,
-    UPSCALE
+    UPSCALE,
+    /** Detector-guided detail repair. It may optionally carry an img2img source. */
+    ADETAILER
 }
 
 /**
@@ -1702,6 +2104,7 @@ class SDModeStateHolder(val mode: SDMode) {
     companion object {
         val txt2img = SDModeStateHolder(SDMode.TXT2IMG)
         val img2img = SDModeStateHolder(SDMode.IMG2IMG)
+        val adetailer = SDModeStateHolder(SDMode.ADETAILER)
         val upscale = SDModeStateHolder(SDMode.UPSCALE)
 
         val workflowTxt2img = SDModeStateHolder(SDMode.TXT2IMG)
@@ -1709,17 +2112,20 @@ class SDModeStateHolder(val mode: SDMode) {
 
         val distributedTxt2img = SDModeStateHolder(SDMode.TXT2IMG)
         val distributedImg2img = SDModeStateHolder(SDMode.IMG2IMG)
+        val distributedAdetailer = SDModeStateHolder(SDMode.ADETAILER)
         val distributedUpscale = SDModeStateHolder(SDMode.UPSCALE)
 
         fun getForMode(mode: SDMode): SDModeStateHolder = when (mode) {
             SDMode.TXT2IMG -> txt2img
             SDMode.IMG2IMG -> img2img
+            SDMode.ADETAILER -> adetailer
             SDMode.UPSCALE -> upscale
         }
 
         fun getDistributedForMode(mode: SDMode): SDModeStateHolder = when (mode) {
             SDMode.TXT2IMG -> distributedTxt2img
             SDMode.IMG2IMG -> distributedImg2img
+            SDMode.ADETAILER -> distributedAdetailer
             SDMode.UPSCALE -> distributedUpscale
         }
 

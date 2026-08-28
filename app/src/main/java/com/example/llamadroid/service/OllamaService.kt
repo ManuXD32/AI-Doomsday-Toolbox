@@ -108,7 +108,8 @@ class OllamaService(private val context: Context) {
             thinkingEnabled: Boolean,
             useMmap: Boolean,
             numThreads: Int,
-            numCtx: Int
+            numCtx: Int,
+            maxOutputTokens: Int? = null
         ): JSONObject = JSONObject().apply {
             put("model", model)
             put("stream", true)
@@ -130,12 +131,13 @@ class OllamaService(private val context: Context) {
                         msg.toolCalls?.takeIf { it.isNotEmpty() }?.let { calls ->
                             put("tool_calls", JSONArray().apply {
                                 for (tc in calls) {
+                                    val rawArguments = canonicalToolArguments(tc)
                                     put(JSONObject().apply {
-                                        put("id", tc.id ?: "call_${System.nanoTime()}")
+                                        put("id", tc.id ?: stableToolCallId(tc.name, rawArguments))
                                         put("type", "function")
                                         put("function", JSONObject().apply {
                                             put("name", tc.name)
-                                            put("arguments", JSONObject(tc.arguments as Map<*, *>))
+                                            put("arguments", JSONObject(rawArguments))
                                         })
                                     })
                                 }
@@ -147,24 +149,18 @@ class OllamaService(private val context: Context) {
 
             if (tools.isNotEmpty()) {
                 put("tools", JSONArray().apply {
-                    for (tool in tools) {
+                    for (tool in tools.sortedBy { it.name }) {
                         put(JSONObject().apply {
                             put("type", "function")
                             put("function", JSONObject().apply {
                                 put("name", tool.name)
                                 put("description", tool.description)
-                                put("parameters", JSONObject().apply {
-                                    put("type", "object")
-                                    put("properties", JSONObject().apply {
-                                        for ((paramName, paramDesc) in tool.parameters) {
-                                            put(paramName, JSONObject().apply {
-                                                put("type", "string")
-                                                put("description", paramDesc)
-                                            })
-                                        }
-                                    })
-                                    put("required", JSONArray(tool.requiredParams))
-                                })
+                                put(
+                                    "parameters",
+                                    tool.schemaJson
+                                        ?.let { schema -> runCatching { JSONObject(schema) }.getOrNull() }
+                                        ?: JSONObject(legacyToolSchemaJson(tool))
+                                )
                             })
                         })
                     }
@@ -175,6 +171,7 @@ class OllamaService(private val context: Context) {
                 put("use_mmap", useMmap)
                 put("num_thread", numThreads)
                 put("num_ctx", numCtx)
+                maxOutputTokens?.takeIf { it > 0 }?.let { put("num_predict", it) }
             })
         }
 
@@ -243,7 +240,15 @@ class OllamaService(private val context: Context) {
     data class ToolCall(
         val name: String,
         val arguments: Map<String, String>,
-        val id: String? = null
+        val id: String? = null,
+        /**
+         * Exact function-arguments JSON received from the backend.
+         *
+         * llama.cpp prompt-cache reuse depends on preserving the byte/token prefix
+         * across tool continuations. Keep the original JSON when available instead
+         * of rebuilding it from a Map with potentially different key ordering.
+         */
+        val rawArgumentsJson: String? = null
     )
     
     data class ChatMessage(
@@ -326,28 +331,26 @@ class OllamaService(private val context: Context) {
 
         val wasConnected = _isConnected.value
         try {
-            RemoteAgentProtection.withProtection(_baseUrl.value, "Checking remote Ollama connection…") {
-                RemoteBackendResilience.runWithSingleRetry(
-                    onRetry = { firstError ->
-                        _isRecovering.value = true
-                        DebugLog.log("[$TAG] Connection state: ${if (wasConnected) "connected" else "offline"} -> recovering (${RemoteBackendResilience.summarize(firstError)})")
+            RemoteBackendResilience.runWithSingleRetry(
+                onRetry = { firstError ->
+                    _isRecovering.value = true
+                    DebugLog.log("[$TAG] Connection state: ${if (wasConnected) "connected" else "offline"} -> recovering (${RemoteBackendResilience.summarize(firstError)})")
+                }
+            ) {
+                val url = URL("${_baseUrl.value}/api/tags")
+                val conn = url.openConnection() as HttpURLConnection
+                try {
+                    conn.requestMethod = "GET"
+                    conn.connectTimeout = 5000
+                    conn.readTimeout = 5000
+                    val responseCode = conn.responseCode
+                    if (responseCode != 200) {
+                        throw IllegalStateException("HTTP $responseCode")
                     }
-                ) {
-                    val url = URL("${_baseUrl.value}/api/tags")
-                    val conn = url.openConnection() as HttpURLConnection
-                    try {
-                        conn.requestMethod = "GET"
-                        conn.connectTimeout = 5000
-                        conn.readTimeout = 5000
-                        val responseCode = conn.responseCode
-                        if (responseCode != 200) {
-                            throw IllegalStateException("HTTP $responseCode")
-                        }
-                        val response = conn.inputStream.bufferedReader().readText()
-                        parseModels(response)
-                    } finally {
-                        conn.disconnect()
-                    }
+                    val response = conn.inputStream.bufferedReader().readText()
+                    _availableModels.value = parseModels(response)
+                } finally {
+                    conn.disconnect()
                 }
             }
 
@@ -381,18 +384,26 @@ class OllamaService(private val context: Context) {
     /**
      * Get list of installed models
      */
-    suspend fun listModels(): List<OllamaModel> = withContext(Dispatchers.IO) {
+    suspend fun listModels(baseUrlOverride: String? = null): List<OllamaModel> = withContext(Dispatchers.IO) {
         try {
-            val url = URL("${_baseUrl.value}/api/tags")
+            val effectiveBaseUrl = baseUrlOverride
+                ?.trim()
+                ?.trimEnd('/')
+                ?.takeIf { it.startsWith("http://", ignoreCase = true) || it.startsWith("https://", ignoreCase = true) }
+                ?: _baseUrl.value.trimEnd('/')
+            val url = URL("$effectiveBaseUrl/api/tags")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.connectTimeout = 10000
             
             if (conn.responseCode == 200) {
                 val response = conn.inputStream.bufferedReader().readText()
-                parseModels(response)
+                val models = parseModels(response)
                 conn.disconnect()
-                _availableModels.value
+                if (baseUrlOverride.isNullOrBlank()) {
+                    _availableModels.value = models
+                }
+                models
             } else {
                 conn.disconnect()
                 emptyList()
@@ -403,10 +414,10 @@ class OllamaService(private val context: Context) {
         }
     }
     
-    private fun parseModels(response: String) {
+    private fun parseModels(response: String): List<OllamaModel> {
         try {
             val json = JSONObject(response)
-            val modelsArray = json.optJSONArray("models") ?: return
+            val modelsArray = json.optJSONArray("models") ?: return emptyList()
             
             val models = mutableListOf<OllamaModel>()
             for (i in 0 until modelsArray.length()) {
@@ -418,9 +429,10 @@ class OllamaService(private val context: Context) {
                     digest = model.optString("digest", "")
                 ))
             }
-            _availableModels.value = models
+            return models
         } catch (e: Exception) {
             DebugLog.log("[$TAG] Failed to parse models: ${e.message}")
+            return emptyList()
         }
     }
     
@@ -430,6 +442,7 @@ class OllamaService(private val context: Context) {
      * @param model Model name (e.g., "qwen2.5-coder:3b")
      * @param messages Chat history
      * @param tools Available tools for the model to use
+     * @param baseUrlOverride Optional endpoint override for a named agent configuration
      * @param onChunk Callback for (contentChunk, thinkingChunk)
      * @return Final response with potential tool calls
      */
@@ -439,6 +452,8 @@ class OllamaService(private val context: Context) {
         tools: List<AgentTool> = emptyList(),
         thinkingEnabled: Boolean = true,
         numCtxOverride: Int? = null,
+        maxOutputTokens: Int? = null,
+        baseUrlOverride: String? = null,
         onChunk: (String?, String?) -> Unit = { _, _ -> }
     ): Result<ChatResponse> = withContext(Dispatchers.IO) {
         activeChatRequests.incrementAndGet()
@@ -451,7 +466,9 @@ class OllamaService(private val context: Context) {
         }
 
         try {
-            val chatResponse = RemoteAgentProtection.withProtection(_baseUrl.value, "Running remote Ollama agent…") {
+            val effectiveBaseUrl = baseUrlOverride?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+                ?: _baseUrl.value
+            val chatResponse = RemoteAgentProtection.withProtection(effectiveBaseUrl, "Running remote Ollama agent…") {
                 RemoteBackendResilience.runWithSingleRetry(
                     onRetry = { firstError ->
                         _isRecovering.value = true
@@ -459,7 +476,16 @@ class OllamaService(private val context: Context) {
                     },
                     shouldRetry = { !sawStreamOutput }
                 ) {
-                    performChatWithToolsStreaming(model, messages, tools, thinkingEnabled, numCtxOverride, guardedOnChunk)
+                    performChatWithToolsStreaming(
+                        model,
+                        messages,
+                        tools,
+                        thinkingEnabled,
+                        numCtxOverride,
+                        maxOutputTokens,
+                        guardedOnChunk,
+                        effectiveBaseUrl
+                    )
                 }
             }
             _isConnected.value = true
@@ -490,9 +516,11 @@ class OllamaService(private val context: Context) {
         tools: List<AgentTool>,
         thinkingEnabled: Boolean,
         numCtxOverride: Int?,
-        onChunk: (String?, String?) -> Unit
+        maxOutputTokens: Int?,
+        onChunk: (String?, String?) -> Unit,
+        baseUrl: String
     ): ChatResponse {
-        val url = URL("${_baseUrl.value}/api/chat")
+        val url = URL("$baseUrl/api/chat")
         val conn = url.openConnection() as HttpURLConnection
         return withTrackedConnection(conn) { trackedConn ->
             trackedConn.requestMethod = "POST"
@@ -509,7 +537,8 @@ class OllamaService(private val context: Context) {
                 thinkingEnabled = thinkingEnabled,
                 useMmap = _useMmap.value,
                 numThreads = _numThreads.value,
-                numCtx = AgentRuntimeSupport.resolveChatNumCtx(_numCtx.value, numCtxOverride)
+                numCtx = AgentRuntimeSupport.resolveChatNumCtx(_numCtx.value, numCtxOverride),
+                maxOutputTokens = maxOutputTokens
             )
 
             OutputStreamWriter(trackedConn.outputStream).use { it.write(requestJson.toString()); it.flush() }
@@ -596,7 +625,14 @@ class OllamaService(private val context: Context) {
                             argsObj.keys().forEach { args[it] = argsObj.get(it).toString() }
 
                             DebugLog.log("[$TAG] Detected tool call: $name (id: $id)")
-                            toolCalls?.add(ToolCall(name, args, id))
+                            toolCalls?.add(
+                                ToolCall(
+                                    name = name,
+                                    arguments = args,
+                                    id = id,
+                                    rawArgumentsJson = argsObj.toString()
+                                )
+                            )
                         }
                     }
                 }
@@ -691,18 +727,12 @@ class OllamaService(private val context: Context) {
                                 put("function", JSONObject().apply {
                                     put("name", tool.name)
                                     put("description", tool.description)
-                                    put("parameters", JSONObject().apply {
-                                        put("type", "object")
-                                        put("properties", JSONObject().apply {
-                                            for ((paramName, paramDesc) in tool.parameters) {
-                                                put(paramName, JSONObject().apply {
-                                                    put("type", "string")
-                                                    put("description", paramDesc)
-                                                })
-                                            }
-                                        })
-                                        put("required", JSONArray(tool.requiredParams))
-                                    })
+                                    put(
+                                        "parameters",
+                                        tool.schemaJson
+                                            ?.let { schema -> runCatching { JSONObject(schema) }.getOrNull() }
+                                            ?: JSONObject(legacyToolSchemaJson(tool))
+                                    )
                                 })
                             }
                             toolsArray.put(toolObj)
@@ -763,7 +793,8 @@ class OllamaService(private val context: Context) {
                                                     }
                                                     map
                                                 } ?: emptyMap(),
-                                                id = id
+                                                id = id,
+                                                rawArgumentsJson = args?.toString()
                                             ))
                                         }
                                     }
@@ -872,5 +903,10 @@ data class AgentTool(
     val name: String,
     val description: String,
     val parameters: Map<String, String>,  // paramName -> description
-    val requiredParams: List<String> = emptyList()
+    val requiredParams: List<String> = emptyList(),
+    /**
+     * Optional canonical JSON Schema. This is used for nested tools such as
+     * structured questions while retaining the legacy flat parameter API.
+     */
+    val schemaJson: String? = null
 )

@@ -1,8 +1,17 @@
 package com.example.llamadroid.service
 
 import android.os.Parcelable
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdLoraApplyMode
 import kotlinx.parcelize.Parcelize
+
+@Parcelize
+data class SdIpAdapterConfig(
+    val adapterPath: String,
+    val clipVisionPath: String,
+    val imagePath: String,
+    val strength: Float = 1.0f
+) : Parcelable
 
 /**
  * Configuration for stable-diffusion.cpp image generation
@@ -18,10 +27,13 @@ data class SDConfig(
     val cfgScale: Float = 7.0f,
     val seed: Long = -1, // -1 for random
     val samplingMethod: SamplingMethod = SamplingMethod.EULER_A,
+    val scheduler: SdScheduler? = null,
     val outputPath: String,
     // img2img specific
     val initImage: String? = null,
+    val maskImage: String? = null,
     val strength: Float = 0.75f,
+    val imgCfgScale: Float? = null,
     // Upscale specific
     val upscaleModel: String? = null,
     val upscaleRepeats: Int = 1,
@@ -58,11 +70,24 @@ data class SDConfig(
     val loraPath: String? = null,
     val loraStrength: Float = 1.0f,
     val loraApplyMode: SdLoraApplyMode? = null,
+    /** Ordered multi-LoRA list. Empty means use the legacy single-LoRA fields. */
+    val loras: List<SdLoraSpec> = emptyList(),
+    // Textual inversion embedding (optional). stable-diffusion.cpp loads all
+    // embeddings from its parent directory and resolves this file's stem as a
+    // prompt token.
+    val textualInversionPath: String? = null,
     // PhotoMaker (optional)
     val photoMakerPath: String? = null,
+    // IP-Adapter (classic and Plus share the same upstream CLI flags)
+    val ipAdapter: SdIpAdapterConfig? = null,
+    val adetailer: SdADetailerConfig? = null,
+    // Dedicated ADetailer preserves the source resolution unless the user
+    // explicitly opts into resizing the entire source before detection.
+    val adetailerResizeInput: Boolean = false,
     // Family-specific runtime flags
     val flowShift: Float? = null,
     val diffusionFa: Boolean = false,
+    val diffusionConvDirect: Boolean = false,
     val mmap: Boolean = false,
     val vaeConvDirect: Boolean = false,
     val qwenImageZeroCondT: Boolean = false,
@@ -73,8 +98,22 @@ data class SDConfig(
     // Quantization type for stable-diffusion.cpp (--type)
     val quantizationType: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
-    val customFlags: String = ""
+    val customFlags: String = "",
+    // User-facing operation metadata remains separate from the native CLI mode.
+    val operation: String? = null,
+    val sourceTransform: String? = null,
+    val maskProvenance: String? = null,
+    val maskPolarity: String? = null,
+    // Curated workflow provenance is copied into the sidecar metadata. It is
+    // nullable so older saved commands and non-curated generations remain valid.
+    val workflowPresetId: String? = null,
+    val workflowBundleId: String? = null,
+    val workflowRevision: String? = null
 ) : Parcelable
+
+/** Resolve old saved commands/drafts into the ordered representation. */
+fun SDConfig.resolvedLoras(): List<SdLoraSpec> =
+    if (loras.isNotEmpty()) loras else SdLoraSpec.fromLegacy(loraPath, loraStrength)
 
 @Parcelize
 data class SDWorkflowConfig(
@@ -106,4 +145,29 @@ enum class SamplingMethod(val cliName: String) {
     DPM_PP_2M_V2("dpm++2mv2"),
     LCM("lcm"),
     DDIM_TRAILING("ddim_trailing")
+}
+
+enum class SdScheduler(val cliName: String) {
+    DISCRETE("discrete"),
+    KARRAS("karras"),
+    EXPONENTIAL("exponential"),
+    AYS("ays"),
+    GITS("gits"),
+    SMOOTHSTEP("smoothstep"),
+    SGM_UNIFORM("sgm_uniform"),
+    SIMPLE("simple"),
+    KL_OPTIMAL("kl_optimal"),
+    LCM("lcm"),
+    BONG_TANGENT("bong_tangent");
+
+    companion object {
+        fun fromCliName(value: String?): SdScheduler? {
+            val normalized = value?.trim().orEmpty()
+            if (normalized.isBlank()) return null
+            return entries.firstOrNull {
+                it.cliName.equals(normalized, ignoreCase = true) ||
+                    it.name.equals(normalized, ignoreCase = true)
+            }
+        }
+    }
 }

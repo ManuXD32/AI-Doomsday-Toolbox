@@ -18,6 +18,8 @@ import com.example.llamadroid.util.WakeLockManager
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
@@ -36,7 +38,9 @@ class WhisperService : Service() {
     private val _progress = MutableStateFlow("")
     val progress = _progress.asStateFlow()
     
+    private val transcriptionMutex = Mutex()
     private var currentProcess: Process? = null
+    @Volatile private var cancellationRequested = false
     private var notificationTaskId: Int? = null
     
     inner class WhisperBinder : Binder() {
@@ -97,11 +101,14 @@ class WhisperService : Service() {
     }
     
     override fun onDestroy() {
-        super.onDestroy()
+        cancellationRequested = true
+        currentProcess?.destroyForcibly()
+        currentProcess = null
         scope.cancel()
-        currentProcess?.destroy()
         WakeLockManager.release("WhisperService")
         notificationTaskId?.let { UnifiedNotificationManager.dismissTask(it) }
+        notificationTaskId = null
+        super.onDestroy()
     }
     
     private fun updateNotification(text: String, progress: Float = 0f) {
@@ -120,218 +127,290 @@ class WhisperService : Service() {
     /**
      * Transcribe audio file using WhisperCPP
      */
-    suspend fun transcribe(config: WhisperConfig): Result<WhisperResult> = withContext(Dispatchers.IO) {
-        var wavFile: File? = null
-        var process: Process? = null
-        try {
-            _state.value = WhisperState.Converting
-            updateNotification(getString(R.string.whisper_status_converting))
-            
-            // Step 1: Convert audio to 16-bit WAV using ffmpeg
-            wavFile = File(cacheDir, "whisper_input.wav")
-            val convertResult = convertAudioToWav(config.audioPath, wavFile.absolutePath)
-            if (convertResult.isFailure) {
-                _state.value = WhisperState.Error(
-                    convertResult.exceptionOrNull()?.message
-                        ?: getString(R.string.whisper_error_audio_conversion_failed)
-                )
-                return@withContext Result.failure(convertResult.exceptionOrNull()!!)
-            }
-            
-            _state.value = WhisperState.Transcribing
-            updateNotification(getString(R.string.whisper_status_transcribing))
-            
-            // Step 2: Run whisper-cli using BinaryRepository
-            val binaryRepo = BinaryRepository(applicationContext)
-            val whisperBinary = binaryRepo.getWhisperCliBinary()
-            if (whisperBinary == null || !whisperBinary.exists()) {
-                val error = getString(R.string.whisper_error_binary_not_found)
-                _state.value = WhisperState.Error(error)
-                return@withContext Result.failure(Exception(error))
-            }
+    suspend fun transcribe(config: WhisperConfig): Result<WhisperResult> =
+        transcriptionMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val runId = "${System.currentTimeMillis()}_${System.nanoTime()}"
+                val wavFile = File(cacheDir, "whisper_input_$runId.wav")
+                val generatedOutputFiles = mutableListOf<File>()
+                var process: Process? = null
+                cancellationRequested = false
+                try {
+                    _progress.value = ""
+                    _state.value = WhisperState.Converting
+                    updateNotification(getString(R.string.whisper_status_converting))
 
-            val resolvedModelPath = WhisperModelPathResolver.resolve(applicationContext, config.modelPath)
-            if (resolvedModelPath == null) {
-                val error = getString(R.string.whisper_error_no_model)
-                _state.value = WhisperState.Error(error)
-                return@withContext Result.failure(Exception(error))
-            }
-            
-            // Build command
-            val args = mutableListOf<String>()
-            args.add(whisperBinary.absolutePath)
-            args.addAll(listOf("-m", resolvedModelPath))
-            args.addAll(listOf("-f", wavFile.absolutePath))
-            args.addAll(listOf("-l", config.language))
-            args.addAll(listOf("-t", config.threads.toString()))
-            
-            if (config.translate) {
-                args.add("-tr")
-            }
-            
-            // Disable GPU to prevent ggml from scanning system directories for GPU backends
-            // This fixes the "/init permission denied" crash on Android
-            args.add("--no-gpu")
-            
-            // Add output format flags
-            config.outputFormats.forEach { format ->
-                args.add(format.cliFlag)
-            }
-            
-            // Output file base name
-            val outputBase = config.outputDir?.let { File(it, "whisper_output") } 
-                ?: File(cacheDir, "whisper_output")
-            args.addAll(listOf("-of", outputBase.absolutePath))
-            
-            DebugLog.log("[WHISPER] Running: ${args.joinToString(" ")}")
-            
-            val processBuilder = ProcessBuilder(args)
-            val libDir = File(filesDir, "ffmpeg_libs")
-            processBuilder.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
-            // Set GGML_BACKEND_PATH to /dev/null to completely skip GPU backend loading
-            // This prevents std::filesystem from accessing protected paths like /init
-            processBuilder.environment()["GGML_BACKEND_PATH"] = "/dev/null"
-            // Set HOME and working directory to app's files dir to prevent filesystem access to /init
-            processBuilder.environment()["HOME"] = filesDir.absolutePath
-            processBuilder.environment()["TMPDIR"] = cacheDir.absolutePath
-            processBuilder.directory(filesDir)
-            processBuilder.redirectErrorStream(true)
-            
-            process = processBuilder.start()
-            currentProcess = process
-            
-            // Read output
-            val output = StringBuilder()
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                output.appendLine(line)
-                _progress.value = line ?: ""
-                DebugLog.log("[WHISPER] ${line ?: ""}")
-            }
-            
-            val exitCode = process.waitFor()
-            
-            if (exitCode != 0) {
-                val error = getString(R.string.whisper_error_failed_with_exit_code, exitCode)
-                _state.value = WhisperState.Error(error)
-                return@withContext Result.failure(Exception(error))
-            }
-            
-            // Read output files
-            val results = mutableMapOf<WhisperOutputFormat, String>()
-            val outputFiles = mutableListOf<File>()
-            config.outputFormats.forEach { format ->
-                val outputFile = File("${outputBase.absolutePath}.${format.extension}")
-                if (outputFile.exists()) {
-                    results[format] = outputFile.readText()
-                    outputFiles.add(outputFile)
-                }
-            }
-            
-            // Copy output files to user's selected folder if set
-            val settingsRepo = SettingsRepository(this@WhisperService)
-            // Use whisper-specific folder, or fall back to shared output folder
-            val outputFolderUri = settingsRepo.whisperOutputFolder.value 
-                ?: settingsRepo.outputFolderUri.value
-            if (!outputFolderUri.isNullOrEmpty()) {
-                try {
-                    val treeUri = Uri.parse(outputFolderUri)
-                    val rootFolder = DocumentFile.fromTreeUri(this@WhisperService, treeUri)
-                    
-                    // Create/get transcriptions/ subfolder
-                    var transcriptionsDoc = rootFolder?.findFile("transcriptions")
-                    if (transcriptionsDoc == null) {
-                        transcriptionsDoc = rootFolder?.createDirectory("transcriptions")
-                    }
-                    
-                    if (transcriptionsDoc != null) {
-                        val timestamp = System.currentTimeMillis()
-                        
-                        outputFiles.forEach { sourceFile ->
-                            val mimeType = when (sourceFile.extension) {
-                                "txt" -> "text/plain"
-                                "srt" -> "application/x-subrip"
-                                "vtt" -> "text/vtt"
-                                "json" -> "application/json"
-                                else -> "text/plain"
-                            }
-                            val destName = "whisper_${timestamp}.${sourceFile.extension}"
-                            val newFile = transcriptionsDoc.createFile(mimeType, destName)
-                            newFile?.uri?.let { destUri ->
-                                contentResolver.openOutputStream(destUri)?.use { output ->
-                                    sourceFile.inputStream().use { input ->
-                                        input.copyTo(output)
-                                    }
-                                }
-                                DebugLog.log("[WHISPER] Copied ${sourceFile.name} to transcriptions/")
-                            }
+                    val convertResult = convertAudioToWav(config.audioPath, wavFile.absolutePath)
+                    if (convertResult.isFailure) {
+                        val error = convertResult.exceptionOrNull()
+                            ?: IllegalStateException(
+                                getString(R.string.whisper_error_audio_conversion_failed)
+                            )
+                        if (cancellationRequested || error is CancellationException) {
+                            throw CancellationException("Whisper transcription cancelled")
                         }
-                    } else {
-                        DebugLog.log("[WHISPER] Failed to create transcriptions folder")
+                        throw error
                     }
-                } catch (e: Exception) {
-                    DebugLog.log("[WHISPER] Failed to copy to output folder: ${e.message}")
-                }
-            } else {
-                DebugLog.log("[WHISPER] No output folder configured, files remain in cache")
-            }
-            
-            // Clean up temp files
-            _state.value = WhisperState.Completed
-            updateNotification(getString(R.string.whisper_status_complete))
-            
-            // Get result text - use TXT if available, otherwise use first available format
-            val resultText = results[WhisperOutputFormat.TXT] 
-                ?: results.values.firstOrNull() 
-                ?: output.toString()
-            
-            // Auto-save to Notes database - use NonCancellable to ensure this completes
-            // even if the calling scope is cancelled (e.g., user navigating away)
-            withContext(kotlinx.coroutines.NonCancellable) {
-                try {
-                    val db = AppDatabase.getDatabase(this@WhisperService)
-                    val noteTitle = "Transcription: ${config.audioPath.substringAfterLast("/").substringBeforeLast(".")}"
-                    db.noteDao().insert(
-                        NoteEntity(
-                            title = noteTitle,
-                            content = resultText,
-                            type = NoteType.TRANSCRIPTION,
-                            sourceFile = config.audioPath,
-                            language = extractDetectedLanguage(output.toString()),
-                            audioPath = config.audioPath  // Link to audio for playback
+                    if (cancellationRequested) {
+                        throw CancellationException("Whisper transcription cancelled")
+                    }
+
+                    _state.value = WhisperState.Transcribing
+                    updateNotification(getString(R.string.whisper_status_transcribing))
+
+                    val binaryRepo = BinaryRepository(applicationContext)
+                    val whisperBinary = binaryRepo.getWhisperCliBinary()
+                    if (whisperBinary == null || !whisperBinary.exists()) {
+                        throw IllegalStateException(
+                            getString(R.string.whisper_error_binary_not_found)
+                        )
+                    }
+                    val resolvedModelPath = WhisperModelPathResolver.resolve(
+                        applicationContext,
+                        config.modelPath
+                    ) ?: throw IllegalStateException(getString(R.string.whisper_error_no_model))
+
+                    val settingsRepo = SettingsRepository(this@WhisperService)
+                    val requestedVad = config.vad ?: settingsRepo.whisperVadConfigSnapshot()
+                    val effectiveVad = try {
+                        WhisperVadAssetStore.effectiveConfig(
+                            context = this@WhisperService,
+                            config = requestedVad,
+                            purpose = config.purpose
+                        )
+                    } catch (error: WhisperVadUnavailableException) {
+                        throw IllegalStateException(
+                            getString(R.string.whisper_error_vad_model_missing),
+                            error
+                        )
+                    }
+
+                    val outputBase = config.outputDir
+                        ?.let { directoryPath ->
+                            val directory = File(directoryPath).apply { mkdirs() }
+                            File(directory, "whisper_output_$runId")
+                        }
+                        ?: File(cacheDir, "whisper_output_$runId")
+                    outputBase.parentFile?.mkdirs()
+
+                    val libDir = File(filesDir, "ffmpeg_libs")
+                    val environment = mapOf(
+                        "LD_LIBRARY_PATH" to
+                            "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}",
+                        "GGML_BACKEND_PATH" to "/dev/null",
+                        "HOME" to filesDir.absolutePath,
+                        "TMPDIR" to cacheDir.absolutePath
+                    )
+                    val capabilities = if (effectiveVad.enabled) {
+                        WhisperBinaryCapabilityCache.capabilitiesFor(
+                            binary = whisperBinary,
+                            workingDirectory = filesDir,
+                            environment = environment
+                        )
+                    } else {
+                        null
+                    }
+                    val args = try {
+                        buildWhisperInvocationArgs(
+                            request = WhisperInvocationRequest(
+                                binaryPath = whisperBinary.absolutePath,
+                                modelPath = resolvedModelPath,
+                                audioPath = wavFile.absolutePath,
+                                language = config.language,
+                                threads = config.threads,
+                                translate = config.translate,
+                                outputFormats = config.outputFormats,
+                                outputBasePath = outputBase.absolutePath,
+                                purpose = config.purpose,
+                                vad = effectiveVad
+                            ),
+                            binaryCapabilities = capabilities
+                        )
+                    } catch (error: WhisperUnsupportedFlagsException) {
+                        throw IllegalStateException(
+                            getString(
+                                R.string.whisper_error_vad_unsupported,
+                                error.flags.joinToString(", ")
+                            ),
+                            error
+                        )
+                    }
+                    DebugLog.log("[WHISPER] Running: ${args.joinToString(" ")}")
+
+                    val processBuilder = ProcessBuilder(args)
+                        .directory(filesDir)
+                        .redirectErrorStream(true)
+                    processBuilder.environment().putAll(environment)
+                    process = processBuilder.start()
+                    currentProcess = process
+
+                    val output = StringBuilder()
+                    process.inputStream.bufferedReader().useLines { lines ->
+                        lines.forEach { line ->
+                            output.appendLine(line)
+                            _progress.value = line
+                            DebugLog.log("[WHISPER] $line")
+                        }
+                    }
+                    val exitCode = process.waitFor()
+                    if (cancellationRequested) {
+                        throw CancellationException("Whisper transcription cancelled")
+                    }
+                    if (exitCode != 0) {
+                        throw IllegalStateException(
+                            getString(R.string.whisper_error_failed_with_exit_code, exitCode)
+                        )
+                    }
+
+                    val normalizedFormats = config.outputFormats.ifEmpty {
+                        setOf(WhisperOutputFormat.TXT)
+                    }
+                    val results = linkedMapOf<WhisperOutputFormat, String>()
+                    normalizedFormats.sortedBy { it.ordinal }.forEach { format ->
+                        val outputFile = File("${outputBase.absolutePath}.${format.extension}")
+                        if (outputFile.isFile) {
+                            generatedOutputFiles += outputFile
+                            results[format] = outputFile.readText()
+                        }
+                    }
+                    if (cancellationRequested) {
+                        throw CancellationException("Whisper transcription cancelled")
+                    }
+                    if (results.isEmpty()) {
+                        throw IllegalStateException(
+                            getString(R.string.whisper_error_no_output)
+                        )
+                    }
+
+                    val outputFolderUri = settingsRepo.whisperOutputFolder.value
+                        ?: settingsRepo.outputFolderUri.value
+                    if (!outputFolderUri.isNullOrBlank()) {
+                        runCatching {
+                            val rootFolder = DocumentFile.fromTreeUri(
+                                this@WhisperService,
+                                Uri.parse(outputFolderUri)
+                            )
+                            val transcriptionsFolder = rootFolder?.findFile("transcriptions")
+                                ?: rootFolder?.createDirectory("transcriptions")
+                            if (transcriptionsFolder != null) {
+                                val timestamp = System.currentTimeMillis()
+                                generatedOutputFiles.forEach { sourceFile ->
+                                    if (cancellationRequested) {
+                                        throw CancellationException(
+                                            "Whisper transcription cancelled"
+                                        )
+                                    }
+                                    val mimeType = when (sourceFile.extension.lowercase()) {
+                                        "txt" -> "text/plain"
+                                        "srt" -> "application/x-subrip"
+                                        "vtt" -> "text/vtt"
+                                        "json" -> "application/json"
+                                        else -> "text/plain"
+                                    }
+                                    transcriptionsFolder
+                                        .createFile(
+                                            mimeType,
+                                            "whisper_${timestamp}.${sourceFile.extension}"
+                                        )
+                                        ?.uri
+                                        ?.let { destination ->
+                                            contentResolver.openOutputStream(destination)?.use {
+                                                outputStream ->
+                                                sourceFile.inputStream().use { input ->
+                                                    input.copyTo(outputStream)
+                                                }
+                                            }
+                                        }
+                                }
+                            }
+                        }.onFailure { error ->
+                            if (error is CancellationException) throw error
+                            DebugLog.log(
+                                "[WHISPER] Failed to copy output files: ${error.message}"
+                            )
+                        }
+                    }
+                    if (cancellationRequested) {
+                        throw CancellationException("Whisper transcription cancelled")
+                    }
+
+                    val outputText = output.toString()
+                    val resultText = results[WhisperOutputFormat.TXT]
+                        ?: results.values.firstOrNull()
+                        ?: outputText
+                    val detectedLanguage = extractDetectedLanguage(outputText)
+
+                    // Preserve existing behavior, but never persist a completed note after cancellation.
+                    if (cancellationRequested) {
+                        throw CancellationException("Whisper transcription cancelled")
+                    }
+                    currentCoroutineContext().ensureActive()
+                    try {
+                        val db = AppDatabase.getDatabase(this@WhisperService)
+                        val sourceName = config.audioPath
+                            .substringAfterLast('/')
+                            .substringBeforeLast('.')
+                        db.noteDao().insert(
+                            NoteEntity(
+                                title = "Transcription: $sourceName",
+                                content = resultText,
+                                type = NoteType.TRANSCRIPTION,
+                                sourceFile = config.audioPath,
+                                language = detectedLanguage,
+                                audioPath = config.audioPath
+                            )
+                        )
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (error: Exception) {
+                        DebugLog.log("[WHISPER] Failed to save note: ${error.message}")
+                    }
+                    if (cancellationRequested) {
+                        throw CancellationException("Whisper transcription cancelled")
+                    }
+
+                    _state.value = WhisperState.Completed
+                    _progress.value = getString(R.string.whisper_status_complete)
+                    updateNotification(getString(R.string.whisper_status_complete), 1f)
+                    Result.success(
+                        WhisperResult(
+                            text = resultText,
+                            outputs = results,
+                            detectedLanguage = detectedLanguage
                         )
                     )
-                    DebugLog.log("[WHISPER] Transcription saved to Notes with audio: ${config.audioPath}")
-                } catch (e: Exception) {
-                    DebugLog.log("[WHISPER] Failed to save note: ${e.message}")
+                } catch (cancelled: CancellationException) {
+                    _state.value = WhisperState.Cancelled
+                    _progress.value = getString(R.string.whisper_status_cancelled)
+                    Result.failure(cancelled)
+                } catch (error: Exception) {
+                    val message = error.message ?: getString(R.string.error_generic)
+                    _state.value = WhisperState.Error(message)
+                    _progress.value = message
+                    Result.failure(error)
+                } finally {
+                    if (process?.isAlive == true) process.destroyForcibly()
+                    if (currentProcess === process) currentProcess = null
+                    if (wavFile.exists()) wavFile.delete()
+                    generatedOutputFiles
+                        .filter { file ->
+                            file.absolutePath.startsWith(cacheDir.absolutePath)
+                        }
+                        .forEach { it.delete() }
+                    finishForegroundTask()
                 }
             }
-            
-            Result.success(WhisperResult(
-                text = resultText,
-                outputs = results,
-                detectedLanguage = extractDetectedLanguage(output.toString())
-            ))
-        } catch (e: Exception) {
-            _state.value = WhisperState.Error(e.message ?: "Unknown error")
-            Result.failure(e)
-        } finally {
-            runCatching {
-                if (process?.isAlive == true) {
-                    process.destroy()
-                }
-            }
-            if (currentProcess === process) {
-                currentProcess = null
-            }
-            wavFile?.takeIf { it.exists() }?.delete()
-            finishForegroundTask()
         }
-    }
     
-    private suspend fun convertAudioToWav(inputPath: String, outputPath: String): Result<Unit> = withContext(Dispatchers.IO) {
+    private suspend fun convertAudioToWav(
+        inputPath: String,
+        outputPath: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        var process: Process? = null
         try {
+            if (cancellationRequested) {
+                throw CancellationException("Whisper transcription cancelled")
+            }
             val binaryRepo = BinaryRepository(applicationContext)
             val ffmpegBinary = binaryRepo.getFFmpegBinary()
             if (ffmpegBinary == null || !ffmpegBinary.exists()) {
@@ -339,69 +418,75 @@ class WhisperService : Service() {
                 DebugLog.log("[WHISPER] $error")
                 return@withContext Result.failure(Exception(error))
             }
-            
-            DebugLog.log("[WHISPER] Input file: $inputPath")
-            DebugLog.log("[WHISPER] Input file exists: ${File(inputPath).exists()}")
-            DebugLog.log("[WHISPER] Input file size: ${File(inputPath).length()}")
-            
-            val args = listOf(
-                ffmpegBinary.absolutePath,
-                "-y", // Overwrite output
-                "-i", inputPath,
-                "-ar", "16000", // 16kHz sample rate
-                "-ac", "1", // Mono
-                "-c:a", "pcm_s16le", // 16-bit PCM
-                outputPath
-            )
-            
-            DebugLog.log("[WHISPER] Converting audio: ${args.joinToString(" ")}")
-            
-            val processBuilder = ProcessBuilder(args)
-            val libDir = File(filesDir, "ffmpeg_libs")
-            processBuilder.environment()["LD_LIBRARY_PATH"] = "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
-            // Separate stdout and stderr for better error capture
-            processBuilder.redirectErrorStream(false)
-            
-            val process = processBuilder.start()
-            
-            // ffmpeg outputs to stderr, not stdout
-            val stdout = process.inputStream.bufferedReader().readText()
-            val stderr = process.errorStream.bufferedReader().readText()
-            
-            val exitCode = process.waitFor()
-            
-            DebugLog.log("[WHISPER] ffmpeg exit code: $exitCode")
-            if (stdout.isNotEmpty()) {
-                DebugLog.log("[WHISPER] ffmpeg stdout: ${stdout.take(500)}")
-            }
-            if (stderr.isNotEmpty()) {
-                // Log last few lines of stderr (most important)
-                val lastLines = stderr.lines().takeLast(10).joinToString("\n")
-                DebugLog.log("[WHISPER] ffmpeg stderr: $lastLines")
-            }
-            
-            if (exitCode != 0) {
-                val errorLines = stderr.lines().filter { 
-                    it.contains("Error", ignoreCase = true) || 
-                    it.contains("Invalid", ignoreCase = true) ||
-                    it.contains("No such", ignoreCase = true)
-                }.joinToString("; ")
-                val errorMsg = errorLines.ifEmpty {
-                    getString(R.string.whisper_error_ffmpeg_exit_code, exitCode)
-                }
-                DebugLog.log("[WHISPER] ffmpeg conversion failed: $errorMsg")
+
+            val inputFile = File(inputPath)
+            if (!inputFile.isFile || !inputFile.canRead()) {
                 return@withContext Result.failure(
-                    Exception(getString(R.string.whisper_error_audio_conversion_detail, errorMsg))
+                    IllegalArgumentException(getString(R.string.whisper_error_no_audio))
                 )
             }
-            
+
+            val args = listOf(
+                ffmpegBinary.absolutePath,
+                "-y",
+                "-i", inputPath,
+                "-ar", "16000",
+                "-ac", "1",
+                "-c:a", "pcm_s16le",
+                outputPath
+            )
+            DebugLog.log("[WHISPER] Converting audio: ${args.joinToString(" ")}")
+
+            val processBuilder = ProcessBuilder(args)
+            val libDir = File(filesDir, "ffmpeg_libs")
+            processBuilder.environment()["LD_LIBRARY_PATH"] =
+                "${libDir.absolutePath}:${binaryRepo.getLibraryDir()}"
+            processBuilder.redirectErrorStream(true)
+
+            process = processBuilder.start()
+            currentProcess = process
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = process.waitFor()
+            if (cancellationRequested) {
+                throw CancellationException("Whisper transcription cancelled")
+            }
+            if (exitCode != 0) {
+                val diagnostic = output
+                    .lineSequence()
+                    .filter { line ->
+                        line.contains("error", ignoreCase = true) ||
+                            line.contains("invalid", ignoreCase = true) ||
+                            line.contains("no such", ignoreCase = true)
+                    }
+                    .toList()
+                    .takeLast(4)
+                    .joinToString("; ")
+                    .ifBlank { getString(R.string.whisper_error_ffmpeg_exit_code, exitCode) }
+                return@withContext Result.failure(
+                    Exception(
+                        getString(
+                            R.string.whisper_error_audio_conversion_detail,
+                            diagnostic
+                        )
+                    )
+                )
+            }
+
             val outputFile = File(outputPath)
-            DebugLog.log("[WHISPER] Output file exists: ${outputFile.exists()}, size: ${outputFile.length()}")
-            
+            if (!outputFile.isFile || outputFile.length() <= 44L) {
+                return@withContext Result.failure(
+                    Exception(getString(R.string.whisper_error_audio_conversion_failed))
+                )
+            }
             Result.success(Unit)
-        } catch (e: Exception) {
-            DebugLog.log("[WHISPER] Exception during conversion: ${e.message}")
-            Result.failure(e)
+        } catch (cancelled: CancellationException) {
+            Result.failure(cancelled)
+        } catch (error: Exception) {
+            DebugLog.log("[WHISPER] Audio conversion failed: ${error.message}")
+            Result.failure(error)
+        } finally {
+            if (process?.isAlive == true) process.destroyForcibly()
+            if (currentProcess === process) currentProcess = null
         }
     }
     
@@ -412,9 +497,12 @@ class WhisperService : Service() {
     }
     
     fun cancel() {
+        cancellationRequested = true
         currentProcess?.destroy()
+        if (currentProcess?.isAlive == true) currentProcess?.destroyForcibly()
         currentProcess = null
-        _state.value = WhisperState.Idle
+        _state.value = WhisperState.Cancelled
+        _progress.value = getString(R.string.whisper_status_cancelled)
         updateNotification(getString(R.string.whisper_status_cancelled))
     }
     
@@ -428,6 +516,7 @@ sealed class WhisperState {
     object Converting : WhisperState()
     object Transcribing : WhisperState()
     object Completed : WhisperState()
+    object Cancelled : WhisperState()
     data class Error(val message: String) : WhisperState()
 }
 

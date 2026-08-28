@@ -5,7 +5,21 @@
 
 # Keep Kotlin data classes for serialization
 -keep class com.example.llamadroid.data.** { *; }
--keep class com.example.llamadroid.service.**.* { *; }
+
+# The Agent remote worker exchanges Gson DTOs through app-private files. Keep
+# this graph explicitly: a broad `service.**.*` rule did not retain Kotlin
+# generic element signatures under R8, so List<ChatMessage> was restored as a
+# List<LinkedTreeMap> in release builds.
+-keep class com.example.llamadroid.service.AgentRemoteChatRequest { *; }
+-keep class com.example.llamadroid.service.AgentTool { *; }
+-keep class com.example.llamadroid.service.LlamaServerSamplingParams { *; }
+-keep class com.example.llamadroid.service.LlamaServerRequestOptions { *; }
+-keep class com.example.llamadroid.service.LlamaSlotOwnerKey { *; }
+-keep class com.example.llamadroid.service.LlamaSlotAffinityMode { *; }
+-keep class com.example.llamadroid.service.OllamaService$ChatMessage { *; }
+-keep class com.example.llamadroid.service.OllamaService$ChatResponse { *; }
+-keep class com.example.llamadroid.service.OllamaService$ChatUsage { *; }
+-keep class com.example.llamadroid.service.OllamaService$ToolCall { *; }
 
 # Keep Room entities
 -keep class * extends androidx.room.RoomDatabase { *; }

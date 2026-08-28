@@ -10,6 +10,7 @@ import androidx.room.Query
 import androidx.room.Delete
 import kotlinx.coroutines.flow.Flow
 import com.example.llamadroid.service.LlamaSpeculativeMode
+import com.example.llamadroid.service.LlamaServerLaunchProfile
 
 object SavedCommandScopes {
     const val GENERAL = "GENERAL"
@@ -24,6 +25,11 @@ data class SavedCommand(
     @ColumnInfo(name = "command")
     val commandTemplate: String = "",
     val scope: String = SavedCommandScopes.GENERAL,
+    /** Canonical, versioned general llama-server snapshot. Null rows predate canonical snapshots. */
+    @ColumnInfo(name = "launchProfileJson")
+    val launchProfileJson: String? = null,
+    @ColumnInfo(name = "launchProfileSchemaVersion", defaultValue = "1")
+    val launchProfileSchemaVersion: Int = 1,
     // Model
     val modelPath: String = "",
     val contextSize: Int = 4096,
@@ -72,6 +78,73 @@ data class SavedCommand(
     val mmprojPath: String? = null
 )
 
+/**
+ * General saved commands use [LlamaServerLaunchProfile] as their one source of truth.
+ * Old rows keep working by translating their historical columns exactly once at read time.
+ */
+fun SavedCommand.launchProfile(): LlamaServerLaunchProfile =
+    LlamaServerLaunchProfile.decode(launchProfileJson) ?: LlamaServerLaunchProfile(
+        modelPath = modelPath,
+        mmprojPath = mmprojPath,
+        visionEnabled = enableVision,
+        host = host,
+        threads = threads,
+        batchSize = batchSize,
+        contextSize = contextSize,
+        temperature = temperature,
+        kvCacheEnabled = kvCacheEnabled,
+        kvCacheTypeK = kvCacheTypeK,
+        kvCacheTypeV = kvCacheTypeV,
+        kvCacheReuse = kvCacheReuse,
+        noMmap = lowMemoryMode,
+        parallel = parallel,
+        cacheRam = cacheRam,
+        customFlags = customFlags.takeIf { it.isNotBlank() },
+        flashAttention = flashAttention,
+        nativeToolsEnabled = nativeToolsEnabled,
+        commandTemplate = commandTemplate.takeIf { it.isNotBlank() },
+        speculativeEnabled = speculativeEnabled,
+        speculativeMode = speculativeMode,
+        draftModelPath = draftModelPath,
+        draftMax = draftMax,
+        draftMin = draftMin,
+        draftPMin = draftPMin,
+        draftThreads = draftThreads,
+        draftThreadsBatch = draftThreadsBatch,
+        ngramModNMatch = ngramModNMatch,
+        ngramModNMin = ngramModNMin,
+        ngramModNMax = ngramModNMax,
+        ngramSimpleSizeN = ngramSimpleSizeN,
+        ngramSimpleSizeM = ngramSimpleSizeM,
+        ngramSimpleMinHits = ngramSimpleMinHits,
+        ngramMapKSizeN = ngramMapKSizeN,
+        ngramMapKSizeM = ngramMapKSizeM,
+        ngramMapKMinHits = ngramMapKMinHits,
+        ngramMapK4VSizeN = ngramMapK4VSizeN,
+        ngramMapK4VSizeM = ngramMapK4VSizeM,
+        ngramMapK4VMinHits = ngramMapK4VMinHits
+    )
+
+fun savedCommandFromLaunchProfile(
+    name: String,
+    profile: LlamaServerLaunchProfile,
+    id: Long = 0L
+): SavedCommand = SavedCommand(
+    id = id,
+    name = name,
+    scope = SavedCommandScopes.GENERAL,
+    launchProfileJson = LlamaServerLaunchProfile.encode(profile),
+    launchProfileSchemaVersion = LlamaServerLaunchProfile.SCHEMA_VERSION,
+    // Keep a concise legacy summary for older readers and list rendering.
+    modelPath = profile.modelPath,
+    commandTemplate = profile.commandTemplate.orEmpty(),
+    contextSize = profile.contextSize,
+    batchSize = profile.batchSize,
+    temperature = profile.temperature,
+    threads = profile.threads,
+    host = profile.host
+)
+
 // Type alias for backward compatibility with MasterModeScreen imports
 typealias SavedCommandEntity = SavedCommand
 
@@ -82,6 +155,10 @@ interface SavedCommandDao {
 
     @Query("SELECT * FROM saved_commands WHERE scope = :scope ORDER BY name ASC")
     fun getCommandsByScope(scope: String): Flow<List<SavedCommand>>
+
+    /** Used by live-linked server cards; a missing row is a supported visible state. */
+    @Query("SELECT * FROM saved_commands WHERE id = :id AND scope = 'GENERAL' LIMIT 1")
+    suspend fun getGeneralCommandById(id: Long): SavedCommand?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCommand(command: SavedCommand): Long

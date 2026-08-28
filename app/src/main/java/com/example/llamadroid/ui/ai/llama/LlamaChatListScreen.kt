@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai.llama
 
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,11 +35,11 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.model.LlamaChatEntity
 import com.example.llamadroid.data.model.LlamaChatFolderEntity
 import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
+import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.ui.navigation.Screen
 import java.text.SimpleDateFormat
 import java.util.*
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.gson.Gson
@@ -46,6 +48,18 @@ import org.json.JSONObject
 
 private const val LLAMA_FOLDER_FILTER_ALL = Long.MIN_VALUE
 private const val LLAMA_FOLDER_FILTER_UNFILED = 0L
+private const val WEAR_QUICK_CHAT_PREFS = "adt_wear_quick_chat_v1"
+private const val WEAR_QUICK_CHAT_SELECTED_SERVER_ID = "selected_server_id"
+private const val WEAR_QUICK_CHAT_SYSTEM_PROMPT = "system_prompt"
+private const val WEAR_QUICK_CHAT_ALLOWED_TOOLS = "allowed_tools"
+private const val WEAR_QUICK_CHAT_AUTO_START = "auto_start_server"
+private const val WEAR_QUICK_CHAT_AUTO_TTS = "auto_play_tts"
+private const val WEAR_TOOL_CALENDAR = "calendar"
+private const val WEAR_TOOL_ALARMS = "alarms"
+private const val WEAR_TOOL_NOTES = "notes"
+private const val WEAR_TOOL_PINNED_NOTE = "pinned_note"
+private const val WEAR_TOOL_WEB = "web_search"
+private const val WEAR_TOOL_IMAGES = "image_generation"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -74,6 +88,7 @@ fun LlamaChatListScreen(
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var showManageFoldersDialog by remember { mutableStateOf(false) }
     var showPromptProfilesDialog by remember { mutableStateOf(false) }
+    var showWearQuickChatSettings by remember { mutableStateOf(false) }
     var chatToEdit by remember { mutableStateOf<LlamaChatEntity?>(null) }
     var chatToMove by remember { mutableStateOf<LlamaChatEntity?>(null) }
     var folderToDelete by remember { mutableStateOf<LlamaChatFolderEntity?>(null) }
@@ -291,6 +306,16 @@ fun LlamaChatListScreen(
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text(stringResource(R.string.wear_quick_chat_settings)) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Settings, contentDescription = null)
+                                },
+                                onClick = {
+                                    showFabMenu = false
+                                    showWearQuickChatSettings = true
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text(stringResource(R.string.llama_import_chat)) },
                                 onClick = {
                                     showFabMenu = false
@@ -328,6 +353,12 @@ fun LlamaChatListScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (selectedFolderFilter == LLAMA_FOLDER_FILTER_ALL) {
+                        item(key = "wear_quick_chat_settings") {
+                            WearQuickChatSettingsEntryCard(
+                                servers = servers,
+                                onClick = { showWearQuickChatSettings = true }
+                            )
+                        }
                         item(key = "scheduler_folder") {
                             LlamaSchedulerFolderCard(
                                 onClick = { navController.navigate(Screen.LlamaScheduler.route) }
@@ -385,6 +416,13 @@ fun LlamaChatListScreen(
                 }
             }
         }
+    }
+
+    if (showWearQuickChatSettings) {
+        WearQuickChatSettingsDialog(
+            servers = servers,
+            onDismiss = { showWearQuickChatSettings = false }
+        )
     }
 
     // Edit Chat Dialog
@@ -705,6 +743,162 @@ fun LlamaChatListScreen(
 }
 
 @Composable
+private fun WearQuickChatSettingsDialog(
+    servers: List<LlamaServerEntity>,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember(context) {
+        context.getSharedPreferences(WEAR_QUICK_CHAT_PREFS, Context.MODE_PRIVATE)
+    }
+    val defaultPrompt = stringResource(R.string.wear_quick_chat_default_prompt)
+    var selectedServerId by remember {
+        mutableLongStateOf(prefs.getLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, -1L))
+    }
+    var systemPrompt by remember {
+        mutableStateOf(prefs.getString(WEAR_QUICK_CHAT_SYSTEM_PROMPT, defaultPrompt) ?: defaultPrompt)
+    }
+    var autoStartServer by remember {
+        mutableStateOf(prefs.getBoolean(WEAR_QUICK_CHAT_AUTO_START, true))
+    }
+    var autoPlayTts by remember {
+        mutableStateOf(prefs.getBoolean(WEAR_QUICK_CHAT_AUTO_TTS, false))
+    }
+    var allowedTools by remember {
+        mutableStateOf(
+            prefs.getStringSet(
+                WEAR_QUICK_CHAT_ALLOWED_TOOLS,
+                setOf(WEAR_TOOL_CALENDAR, WEAR_TOOL_ALARMS, WEAR_TOOL_NOTES)
+            )?.toSet() ?: setOf(WEAR_TOOL_CALENDAR, WEAR_TOOL_ALARMS, WEAR_TOOL_NOTES)
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.wear_quick_chat_settings)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.llama_server_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                if (servers.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.llama_no_servers),
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        servers.take(8).forEach { server ->
+                            FilterChip(
+                                selected = selectedServerId == server.id,
+                                onClick = {
+                                    selectedServerId = server.id
+                                    prefs.edit().putLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, server.id).apply()
+                                },
+                                label = {
+                                    Text(server.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = systemPrompt,
+                    onValueChange = {
+                        systemPrompt = it
+                        prefs.edit().putString(WEAR_QUICK_CHAT_SYSTEM_PROMPT, it).apply()
+                    },
+                    label = { Text(stringResource(R.string.llama_system_prompt)) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 96.dp),
+                    minLines = 3
+                )
+                WearQuickChatSettingsSwitchRow(
+                    label = stringResource(R.string.wear_quick_chat_auto_start),
+                    checked = autoStartServer,
+                    onCheckedChange = {
+                        autoStartServer = it
+                        prefs.edit().putBoolean(WEAR_QUICK_CHAT_AUTO_START, it).apply()
+                    }
+                )
+                WearQuickChatSettingsSwitchRow(
+                    label = stringResource(R.string.llama_tool_assistant_tts),
+                    checked = autoPlayTts,
+                    onCheckedChange = {
+                        autoPlayTts = it
+                        prefs.edit().putBoolean(WEAR_QUICK_CHAT_AUTO_TTS, it).apply()
+                    }
+                )
+                Text(
+                    text = stringResource(R.string.llama_tools_title),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        WEAR_TOOL_CALENDAR to stringResource(R.string.llama_tool_calendar),
+                        WEAR_TOOL_ALARMS to stringResource(R.string.llama_tool_alarms),
+                        WEAR_TOOL_NOTES to stringResource(R.string.llama_tool_notes),
+                        WEAR_TOOL_PINNED_NOTE to stringResource(R.string.wear_quick_chat_modify_pinned_note),
+                        WEAR_TOOL_WEB to stringResource(R.string.llama_tool_web_search),
+                        WEAR_TOOL_IMAGES to stringResource(R.string.llama_tool_image_generation)
+                    ).forEach { (tool, label) ->
+                        FilterChip(
+                            selected = tool in allowedTools,
+                            onClick = {
+                                val enabled = tool !in allowedTools
+                                allowedTools = if (enabled) allowedTools + tool else allowedTools - tool
+                                prefs.edit().putStringSet(WEAR_QUICK_CHAT_ALLOWED_TOOLS, allowedTools).apply()
+                            },
+                            label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    )
+}
+
+@Composable
+private fun WearQuickChatSettingsSwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
 fun LlamaChatCard(
     chat: LlamaChatEntity,
     folderName: String?,
@@ -840,6 +1034,74 @@ private fun LlamaSchedulerFolderCard(
                 imageVector = Icons.Default.FolderOpen,
                 contentDescription = stringResource(R.string.llama_scheduler_open_desc),
                 tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun WearQuickChatSettingsEntryCard(
+    servers: List<LlamaServerEntity>,
+    onClick: () -> Unit
+) {
+    val context = LocalContext.current
+    val selectedServerId = context
+        .getSharedPreferences(WEAR_QUICK_CHAT_PREFS, Context.MODE_PRIVATE)
+        .getLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, -1L)
+    val selectedServer = servers.firstOrNull { it.id == selectedServerId }
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Settings,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                modifier = Modifier.size(36.dp)
+            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.wear_quick_chat_settings),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = stringResource(R.string.wear_quick_chat_settings_summary),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (selectedServer == null) {
+                        stringResource(R.string.wear_quick_chat_settings_no_server)
+                    } else {
+                        stringResource(R.string.wear_quick_chat_settings_server, selectedServer.name)
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.Edit,
+                contentDescription = stringResource(R.string.wear_quick_chat_settings),
+                tint = MaterialTheme.colorScheme.onTertiaryContainer
             )
         }
     }

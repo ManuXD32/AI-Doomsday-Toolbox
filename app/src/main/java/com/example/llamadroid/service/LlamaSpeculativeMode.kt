@@ -4,6 +4,7 @@ enum class LlamaSpeculativeMode(val flagValue: String) {
     DRAFT_SIMPLE("draft-simple"),
     DRAFT_MTP("draft-mtp"),
     DRAFT_DFLASH("draft-dflash"),
+    DRAFT_DSPARK("draft-dspark"),
     NGRAM_MOD("ngram-mod"),
     NGRAM_SIMPLE("ngram-simple"),
     NGRAM_MAP_K("ngram-map-k"),
@@ -11,7 +12,7 @@ enum class LlamaSpeculativeMode(val flagValue: String) {
     NGRAM_CACHE("ngram-cache");
 
     val requiresDraftModel: Boolean
-        get() = this == DRAFT_SIMPLE || this == DRAFT_DFLASH
+        get() = this == DRAFT_SIMPLE || this == DRAFT_DFLASH || this == DRAFT_DSPARK
 
     companion object {
         fun fromFlagValue(value: String?): LlamaSpeculativeMode =

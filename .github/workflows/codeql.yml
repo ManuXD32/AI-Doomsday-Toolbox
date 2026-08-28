@@ -3,16 +3,21 @@ name: CodeQL
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [master, Dev]
   pull_request:
-    branches: [main]
+    branches: [master, Dev]
   schedule:
     - cron: "24 3 * * 1"
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   analyze:
     name: Analyze (java-kotlin)
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     permissions:
       security-events: write
@@ -37,8 +42,16 @@ jobs:
           languages: java-kotlin
           build-mode: manual
 
+      # --no-build-cache is required, not an optimisation choice.
+      # `cache: gradle` restores ~/.gradle including the local build cache, and
+      # `org.gradle.caching=true` is set in gradle.properties. On a cache hit
+      # Gradle serves `:app:compileDebugKotlin` FROM-CACHE, no compilation
+      # actually runs, and CodeQL then fails the whole scan with
+      # "detected code written in Java/Kotlin but this run didn't build any of it".
+      # That is why fast (~2 min) runs failed while slow (~15 min) runs passed.
+      # Dependency caching still applies; only task output reuse is disabled.
       - name: Build Kotlin for CodeQL
-        run: ./gradlew --no-daemon :app:compileDebugKotlin
+        run: ./gradlew --no-daemon --no-build-cache :app:compileDebugKotlin
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

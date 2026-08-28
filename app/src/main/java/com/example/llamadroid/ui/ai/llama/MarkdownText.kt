@@ -55,11 +55,13 @@ fun MarkdownText(
     val blocks = parseIntoBlocks(text)
 
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        for (block in blocks) {
-            when (block) {
-                is MdBlock.CodeBlock -> CodeBlockView(block)
-                is MdBlock.TableBlock -> MarkdownTableView(block, textColor, onLinkClick)
-                is MdBlock.TextBlock -> MarkdownSpannedText(block.content, textColor, onLinkClick)
+        blocks.forEachIndexed { index, block ->
+            key(index, block.stableKey()) {
+                when (block) {
+                    is MdBlock.CodeBlock -> CodeBlockView(block)
+                    is MdBlock.TableBlock -> MarkdownTableView(block, textColor, onLinkClick)
+                    is MdBlock.TextBlock -> MarkdownSpannedText(block.content, textColor, onLinkClick)
+                }
             }
         }
     }
@@ -71,6 +73,12 @@ private sealed class MdBlock {
     data class TextBlock(val content: String) : MdBlock()
     data class CodeBlock(val language: String, val code: String) : MdBlock()
     data class TableBlock(val header: List<String>, val rows: List<List<String>>) : MdBlock()
+}
+
+private fun MdBlock.stableKey(): String = when (this) {
+    is MdBlock.CodeBlock -> "code:${language}:${code.hashCode()}"
+    is MdBlock.TableBlock -> "table:${header.hashCode()}:${rows.hashCode()}"
+    is MdBlock.TextBlock -> "text:${content.hashCode()}"
 }
 
 // ─── Block Parser ────────────────────────────────────────────────────────────
@@ -244,6 +252,7 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
+    val codeScrollState = rememberScrollState()
 
     Surface(
         color = codeBg,
@@ -294,17 +303,22 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
 
             // Code content — horizontally scrollable
             SelectionContainer {
-                Text(
-                    text = block.code,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurface,
+                Box(
                     modifier = Modifier
-                        .horizontalScroll(rememberScrollState())
-                        .padding(12.dp)
-                        .fillMaxWidth(),
-                    lineHeight = 18.sp
-                )
+                        .fillMaxWidth()
+                        .horizontalScroll(codeScrollState)
+                ) {
+                    Text(
+                        text = block.code,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .width(IntrinsicSize.Max)
+                            .padding(12.dp),
+                        lineHeight = 18.sp
+                    )
+                }
             }
         }
     }

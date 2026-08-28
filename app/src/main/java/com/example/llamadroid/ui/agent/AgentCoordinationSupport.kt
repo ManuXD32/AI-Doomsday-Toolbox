@@ -1,7 +1,9 @@
 package com.example.llamadroid.ui.agent
 
 import com.example.llamadroid.data.db.AiRuntimeJobEntity
+import com.example.llamadroid.service.AgentLocalWorkspaceSupport
 import com.example.llamadroid.service.AgentService
+import com.example.llamadroid.service.AgentWorkspaceBackendType
 import com.example.llamadroid.service.AiRuntimeJobStore
 
 internal fun newestConversationIdExcluding(
@@ -36,6 +38,17 @@ internal fun shouldPreferLiveRuntimeMessages(
     if (liveMessagesEmpty) return false
     if (activeConversationId == selectedConversationId) return true
     return runtimeConversationId == selectedConversationId
+}
+
+internal fun shouldAttachToLiveConversationRuntime(
+    targetConversationId: Long,
+    activeConversationId: Long?,
+    isLoading: Boolean,
+    liveMessagesEmpty: Boolean
+): Boolean {
+    return activeConversationId == targetConversationId &&
+        isLoading &&
+        !liveMessagesEmpty
 }
 
 internal fun shouldAdoptLiveRuntimeConversation(
@@ -93,11 +106,16 @@ internal fun resolveWorkspaceConversationAnchor(
 
 internal fun resolveWorkspaceProjectRoot(
     conversationAnchorId: Long?,
-    currentProjectFolder: String?
+    currentProjectFolder: String?,
+    backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.REMOTE_SSH
 ): String? {
     val projectFolder = currentProjectFolder?.takeIf { it.isNotBlank() } ?: return null
     if (conversationAnchorId == null) return null
-    return "${AgentService.WORKSPACE_PATH}/$projectFolder"
+    return if (backend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
+        AgentLocalWorkspaceSupport.displayRoot(projectFolder)
+    } else {
+        "${AgentService.WORKSPACE_PATH}/$projectFolder"
+    }
 }
 
 internal fun clampWorkspaceParentPath(

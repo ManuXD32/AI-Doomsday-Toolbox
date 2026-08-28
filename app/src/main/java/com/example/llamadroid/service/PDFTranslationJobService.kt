@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import android.content.Context
 import android.net.Uri
 import com.example.llamadroid.R
+import com.example.llamadroid.data.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,13 +24,20 @@ data class PdfTranslationJobState(
     val successMessage: String? = null,
     val errorMessage: String? = null,
     val errorDetails: String? = null,
-    val mangaResults: List<MangaTranslationFileResult> = emptyList()
+    val outputUris: List<Uri> = emptyList(),
+    val mangaResults: List<MangaTranslationFileResult> = emptyList(),
+    val currentFileName: String? = null,
+    val currentFileIndex: Int = 0,
+    val totalFiles: Int = 0,
+    val capturedConfigFingerprint: String? = null,
+    val mangaPreview: MangaTranslationPreviewResult? = null
 )
 
 enum class PdfTranslationJobKind {
     OCR_PDF,
     TEXT_LAYER_PDF,
-    MANGA_BATCH
+    MANGA_BATCH,
+    MANGA_PREVIEW
 }
 
 object PDFTranslationJobService {
@@ -52,6 +60,25 @@ object PDFTranslationJobService {
         }
     }
 
+    fun startOcrPdfTranslation(context: Context, spec: PdfOcrJobSpec): Boolean {
+        val translation = spec.translationConfig ?: return false
+        val options = translation.toLegacyOptions(spec.ocrConfig)
+        return startTranslation(
+            context = context,
+            kind = PdfTranslationJobKind.OCR_PDF,
+            successMessage = context.getString(R.string.pdf_ocr_translated_pdf_export_success)
+        ) { service, appContext, controller ->
+            service.exportTranslatedOcrPdf(
+                pdfUri = spec.source.uri,
+                settingsOverride = translation.settings,
+                optionsOverride = options,
+                executionController = controller
+            ) { progress ->
+                publishProgress(appContext, progress)
+            }
+        }
+    }
+
     fun startTextLayerPdfTranslation(context: Context, pdfUri: Uri): Boolean {
         return startTranslation(
             context = context,
@@ -65,9 +92,24 @@ object PDFTranslationJobService {
     }
 
     fun startTextLayerPdfTranslationBatch(context: Context, pdfUris: List<Uri>): Boolean {
+        return startTextLayerPdfTranslationBatch(context, pdfUris, null)
+    }
+
+    fun startTextLayerPdfTranslationBatch(
+        context: Context,
+        spec: PdfTextTranslationJobSpec
+    ): Boolean = startTextLayerPdfTranslationBatch(context, spec.sources.map { it.uri }, spec.translationConfig)
+
+    private fun startTextLayerPdfTranslationBatch(
+        context: Context,
+        pdfUris: List<Uri>,
+        capturedConfig: DocumentTranslationRunConfig?
+    ): Boolean {
         val pendingPdfs = pdfUris.distinct()
         if (pendingPdfs.isEmpty()) return false
-        if (pendingPdfs.size == 1) return startTextLayerPdfTranslation(context, pendingPdfs.first())
+        if (pendingPdfs.size == 1 && capturedConfig == null) {
+            return startTextLayerPdfTranslation(context, pendingPdfs.first())
+        }
         if (currentJob?.isActive == true) return false
 
         val appContext = context.applicationContext
@@ -85,6 +127,7 @@ object PDFTranslationJobService {
             var completed = 0
             var failed = 0
             var wasCancelled = false
+            val outputs = mutableListOf<Uri>()
 
             pendingPdfs.forEachIndexed { index, pdfUri ->
                 if (controller.isCancelled()) {
@@ -92,7 +135,19 @@ object PDFTranslationJobService {
                     return@forEachIndexed
                 }
                 val result = try {
-                    service.exportTranslatedTextLayerPdf(pdfUri, executionController = controller) { progress ->
+                    service.exportTranslatedTextLayerPdf(
+                        pdfUri = pdfUri,
+                        settingsOverride = capturedConfig?.settings,
+                        optionsOverride = capturedConfig?.let { config ->
+                            config.toLegacyOptions(
+                                DocumentOcrRunConfig(
+                                    provider = com.example.llamadroid.data.PdfOcrProvider.ML_KIT,
+                                    llamaOcr = SettingsRepository(appContext).pdfTranslationOptionsSnapshot().llamaOcr
+                                )
+                            )
+                        },
+                        executionController = controller
+                    ) { progress ->
                         val fileProgress = progressFraction(progress)
                         _state.update {
                             it.copy(
@@ -119,6 +174,7 @@ object PDFTranslationJobService {
 
                 if (result.isSuccess) {
                     completed++
+                    result.getOrNull()?.let(outputs::add)
                 } else if (result.exceptionOrNull() is CancellationException || controller.isCancelled()) {
                     wasCancelled = true
                     return@forEachIndexed
@@ -148,7 +204,8 @@ object PDFTranslationJobService {
                     isRunning = false,
                     kind = PdfTranslationJobKind.TEXT_LAYER_PDF,
                     progressFraction = 1f,
-                    successMessage = message
+                    successMessage = message,
+                    outputUris = outputs
                 )
             } else {
                 PdfTranslationJobState(
@@ -171,13 +228,56 @@ object PDFTranslationJobService {
         exportPdf: Boolean = true,
         exportCbz: Boolean = true
     ): Boolean {
+        val appContext = context.applicationContext
+        val defaultConfig = captureDefaultMangaConfig(appContext)
+        val spec = MangaTranslationJobSpec(
+            sources = cbzUris.distinct().map { uri ->
+                MangaTranslationSource(
+                    uri = uri,
+                    displayName = uri.lastPathSegment?.substringAfterLast('/') ?: uri.toString(),
+                    mimeType = appContext.contentResolver.getType(uri)
+                )
+            },
+            exportPdf = exportPdf,
+            exportCbz = exportCbz,
+            config = defaultConfig
+        )
+        return startMangaTranslation(context, spec)
+    }
+
+    fun discoverResumableMangaJobs(context: Context): List<MangaTranslationJobManifest> =
+        MangaTranslationSupport.discoverResumableManifests(
+            jobsRoot = java.io.File(context.applicationContext.filesDir, "manga_translation_jobs"),
+            fallbackConfig = captureDefaultMangaConfig(context.applicationContext)
+        )
+
+    fun resumeMangaTranslation(
+        context: Context,
+        manifest: MangaTranslationJobManifest
+    ): Boolean = startMangaTranslation(context, manifest.spec)
+
+    fun startMangaTranslation(
+        context: Context,
+        spec: MangaTranslationJobSpec
+    ): Boolean {
         if (currentJob?.isActive == true) return false
 
         val appContext = context.applicationContext
+        val preflight = MangaTranslationSupport.preflight(spec)
+        if (!preflight.canRun) {
+            _state.value = PdfTranslationJobState(
+                isRunning = false,
+                kind = PdfTranslationJobKind.MANGA_BATCH,
+                errorMessage = preflight.blockers.joinToString { it.code.name }
+            )
+            return false
+        }
         _state.value = PdfTranslationJobState(
             isRunning = true,
             kind = PdfTranslationJobKind.MANGA_BATCH,
-            progressMessage = appContext.getString(R.string.pdf_translation_background_started)
+            progressMessage = appContext.getString(R.string.pdf_translation_background_started),
+            totalFiles = spec.sources.size,
+            capturedConfigFingerprint = spec.config.fingerprint()
         )
         RemoteSummaryProtection.acquire(appContext)
         MangaTranslationForegroundService.start(
@@ -190,13 +290,20 @@ object PDFTranslationJobService {
         currentJob = serviceScope.launch {
             try {
                 val result = try {
-                    PDFService(appContext).translateMangaCbzBatch(
-                        cbzUris = cbzUris,
-                        exportPdf = exportPdf,
-                        exportCbz = exportCbz,
-                        executionController = controller
+                    PDFService(appContext).translateMangaBatch(
+                        spec = spec,
+                        executionController = controller,
+                        onFileStarted = { index, total, name ->
+                            _state.update {
+                                it.copy(
+                                    currentFileName = name,
+                                    currentFileIndex = index,
+                                    totalFiles = total
+                                )
+                            }
+                        }
                     ) { progress ->
-                        publishProgress(appContext, progress)
+                        publishMangaProgress(appContext, progress)
                     }
                 } catch (cancelled: CancellationException) {
                     Result.failure(cancelled)
@@ -216,7 +323,10 @@ object PDFTranslationJobService {
                             isRunning = false,
                             kind = PdfTranslationJobKind.MANGA_BATCH,
                             successMessage = message,
-                            mangaResults = results
+                            mangaResults = results,
+                            progressFraction = 1f,
+                            totalFiles = spec.sources.size,
+                            capturedConfigFingerprint = spec.config.fingerprint()
                         )
                     },
                     onFailure = { error ->
@@ -225,7 +335,9 @@ object PDFTranslationJobService {
                                 isRunning = false,
                                 kind = PdfTranslationJobKind.MANGA_BATCH,
                                 cancelled = true,
-                                mangaResults = (error as? PDFTranslationCancelledException)?.mangaResults.orEmpty()
+                                mangaResults = (error as? PDFTranslationCancelledException)?.mangaResults.orEmpty(),
+                                totalFiles = spec.sources.size,
+                                capturedConfigFingerprint = spec.config.fingerprint()
                             )
                         } else {
                             val display = displayError(error, appContext)
@@ -233,7 +345,9 @@ object PDFTranslationJobService {
                                 isRunning = false,
                                 kind = PdfTranslationJobKind.MANGA_BATCH,
                                 errorMessage = display.first,
-                                errorDetails = display.second
+                                errorDetails = display.second,
+                                totalFiles = spec.sources.size,
+                                capturedConfigFingerprint = spec.config.fingerprint()
                             )
                         }
                     }
@@ -246,6 +360,72 @@ object PDFTranslationJobService {
             }
         }
 
+        return true
+    }
+
+    fun startMangaPreview(context: Context, spec: MangaTranslationJobSpec): Boolean {
+        if (currentJob?.isActive == true) return false
+        val appContext = context.applicationContext
+        val preflight = MangaTranslationSupport.preflight(spec)
+        if (!preflight.canRun) {
+            _state.value = PdfTranslationJobState(
+                kind = PdfTranslationJobKind.MANGA_PREVIEW,
+                errorMessage = preflight.blockers.joinToString { it.code.name }
+            )
+            return false
+        }
+        val controller = PDFTranslationExecutionController()
+        currentController = controller
+        _state.value = PdfTranslationJobState(
+            isRunning = true,
+            kind = PdfTranslationJobKind.MANGA_PREVIEW,
+            progressMessage = appContext.getString(R.string.workflow_step_starting),
+            totalFiles = 1,
+            currentFileIndex = 1,
+            currentFileName = spec.sources.firstOrNull()?.displayName,
+            capturedConfigFingerprint = spec.config.fingerprint()
+        )
+        RemoteSummaryProtection.acquire(appContext)
+        currentJob = serviceScope.launch {
+            try {
+                val result = PDFService(appContext).previewMangaFirstPage(
+                    spec = spec,
+                    executionController = controller
+                ) { progress ->
+                    publishMangaProgress(appContext, progress)
+                }
+                result.fold(
+                    onSuccess = { preview ->
+                        _state.value = PdfTranslationJobState(
+                            kind = PdfTranslationJobKind.MANGA_PREVIEW,
+                            progressFraction = 1f,
+                            successMessage = appContext.getString(R.string.workflow_manga_preview_ready),
+                            capturedConfigFingerprint = spec.config.fingerprint(),
+                            mangaPreview = preview
+                        )
+                    },
+                    onFailure = { error ->
+                        _state.value = if (error is CancellationException || controller.isCancelled()) {
+                            PdfTranslationJobState(
+                                kind = PdfTranslationJobKind.MANGA_PREVIEW,
+                                cancelled = true
+                            )
+                        } else {
+                            val display = displayError(error, appContext)
+                            PdfTranslationJobState(
+                                kind = PdfTranslationJobKind.MANGA_PREVIEW,
+                                errorMessage = display.first,
+                                errorDetails = display.second
+                            )
+                        }
+                    }
+                )
+            } finally {
+                RemoteSummaryProtection.release()
+                currentJob = null
+                currentController = null
+            }
+        }
         return true
     }
 
@@ -286,11 +466,12 @@ object PDFTranslationJobService {
             }
 
             result.fold(
-                onSuccess = {
+                onSuccess = { outputUri ->
                     _state.value = PdfTranslationJobState(
                         isRunning = false,
                         kind = kind,
-                        successMessage = successMessage
+                        successMessage = successMessage,
+                        outputUris = listOf(outputUri)
                     )
                 },
                 onFailure = { error ->
@@ -333,12 +514,37 @@ object PDFTranslationJobService {
         }
     }
 
+    private fun publishMangaProgress(context: Context, progress: PdfOcrTranslationProgress) {
+        _state.update { current ->
+            val fileFraction = mangaProgressFraction(progress)
+            val overall = if (current.totalFiles > 0 && current.currentFileIndex > 0) {
+                ((current.currentFileIndex - 1).toFloat() + fileFraction) / current.totalFiles.toFloat()
+            } else {
+                fileFraction
+            }
+            current.copy(
+                isRunning = true,
+                cancelled = false,
+                progressMessage = formatTranslationProgress(context, progress),
+                progressFraction = overall.coerceIn(0f, 1f),
+                successMessage = null,
+                errorMessage = null,
+                errorDetails = null
+            )
+        }
+    }
+
     private fun displayError(error: Throwable, context: Context): Pair<String, String?> {
         if (error is PDFTranslationDisplayException) {
             return error.displayMessage to error.displayDetails
         }
         val message = error.message ?: context.getString(R.string.error_generic)
         return message to null
+    }
+
+    private fun captureDefaultMangaConfig(context: Context): MangaTranslationRunConfig {
+        val settings = SettingsRepository(context)
+        return settings.mangaTranslationRunConfigSnapshot()
     }
 
     private fun progressFraction(progress: PdfOcrTranslationProgress): Float {
@@ -349,7 +555,39 @@ object PDFTranslationJobService {
         }.coerceIn(0f, 1f)
     }
 
+    private fun mangaProgressFraction(progress: PdfOcrTranslationProgress): Float {
+        val pageFraction = when {
+            progress.stage == PdfOcrTranslationStage.OCR &&
+                progress.totalPages > 0 &&
+                progress.totalRegions > 0 -> {
+                val currentPageProgress = (
+                    progress.processedPages.toFloat() +
+                        (progress.currentRegion.toFloat() / progress.totalRegions.toFloat().coerceAtLeast(1f))
+                    ) / progress.totalPages.toFloat()
+                currentPageProgress
+            }
+            progress.totalPages > 0 -> progress.processedPages.toFloat() / progress.totalPages.toFloat()
+            else -> 0f
+        }.coerceIn(0f, 1f)
+        val blockFraction = when {
+            progress.totalBlocks > 0 -> progress.translatedBlocks.toFloat() / progress.totalBlocks.toFloat()
+            else -> pageFraction
+        }.coerceIn(0f, 1f)
+        return when (progress.stage) {
+            PdfOcrTranslationStage.EXTRACTING -> 0.02f + pageFraction * 0.05f
+            PdfOcrTranslationStage.READING_TEXT -> 0.05f + pageFraction * 0.18f
+            PdfOcrTranslationStage.OCR -> 0.08f + pageFraction * 0.32f
+            PdfOcrTranslationStage.TRANSLATING -> 0.40f + blockFraction * 0.35f
+            PdfOcrTranslationStage.CORRECTING -> 0.75f + blockFraction * 0.08f
+            PdfOcrTranslationStage.WRITING,
+            PdfOcrTranslationStage.RENDERING -> 0.83f + pageFraction * 0.10f
+            PdfOcrTranslationStage.PDF_CREATION -> 0.94f
+            PdfOcrTranslationStage.PACKING -> 0.98f + pageFraction * 0.02f
+        }.coerceIn(0f, 1f)
+    }
+
     private fun formatTranslationProgress(context: Context, progress: PdfOcrTranslationProgress): String {
+        progress.detailText?.takeIf { it.isNotBlank() }?.let { return it }
         return when (progress.stage) {
             PdfOcrTranslationStage.READING_TEXT -> context.getString(
                 R.string.pdf_translate_ocr_progress_read_text,

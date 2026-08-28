@@ -34,6 +34,8 @@ data class LlamaChatRequest(
     @SerializedName("presence_penalty") val presence_penalty: Float? = null,
     @SerializedName("max_tokens") val max_tokens: Int? = null,
     @SerializedName("n_predict") val n_predict: Int? = null,
+    @SerializedName("return_progress") val returnProgress: Boolean = true,
+    @SerializedName("sse_ping_interval") val ssePingInterval: Int = 2,
     @SerializedName("stop") val stop: List<String>? = null,
     @SerializedName("chat_template_kwargs") val chat_template_kwargs: Map<String, Any>? = null
 )
@@ -52,7 +54,16 @@ data class LlamaChatMessage(
 @Keep
 data class LlamaChatResponse(
     @SerializedName("choices") val choices: List<LlamaChatChoice>,
-    @SerializedName("usage") val usage: LlamaChatUsage? = null
+    @SerializedName("usage") val usage: LlamaChatUsage? = null,
+    @SerializedName("prompt_progress") val promptProgress: LlamaPromptProgress? = null
+)
+
+@Keep
+data class LlamaPromptProgress(
+    @SerializedName("total") val total: Int = 0,
+    @SerializedName("cache") val cached: Int = 0,
+    @SerializedName("processed") val processed: Int = 0,
+    @SerializedName("time_ms") val timeMs: Long = 0L
 )
 
 @Keep

@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "id": "repository-exploration",
+      "name": "Repository Exploration",
+      "description": "Map an unfamiliar repository efficiently before making changes.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "repository-exploration"
+    },
+    {
+      "id": "implementation-planning",
+      "name": "Implementation Planning",
+      "description": "Turn a feature request into an evidence-based, testable implementation plan.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "implementation-planning"
+    },
+    {
+      "id": "code-review",
+      "name": "Code Review",
+      "description": "Review a change for correctness, regressions, maintainability, and missing tests.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "code-review"
+    },
+    {
+      "id": "testing-debugging",
+      "name": "Testing and Debugging",
+      "description": "Reproduce failures, isolate causes, and verify fixes with focused tests.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "testing-debugging"
+    },
+    {
+      "id": "webui-visual-testing",
+      "name": "WebUI Visual Testing",
+      "description": "Validate local WebUI previews through small observable interactions.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "webui-visual-testing"
+    },
+    {
+      "id": "android-compose",
+      "name": "Android and Compose",
+      "description": "Implement Android and Jetpack Compose changes with lifecycle and small-screen care.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "android-compose"
+    },
+    {
+      "id": "python-projects",
+      "name": "Python Projects",
+      "description": "Implement and validate maintainable Python projects in the local sandbox.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "python-projects"
+    },
+    {
+      "id": "release-workflow",
+      "name": "Release Workflow",
+      "description": "Run a cautious versioned release workflow with artifact verification.",
+      "version": "1.0.0",
+      "license": "Apache-2.0",
+      "asset_path": "release-workflow"
+    }
+  ]
+}

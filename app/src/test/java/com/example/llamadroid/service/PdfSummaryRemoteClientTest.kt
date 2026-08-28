@@ -101,6 +101,68 @@ class PdfSummaryRemoteClientTest {
         assertTrue(imageUrl.startsWith("data:image/png;base64,abc123"))
     }
 
+    @Test
+    fun `llama multimodal completion pairs one marker with each bitmap`() {
+        val payload = buildLlamaServerMultimodalCompletionRequestPayload(
+            RemoteSummaryRequest(
+                systemPrompt = "OCR only",
+                userPrompt = "document parsing.",
+                contextSize = 4096,
+                maxTokens = 512,
+                temperature = 0f,
+                thinkingEnabled = false,
+                imageAttachments = listOf(
+                    RemoteSummaryImageAttachment("first"),
+                    RemoteSummaryImageAttachment("second")
+                ),
+                preferLlamaMultimodalCompletion = true
+            )
+        )
+
+        val prompt = payload["prompt"] as Map<*, *>
+        val promptString = prompt["prompt_string"] as String
+        assertEquals(2, Regex("<__media__>").findAll(promptString).count())
+        assertEquals(listOf("first", "second"), prompt["multimodal_data"])
+        assertEquals(512, payload["n_predict"])
+    }
+
+    @Test
+    fun `llama multimodal completion uses resolved server marker`() {
+        val payload = buildLlamaServerMultimodalCompletionRequestPayload(
+            RemoteSummaryRequest(
+                systemPrompt = "",
+                userPrompt = "document parsing.",
+                contextSize = 4096,
+                maxTokens = 128,
+                temperature = 0f,
+                thinkingEnabled = false,
+                imageAttachments = listOf(RemoteSummaryImageAttachment("image")),
+                preferLlamaMultimodalCompletion = true,
+                allowBlankOutput = true
+            ),
+            mediaMarker = "<server-media>"
+        )
+
+        val prompt = payload["prompt"] as Map<*, *>
+        val promptString = prompt["prompt_string"] as String
+        assertEquals(1, Regex("<server-media>").findAll(promptString).count())
+        assertEquals(listOf("image"), prompt["multimodal_data"])
+    }
+
+    @Test
+    fun `remote summary requests remain strict on blank output by default`() {
+        val request = RemoteSummaryRequest(
+            systemPrompt = "",
+            userPrompt = "translate",
+            contextSize = 4096,
+            maxTokens = 128,
+            temperature = 0f,
+            thinkingEnabled = false
+        )
+
+        assertFalse(request.allowBlankOutput)
+    }
+
 
     @Test
     fun `parseLlamaServerContextTokens reads props response`() {
@@ -113,6 +175,61 @@ class PdfSummaryRemoteClientTest {
         """.trimIndent()
 
         assertEquals(16384, parseLlamaServerContextTokens(body))
+    }
+
+    @Test
+    fun `parseLlamaServerMediaMarker reads props marker`() {
+        val body = """{"media_marker":"<server-media>"}"""
+
+        assertEquals("<server-media>", parseLlamaServerMediaMarker(body))
+    }
+
+    @Test
+    fun `parseLlamaServerBuildInfo reads props build info`() {
+        val body = """{"build_info":"b1234-deadbeef"}"""
+
+        assertEquals("b1234-deadbeef", parseLlamaServerBuildInfo(body))
+    }
+
+    @Test
+    fun `parseLlamaServerMediaMarker returns null when absent`() {
+        assertEquals(null, parseLlamaServerMediaMarker("""{"ok":true}"""))
+    }
+
+    @Test
+    fun `parseLlamaServerVisionSupport reads modalities flag`() {
+        assertEquals(true, parseLlamaServerVisionSupport("""{"modalities":{"vision":true}}"""))
+        assertEquals(false, parseLlamaServerVisionSupport("""{"modalities":{"vision":false}}"""))
+    }
+
+    @Test
+    fun `parseLlamaServerVisionSupport reads capability arrays conservatively`() {
+        assertEquals(true, parseLlamaServerVisionSupport("""{"capabilities":["completion","multimodal"]}"""))
+        assertEquals(null, parseLlamaServerVisionSupport("""{"capabilities":["completion"]}"""))
+        assertEquals(false, parseLlamaServerVisionSupport("""{"multimodal":false}"""))
+        assertEquals(null, parseLlamaServerVisionSupport("""{"ok":true}"""))
+    }
+
+    @Test
+    fun `parseLlamaServerModelVisionSupport reads model endpoint capability fallback`() {
+        assertEquals(
+            true,
+            parseLlamaServerModelVisionSupport(
+                """{"data":[{"id":"ocr","capabilities":["completion","multimodal"]}]}"""
+            )
+        )
+        assertEquals(
+            false,
+            parseLlamaServerModelVisionSupport(
+                """{"data":[{"id":"text","modalities":{"vision":false}}]}"""
+            )
+        )
+        assertEquals(
+            null,
+            parseLlamaServerModelVisionSupport(
+                """{"data":[{"id":"unknown","capabilities":["completion"]}]}"""
+            )
+        )
     }
 
     @Test

@@ -1,0 +1,7 @@
+<resources>
+    <string name="saved_command_update_existing">Update an existing command</string>
+    <string name="saved_command_overwrite_title">Overwrite saved command?</string>
+    <string name="saved_command_overwrite_message">A command named "%1$s" already exists. Replace it with the current settings?</string>
+    <string name="saved_command_overwrite">Overwrite</string>
+    <string name="saved_command_overwritten">Saved command updated</string>
+</resources>

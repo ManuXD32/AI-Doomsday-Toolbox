@@ -212,7 +212,7 @@ object UpscalerAssetPackSupport {
         storedVersionCode: Long?,
         currentVersionCode: Long
     ): Boolean {
-        return !hasExtractedModels || storedVersionCode != currentVersionCode
+        return !hasExtractedModels
     }
 
     internal fun hasExtractedModels(modelsDir: File): Boolean {

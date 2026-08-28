@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.ksp)
     alias(libs.plugins.jetbrains.kotlin.serialization)
+    id("com.chaquo.python")
     id("kotlin-parcelize")
 }
 
@@ -47,20 +48,21 @@ configurations.configureEach {
 
 android {
     namespace = "com.example.llamadroid"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.manuxd32.aidoomsdaytoolbox"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 948
-        versionName = "0.948"
+        targetSdk = 36
+        versionCode = providers.gradleProperty("MOBILE_VERSION_CODE").get().toInt()
+        versionName = providers.gradleProperty("VERSION_NAME").get()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
         buildConfigField("boolean", "IS_FAT_APK_BUILD", isFatApkBuild.get().toString())
+        manifestPlaceholders["gwpAsanMode"] = "never"
         
         // Limit to arm64 only (CPU features detection uses ARM-specific headers)
         ndk {
@@ -87,9 +89,27 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Use release signing for Play Store
             signingConfig = signingConfigs.getByName("release")
+        }
+        create("forensics") {
+            initWith(getByName("debug"))
+            isDebuggable = true
+            matchingFallbacks += listOf("debug")
+            manifestPlaceholders["gwpAsanMode"] = "always"
+            ndk {
+                debugSymbolLevel = "FULL"
+            }
+            externalNativeBuild {
+                cmake {
+                    cFlags += "-fno-omit-frame-pointer"
+                    cppFlags += "-fno-omit-frame-pointer"
+                }
+            }
         }
     }
     compileOptions {
@@ -128,7 +148,7 @@ android {
     
     // NDK for CPU features detection
     ndkVersion = "29.0.14206865"
-    
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -143,13 +163,19 @@ android {
     
     // Dynamic Features for native binaries execution (Install-Time/On-Demand)
     dynamicFeatures += setOf(
-        ":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9",
+        ":feature_llm_baseline", ":feature_llm_dotprod", ":feature_llm_armv9", ":feature_llm_i8mm",
         ":feature_llm_snapdragon_opencl",
         ":feature_kiwix_baseline", ":feature_kiwix_dotprod", ":feature_kiwix_armv9",
-        ":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9",
-        ":feature_media_snapdragon_vulkan",
+        ":feature_media_baseline", ":feature_media_dotprod", ":feature_media_armv9", ":feature_media_i8mm",
+        ":feature_media_snapdragon_vulkan", ":feature_media_snapdragon_opencl",
         ":feature_upscaler"
     )
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.13"
+    }
 }
 
 val tamaDialogWorkbook = layout.projectDirectory.file("src/main/tama-dialogs/pet_dialogs.xlsx")
@@ -175,7 +201,34 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.con
     dependsOn(generateTamaDialogCatalog)
 }
 
+tasks.matching { it.name.contains("lint", ignoreCase = true) }.configureEach {
+    dependsOn(generateTamaDialogCatalog)
+}
+
+val generateNativeLibraryBuildIdManifest by tasks.registering(Exec::class) {
+    val output = layout.buildDirectory.file("outputs/native-symbols/native-library-build-ids.tsv")
+    outputs.file(output)
+    commandLine(
+        "bash",
+        rootProject.file("tools/generate_native_build_id_manifest.sh").absolutePath,
+        rootProject.projectDir.absolutePath,
+        output.get().asFile.absolutePath
+    )
+}
+
+val packageReleaseNativeDebugSymbols by tasks.registering(Zip::class) {
+    dependsOn("extractReleaseNativeDebugMetadata")
+    from(layout.buildDirectory.dir("intermediates/native_debug_metadata/release/extractReleaseNativeDebugMetadata/out"))
+    destinationDirectory.set(layout.buildDirectory.dir("outputs/native-symbols"))
+    archiveFileName.set("native-debug-symbols-${providers.gradleProperty("VERSION_NAME").get()}.zip")
+}
+
+tasks.matching { it.name == "bundleRelease" }.configureEach {
+    finalizedBy(generateNativeLibraryBuildIdManifest, packageReleaseNativeDebugSymbols)
+}
+
 dependencies {
+    implementation(project(":wear-protocol"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -189,6 +242,7 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.play.services.wearable)
     
     // Document file support for SAF
     implementation("androidx.documentfile:documentfile:1.0.1")
@@ -207,7 +261,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
-    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    // Catalog-referenced so it can never drift from the Room runtime/compiler
+    // version, which previously had to be kept in step by hand.
+    androidTestImplementation(libs.androidx.room.testing)
 
     // Image Loading
     implementation(libs.coil.compose)
@@ -287,6 +343,7 @@ val releaseFeatureModules = listOf(
     ":feature_llm_baseline",
     ":feature_llm_dotprod",
     ":feature_llm_armv9",
+    ":feature_llm_i8mm",
     ":feature_llm_snapdragon_opencl",
     ":feature_kiwix_baseline",
     ":feature_kiwix_dotprod",
@@ -334,9 +391,9 @@ tasks.register("checkReleaseFeatureSplitSizes") {
 tasks.register<Exec>("repackReleaseBundleForSigning") {
     group = "verification"
     description = "Compresses the release AAB and removes bulky upload-only metadata before signing."
-    dependsOn("shrinkBundleReleaseResources")
+    dependsOn("packageReleaseBundle")
     val intermediaryBundle = layout.buildDirectory.file(
-        "intermediates/intermediary_bundle/release/shrinkBundleReleaseResources/intermediary-bundle.aab"
+        "intermediates/intermediary_bundle/release/packageReleaseBundle/intermediary-bundle.aab"
     )
     inputs.file(intermediaryBundle)
     outputs.file(intermediaryBundle)

@@ -44,6 +44,7 @@ import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 import java.net.URI
+import java.util.concurrent.atomic.AtomicBoolean
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.onnx.OnnxTtsRequest
 import com.example.llamadroid.onnx.SUPERTONIC_DEFAULT_LANGUAGE
@@ -53,6 +54,7 @@ import com.example.llamadroid.widget.NoteDisplayWidgetProvider
 import com.example.llamadroid.widget.OrganizerCalendarWidgetProvider
 import kotlinx.coroutines.flow.first
 import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 
 internal fun isNativeChatLoopbackHost(host: String): Boolean {
     val normalized = normalizeNativeChatServerHost(host)
@@ -255,7 +257,13 @@ internal fun nativeChatToolAwarenessMessages(
     toolConfig: NativeChatToolConfig,
     knowledgeBaseRoutingGuide: String? = null
 ): List<OllamaService.ChatMessage> = buildList {
-    if (!toolConfig.toolsEnabled) return@buildList
+    if (!toolConfig.hasEnabledTools()) return@buildList
+    add(
+        OllamaService.ChatMessage(
+            role = "system",
+            content = "You are enclosed in the app runtime. Use only the native tools explicitly available in this turn; do not assume shell access, arbitrary files, network, Android APIs, or external services unless a listed tool provides them."
+        )
+    )
     val currentYear = java.time.LocalDate.now().year
 
     if (toolConfig.noteToolsEnabled || toolConfig.todoToolsEnabled) {
@@ -387,6 +395,7 @@ class LlamaClientService : Service() {
     // Active generation state
     private var job: Job? = null
     private var notificationTaskId: Int? = null
+    private val stoppingGeneration = AtomicBoolean(false)
     
     // Repository to save messages
     private lateinit var repository: LlamaRepository
@@ -438,6 +447,7 @@ class LlamaClientService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_GENERATE -> {
+                val taskId = ensureForegroundStarted()
                 val chatId = intent.getLongExtra(EXTRA_CHAT_ID, -1L)
                 val serverId = intent.getLongExtra(EXTRA_SERVER_ID, -1L)
                 val userMessage = intent.getStringExtra(EXTRA_USER_MESSAGE)
@@ -451,6 +461,7 @@ class LlamaClientService : Service() {
                     startGeneration(
                         chatId,
                         serverId,
+                        taskId,
                         userMessage,
                         imagePath,
                         audioPath,
@@ -461,18 +472,34 @@ class LlamaClientService : Service() {
                 } else {
                     DebugLog.log("LlamaClientService: Missing params for generation")
                     Companion.updateState(GenerationState.Error("Missing parameters for generation", chatId))
+                    stopGeneration()
                 }
             }
             ACTION_STOP -> {
+                if (notificationTaskId == null) {
+                    ensureForegroundStarted()
+                }
                 stopGeneration()
             }
         }
         return START_NOT_STICKY
     }
 
+    private fun ensureForegroundStarted(): Int {
+        notificationTaskId?.let { return it }
+        val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
+            UnifiedNotificationManager.TaskType.LLAMA_CLIENT,
+            "Llama Chat"
+        )
+        notificationTaskId = taskId
+        startForeground(taskId, notification)
+        return taskId
+    }
+
     private fun startGeneration(
         chatId: Long,
         serverId: Long,
+        taskId: Int,
         userMessage: String?,
         imagePath: String?,
         audioPath: String?,
@@ -484,15 +511,8 @@ class LlamaClientService : Service() {
             DebugLog.log("LlamaClientService: Generation already in progress")
             return
         }
-
-        // Start Foreground
-        val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
-            UnifiedNotificationManager.TaskType.LLAMA_CLIENT,
-            "Llama Chat"
-        )
-        notificationTaskId = taskId
-        startForeground(taskId, notification)
         
+        stoppingGeneration.set(false)
         acquirePowerLocks()
         warnIfBatteryOptimizationMayThrottle(chatId)
 
@@ -651,7 +671,7 @@ class LlamaClientService : Service() {
                     tokensPerSecond = finalTps
                 ))
             } catch (e: Exception) {
-                if (e is CancellationException) {
+                if (e is CancellationException || stoppingGeneration.get() || e.message == "Stopped by user") {
                      DebugLog.log("LlamaClientService: Generation cancelled")
                      if (assistantMsgId != -1L) {
                          val finalElapsedMs = progress.generationElapsedMs()
@@ -679,6 +699,7 @@ class LlamaClientService : Service() {
                     UnifiedNotificationManager.dismissTask(taskId)
                 }
                 notificationTaskId = null
+                stoppingGeneration.set(false)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 job = null
             }
@@ -708,14 +729,26 @@ class LlamaClientService : Service() {
             throw IllegalStateException(getString(R.string.llama_client_error_local_server_not_running))
         }
 
-        val modelPath = settingsRepo.selectedModelPath.value
+        val savedProfile = LlamaServerLaunchProfile.decode(server.localLaunchProfileJson)
+        val modelPath = savedProfile?.modelPath?.takeIf { it.isNotBlank() }
+            ?: settingsRepo.selectedModelPath.value
             ?: throw IllegalStateException(getString(R.string.llama_client_error_no_selected_model))
-        val shouldPassVisionProjector = shouldAttachMmprojForLocalAutoStart(
-            server = server,
-            imagePath = imagePath,
-            visionEnabled = settingsRepo.enableVision.value,
-            selectedMmprojPath = settingsRepo.selectedMmprojPath.value
-        )
+        val selectedVisionEnabled = savedProfile?.visionEnabled ?: settingsRepo.enableVision.value
+        val selectedMmprojPath = savedProfile?.mmprojPath ?: settingsRepo.selectedMmprojPath.value
+        val shouldPassVisionProjector = if (savedProfile != null) {
+            savedProfile.visionEnabled && !savedProfile.mmprojPath.isNullOrBlank()
+        } else {
+            shouldAttachMmprojForLocalAutoStart(
+                server = server,
+                imagePath = imagePath,
+                visionEnabled = selectedVisionEnabled,
+                selectedMmprojPath = selectedMmprojPath
+            )
+        }
+        // A saved profile represents the exact server configuration, not only
+        // the requirements of the first chat turn. Keep its projector loaded so
+        // a later image message does not require an otherwise invisible restart.
+        val profileForRequest = savedProfile
         val startIntent = Intent(applicationContext, LlamaService::class.java).apply {
             action = LlamaService.ACTION_START
             putExtra(LlamaService.EXTRA_MODEL_PATH, modelPath)
@@ -723,10 +756,16 @@ class LlamaClientService : Service() {
             putExtra(LlamaService.EXTRA_HOST, nativeChatLocalHostForServer(server.host))
             putExtra(LlamaService.EXTRA_PORT, server.port)
             putExtra(LlamaService.EXTRA_ALLOW_SETTINGS_MMPROJ, false)
-            if (shouldPassVisionProjector) {
-                putExtra(LlamaService.EXTRA_MMPROJ_PATH, settingsRepo.selectedMmprojPath.value)
+            profileForRequest?.let { profile ->
+                putExtra(LlamaService.EXTRA_LAUNCH_PROFILE_JSON, LlamaServerLaunchProfile.encode(profile))
             }
-            if (settingsRepo.speculativeEnabled.value) {
+            if (shouldPassVisionProjector) {
+                putExtra(
+                    LlamaService.EXTRA_MMPROJ_PATH,
+                    profileForRequest?.mmprojPath ?: selectedMmprojPath
+                )
+            }
+            if (profileForRequest == null && settingsRepo.speculativeEnabled.value) {
                 val speculativeMode = settingsRepo.speculativeMode.value
                 val shouldPassDraftModel =
                     speculativeMode.requiresDraftModel ||
@@ -750,7 +789,7 @@ class LlamaClientService : Service() {
             getString(R.string.llama_client_status_starting_local_server)
         )
         DebugLog.log("LlamaClientService: Auto-starting local llama-server at $baseUrl")
-        applicationContext.startForegroundService(startIntent)
+        LlamaServerLauncher.startLocalChat(applicationContext, startIntent).getOrThrow()
 
         if (!waitForLocalLlamaServerReady(baseUrl = baseUrl)) {
             throw IllegalStateException(getString(R.string.llama_client_error_local_server_timeout))
@@ -1137,6 +1176,29 @@ class LlamaClientService : Service() {
                     progress.promptTokens = usage.promptTokens
                     progress.completionTokens = usage.completionTokens
                 }
+                chunk.promptProgress?.takeIf { it.total > 0 }?.let { promptProgress ->
+                    progress.promptProcessed = promptProgress.processed.coerceIn(0, promptProgress.total)
+                    progress.promptTotal = promptProgress.total
+                    progress.promptCached = promptProgress.cached.coerceAtLeast(0)
+                    val promptFraction = (
+                        progress.promptProcessed.toFloat() / progress.promptTotal.toFloat()
+                        ).coerceIn(0f, 1f)
+                    progress.promptProgress = promptFraction
+                    progress.statusText = getString(
+                        R.string.llama_prompt_processing_progress,
+                        progress.promptProcessed,
+                        progress.promptTotal,
+                        (promptFraction * 100f).roundToInt(),
+                        progress.promptCached
+                    )
+                    lastUpdate = updateStreamingProgress(
+                        chatId = chatId,
+                        taskId = taskId,
+                        assistantMsgId = assistantMsgId,
+                        progress = progress,
+                        lastUpdateMs = lastUpdate
+                    )
+                }
                 chunk.choices.firstOrNull()?.finish_reason?.let { finishReason ->
                     val normalized = finishReason.lowercase()
                     if (normalized == "length" || normalized == "max_tokens") {
@@ -1150,6 +1212,8 @@ class LlamaClientService : Service() {
                 val dedicatedReasoning = deltaObj?.reasoningContent ?: deltaObj?.thinking ?: ""
                 if (delta.isEmpty() && dedicatedReasoning.isEmpty()) continue
 
+                progress.promptProgress = null
+                progress.statusText = null
                 if (delta.isNotEmpty() && !firstDeltaReceived && needsSpaceCheck && !delta.first().isWhitespace()) {
                     rawSequence += " "
                 }
@@ -1559,6 +1623,28 @@ class LlamaClientService : Service() {
                     thinkingEnabled = thinkingEnabled,
                     maxTokens = maxOutputTokens,
                     samplingParams = samplingParams,
+                    onPromptProgress = { promptProgress ->
+                        progress.promptProcessed = promptProgress.processed
+                        progress.promptTotal = promptProgress.total
+                        progress.promptCached = promptProgress.cached
+                        progress.promptProgress = promptProgress.fraction
+                        progress.statusText = getString(
+                            R.string.llama_prompt_processing_progress,
+                            promptProgress.processed,
+                            promptProgress.total,
+                            (promptProgress.fraction * 100f).roundToInt(),
+                            promptProgress.cached
+                        )
+                        runBlocking {
+                            lastUpdate = updateStreamingProgress(
+                                chatId = chatId,
+                                taskId = taskId,
+                                assistantMsgId = assistantMsgId,
+                                progress = progress,
+                                lastUpdateMs = lastUpdate
+                            )
+                        }
+                    },
                     onChunk = chunkHandler
                 ).getOrElse { throw it }
             }
@@ -2491,6 +2577,7 @@ class LlamaClientService : Service() {
         thinkingEnabled: Boolean
     ): String = buildString {
         appendLine("You are running in the app's local LiteRT chat engine.")
+        appendLine("You are enclosed in the app runtime. Use only the native tools explicitly listed for this turn; do not assume shell access, arbitrary files, network, Android APIs, or external services unless a listed tool provides them.")
         appendLine("Answer in the user's language. Use readable Markdown with blank lines before numbered lists.")
         appendLine("Write normal text with normal spaces between words. Never concatenate words in the final answer.")
         if (thinkingEnabled) {
@@ -2658,6 +2745,7 @@ class LlamaClientService : Service() {
         val header = buildString {
         appendLine("System:")
         appendLine("You are running in the app's local LiteRT chat engine.")
+        appendLine("You are enclosed in the app runtime. Use only the native tools explicitly listed for this turn; do not assume shell access, arbitrary files, network, Android APIs, or external services unless a listed tool provides them.")
         appendLine("Answer in the user's language. Use readable Markdown with blank lines before numbered lists.")
         if (thinkingEnabled) {
             appendLine("Do not write analysis, reasoning, or a Thinking Process section in the final answer.")
@@ -3134,6 +3222,10 @@ class LlamaClientService : Service() {
                 tokenCount = progress.tokenCount,
                 tokensPerSecond = tps,
                 statusText = progress.statusText,
+                promptProgress = progress.promptProgress,
+                promptProcessed = progress.promptProcessed,
+                promptTotal = progress.promptTotal,
+                promptCached = progress.promptCached,
                 toolEvents = progress.toolEvents.toList()
             )
         )
@@ -3473,7 +3565,9 @@ class LlamaClientService : Service() {
                 audioPath = audioPath,
                 language = server.whisperLanguage.ifBlank { LlamaServerEntity.DEFAULT_WHISPER_LANGUAGE },
                 outputFormats = setOf(WhisperOutputFormat.TXT),
-                threads = settingsRepo.whisperThreads.value
+                threads = settingsRepo.whisperThreads.value,
+                purpose = WhisperInvocationPurpose.AUDIO_ATTACHMENT,
+                vad = settingsRepo.whisperVadConfigSnapshot()
             )
         )
     }
@@ -3585,6 +3679,12 @@ class LlamaClientService : Service() {
     }
 
     private fun stopGeneration() {
+        if (!stoppingGeneration.compareAndSet(false, true)) return
+        (Companion.generationState.value as? GenerationState.Generating)?.let { generating ->
+            Companion.updateState(
+                generating.copy(statusText = getString(R.string.llama_generation_stopping))
+            )
+        }
         job?.cancel()
         OllamaService.stop()
         llamaServerChatService.stopGeneration()
@@ -3609,6 +3709,7 @@ class LlamaClientService : Service() {
         OllamaService.stop()
         llamaServerChatService.stopGeneration()
         serviceScope.cancel()
+        stoppingGeneration.set(false)
         notificationTaskId?.let { taskId ->
             UnifiedNotificationManager.dismissTask(taskId)
         }
@@ -3686,6 +3787,10 @@ class LlamaClientService : Service() {
         var isTruncated: Boolean = false,
         var reportedTokensPerSecond: Double? = null,
         var statusText: String? = null,
+        var promptProgress: Float? = null,
+        var promptProcessed: Int = 0,
+        var promptTotal: Int = 0,
+        var promptCached: Int = 0,
         val toolEvents: MutableList<ToolActivityEvent> = mutableListOf(),
         val generatedImagePaths: MutableList<String> = mutableListOf(),
         var lastPowerDiagnosticMs: Long = 0L,
@@ -3698,6 +3803,10 @@ class LlamaClientService : Service() {
             promptTokens = 0
             completionTokens = 0
             isTruncated = false
+            promptProgress = null
+            promptProcessed = 0
+            promptTotal = 0
+            promptCached = 0
             lastTokenAtMs = nowMs
         }
 
@@ -3787,6 +3896,10 @@ class LlamaClientService : Service() {
             val isTranscribingAudio: Boolean = false,
             val transcribingMessageId: Long? = null,
             val statusText: String? = null,
+            val promptProgress: Float? = null,
+            val promptProcessed: Int = 0,
+            val promptTotal: Int = 0,
+            val promptCached: Int = 0,
             val toolEvents: List<ToolActivityEvent> = emptyList()
         ) : GenerationState()
         data class Completed(

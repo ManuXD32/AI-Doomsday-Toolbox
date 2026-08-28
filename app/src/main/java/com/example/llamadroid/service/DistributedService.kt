@@ -32,6 +32,16 @@ enum class DistributedMode {
     WORKER  // Providing compute resources to master
 }
 
+enum class DistributedSpeculativePlacement {
+    LOCAL,
+    /** The master runs only the local MTP drafter; target layers stay on RPC workers. */
+    MASTER_DEDICATED,
+    WORKER_SHARED,
+    WORKER_DEDICATED
+}
+
+enum class RpcWorkerStatus { UNKNOWN, CONNECTING, ONLINE, FAILED, NOT_SELECTED }
+
 /**
  * Information about a connected worker
  */
@@ -45,7 +55,10 @@ data class WorkerInfo(
     val isEnabled: Boolean = true,
     val savedWorkerId: Long? = null,  // Reference to persisted worker
     val assignedProportion: Float? = null,  // User-set proportion override (0.0-1.0)
-    val realRamUsageMB: Float? = null // Real RAM usage from server logs
+    val realRamUsageMB: Float? = null, // Real RAM usage from server logs
+    val rpcStatus: RpcWorkerStatus = RpcWorkerStatus.UNKNOWN,
+    val lastConfirmedAtMs: Long? = null,
+    val statusDetail: String? = null
 )
 
 /**
@@ -107,6 +120,22 @@ class DistributedService : Service() {
             _connectionCount.value++
             DebugLog.log("[DistributedService] Connection count: ${_connectionCount.value}")
         }
+
+        fun updateWorkerRpcStatus(
+            address: String,
+            status: RpcWorkerStatus,
+            detail: String? = null,
+            confirmedAtMs: Long = System.currentTimeMillis()
+        ) {
+            _workers.value = _workers.value.map { worker ->
+                if ("${worker.ip}:${worker.port}" != address) worker else worker.copy(
+                    isConnected = status == RpcWorkerStatus.ONLINE,
+                    rpcStatus = status,
+                    lastConfirmedAtMs = if (status == RpcWorkerStatus.ONLINE) confirmedAtMs else worker.lastConfirmedAtMs,
+                    statusDetail = detail
+                )
+            }
+        }
         
         // Reset connection count
         fun resetConnectionCount() {
@@ -150,16 +179,24 @@ class DistributedService : Service() {
         
         fun setLastCommand(cmd: String) {
             _lastCommand.value = cmd
+            // LlamaService runs in :llama_runtime while the screen is in the main
+            // process. Persist the preview so Show Command crosses that boundary.
+            masterPrefs()?.edit()?.putString("last_command", cmd)?.commit()
         }
 
         fun clearLastCommand() {
             _lastCommand.value = null
+            masterPrefs()?.edit()?.remove("last_command")?.commit()
+        }
+
+        fun refreshLastCommand() {
+            _lastCommand.value = masterPrefs()?.getString("last_command", null)
         }
         
         fun setCustomCommand(cmd: String?) {
             _customCommand.value = cmd
             if (cmd != null) {
-                DebugLog.log("[DistributedService] Custom command set: $cmd")
+                DebugLog.log("[DistributedService] Custom command override enabled")
             } else {
                 DebugLog.log("[DistributedService] Custom command cleared")
             }
@@ -235,6 +272,16 @@ class DistributedService : Service() {
         val masterContextSize: StateFlow<Int> = _masterContextSize.asStateFlow()
         fun setMasterContextSize(size: Int) { _masterContextSize.value = size }
 
+        private val _masterServerPort = MutableStateFlow(
+            masterPrefs()?.getInt("server_port", 8080) ?: 8080
+        )
+        val masterServerPort: StateFlow<Int> = _masterServerPort.asStateFlow()
+        fun setMasterServerPort(port: Int) {
+            if (port !in 1..65535) return
+            _masterServerPort.value = port
+            masterPrefs()?.edit()?.putInt("server_port", port)?.apply()
+        }
+
         private val _masterContextSizeText = MutableStateFlow<String>("4096")
         val masterContextSizeText: StateFlow<String> = _masterContextSizeText.asStateFlow()
         fun setMasterContextSizeText(text: String) { _masterContextSizeText.value = text }
@@ -271,53 +318,372 @@ class DistributedService : Service() {
         val masterKvCacheReuse: StateFlow<Int> = _masterKvCacheReuse.asStateFlow()
         fun setMasterKvCacheReuse(reuse: Int) { _masterKvCacheReuse.value = reuse }
 
-        private val _masterSpeculativeEnabled = MutableStateFlow<Boolean>(false)
+        private val _masterSpeculativeEnabled = MutableStateFlow(
+            masterPrefs()?.getBoolean("speculative_enabled", false) ?: false
+        )
         val masterSpeculativeEnabled: StateFlow<Boolean> = _masterSpeculativeEnabled.asStateFlow()
-        fun setMasterSpeculativeEnabled(enabled: Boolean) { _masterSpeculativeEnabled.value = enabled }
+        fun setMasterSpeculativeEnabled(enabled: Boolean) {
+            _masterSpeculativeEnabled.value = enabled
+            masterPrefs()?.edit()?.putBoolean("speculative_enabled", enabled)?.apply()
+        }
+
+        private fun masterPrefs() = runCatching {
+            LlamaApplication.instance.getSharedPreferences("distributed_llm_profile", Context.MODE_PRIVATE)
+        }.getOrNull()
+
+        private val _masterSpeculativeMode = MutableStateFlow(
+            LlamaSpeculativeMode.fromFlagValue(masterPrefs()?.getString("speculative_mode", null))
+        )
+        val masterSpeculativeMode: StateFlow<LlamaSpeculativeMode> = _masterSpeculativeMode.asStateFlow()
+        fun setMasterSpeculativeMode(mode: LlamaSpeculativeMode) {
+            val previousMode = _masterSpeculativeMode.value
+            val crossesMtpBoundary =
+                (previousMode == LlamaSpeculativeMode.DRAFT_MTP) !=
+                    (mode == LlamaSpeculativeMode.DRAFT_MTP)
+            if (crossesMtpBoundary) {
+                // Standard draft and MTP selectors use disjoint model families.
+                // Clear both in-memory and persisted state before switching.
+                setMasterDraftModel(null)
+            }
+            _masterSpeculativeMode.value = mode
+            masterPrefs()?.edit()?.putString("speculative_mode", mode.flagValue)?.apply()
+        }
+
+        private val _masterFitEnabled = MutableStateFlow(masterPrefs()?.getBoolean("fit_enabled", false) ?: false)
+        val masterFitEnabled: StateFlow<Boolean> = _masterFitEnabled.asStateFlow()
+        fun setMasterFitEnabled(enabled: Boolean) {
+            _masterFitEnabled.value = enabled
+            masterPrefs()?.edit()?.putBoolean("fit_enabled", enabled)?.apply()
+        }
+
+        private val _masterFitTargetMiB = MutableStateFlow(masterPrefs()?.getString("fit_target_mib", "7168") ?: "7168")
+        val masterFitTargetMiB: StateFlow<String> = _masterFitTargetMiB.asStateFlow()
+        fun setMasterFitTargetMiB(value: String) {
+            _masterFitTargetMiB.value = value
+            masterPrefs()?.edit()?.putString("fit_target_mib", value)?.apply()
+        }
+
+        private val _masterNglArgument = MutableStateFlow(masterPrefs()?.getString("ngl_argument", "auto") ?: "auto")
+        val masterNglArgument: StateFlow<String> = _masterNglArgument.asStateFlow()
+        fun setMasterNglArgument(value: String) {
+            _masterNglArgument.value = value
+            masterPrefs()?.edit()?.putString("ngl_argument", value)?.apply()
+        }
+
+        private val _masterDraftDeviceId = MutableStateFlow(masterPrefs()?.getString("draft_device_id", null))
+        val masterDraftDeviceId: StateFlow<String?> = _masterDraftDeviceId.asStateFlow()
+        fun setMasterDraftDeviceId(value: String?) {
+            _masterDraftDeviceId.value = value
+            masterPrefs()?.edit()?.putString("draft_device_id", value)?.apply()
+        }
+
+        private val _masterDraftGpuLayers = MutableStateFlow(masterPrefs()?.getString("draft_gpu_layers", "all") ?: "all")
+        val masterDraftGpuLayers: StateFlow<String> = _masterDraftGpuLayers.asStateFlow()
+        fun setMasterDraftGpuLayers(value: String) {
+            _masterDraftGpuLayers.value = value
+            masterPrefs()?.edit()?.putString("draft_gpu_layers", value)?.apply()
+        }
+
+        private val _masterSpeculativePlacement = MutableStateFlow(
+            runCatching {
+                DistributedSpeculativePlacement.valueOf(
+                    masterPrefs()?.getString("speculative_placement", DistributedSpeculativePlacement.LOCAL.name)
+                        ?: DistributedSpeculativePlacement.LOCAL.name
+                )
+            }.getOrDefault(DistributedSpeculativePlacement.LOCAL)
+        )
+        val masterSpeculativePlacement: StateFlow<DistributedSpeculativePlacement> = _masterSpeculativePlacement.asStateFlow()
+        fun setMasterSpeculativePlacement(value: DistributedSpeculativePlacement) {
+            _masterSpeculativePlacement.value = value
+            masterPrefs()?.edit()?.putString("speculative_placement", value.name)?.apply()
+        }
+
+        private val _masterSpeculativeWorkerIndex = MutableStateFlow(
+            masterPrefs()?.getInt("speculative_worker_index", -1)?.takeIf { it >= 0 }
+        )
+        val masterSpeculativeWorkerIndex: StateFlow<Int?> = _masterSpeculativeWorkerIndex.asStateFlow()
+        fun setMasterSpeculativeWorkerIndex(value: Int?) {
+            _masterSpeculativeWorkerIndex.value = value
+            val editor = masterPrefs()?.edit() ?: return
+            if (value == null) editor.remove("speculative_worker_index") else editor.putInt("speculative_worker_index", value)
+            editor.apply()
+        }
+
+        /** Native llama.cpp names RPC devices in the same order as the --rpc list. */
+        fun distributedDeviceSlots(rpcWorkers: List<String>): List<String> =
+            rpcWorkers.mapIndexed { index, _ -> "RPC$index" }
 
         private val _masterDraftModel = MutableStateFlow<ModelEntity?>(null)
         val masterDraftModel: StateFlow<ModelEntity?> = _masterDraftModel.asStateFlow()
-        fun setMasterDraftModel(model: ModelEntity?) { _masterDraftModel.value = model }
+        private val _masterDraftModelPath = MutableStateFlow(masterPrefs()?.getString("draft_model_path", null))
+        val masterDraftModelPath: StateFlow<String?> = _masterDraftModelPath.asStateFlow()
+        fun setMasterDraftModel(model: ModelEntity?) {
+            _masterDraftModel.value = model
+            _masterDraftModelPath.value = model?.path
+            val editor = masterPrefs()?.edit() ?: return
+            val path = model?.path
+            if (path.isNullOrBlank()) editor.remove("draft_model_path") else editor.putString("draft_model_path", path)
+            editor.apply()
+        }
+        fun setMasterDraftModelPath(path: String?) {
+            _masterDraftModelPath.value = path
+            val editor = masterPrefs()?.edit() ?: return
+            if (path.isNullOrBlank()) editor.remove("draft_model_path") else editor.putString("draft_model_path", path)
+            editor.apply()
+        }
 
-        private val _masterDraftMax = MutableStateFlow<Int>(3)
+        private val _masterDraftMax = MutableStateFlow(masterPrefs()?.getInt("draft_max", 3)?.coerceIn(1, 64) ?: 3)
         val masterDraftMax: StateFlow<Int> = _masterDraftMax.asStateFlow()
-        fun setMasterDraftMax(max: Int) { _masterDraftMax.value = max }
+        fun setMasterDraftMax(max: Int) {
+            val normalized = max.coerceIn(1, 64)
+            _masterDraftMax.value = normalized
+            masterPrefs()?.edit()?.putInt("draft_max", normalized)?.apply()
+        }
 
-        private val _masterDraftMaxText = MutableStateFlow<String>("3")
+        private val _masterDraftMaxText = MutableStateFlow(masterPrefs()?.getString("draft_max_text", _masterDraftMax.value.toString()) ?: _masterDraftMax.value.toString())
         val masterDraftMaxText: StateFlow<String> = _masterDraftMaxText.asStateFlow()
-        fun setMasterDraftMaxText(text: String) { _masterDraftMaxText.value = text }
+        fun setMasterDraftMaxText(text: String) {
+            _masterDraftMaxText.value = text
+            masterPrefs()?.edit()?.putString("draft_max_text", text)?.apply()
+        }
 
-        private val _masterDraftMin = MutableStateFlow<Int>(0)
+        private val _masterDraftMin = MutableStateFlow(masterPrefs()?.getInt("draft_min", 0)?.coerceIn(0, 16) ?: 0)
         val masterDraftMin: StateFlow<Int> = _masterDraftMin.asStateFlow()
-        fun setMasterDraftMin(min: Int) { _masterDraftMin.value = min }
+        fun setMasterDraftMin(min: Int) {
+            val normalized = min.coerceIn(0, 16)
+            _masterDraftMin.value = normalized
+            masterPrefs()?.edit()?.putInt("draft_min", normalized)?.apply()
+        }
 
-        private val _masterDraftMinText = MutableStateFlow<String>("0")
+        private val _masterDraftMinText = MutableStateFlow(masterPrefs()?.getString("draft_min_text", _masterDraftMin.value.toString()) ?: _masterDraftMin.value.toString())
         val masterDraftMinText: StateFlow<String> = _masterDraftMinText.asStateFlow()
-        fun setMasterDraftMinText(text: String) { _masterDraftMinText.value = text }
+        fun setMasterDraftMinText(text: String) {
+            _masterDraftMinText.value = text
+            masterPrefs()?.edit()?.putString("draft_min_text", text)?.apply()
+        }
 
-        private val _masterDraftPMin = MutableStateFlow<Float>(0.0f)
+        private val _masterDraftPMin = MutableStateFlow(masterPrefs()?.getFloat("draft_p_min", 0.0f)?.coerceIn(0f, 1f) ?: 0.0f)
         val masterDraftPMin: StateFlow<Float> = _masterDraftPMin.asStateFlow()
-        fun setMasterDraftPMin(pmin: Float) { _masterDraftPMin.value = pmin }
+        fun setMasterDraftPMin(pmin: Float) {
+            val normalized = pmin.coerceIn(0f, 1f)
+            _masterDraftPMin.value = normalized
+            masterPrefs()?.edit()?.putFloat("draft_p_min", normalized)?.apply()
+        }
 
-        private val _masterDraftPMinText = MutableStateFlow<String>("0.00")
+        private val _masterDraftPMinText = MutableStateFlow(masterPrefs()?.getString("draft_p_min_text", "0.00") ?: "0.00")
         val masterDraftPMinText: StateFlow<String> = _masterDraftPMinText.asStateFlow()
-        fun setMasterDraftPMinText(text: String) { _masterDraftPMinText.value = text }
+        fun setMasterDraftPMinText(text: String) {
+            _masterDraftPMinText.value = text
+            masterPrefs()?.edit()?.putString("draft_p_min_text", text)?.apply()
+        }
 
-        private val _masterDraftThreads = MutableStateFlow<Int>(4)
+        private val _masterDraftThreads = MutableStateFlow(masterPrefs()?.getInt("draft_threads", 4)?.coerceIn(1, 16) ?: 4)
         val masterDraftThreads: StateFlow<Int> = _masterDraftThreads.asStateFlow()
-        fun setMasterDraftThreads(threads: Int) { _masterDraftThreads.value = threads.coerceIn(1, 16) }
+        fun setMasterDraftThreads(threads: Int) {
+            val normalized = threads.coerceIn(1, 16)
+            _masterDraftThreads.value = normalized
+            masterPrefs()?.edit()?.putInt("draft_threads", normalized)?.apply()
+        }
 
-        private val _masterDraftThreadsText = MutableStateFlow<String>("4")
+        private val _masterDraftThreadsText = MutableStateFlow(masterPrefs()?.getString("draft_threads_text", _masterDraftThreads.value.toString()) ?: _masterDraftThreads.value.toString())
         val masterDraftThreadsText: StateFlow<String> = _masterDraftThreadsText.asStateFlow()
-        fun setMasterDraftThreadsText(text: String) { _masterDraftThreadsText.value = text }
+        fun setMasterDraftThreadsText(text: String) {
+            _masterDraftThreadsText.value = text
+            masterPrefs()?.edit()?.putString("draft_threads_text", text)?.apply()
+        }
 
-        private val _masterDraftThreadsBatch = MutableStateFlow<Int>(4)
+        private val _masterDraftThreadsBatch = MutableStateFlow(masterPrefs()?.getInt("draft_threads_batch", 4)?.coerceIn(1, 16) ?: 4)
         val masterDraftThreadsBatch: StateFlow<Int> = _masterDraftThreadsBatch.asStateFlow()
-        fun setMasterDraftThreadsBatch(threads: Int) { _masterDraftThreadsBatch.value = threads.coerceIn(1, 16) }
+        fun setMasterDraftThreadsBatch(threads: Int) {
+            val normalized = threads.coerceIn(1, 16)
+            _masterDraftThreadsBatch.value = normalized
+            masterPrefs()?.edit()?.putInt("draft_threads_batch", normalized)?.apply()
+        }
 
-        private val _masterDraftThreadsBatchText = MutableStateFlow<String>("4")
+        private val _masterDraftThreadsBatchText = MutableStateFlow(masterPrefs()?.getString("draft_threads_batch_text", _masterDraftThreadsBatch.value.toString()) ?: _masterDraftThreadsBatch.value.toString())
         val masterDraftThreadsBatchText: StateFlow<String> = _masterDraftThreadsBatchText.asStateFlow()
-        fun setMasterDraftThreadsBatchText(text: String) { _masterDraftThreadsBatchText.value = text }
+        fun setMasterDraftThreadsBatchText(text: String) {
+            _masterDraftThreadsBatchText.value = text
+            masterPrefs()?.edit()?.putString("draft_threads_batch_text", text)?.apply()
+        }
+
+        private val _masterDraftDeviceMode = MutableStateFlow(
+            masterPrefs()?.getString("draft_device_mode", com.example.llamadroid.data.SettingsRepository.LLAMA_DRAFT_DEVICE_AUTO)
+                ?: com.example.llamadroid.data.SettingsRepository.LLAMA_DRAFT_DEVICE_AUTO
+        )
+        val masterDraftDeviceMode: StateFlow<String> = _masterDraftDeviceMode.asStateFlow()
+        fun setMasterDraftDeviceMode(value: String) {
+            val normalized = when (value) {
+                com.example.llamadroid.data.SettingsRepository.LLAMA_DRAFT_DEVICE_ACCELERATOR,
+                com.example.llamadroid.data.SettingsRepository.LLAMA_DRAFT_DEVICE_CPU -> value
+                else -> com.example.llamadroid.data.SettingsRepository.LLAMA_DRAFT_DEVICE_AUTO
+            }
+            _masterDraftDeviceMode.value = normalized
+            masterPrefs()?.edit()?.putString("draft_device_mode", normalized)?.apply()
+        }
+
+        // Mode-specific speculative settings are intentionally kept in the
+        // distributed profile. They must not inherit or mutate general LLM
+        // settings when the master launches an RPC server.
+        private val _masterMtpUseDraftModel = MutableStateFlow(
+            masterPrefs()?.getBoolean("mtp_use_draft_model", false) ?: false
+        )
+        val masterMtpUseDraftModel: StateFlow<Boolean> = _masterMtpUseDraftModel.asStateFlow()
+        fun setMasterMtpUseDraftModel(enabled: Boolean) {
+            _masterMtpUseDraftModel.value = enabled
+            masterPrefs()?.edit()?.putBoolean("mtp_use_draft_model", enabled)?.apply()
+        }
+
+        private val _masterMtpDraftMax = MutableStateFlow(
+            masterPrefs()?.getInt("mtp_draft_max", 3)?.coerceIn(1, 16) ?: 3
+        )
+        val masterMtpDraftMax: StateFlow<Int> = _masterMtpDraftMax.asStateFlow()
+        fun setMasterMtpDraftMax(value: Int) {
+            val normalized = value.coerceIn(1, 16)
+            _masterMtpDraftMax.value = normalized
+            masterPrefs()?.edit()?.putInt("mtp_draft_max", normalized)?.apply()
+        }
+
+        private val _masterMtpDraftMin = MutableStateFlow(
+            masterPrefs()?.getInt("mtp_draft_min", 0)?.coerceAtLeast(0) ?: 0
+        )
+        val masterMtpDraftMin: StateFlow<Int> = _masterMtpDraftMin.asStateFlow()
+        fun setMasterMtpDraftMin(value: Int) {
+            val normalized = value.coerceAtLeast(0)
+            _masterMtpDraftMin.value = normalized
+            masterPrefs()?.edit()?.putInt("mtp_draft_min", normalized)?.apply()
+        }
+
+        private val _masterMtpDraftPMin = MutableStateFlow(
+            masterPrefs()?.getFloat("mtp_draft_p_min", 0f)?.coerceIn(0f, 1f) ?: 0f
+        )
+        val masterMtpDraftPMin: StateFlow<Float> = _masterMtpDraftPMin.asStateFlow()
+        fun setMasterMtpDraftPMin(value: Float) {
+            val normalized = value.coerceIn(0f, 1f)
+            _masterMtpDraftPMin.value = normalized
+            masterPrefs()?.edit()?.putFloat("mtp_draft_p_min", normalized)?.apply()
+        }
+
+        private val _masterNgramModNMatch = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_mod_n_match", 24)?.coerceAtLeast(1) ?: 24
+        )
+        val masterNgramModNMatch: StateFlow<Int> = _masterNgramModNMatch.asStateFlow()
+        fun setMasterNgramModNMatch(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramModNMatch.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_mod_n_match", normalized)?.apply()
+        }
+
+        private val _masterNgramModNMin = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_mod_n_min", 48)?.coerceAtLeast(1) ?: 48
+        )
+        val masterNgramModNMin: StateFlow<Int> = _masterNgramModNMin.asStateFlow()
+        fun setMasterNgramModNMin(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramModNMin.value = normalized
+            if (_masterNgramModNMax.value < normalized) setMasterNgramModNMax(normalized)
+            masterPrefs()?.edit()?.putInt("ngram_mod_n_min", normalized)?.apply()
+        }
+
+        private val _masterNgramModNMax = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_mod_n_max", 64)?.coerceAtLeast(1) ?: 64
+        )
+        val masterNgramModNMax: StateFlow<Int> = _masterNgramModNMax.asStateFlow()
+        fun setMasterNgramModNMax(value: Int) {
+            val normalized = value.coerceAtLeast(_masterNgramModNMin.value.coerceAtLeast(1))
+            _masterNgramModNMax.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_mod_n_max", normalized)?.apply()
+        }
+
+        private val _masterNgramSimpleSizeN = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_simple_size_n", 12)?.coerceAtLeast(1) ?: 12
+        )
+        val masterNgramSimpleSizeN: StateFlow<Int> = _masterNgramSimpleSizeN.asStateFlow()
+        fun setMasterNgramSimpleSizeN(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramSimpleSizeN.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_simple_size_n", normalized)?.apply()
+        }
+
+        private val _masterNgramSimpleSizeM = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_simple_size_m", 48)?.coerceAtLeast(1) ?: 48
+        )
+        val masterNgramSimpleSizeM: StateFlow<Int> = _masterNgramSimpleSizeM.asStateFlow()
+        fun setMasterNgramSimpleSizeM(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramSimpleSizeM.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_simple_size_m", normalized)?.apply()
+        }
+
+        private val _masterNgramSimpleMinHits = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_simple_min_hits", 1)?.coerceAtLeast(1) ?: 1
+        )
+        val masterNgramSimpleMinHits: StateFlow<Int> = _masterNgramSimpleMinHits.asStateFlow()
+        fun setMasterNgramSimpleMinHits(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramSimpleMinHits.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_simple_min_hits", normalized)?.apply()
+        }
+
+        private val _masterNgramMapKSizeN = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_map_k_size_n", 12)?.coerceAtLeast(1) ?: 12
+        )
+        val masterNgramMapKSizeN: StateFlow<Int> = _masterNgramMapKSizeN.asStateFlow()
+        fun setMasterNgramMapKSizeN(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramMapKSizeN.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_map_k_size_n", normalized)?.apply()
+        }
+
+        private val _masterNgramMapKSizeM = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_map_k_size_m", 48)?.coerceAtLeast(1) ?: 48
+        )
+        val masterNgramMapKSizeM: StateFlow<Int> = _masterNgramMapKSizeM.asStateFlow()
+        fun setMasterNgramMapKSizeM(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramMapKSizeM.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_map_k_size_m", normalized)?.apply()
+        }
+
+        private val _masterNgramMapKMinHits = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_map_k_min_hits", 1)?.coerceAtLeast(1) ?: 1
+        )
+        val masterNgramMapKMinHits: StateFlow<Int> = _masterNgramMapKMinHits.asStateFlow()
+        fun setMasterNgramMapKMinHits(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramMapKMinHits.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_map_k_min_hits", normalized)?.apply()
+        }
+
+        private val _masterNgramMapK4VSizeN = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_map_k4v_size_n", 12)?.coerceAtLeast(1) ?: 12
+        )
+        val masterNgramMapK4VSizeN: StateFlow<Int> = _masterNgramMapK4VSizeN.asStateFlow()
+        fun setMasterNgramMapK4VSizeN(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramMapK4VSizeN.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_map_k4v_size_n", normalized)?.apply()
+        }
+
+        private val _masterNgramMapK4VSizeM = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_map_k4v_size_m", 48)?.coerceAtLeast(1) ?: 48
+        )
+        val masterNgramMapK4VSizeM: StateFlow<Int> = _masterNgramMapK4VSizeM.asStateFlow()
+        fun setMasterNgramMapK4VSizeM(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramMapK4VSizeM.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_map_k4v_size_m", normalized)?.apply()
+        }
+
+        private val _masterNgramMapK4VMinHits = MutableStateFlow(
+            masterPrefs()?.getInt("ngram_map_k4v_min_hits", 1)?.coerceAtLeast(1) ?: 1
+        )
+        val masterNgramMapK4VMinHits: StateFlow<Int> = _masterNgramMapK4VMinHits.asStateFlow()
+        fun setMasterNgramMapK4VMinHits(value: Int) {
+            val normalized = value.coerceAtLeast(1)
+            _masterNgramMapK4VMinHits.value = normalized
+            masterPrefs()?.edit()?.putInt("ngram_map_k4v_min_hits", normalized)?.apply()
+        }
         
         // --- Advanced settings (Master) ---
 
@@ -592,6 +958,7 @@ class DistributedService : Service() {
         
         // Set master mode with worker addresses (for use by LlamaService)
         fun setMasterMode(workerAddresses: List<String>) {
+            if (_mode.value == DistributedMode.MASTER) return
             _mode.value = DistributedMode.MASTER
             DebugLog.log("[$TAG] Master mode set with ${workerAddresses.size} workers: $workerAddresses")
             
@@ -600,6 +967,15 @@ class DistributedService : Service() {
             WakeLockManager.acquireWifiLock(LlamaApplication.instance, "DistributedServiceMaster")
             
             startMasterConnectionMonitor()
+        }
+
+        fun stopMasterMode() {
+            if (_mode.value != DistributedMode.MASTER) return
+            stopMasterConnectionMonitor()
+            _mode.value = DistributedMode.NONE
+            _inferenceRunning.value = false
+            WakeLockManager.release("DistributedServiceMaster")
+            WakeLockManager.releaseWifiLock("DistributedServiceMaster")
         }
         
         // Set master RAM allocation
@@ -731,11 +1107,20 @@ class DistributedService : Service() {
                     _workers.value = _workers.value.map { worker ->
                         val key = "${worker.ip}:${worker.port}"
                         if (results.containsKey(key)) {
-                            val newStatus = results[key]!!
+                            val probedOnline = results[key]!!
+                            // rpc-server can stop accepting auxiliary probe connections while it
+                            // is loading or serving. A failed probe is absence of evidence, not an
+                            // offline signal; explicit master RPC errors own FAILED transitions.
+                            val newStatus = probedOnline || worker.rpcStatus == RpcWorkerStatus.ONLINE
                             if (worker.isConnected != newStatus) {
                                 DebugLog.log("[$TAG] Worker ${worker.deviceName} (${worker.ip}) changed status to: ${if(newStatus) "ONLINE" else "OFFLINE"}")
                             }
-                            worker.copy(isConnected = newStatus)
+                            if (probedOnline) worker.copy(
+                                isConnected = true,
+                                rpcStatus = RpcWorkerStatus.ONLINE,
+                                lastConfirmedAtMs = System.currentTimeMillis(),
+                                statusDetail = "Network probe confirmed"
+                            ) else worker
                         } else {
                             worker // Worker was added while we were checking, keep as is
                         }

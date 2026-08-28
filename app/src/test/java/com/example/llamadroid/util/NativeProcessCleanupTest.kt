@@ -10,6 +10,24 @@ import kotlin.io.path.createTempDirectory
 
 class NativeProcessCleanupTest {
     @Test
+    fun processTreeSelectionIncludesOpenClRootAndNestedHelpersWhenRequested() {
+        val entries = listOf(
+            NativeProcessCandidate(20, 1000, "libllama_server_snapdragon_opencl.so", parentPid = 10),
+            NativeProcessCandidate(21, 1000, "opencl-helper", parentPid = 20),
+            NativeProcessCandidate(22, 1000, "vendor-helper", parentPid = 21),
+            NativeProcessCandidate(30, 1000, "unrelated", parentPid = 10)
+        )
+        assertEquals(
+            listOf(20, 21, 22),
+            NativeProcessCleanup.selectProcessTree(entries, rootPid = 20, includeRoot = true).map { it.pid }
+        )
+        assertEquals(
+            listOf(21, 22),
+            NativeProcessCleanup.selectProcessTree(entries, rootPid = 20, includeRoot = false).map { it.pid }
+        )
+    }
+
+    @Test
     fun processFilterOnlyMatchesKnownLlamaServers() {
         assertTrue(NativeProcessCleanup.isKnownLlamaServerCommand("/data/app/lib/arm64/libllama_server_dotprod.so --port 8080"))
         assertTrue(NativeProcessCleanup.isKnownLlamaServerCommand("/data/app/lib/arm64/llama-server --port 8080"))
@@ -149,6 +167,40 @@ class NativeProcessCleanupTest {
 
             assertTrue(description.contains("pid=10"))
             assertTrue(description.contains("libllama_server_dotprod.so"))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun liveAppOwnedListenerIsDetectedBeforeAnyStaleProcessSweep() {
+        val root = createTempDirectory(prefix = "proc-test").toFile()
+        try {
+            writeTcpListener(root, portHex = "1F91", uid = 10042, inode = "12345")
+            writeProcWithSocket(
+                root = root,
+                pid = 10,
+                uid = 10042,
+                cmdline = "/data/app/lib/arm64/libllama_server_dotprod.so\u0000--port\u00008081",
+                inode = "12345"
+            )
+
+            assertTrue(
+                NativeProcessCleanup.hasSameUidPortListenerSync(
+                    port = 8081,
+                    procRoot = root,
+                    myPid = 99,
+                    myUid = 10042
+                )
+            )
+            assertFalse(
+                NativeProcessCleanup.hasSameUidPortListenerSync(
+                    port = 8082,
+                    procRoot = root,
+                    myPid = 99,
+                    myUid = 10042
+                )
+            )
         } finally {
             root.deleteRecursively()
         }

@@ -14,6 +14,7 @@ import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
@@ -73,6 +75,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -461,18 +464,35 @@ fun LlamaChatScreen(
     var temperature by remember(currentChat?.apiParams) {
         mutableFloatStateOf(parseParam(currentChat?.apiParams, "temperature", 0.8f))
     }
+    var temperatureText by remember(currentChat?.apiParams) {
+        mutableStateOf(formatSamplerText(parseParam(currentChat?.apiParams, "temperature", 0.8f)))
+    }
     var topP by remember(currentChat?.apiParams) {
         mutableFloatStateOf(parseParam(currentChat?.apiParams, "top_p", 0.95f))
+    }
+    var topPText by remember(currentChat?.apiParams) {
+        mutableStateOf(formatSamplerText(parseParam(currentChat?.apiParams, "top_p", 0.95f)))
     }
     var topK by remember(currentChat?.apiParams) {
         mutableFloatStateOf(parseParam(currentChat?.apiParams, "top_k", 40f))
     }
+    var topKText by remember(currentChat?.apiParams) {
+        mutableStateOf(formatSamplerText(parseParam(currentChat?.apiParams, "top_k", 40f), integer = true))
+    }
     var minP by remember(currentChat?.apiParams) {
         mutableFloatStateOf(parseParam(currentChat?.apiParams, "min_p", 0.05f))
+    }
+    var minPText by remember(currentChat?.apiParams) {
+        mutableStateOf(formatSamplerText(parseParam(currentChat?.apiParams, "min_p", 0.05f)))
     }
     var repPen by remember(currentChat?.apiParams) {
         mutableFloatStateOf(parseParam(currentChat?.apiParams, "repeat_penalty", 1.1f))
     }
+    var repPenText by remember(currentChat?.apiParams) {
+        mutableStateOf(formatSamplerText(parseParam(currentChat?.apiParams, "repeat_penalty", 1.1f)))
+    }
+    var samplerErrorField by remember(currentChat?.apiParams) { mutableStateOf<LlamaSamplerField?>(null) }
+    var samplerErrorMessage by remember(currentChat?.apiParams) { mutableStateOf<String?>(null) }
     var enableThinking by remember(currentChat?.apiParams) {
         mutableStateOf(parseParam(currentChat?.apiParams, "enable_thinking", true))
     }
@@ -490,6 +510,9 @@ fun LlamaChatScreen(
                 parseParam(currentChat?.apiParams, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024)
             ).coerceAtLeast(1)
         )
+    }
+    var seedText by remember(currentChat?.apiParams) {
+        mutableStateOf(parseOptionalIntParam(currentChat?.apiParams, "seed"))
     }
     var liteRtMaxTokens by remember(currentChat?.id, currentChat?.contextSize, liteRtContextRange, liteRtDefaultContext) {
         mutableIntStateOf(
@@ -843,10 +866,59 @@ fun LlamaChatScreen(
     val effectiveImageIterationEnabled = chatToolsEnabledByUser && imageIterationEnabled && serverAllowsImageIteration
     val effectiveBackgroundRemovalEnabled = chatToolsEnabledByUser && backgroundRemovalEnabled && serverAllowsBackgroundRemoval
 
+    fun validateSampler(field: LlamaSamplerField, text: String, liteRt: Boolean): Float? {
+        val range = LlamaChatSamplerValidation.range(field, liteRt)
+        if (range == null) return null
+        val value = LlamaChatSamplerValidation.parse(text, field, liteRt)
+        if (value == null) {
+            samplerErrorField = field
+            samplerErrorMessage = if (!LlamaChatSamplerValidation.isNumeric(text)) {
+                context.getString(R.string.llama_sampler_invalid_number)
+            } else {
+                context.getString(
+                    R.string.llama_sampler_invalid_range,
+                    LlamaChatSamplerValidation.rangeText(field, liteRt)
+                )
+            }
+        }
+        return value
+    }
+
+    fun updateSamplerText(field: LlamaSamplerField, text: String, liteRt: Boolean, onValid: (Float) -> Unit) {
+        val value = LlamaChatSamplerValidation.parse(text, field, liteRt)
+        samplerErrorField = field
+        samplerErrorMessage = when {
+            text.isBlank() -> context.getString(R.string.llama_sampler_invalid_number)
+            !LlamaChatSamplerValidation.isNumeric(text) -> context.getString(R.string.llama_sampler_invalid_number)
+            value == null -> context.getString(
+                R.string.llama_sampler_invalid_range,
+                LlamaChatSamplerValidation.rangeText(field, liteRt)
+            )
+            else -> null
+        }
+        if (value != null) {
+            samplerErrorField = null
+            onValid(value)
+        }
+    }
+
     fun saveParams(
         chatDocumentKnowledgeBaseIdOverride: Long? = chatDocumentKnowledgeBaseId,
         forceKnowledgeBaseTools: Boolean = false
-    ) {
+    ): Boolean {
+        val liteRt = activeServerIsLiteRt
+        val validTemperature = validateSampler(LlamaSamplerField.TEMPERATURE, temperatureText, liteRt) ?: return false
+        val validTopP = validateSampler(LlamaSamplerField.TOP_P, topPText, liteRt) ?: return false
+        val validTopK = validateSampler(LlamaSamplerField.TOP_K, topKText, liteRt) ?: return false
+        val validMinP = if (liteRt) minP else validateSampler(LlamaSamplerField.MIN_P, minPText, false) ?: return false
+        val validRepPen = if (liteRt) repPen else validateSampler(LlamaSamplerField.REPETITION_PENALTY, repPenText, false) ?: return false
+        temperature = validTemperature
+        topP = validTopP
+        topK = validTopK
+        if (!liteRt) {
+            minP = validMinP
+            repPen = validRepPen
+        }
         val nextToolsEnabled = toolsEnabled || forceKnowledgeBaseTools
         val nextKnowledgeBaseEnabled = knowledgeBaseEnabled || forceKnowledgeBaseTools
         val nextKnowledgeBaseAutoContextEnabled = knowledgeBaseAutoContextEnabled || forceKnowledgeBaseTools
@@ -857,6 +929,7 @@ fun LlamaChatScreen(
             NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED to maxOutputTokensEnabled,
             NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS to maxOutputTokens.coerceAtLeast(1)
         )
+        seedText.trim().toIntOrNull()?.let { map["seed"] = it }
         if (activeServerIsLiteRt) {
             map[LITERT_PARAM_MTP_ENABLED] = liteRtMtpEnabled
             if (maxOutputTokensEnabled) {
@@ -1090,15 +1163,25 @@ fun LlamaChatScreen(
         }
         val json = Gson().toJson(map)
         viewModel.updateChatApiParams(chatId, json)
+        samplerErrorField = null
+        samplerErrorMessage = null
+        return true
     }
 
     fun resetParamsFromChat() {
         val params = currentChat?.apiParams
         temperature = parseParam(params, "temperature", 0.8f)
+        temperatureText = formatSamplerText(temperature)
         topP = parseParam(params, "top_p", 0.95f)
+        topPText = formatSamplerText(topP)
         topK = parseParam(params, "top_k", 40f)
+        topKText = formatSamplerText(topK, integer = true)
         minP = parseParam(params, "min_p", 0.05f)
+        minPText = formatSamplerText(minP)
         repPen = parseParam(params, "repeat_penalty", 1.1f)
+        repPenText = formatSamplerText(repPen)
+        samplerErrorField = null
+        samplerErrorMessage = null
         enableThinking = parseParam(params, "enable_thinking", true)
         liteRtMtpEnabled = parseParam(params, LITERT_PARAM_MTP_ENABLED, false)
         maxOutputTokensEnabled = parseParam(params, NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED, false)
@@ -1107,6 +1190,7 @@ fun LlamaChatScreen(
             NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS,
             parseParam(params, LITERT_PARAM_MAX_OUTPUT_TOKENS, 1024)
         ).coerceAtLeast(1)
+        seedText = parseOptionalIntParam(params, "seed")
         enableThinking = parseParam(params, "enable_thinking", true)
         liteRtMaxTokens = (currentChat?.contextSize?.takeIf { it > 0 } ?: liteRtDefaultContext)
             .coerceIn(liteRtContextRange)
@@ -1566,26 +1650,63 @@ fun LlamaChatScreen(
 
     val listState = rememberLazyListState()
 
-    // Smart auto-scroll: only scroll when user is at (or near) bottom
-    // We use a stable flag that the user can "break out of" by scrolling up
+    // Follow the exact bottom while the user is there. Layout changes caused by a
+    // streaming bubble must not be mistaken for a manual scroll away from the bottom.
     var userWantsAutoScroll by remember { mutableStateOf(true) }
+    var manualScrollPending by remember { mutableStateOf(false) }
 
-    // Detect user manual scroll: if user scrolls up, disable auto-scroll
-    // If user scrolls back to bottom, re-enable it
     LaunchedEffect(listState) {
-        snapshotFlow {
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            val total = listState.layoutInfo.totalItemsCount
-            total == 0 || lastVisible >= total - 2
-        }.collect { atBottom ->
-            userWantsAutoScroll = atBottom
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> manualScrollPending = true
+                is DragInteraction.Stop,
+                is DragInteraction.Cancel -> {
+                    userWantsAutoScroll = !listState.canScrollForward
+                    if (!listState.isScrollInProgress) manualScrollPending = false
+                }
+            }
         }
     }
 
-    // Only auto-scroll when new content arrives AND user hasn't scrolled away
-    LaunchedEffect(messages.size) {
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            Triple(manualScrollPending, listState.isScrollInProgress, listState.canScrollForward)
+        }.collect { (manual, scrolling, canScrollForward) ->
+            if (manual) {
+                userWantsAutoScroll = !canScrollForward
+                if (!scrolling) manualScrollPending = false
+            }
+        }
+    }
+
+    val streamingAutoScrollKey = remember(
+        displayedMessages,
+        streamingGenerationState?.content,
+        streamingGenerationState?.thinking,
+        streamingGenerationState?.tokenCount,
+        streamingGenerationState?.statusText,
+        activeToolEvents
+    ) {
+        val persistedLength = displayedMessages.sumOf { message ->
+            message.content.length +
+                (message.thinking?.length ?: 0) +
+                (message.imagePath?.length ?: 0) +
+                (message.audioPath?.length ?: 0)
+        }
+        persistedLength +
+            (streamingGenerationState?.content?.length ?: 0) +
+            (streamingGenerationState?.thinking?.length ?: 0) +
+            (streamingGenerationState?.tokenCount ?: 0) +
+            activeToolEvents.size
+    }
+
+    // Auto-scroll whenever streaming content, thinking, or tools change and the user is still at the bottom.
+    LaunchedEffect(displayedMessages.size, streamingAutoScrollKey, userWantsAutoScroll) {
         if (userWantsAutoScroll && listState.layoutInfo.totalItemsCount > 0) {
-            listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+            listState.scrollToItem(
+                index = listState.layoutInfo.totalItemsCount - 1,
+                scrollOffset = Int.MAX_VALUE
+            )
         }
     }
 
@@ -1768,7 +1889,6 @@ fun LlamaChatScreen(
                             },
                             style = MaterialTheme.typography.titleSmall
                         )
-
                         if (activeServerIsLiteRt) {
                             LlamaToolNumberRow(
                                 label = stringResource(R.string.litert_gallery_max_tokens),
@@ -1781,6 +1901,10 @@ fun LlamaChatScreen(
                                 value = maxOutputTokens,
                                 onEnabledChange = { maxOutputTokensEnabled = it },
                                 onValueChange = { maxOutputTokens = it.coerceAtLeast(1) }
+                            )
+                            LlamaSeedControl(
+                                value = seedText,
+                                onValueChange = { seedText = it }
                             )
                             Text(
                                 text = stringResource(
@@ -1802,45 +1926,37 @@ fun LlamaChatScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = stringResource(R.string.litert_gallery_temperature, "%.2f".format(temperature.coerceIn(0f, 1f))),
-                                    modifier = Modifier.width(120.dp),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = temperature.coerceIn(0f, 1f),
-                                    onValueChange = { temperature = it.coerceIn(0f, 1f) },
-                                    valueRange = 0f..1f,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = stringResource(R.string.litert_gallery_top_p, "%.2f".format(topP.coerceIn(0f, 0.95f))),
-                                    modifier = Modifier.width(120.dp),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = topP.coerceIn(0f, 0.95f),
-                                    onValueChange = { topP = it.coerceIn(0f, 0.95f) },
-                                    valueRange = 0f..0.95f,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = stringResource(R.string.litert_gallery_top_k, topK.toInt().coerceIn(5, 64)),
-                                    modifier = Modifier.width(120.dp),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Slider(
-                                    value = topK.coerceIn(5f, 64f),
-                                    onValueChange = { topK = it.coerceIn(5f, 64f) },
-                                    valueRange = 5f..64f,
-                                    modifier = Modifier.weight(1f)
-                                )
-                            }
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_temperature_label),
+                                value = temperatureText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.TEMPERATURE, true),
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.TEMPERATURE },
+                                onValueChange = { text ->
+                                    temperatureText = text
+                                    updateSamplerText(LlamaSamplerField.TEMPERATURE, text, true) { temperature = it }
+                                }
+                            )
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_top_p_label),
+                                value = topPText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.TOP_P, true),
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.TOP_P },
+                                onValueChange = { text ->
+                                    topPText = text
+                                    updateSamplerText(LlamaSamplerField.TOP_P, text, true) { topP = it }
+                                }
+                            )
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_top_k_label),
+                                value = topKText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.TOP_K, true),
+                                integer = true,
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.TOP_K },
+                                onValueChange = { text ->
+                                    topKText = text
+                                    updateSamplerText(LlamaSamplerField.TOP_K, text, true) { topK = it }
+                                }
+                            )
                             Text(
                                 text = stringResource(R.string.litert_gallery_accelerator),
                                 style = MaterialTheme.typography.bodySmall,
@@ -1918,32 +2034,67 @@ fun LlamaChatScreen(
                                 minLines = 3
                             )
                         } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.llama_temperature_value, temperature), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
-                                Slider(value = temperature, onValueChange = { temperature = it }, valueRange = 0f..2f, modifier = Modifier.weight(1f))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.llama_top_p_value, topP), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
-                                Slider(value = topP, onValueChange = { topP = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.llama_top_k_value, topK.toInt()), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
-                                Slider(value = topK, onValueChange = { topK = it }, valueRange = 1f..100f, modifier = Modifier.weight(1f))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.llama_min_p_value, minP), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
-                                Slider(value = minP, onValueChange = { minP = it }, valueRange = 0f..1f, modifier = Modifier.weight(1f))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(R.string.llama_repeat_penalty_value, repPen), modifier = Modifier.width(80.dp), style = MaterialTheme.typography.bodySmall)
-                                Slider(value = repPen, onValueChange = { repPen = it }, valueRange = 1f..2f, modifier = Modifier.weight(1f))
-                            }
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_temperature_label),
+                                value = temperatureText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.TEMPERATURE, false),
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.TEMPERATURE },
+                                onValueChange = { text ->
+                                    temperatureText = text
+                                    updateSamplerText(LlamaSamplerField.TEMPERATURE, text, false) { temperature = it }
+                                }
+                            )
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_top_p_label),
+                                value = topPText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.TOP_P, false),
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.TOP_P },
+                                onValueChange = { text ->
+                                    topPText = text
+                                    updateSamplerText(LlamaSamplerField.TOP_P, text, false) { topP = it }
+                                }
+                            )
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_top_k_label),
+                                value = topKText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.TOP_K, false),
+                                integer = true,
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.TOP_K },
+                                onValueChange = { text ->
+                                    topKText = text
+                                    updateSamplerText(LlamaSamplerField.TOP_K, text, false) { topK = it }
+                                }
+                            )
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_min_p_label),
+                                value = minPText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.MIN_P, false),
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.MIN_P },
+                                onValueChange = { text ->
+                                    minPText = text
+                                    updateSamplerText(LlamaSamplerField.MIN_P, text, false) { minP = it }
+                                }
+                            )
+                            LlamaSamplerNumericField(
+                                label = stringResource(R.string.llama_sampler_repetition_penalty_label),
+                                value = repPenText,
+                                rangeText = LlamaChatSamplerValidation.rangeText(LlamaSamplerField.REPETITION_PENALTY, false),
+                                error = samplerErrorMessage.takeIf { samplerErrorField == LlamaSamplerField.REPETITION_PENALTY },
+                                onValueChange = { text ->
+                                    repPenText = text
+                                    updateSamplerText(LlamaSamplerField.REPETITION_PENALTY, text, false) { repPen = it }
+                                }
+                            )
 
                             LlamaMaxOutputTokensControl(
                                 enabled = maxOutputTokensEnabled,
                                 value = maxOutputTokens,
                                 onEnabledChange = { maxOutputTokensEnabled = it },
                                 onValueChange = { maxOutputTokens = it.coerceAtLeast(1) }
+                            )
+                            LlamaSeedControl(
+                                value = seedText,
+                                onValueChange = { seedText = it }
                             )
 
                             Row(
@@ -2535,8 +2686,7 @@ fun LlamaChatScreen(
                                 Text(stringResource(R.string.action_cancel))
                             }
                             TextButton(onClick = {
-                                saveParams()
-                                showParams = false
+                                if (saveParams()) showParams = false
                             }) {
                                 Text(stringResource(R.string.action_save))
                             }
@@ -2768,6 +2918,14 @@ fun LlamaChatScreen(
                                         }
                                     }
                                 }
+                                genState.promptProgress?.let { promptProgress ->
+                                    LinearProgressIndicator(
+                                        progress = { promptProgress },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 6.dp)
+                                    )
+                                }
                             }
                         }
                     }
@@ -2844,7 +3002,10 @@ fun LlamaChatScreen(
                     onClick = {
                         scope.launch {
                             if (listState.layoutInfo.totalItemsCount > 0) {
-                                listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
+                                listState.animateScrollToItem(
+                                    index = listState.layoutInfo.totalItemsCount - 1,
+                                    scrollOffset = Int.MAX_VALUE
+                                )
                             }
                             userWantsAutoScroll = true
                         }
@@ -3948,6 +4109,52 @@ private fun parseParam(jsonStr: String?, key: String, default: String): String {
     }
 }
 
+private fun formatSamplerText(value: Float, integer: Boolean = false): String = if (integer) {
+    value.toInt().toString()
+} else {
+    "%.2f".format(Locale.US, value).trimEnd('0').trimEnd('.')
+}
+
+@Composable
+private fun LlamaSamplerNumericField(
+    label: String,
+    value: String,
+    rangeText: String,
+    error: String?,
+    integer: Boolean = false,
+    onValueChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text(label) },
+        isError = error != null,
+        supportingText = {
+            Text(error ?: stringResource(R.string.llama_sampler_range_hint, rangeText))
+        },
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (integer) KeyboardType.Number else KeyboardType.Decimal
+        )
+    )
+}
+
+private fun parseOptionalIntParam(jsonStr: String?, key: String): String {
+    if (jsonStr.isNullOrBlank()) return ""
+    return try {
+        val mapType = object : TypeToken<Map<String, Any>>() {}.type
+        val map: Map<String, Any> = Gson().fromJson(jsonStr, mapType)
+        when (val value = map[key]) {
+            is Number -> value.toInt().toString()
+            is String -> value.trim().takeIf { it.toIntOrNull() != null }.orEmpty()
+            else -> ""
+        }
+    } catch (e: Exception) {
+        ""
+    }
+}
+
 @Composable
 private fun LlamaMaxOutputTokensControl(
     enabled: Boolean,
@@ -3976,6 +4183,28 @@ private fun LlamaMaxOutputTokensControl(
             )
         }
     }
+}
+
+@Composable
+private fun LlamaSeedControl(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = { next ->
+            if (next.isBlank() || next == "-" || next.toIntOrNull() != null) {
+                onValueChange(next)
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        label = { Text(stringResource(R.string.llama_seed_label)) },
+        supportingText = { Text(stringResource(R.string.llama_seed_supporting)) },
+        singleLine = true,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+        )
+    )
 }
 
 @Composable

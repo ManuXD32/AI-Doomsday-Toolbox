@@ -1640,9 +1640,21 @@ private class LiteRtLmReflectionBridge(private val context: Context) {
                 appendLine("Use this tool result to answer the user. Do not call $toolName again unless the result is insufficient.")
             }
         )
-        createMessageFromContents(companion, "user", fallbackContents)
+        // This is runtime/tool context, never user-authored text. Prefer a system
+        // envelope on LiteRT builds whose native Message.tool API is unavailable;
+        // only use a clearly labelled user fallback for older engines that expose
+        // neither tool nor system messages.
+        createMessageFromContents(companion, "system", fallbackContents)
+            ?: createMessageFromContents(
+                companion,
+                "user",
+                createContents(
+                    "[Runtime tool result; not a user message]\n" +
+                        "Tool: $toolName\n" + message.content
+                )
+            )
     }.getOrElse { error ->
-        onDiagnostic("LiteRT tool-response fallback user message unavailable: ${error.liteRtDiagnosticMessage()}")
+        onDiagnostic("LiteRT tool-response fallback message unavailable: ${error.liteRtDiagnosticMessage()}")
         null
     }
 

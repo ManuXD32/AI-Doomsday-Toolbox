@@ -10,6 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class SdCliSupportTest {
 
@@ -77,6 +79,34 @@ class SdCliSupportTest {
         assertFalse(args.contains("--flow-shift"))
         assertFalse(args.contains("--qwen-image-zero-cond-t"))
         assertFalse(args.contains("--chroma-disable-dit-mask"))
+    }
+
+    @Test
+    fun `scheduler emits only when selected`() {
+        val defaultArgs = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                modelVariant = "sd1",
+                prompt = "a clear lake",
+                outputPath = "/tmp/out.png"
+            )
+        )
+        val scheduledArgs = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd15.safetensors",
+                modelFamily = "checkpoint",
+                modelVariant = "sd1",
+                prompt = "a clear lake",
+                outputPath = "/tmp/out.png",
+                scheduler = SdScheduler.KARRAS
+            )
+        )
+
+        assertFalse(defaultArgs.contains("--scheduler"))
+        assertOption(scheduledArgs, "--scheduler", "karras")
     }
 
     @Test
@@ -208,10 +238,11 @@ class SdCliSupportTest {
     }
 
     @Test
-    fun `capability parsing supports short and long flags`() {
+    fun `capability parsing retains short and long flags plus native modes`() {
         val caps = parseSdBinaryCapabilities(
             """
-            Usage: sd -M img_gen [options]
+            Usage: sd -M adetailer [options]
+            Modes: img_gen, adetailer, upscale
               --diffusion-model FILE
               --llm FILE
               --llm_vision FILE
@@ -227,6 +258,42 @@ class SdCliSupportTest {
         assertTrue(caps.supports("--clip_g"))
         assertTrue(caps.supports("--photo-maker"))
         assertTrue(caps.supports("-r"))
+        assertTrue(caps.supportsMode("adetailer"))
+        assertTrue(caps.supportsMode("IMG_GEN"))
+        assertFalse(caps.supportsMode("not_a_native_mode"))
+    }
+
+    @Test(expected = SdUnsupportedModesException::class)
+    fun `dedicated ADetailer mode requires binary support`() {
+        val detector = File.createTempFile("detector", ".safetensors")
+        try {
+            val header = """{"__metadata__":{"yolov8.variant":"detect"},"model.0.conv.weight":{},"model.22.cv2.0.2.weight":{},"model.22.cv3.0.2.weight":{}}"""
+            detector.outputStream().use { output ->
+                output.write(
+                    ByteBuffer.allocate(Long.SIZE_BYTES)
+                        .order(ByteOrder.LITTLE_ENDIAN)
+                        .putLong(header.toByteArray().size.toLong())
+                        .array()
+                )
+                output.write(header.toByteArray())
+                output.write(byteArrayOf(0, 0))
+            }
+            buildSdCommandArgs(
+                SDConfig(
+                    mode = SDMode.ADETAILER,
+                    modelPath = "/models/sd15.gguf",
+                    prompt = "portrait",
+                    outputPath = "/tmp/out.png",
+                    adetailer = SdADetailerConfig(modelPath = detector.absolutePath)
+                ),
+                SdBinaryCapabilities(
+                    supportedFlags = setOf("-M", "--ad-model", "--ad-prompt", "--ad-negative-prompt", "--extra-ad-args"),
+                    supportedModes = setOf("img_gen")
+                )
+            )
+        } finally {
+            detector.delete()
+        }
     }
 
     @Test
@@ -246,6 +313,32 @@ class SdCliSupportTest {
 
         assertTrue(args.contains("--lora-apply-mode"))
         assertTrue(args.contains(SdLoraApplyMode.AT_RUNTIME.cliName))
+        assertFalse(args.contains("--lora"))
+        assertTrue(args.contains("--lora-model-dir"))
+        val promptIndex = args.indexOf("-p")
+        assertTrue(promptIndex >= 0)
+        assertTrue(args[promptIndex + 1].contains("<lora:style:0.8>"))
+    }
+
+    @Test
+    fun `textual inversion uses embedding directory and prompt token`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/base.safetensors",
+                modelFamily = "checkpoint",
+                prompt = "portrait",
+                outputPath = "/tmp/out.png",
+                textualInversionPath = "/models/embeddings/charcoal.pt"
+            )
+        )
+
+        val directoryIndex = args.indexOf("--embd-dir")
+        assertTrue(directoryIndex >= 0)
+        assertEquals("/models/embeddings", args[directoryIndex + 1])
+        val promptIndex = args.indexOf("-p")
+        assertTrue(promptIndex >= 0)
+        assertEquals("charcoal portrait", args[promptIndex + 1])
     }
 
     @Test
@@ -472,6 +565,7 @@ class SdCliSupportTest {
             cfgScale = 6.0f,
             flowShift = null,
             samplingMethod = SamplingMethod.EULER,
+            scheduler = SdScheduler.EXPONENTIAL,
             cacheMode = null,
             cacheOption = "",
             scmMask = "",
@@ -496,6 +590,7 @@ class SdCliSupportTest {
         assertEquals("disk", restored.sdParamsBackendMode)
         assertEquals("cpu", restored.sdRuntimeBackendMode)
         assertEquals("6", restored.maxVramCpuGiB)
+        assertEquals(SdScheduler.EXPONENTIAL, restored.scheduler)
     }
 
     private fun assertOption(args: List<String>, flag: String, value: String) {

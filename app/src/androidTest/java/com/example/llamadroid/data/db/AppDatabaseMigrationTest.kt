@@ -23,6 +23,182 @@ class AppDatabaseMigrationTest {
     )
 
     @Test
+    fun migrate103To104_preservesSavedCommandsAndAddsCanonicalProfile() {
+        helper.createDatabase(TEST_DB, 103).apply {
+            execSQL(
+                """
+                INSERT INTO agent_conversations (
+                    id, title, projectFolder, sortOrder, planningModeEnabled,
+                    resumeState, knowledgeBaseIds, workspaceBackend,
+                    runtimeCapabilitiesJson, runUiMode, lastRunProfileJson,
+                    createdAt, updatedAt
+                ) VALUES (
+                    700, 'Migration project', '/project', 0, 1,
+                    'WAITING_FOR_USER', '', 'LOCAL_PROOT', '{}', 'TERMINAL', '{}',
+                    1, 1
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO agent_pending_questions (
+                    id, conversationId, rootTurnId, agentSessionId, toolCallId,
+                    specificationJson, status, continuationEnqueued, createdAt
+                ) VALUES (
+                    'question-1', 700, 'root-1', 'session-1', 'call-1',
+                    '{"questions":[]}', 'PENDING', 0, 1
+                )
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO saved_commands (
+                    name, command, scope, modelPath, contextSize, batchSize,
+                    temperature, threads, host, speculativeEnabled,
+                    speculativeMode, draftMax, draftMin, draftPMin,
+                    draftThreads, draftThreadsBatch, ngramModNMatch,
+                    ngramModNMin, ngramModNMax, ngramSimpleSizeN,
+                    ngramSimpleSizeM, ngramSimpleMinHits, ngramMapKSizeN,
+                    ngramMapKSizeM, ngramMapKMinHits, ngramMapK4VSizeN,
+                    ngramMapK4VSizeM, ngramMapK4VMinHits,
+                    nativeToolsEnabled, customFlags, flashAttention,
+                    kvCacheEnabled, kvCacheTypeK, kvCacheTypeV, kvCacheReuse,
+                    masterRamMB, workersListStr, lowMemoryMode, enableVision
+                ) VALUES (
+                    'Phone preset', '', 'GENERAL', '/models/test.gguf', 8192, 512,
+                    0.7, 4, '127.0.0.1', 0,
+                    'draft-simple', 3, 0, 0.0,
+                    4, 4, 24,
+                    48, 64, 12,
+                    48, 1, 12,
+                    48, 1, 12,
+                    48, 1,
+                    1, '--cache-prompt', 1,
+                    1, 'f16', 'f16', 0,
+                    4096, '', 0, 0
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            104,
+            true,
+            Migrations.MIGRATION_103_104
+        )
+
+        migratedDb.query(
+            "SELECT name, modelPath, launchProfileJson, launchProfileSchemaVersion FROM saved_commands WHERE name = 'Phone preset'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Phone preset", cursor.getString(0))
+            assertEquals("/models/test.gguf", cursor.getString(1))
+            assertNull(cursor.getString(2))
+            assertEquals(1, cursor.getInt(3))
+        }
+        migratedDb.query(
+            "SELECT draftAnswerJson, currentPage, isCollapsed FROM agent_pending_questions WHERE id = 'question-1'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("{}", cursor.getString(0))
+            assertEquals(0, cursor.getInt(1))
+            assertEquals(0, cursor.getInt(2))
+        }
+        migratedDb.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_pending_plans'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+    }
+
+    @Test
+    fun migrate104To105_addsRootlessStatsSamplesAndEvents() {
+        helper.createDatabase(TEST_DB, 104).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            105,
+            true,
+            Migrations.MIGRATION_104_105
+        )
+
+        migratedDb.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('system_stats_samples', 'system_stats_events')"
+        ).use { cursor ->
+            val tables = mutableSetOf<String>()
+            while (cursor.moveToNext()) tables += cursor.getString(0)
+            assertEquals(setOf("system_stats_samples", "system_stats_events"), tables)
+        }
+        migratedDb.query("PRAGMA table_info(system_stats_samples)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.containsAll(setOf("timestampEpochMs", "deviceId", "snapshotJson")))
+        }
+        migratedDb.query("PRAGMA table_info(system_stats_events)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.containsAll(setOf("id", "category", "phase", "status", "startedAtEpochMs")))
+        }
+    }
+
+    @Test
+    fun migrate105To106_preservesOrchestratorRowsAndCreatesDelegationStorage() {
+        helper.createDatabase(TEST_DB, 105).apply {
+            execSQL(
+                """
+                INSERT INTO agent_conversations (
+                    id, title, projectFolder, sortOrder, planningModeEnabled,
+                    resumeState, knowledgeBaseIds, workspaceBackend,
+                    runtimeCapabilitiesJson, runUiMode, lastRunProfileJson,
+                    createdAt, updatedAt
+                ) VALUES (900, 'Delegation migration', '/project', 0, 1,
+                    'IDLE', '', 'LOCAL_SANDBOX', '{}', 'CONSOLE', '{}', 1, 1)
+                """.trimIndent()
+            )
+            execSQL(
+                """
+                INSERT INTO agent_messages (
+                    originalId, conversationId, role, content, isTerminalVisible,
+                    needsApproval, isPlan, isStreaming, isDelegation, isSuspicious,
+                    isOutputExpanded, timestamp, sequenceNumber
+                ) VALUES ('orchestrator-message', 900, 'assistant', 'already committed',
+                    0, 0, 0, 0, 0, 0, 0, 1, 1)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            106,
+            true,
+            Migrations.MIGRATION_105_106
+        )
+
+        migratedDb.query("SELECT invocationId FROM agent_messages WHERE originalId = 'orchestrator-message'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('agent_invocations', 'agent_pending_inputs')").use { cursor ->
+            val tables = mutableSetOf<String>()
+            while (cursor.moveToNext()) tables += cursor.getString(0)
+            assertEquals(setOf("agent_invocations", "agent_pending_inputs"), tables)
+        }
+        migratedDb.query("PRAGMA table_info(agent_pending_inputs)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.containsAll(setOf("targetInvocationId", "sequenceNumber", "status", "content")))
+        }
+    }
+
+    @Test
     fun migrate40To41_preservesExistingModels() {
         helper.createDatabase(TEST_DB, 40).apply {
             execSQL(
@@ -2330,7 +2506,501 @@ class AppDatabaseMigrationTest {
         }
     }
 
+    @Test
+    fun migrate96To97_addsAgentLocalSandboxRuntimeMetadata() {
+        helper.createDatabase(TEST_DB, 96).apply {
+            execSQL(
+                """
+                INSERT INTO agent_conversations (
+                    id,
+                    title,
+                    projectFolder,
+                    lastAgentRole,
+                    lastTask,
+                    knowledgeBaseIds,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    42,
+                    'Existing SSH project',
+                    'existing_project',
+                    'ORCHESTRATOR',
+                    'Keep current behavior',
+                    '',
+                    100,
+                    200
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            97,
+            true,
+            Migrations.MIGRATION_96_97
+        )
+
+        migratedDb.query(
+            """
+            SELECT workspaceBackend, runtimeCapabilitiesJson, runEntrypointPath, runUiMode, lastRunProfileJson
+            FROM agent_conversations
+            WHERE id = 42
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("REMOTE_SSH", cursor.getString(0))
+            assertEquals("", cursor.getString(1))
+            assertNull(cursor.getString(2))
+            assertEquals("CONSOLE", cursor.getString(3))
+            assertEquals("", cursor.getString(4))
+        }
+
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_project_runs'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+        migratedDb.query("PRAGMA table_info(agent_project_runs)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("conversationId"))
+            assertTrue(columns.contains("backend"))
+            assertTrue(columns.contains("runtime"))
+            assertTrue(columns.contains("entrypoint"))
+            assertTrue(columns.contains("forceStopRequestedAt"))
+        }
+    }
+
+    @Test
+    fun migrate97To98_addsAgentProjectFoldersPlanningAndResumeMetadata() {
+        helper.createDatabase(TEST_DB, 97).apply {
+            execSQL(
+                """
+                INSERT INTO agent_conversations (
+                    id,
+                    title,
+                    projectFolder,
+                    lastAgentRole,
+                    lastTask,
+                    knowledgeBaseIds,
+                    workspaceBackend,
+                    runtimeCapabilitiesJson,
+                    runEntrypointPath,
+                    runUiMode,
+                    lastRunProfileJson,
+                    createdAt,
+                    updatedAt
+                ) VALUES (
+                    101,
+                    'Newer project',
+                    'newer_project',
+                    'ORCHESTRATOR',
+                    NULL,
+                    '',
+                    'REMOTE_SSH',
+                    '',
+                    NULL,
+                    'CONSOLE',
+                    '',
+                    100,
+                    300
+                ), (
+                    102,
+                    'Older project',
+                    'older_project',
+                    'ORCHESTRATOR',
+                    NULL,
+                    '',
+                    'LOCAL_SANDBOX',
+                    '',
+                    NULL,
+                    'CONSOLE',
+                    '',
+                    100,
+                    200
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            98,
+            true,
+            Migrations.MIGRATION_97_98
+        )
+
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_project_folders'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+        }
+        migratedDb.query("PRAGMA table_info(agent_conversations)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+            assertTrue(columns.contains("projectFolderId"))
+            assertTrue(columns.contains("sortOrder"))
+            assertTrue(columns.contains("planningModeEnabled"))
+            assertTrue(columns.contains("resumeState"))
+            assertTrue(columns.contains("lastStopReason"))
+        }
+        migratedDb.query(
+            """
+            SELECT id, workspaceBackend, projectFolderId, sortOrder, planningModeEnabled, resumeState, lastStopReason
+            FROM agent_conversations
+            ORDER BY sortOrder ASC
+            """.trimIndent()
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(101L, cursor.getLong(0))
+            assertEquals("REMOTE_SSH", cursor.getString(1))
+            assertNull(cursor.getString(2))
+            assertEquals(0, cursor.getInt(3))
+            assertEquals(0, cursor.getInt(4))
+            assertEquals("IDLE", cursor.getString(5))
+            assertNull(cursor.getString(6))
+
+            assertTrue(cursor.moveToNext())
+            assertEquals(102L, cursor.getLong(0))
+            assertEquals("LOCAL_SANDBOX", cursor.getString(1))
+            assertNull(cursor.getString(2))
+            assertEquals(1, cursor.getInt(3))
+            assertEquals(0, cursor.getInt(4))
+            assertEquals("IDLE", cursor.getString(5))
+            assertNull(cursor.getString(6))
+        }
+    }
+
+    @Test
+    fun migrate98To99_addsSplitSdDistributedMediaRunSettings() {
+        helper.createDatabase(TEST_DB, 98).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            99,
+            true,
+            Migrations.MIGRATION_98_99
+        )
+
+        migratedDb.query("PRAGMA table_info(sd_distributed_master_settings)").use { cursor ->
+            val defaultsByColumn = mutableMapOf<String, String?>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+            while (cursor.moveToNext()) {
+                defaultsByColumn[cursor.getString(nameIndex)] = cursor.getString(defaultIndex)
+            }
+
+            assertEquals("''", defaultsByColumn["imagePrompt"])
+            assertEquals("'512'", defaultsByColumn["imageWidth"])
+            assertEquals("'512'", defaultsByColumn["imageHeight"])
+            assertEquals("'20'", defaultsByColumn["imageSteps"])
+            assertEquals("'7.0'", defaultsByColumn["imageCfg"])
+            assertEquals("'euler_a'", defaultsByColumn["imageSampler"])
+            assertEquals("''", defaultsByColumn["videoPrompt"])
+            assertEquals("'480'", defaultsByColumn["videoWidth"])
+            assertEquals("'832'", defaultsByColumn["videoHeight"])
+            assertEquals("'18'", defaultsByColumn["videoSteps"])
+            assertEquals("'6.0'", defaultsByColumn["videoCfg"])
+            assertEquals("'euler'", defaultsByColumn["videoSampler"])
+        }
+    }
+
+    @Test
+    fun migrate99To100_addsWearEphemeralLlamaChatMetadata() {
+        helper.createDatabase(TEST_DB, 99).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            100,
+            true,
+            Migrations.MIGRATION_99_100
+        )
+
+        migratedDb.query("PRAGMA table_info(llama_chats)").use { cursor ->
+            val defaultsByColumn = mutableMapOf<String, String?>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+            while (cursor.moveToNext()) {
+                defaultsByColumn[cursor.getString(nameIndex)] = cursor.getString(defaultIndex)
+            }
+
+            assertEquals("0", defaultsByColumn["isEphemeral"])
+            assertEquals(null, defaultsByColumn["source"])
+            assertEquals("0", defaultsByColumn["deleteAfterSession"])
+            assertEquals(null, defaultsByColumn["expiresAtMillis"])
+        }
+    }
+
+    @Test
+    fun migrate100To101_addsAgentProjectEventJournal() {
+        helper.createDatabase(TEST_DB, 100).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            101,
+            true,
+            Migrations.MIGRATION_100_101
+        )
+
+        migratedDb.query("PRAGMA table_info(agent_project_events)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) {
+                columns += cursor.getString(nameIndex)
+            }
+
+            assertTrue(columns.contains("conversationId"))
+            assertTrue(columns.contains("category"))
+            assertTrue(columns.contains("eventType"))
+            assertTrue(columns.contains("toolName"))
+            assertTrue(columns.contains("toolCallId"))
+            assertTrue(columns.contains("contentChars"))
+            assertTrue(columns.contains("toolOutputChars"))
+            assertTrue(columns.contains("errorClass"))
+            assertTrue(columns.contains("errorMessage"))
+            assertTrue(columns.contains("summary"))
+        }
+    }
+
+    @Test
+    fun migrate101To102_addsStructuredAgentWorkflowTables() {
+        helper.createDatabase(TEST_DB, 101).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            102,
+            true,
+            Migrations.MIGRATION_101_102
+        )
+
+        val expectedTables = setOf(
+            "agent_message_parts",
+            "agent_turn_contexts",
+            "agent_skills",
+            "agent_skill_assignments",
+            "agent_pending_questions",
+            "agent_todos",
+            "agent_compactions"
+        )
+        migratedDb.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { cursor ->
+            val actual = mutableSetOf<String>()
+            while (cursor.moveToNext()) actual += cursor.getString(0)
+            assertTrue(actual.containsAll(expectedTables))
+        }
+        migratedDb.query("PRAGMA table_info(agent_turn_contexts)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.contains("messagesHash"))
+            assertTrue(columns.contains("previousPrefixCompatible"))
+            assertTrue(columns.contains("cacheMissReason"))
+        }
+        migratedDb.query("PRAGMA table_info(agent_pending_questions)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.contains("toolCallId"))
+            assertTrue(columns.contains("continuationEnqueued"))
+        }
+    }
+
+    @Test
+    fun migrate102To103_addsSavedLocalLlamaLaunchProfile() {
+        helper.createDatabase(TEST_DB, 102).apply {
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            103,
+            true,
+            Migrations.MIGRATION_102_103
+        )
+
+        migratedDb.query("PRAGMA table_info(llama_servers)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.contains("localLaunchProfileJson"))
+        }
+    }
+
+    @Test
+    fun migrate107To108_addsManagedRuntimesAndMultiLoraStorage() {
+        helper.createDatabase(TEST_DB, 107).apply { close() }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            108,
+            true,
+            Migrations.MIGRATION_107_108
+        )
+
+        migratedDb.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                "AND name IN ('llama_server_cards', 'agent_runtime_profiles')"
+        ).use { cursor ->
+            val tables = mutableSetOf<String>()
+            while (cursor.moveToNext()) tables += cursor.getString(0)
+            assertEquals(setOf("llama_server_cards", "agent_runtime_profiles"), tables)
+        }
+        migratedDb.query("PRAGMA table_info(llama_server_cards)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(
+                columns.containsAll(
+                    setOf("id", "name", "savedCommandId", "presetNameSnapshot", "port")
+                )
+            )
+        }
+        migratedDb.query("PRAGMA table_info(agent_runtime_profiles)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(
+                columns.containsAll(
+                    setOf("agentKey", "backend", "model", "managedLlamaServerId", "liteRtModelId")
+                )
+            )
+        }
+        migratedDb.query("PRAGMA table_info(sd_distributed_master_settings)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(
+                columns.containsAll(
+                    setOf(
+                        "imageLorasJson",
+                        "videoLorasJson",
+                        "videoHighNoiseLorasJson",
+                        "videoLoraApplyMode"
+                    )
+                )
+            )
+        }
+    }
+
+    @Test
+    fun migrate108To109_addsNamedAgentEndpointsAndPreservesProfiles() {
+        helper.createDatabase(TEST_DB, 108).apply {
+            execSQL(
+                """
+                INSERT INTO agent_runtime_profiles(
+                    agentKey, backend, model, managedLlamaServerId, liteRtModelId, updatedAt
+                ) VALUES ('CODER', 'ollama', 'qwen-test', NULL, NULL, 1234)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            109,
+            true,
+            Migrations.MIGRATION_108_109
+        )
+
+        migratedDb.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' " +
+                "AND name = 'agent_runtime_endpoint_configs'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("agent_runtime_endpoint_configs", cursor.getString(0))
+        }
+        migratedDb.query("PRAGMA table_info(agent_runtime_profiles)").use { cursor ->
+            val columns = mutableSetOf<String>()
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            while (cursor.moveToNext()) columns += cursor.getString(nameIndex)
+            assertTrue(columns.contains("endpointConfigId"))
+        }
+        migratedDb.query(
+            "SELECT backend, model, endpointConfigId, updatedAt " +
+                "FROM agent_runtime_profiles WHERE agentKey = 'CODER'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("ollama", cursor.getString(0))
+            assertEquals("qwen-test", cursor.getString(1))
+            assertNull(cursor.getString(2))
+            assertEquals(1234L, cursor.getLong(3))
+        }
+    }
+
+    @Test
+    fun migrate109To110_addsWearStartFlagAndPreservesCards() {
+        helper.createDatabase(TEST_DB, 109).apply {
+            execSQL(
+                """
+                INSERT INTO llama_server_cards (
+                    id, name, savedCommandId, presetNameSnapshot, port, createdAt, updatedAt
+                ) VALUES (1, 'Phone server', 7, 'general preset', 8080, 100, 200)
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            110,
+            true,
+            Migrations.MIGRATION_109_110
+        )
+
+        migratedDb.query("SELECT name, port, allowWearStart FROM llama_server_cards WHERE id = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Phone server", cursor.getString(0))
+            assertEquals(8080, cursor.getInt(1))
+            // Existing cards must default to disabled: upgrading must not silently
+            // grant the watch permission to start a server.
+            assertEquals(0, cursor.getInt(2))
+        }
+    }
+
+    /**
+     * Walks the entire registered migration chain in one run.
+     *
+     * The per-migration tests above each validate one hop in isolation, which
+     * cannot catch ordering mistakes, a hop missing from
+     * [Migrations.ALL_MIGRATIONS], or a migration that only fails once an earlier
+     * one has already reshaped the table. This is the path a real user upgrading
+     * from an old install actually takes, and at 80+ hops it is the failure mode
+     * with no hotfix: a broken chain corrupts local databases on upgrade.
+     *
+     * Starts at 28 because that is the oldest schema JSON exported under
+     * `app/schemas`, so it is the oldest version [MigrationTestHelper] can build.
+     */
+    @Test
+    fun migrateFullChain_fromOldestExportedSchemaToLatest() {
+        helper.createDatabase(TEST_DB, OLDEST_EXPORTED_VERSION).close()
+
+        helper.runMigrationsAndValidate(
+            TEST_DB,
+            LATEST_VERSION,
+            true,
+            *Migrations.ALL_MIGRATIONS
+        ).close()
+    }
+
     companion object {
         private const val TEST_DB = "app-migration-test"
+
+        /** Oldest schema JSON present in `app/schemas`. */
+        private const val OLDEST_EXPORTED_VERSION = 28
+
+        /** Keep in step with the `version` in [AppDatabase]'s `@Database`. */
+        private const val LATEST_VERSION = 110
     }
 }

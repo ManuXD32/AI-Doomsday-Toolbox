@@ -21,8 +21,8 @@ class UpscalerAssetPackSupportTest {
     }
 
     @Test
-    fun `refresh is required when extracted version is stale`() {
-        assertTrue(
+    fun `refresh is skipped when app updates but extracted models remain present`() {
+        assertFalse(
             UpscalerAssetPackSupport.shouldRefreshExtractedModels(
                 hasExtractedModels = true,
                 storedVersionCode = 935L,

@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -74,6 +75,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -113,14 +115,23 @@ import com.example.llamadroid.service.GeneratedVideoMetadata
 import com.example.llamadroid.service.SamplingMethod
 import com.example.llamadroid.service.SdCacheMode
 import com.example.llamadroid.service.SdCacheScmPolicy
+import com.example.llamadroid.service.SdScheduler
 import com.example.llamadroid.service.VideoGenerationConfig
 import com.example.llamadroid.service.VideoGenerationMode
 import com.example.llamadroid.service.VideoGenerationService
 import com.example.llamadroid.service.VideoGenerationState
 import com.example.llamadroid.service.VideoGenerationStateHolder
 import com.example.llamadroid.service.loadGeneratedVideoMetadata
+import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
+import com.example.llamadroid.sd.matchesSdFamily
+import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.toJsonArray
+import com.example.llamadroid.sd.toSdLoraSpecs
+import com.example.llamadroid.sd.validateSdLoras
+import com.example.llamadroid.ui.components.SdSchedulerPicker
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -138,9 +149,11 @@ fun VideoGenScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
+    val restoredDraft = remember { settingsRepo.videoGenerationDraft() }
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
+    val selectedSdNativeBinary by settingsRepo.stableDiffusionNativeBinarySelection.collectAsState()
     val db = remember { AppDatabase.getDatabase(context) }
 
     val videoGenModels by db.modelDao().getModelsByType(ModelType.SD_DIFFUSION)
@@ -149,53 +162,100 @@ fun VideoGenScreen(navController: NavController) {
         .collectAsState(initial = emptyList())
     val t5xxlModels by db.modelDao().getModelsByType(ModelType.SD_T5XXL)
         .collectAsState(initial = emptyList())
+    val loraModels by db.modelDao().getModelsByType(ModelType.SD_LORA)
+        .collectAsState(initial = emptyList())
 
     val availableVideoModels = remember(videoGenModels) {
         videoGenModels.filter { it.hasSdCapability(SD_CAPABILITY_VID_GEN) }
     }
-
     var mainTab by remember { mutableIntStateOf(0) }
-    var selectedMode by remember { mutableIntStateOf(0) }
+    var selectedMode by remember { mutableIntStateOf(restoredDraft?.optInt("mode", 0) ?: 0) }
     var galleryFilter by remember { mutableIntStateOf(0) }
 
-    var selectedVideoModelPath by remember { mutableStateOf<String?>(null) }
+    var selectedVideoModelPath by remember { mutableStateOf(restoredDraft?.optString("model").orEmpty().ifBlank { null }) }
     val selectedVideoModel = availableVideoModels.firstOrNull { it.path == selectedVideoModelPath }
-    var prompt by remember { mutableStateOf("") }
-    var negativePrompt by remember { mutableStateOf("") }
-    var selectedSampler by remember { mutableStateOf(SamplingMethod.EULER) }
+    val compatibleVideoLoraModels = remember(loraModels, selectedVideoModel) {
+        val (family, variant) = selectedVideoModel?.resolvedSdFamily() ?: (null to null)
+        family?.let { selectedFamily ->
+            loraModels.filter { it.matchesSdFamily(selectedFamily, variant) }
+        }.orEmpty()
+    }
+    var prompt by remember { mutableStateOf(restoredDraft?.optString("prompt").orEmpty()) }
+    var negativePrompt by remember { mutableStateOf(restoredDraft?.optString("negativePrompt").orEmpty()) }
+    var selectedSampler by remember { mutableStateOf(SamplingMethod.entries.firstOrNull { it.name == restoredDraft?.optString("sampler") } ?: SamplingMethod.EULER) }
+    var selectedScheduler by remember { mutableStateOf(SdScheduler.fromCliName(restoredDraft?.optString("scheduler"))) }
 
-    var useVae by remember { mutableStateOf(false) }
-    var selectedVaePath by remember { mutableStateOf<String?>(null) }
-    var useT5xxl by remember { mutableStateOf(false) }
-    var selectedT5xxlPath by remember { mutableStateOf<String?>(null) }
+    var useVae by remember { mutableStateOf(restoredDraft?.optBoolean("useVae", false) ?: false) }
+    var selectedVaePath by remember { mutableStateOf(restoredDraft?.optString("vae").orEmpty().ifBlank { null }) }
+    var useT5xxl by remember { mutableStateOf(restoredDraft?.optBoolean("useT5", false) ?: false) }
+    var selectedT5xxlPath by remember { mutableStateOf(restoredDraft?.optString("t5").orEmpty().ifBlank { null }) }
+    val restoredVideoLoras = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("loras")?.toSdLoraSpecs().orEmpty()
+    }
+    val restoredHighNoiseLoras = remember(restoredDraft) {
+        restoredDraft?.optJSONArray("highNoiseLoras")?.toSdLoraSpecs().orEmpty()
+    }
+    var videoLoras by remember(restoredDraft) { mutableStateOf(restoredVideoLoras) }
+    var videoHighNoiseLoras by remember(restoredDraft) { mutableStateOf(restoredHighNoiseLoras) }
+    var videoLoraApplyMode by remember(restoredDraft) {
+        mutableStateOf(SdLoraApplyMode.fromStoredValue(restoredDraft?.optString("loraApplyMode")))
+    }
 
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
-    var selectedImagePath by remember { mutableStateOf<String?>(null) }
+    var selectedImagePath by remember { mutableStateOf(restoredDraft?.optString("input").orEmpty().takeIf { it.isNotBlank() && File(it).canRead() }) }
     var imageResolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
-    var videoFramesText by remember { mutableStateOf("8") }
-    var fpsText by remember { mutableStateOf("5") }
-    var widthText by remember { mutableStateOf("480") }
-    var heightText by remember { mutableStateOf("832") }
-    var stepsText by remember { mutableStateOf("18") }
-    var cfgScaleText by remember { mutableStateOf("6.0") }
-    var threadsText by remember { mutableStateOf("-1") }
-    var flowShiftEnabled by remember { mutableStateOf(false) }
-    var flowShiftText by remember { mutableStateOf("") }
-    var vaeTileSize by remember { mutableStateOf("24x24") }
-    var vaeTiling by remember { mutableStateOf(true) }
-    var diffusionFa by remember { mutableStateOf(true) }
-    var mmap by remember { mutableStateOf(true) }
+    var videoFramesText by remember { mutableStateOf(restoredDraft?.optString("frames", "8") ?: "8") }
+    var fpsText by remember { mutableStateOf(restoredDraft?.optString("fps", "5") ?: "5") }
+    var widthText by remember { mutableStateOf(restoredDraft?.optString("width", "480") ?: "480") }
+    var heightText by remember { mutableStateOf(restoredDraft?.optString("height", "832") ?: "832") }
+    var stepsText by remember { mutableStateOf(restoredDraft?.optString("steps", "18") ?: "18") }
+    var cfgScaleText by remember { mutableStateOf(restoredDraft?.optString("cfg", "6.0") ?: "6.0") }
+    var threadsText by remember { mutableStateOf(restoredDraft?.optString("threads", "-1") ?: "-1") }
+    var flowShiftEnabled by remember { mutableStateOf(restoredDraft?.optBoolean("flowShiftEnabled", false) ?: false) }
+    var flowShiftText by remember { mutableStateOf(restoredDraft?.optString("flowShift").orEmpty()) }
+    var vaeTileSize by remember { mutableStateOf(restoredDraft?.optString("vaeTileSize", "24x24") ?: "24x24") }
+    var vaeTiling by remember { mutableStateOf(restoredDraft?.optBoolean("vaeTiling", true) ?: true) }
+    var diffusionFa by remember { mutableStateOf(restoredDraft?.optBoolean("diffusionFa", true) ?: true) }
+    var diffusionConvDirect by remember { mutableStateOf(restoredDraft?.optBoolean("diffConv", false) ?: false) }
+    var vaeConvDirect by remember { mutableStateOf(restoredDraft?.optBoolean("vaeConv", false) ?: false) }
+    var mmap by remember { mutableStateOf(restoredDraft?.optBoolean("mmap", true) ?: true) }
+    val acceleratorPlacement = when (selectedSdNativeBinary) {
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_VULKAN -> "vulkan0"
+        SettingsRepository.NATIVE_BINARY_SD_SNAPDRAGON_OPENCL -> "opencl0"
+        else -> null
+    }
+    var textEncoderPlacement by remember { mutableStateOf(restoredDraft?.optString("tePlacement").orEmpty().ifBlank { "cpu" }) }
+    var diffusionPlacement by remember { mutableStateOf(restoredDraft?.optString("diffusionPlacement").orEmpty().ifBlank { acceleratorPlacement ?: "cpu" }) }
+    var vaePlacement by remember { mutableStateOf(restoredDraft?.optString("vaePlacement").orEmpty().ifBlank { "cpu" }) }
+    LaunchedEffect(acceleratorPlacement) {
+        if (acceleratorPlacement != null && diffusionPlacement !in listOf("vulkan0", "opencl0")) {
+            diffusionPlacement = acceleratorPlacement
+        }
+    }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var warningMessage by remember { mutableStateOf<String?>(null) }
     var selectedGalleryVideo by remember { mutableStateOf<GeneratedVideoMetadata?>(null) }
     var showInfoDialog by remember { mutableStateOf(false) }
-    var cacheMode by remember { mutableStateOf<SdCacheMode?>(null) }
-    var cacheOption by remember { mutableStateOf("") }
-    var scmMask by remember { mutableStateOf("") }
-    var scmPolicy by remember { mutableStateOf<SdCacheScmPolicy?>(null) }
-    var manualCommandFlags by remember { mutableStateOf("") }
+    var cacheMode by remember { mutableStateOf(SdCacheMode.fromStoredValue(restoredDraft?.optString("cacheMode").orEmpty().ifBlank { null })) }
+    var cacheOption by remember { mutableStateOf(restoredDraft?.optString("cacheOption").orEmpty()) }
+    var scmMask by remember { mutableStateOf(restoredDraft?.optString("scmMask").orEmpty()) }
+    var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
+    var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            settingsRepo.setVideoGenerationDraft(org.json.JSONObject().apply {
+                put("mode", selectedMode); put("model", selectedVideoModelPath); put("prompt", prompt); put("negativePrompt", negativePrompt)
+                put("useVae", useVae); put("vae", selectedVaePath); put("useT5", useT5xxl); put("t5", selectedT5xxlPath); put("input", selectedImagePath)
+                put("frames", videoFramesText); put("fps", fpsText); put("width", widthText); put("height", heightText); put("steps", stepsText); put("cfg", cfgScaleText); put("threads", threadsText); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName)
+                put("flowShiftEnabled", flowShiftEnabled); put("flowShift", flowShiftText); put("vaeTileSize", vaeTileSize); put("vaeTiling", vaeTiling); put("diffusionFa", diffusionFa); put("mmap", mmap); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("diffConv", diffusionConvDirect); put("vaeConv", vaeConvDirect); put("flags", manualCommandFlags)
+                put("loras", videoLoras.toJsonArray()); put("highNoiseLoras", videoHighNoiseLoras.toJsonArray()); put("loraApplyMode", videoLoraApplyMode?.cliName)
+                put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
+            })
+        }
+    }
 
     val outputDir = remember {
         File(context.filesDir, "video_gen_output").apply { mkdirs() }
@@ -291,7 +351,7 @@ fun VideoGenScreen(navController: NavController) {
         }
     }
 
-    val generateVideo = fun() {
+    val generateVideo = generation@ fun() {
         val mode = if (selectedMode == 1) VideoGenerationMode.IMG2VID else VideoGenerationMode.TXT2VID
         val frames = videoFramesText.toIntOrNull()
         val fps = fpsText.toIntOrNull()
@@ -301,6 +361,12 @@ fun VideoGenScreen(navController: NavController) {
         val cfgScale = cfgScaleText.toFloatOrNull()
         val threads = threadsText.toIntOrNull()
         val flowShift = if (flowShiftEnabled) flowShiftText.toFloatOrNull() else null
+
+        val loraError = runCatching { validateSdLoras(videoLoras + videoHighNoiseLoras) }.exceptionOrNull()
+        if (loraError != null) {
+            errorMessage = loraError.message ?: context.getString(R.string.sd_workflow_gate_missing)
+            return@generation
+        }
 
         when {
             selectedVideoModelPath == null -> {
@@ -385,6 +451,7 @@ fun VideoGenScreen(navController: NavController) {
             cfgScale = cfgScale ?: 6.0f,
             flowShift = flowShift,
             samplingMethod = selectedSampler,
+            scheduler = selectedScheduler,
             cacheMode = cacheMode,
             cacheOption = cacheOption,
             scmMask = scmMask,
@@ -392,10 +459,17 @@ fun VideoGenScreen(navController: NavController) {
             vaeTiling = vaeTiling,
             vaeTileSize = vaeTileSize,
             diffusionFa = diffusionFa,
+            diffusionConvDirect = diffusionConvDirect,
+            vaeConvDirect = vaeConvDirect,
             mmap = mmap,
             threads = threads ?: -1,
+            loras = videoLoras,
+            highNoiseLoras = videoHighNoiseLoras,
+            loraApplyMode = videoLoraApplyMode,
             sdParamsBackendMode = selectedVideoModel?.sdParamsBackendMode ?: "auto",
-            sdRuntimeBackendMode = selectedVideoModel?.sdRuntimeBackendMode ?: "auto",
+            sdRuntimeBackendMode = acceleratorPlacement?.let {
+                "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
+            } ?: selectedVideoModel?.sdRuntimeBackendMode ?: "auto",
             maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else "",
             customFlags = manualCommandFlags
         )
@@ -528,37 +602,39 @@ fun VideoGenScreen(navController: NavController) {
         }
 
         if (mainTab == 0) {
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 16.dp)
             ) {
-                val modes = listOf(
-                    stringResource(R.string.video_gen_mode_txt2vid),
-                    stringResource(R.string.video_gen_mode_img2vid)
-                )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    modes.forEachIndexed { index, label ->
-                        SegmentedButton(
-                            selected = selectedMode == index,
-                            onClick = { selectedMode = index },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
-                        ) {
-                            Text(label)
+                item(key = "mode") {
+                    val modes = listOf(
+                        stringResource(R.string.video_gen_mode_txt2vid),
+                        stringResource(R.string.video_gen_mode_img2vid)
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        modes.forEachIndexed { index, label ->
+                            SegmentedButton(
+                                selected = selectedMode == index,
+                                onClick = { selectedMode = index },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
+                            ) {
+                                Text(label)
+                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
                 if (selectedMode == 1) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                    ) {
-                        Column(modifier = Modifier.padding(16.dp)) {
+                    item(key = "input-image") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
                             Text(
                                 stringResource(R.string.video_gen_input_image_title),
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
@@ -569,9 +645,7 @@ fun VideoGenScreen(navController: NavController) {
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    val bitmap = remember(selectedImagePath) {
-                                        android.graphics.BitmapFactory.decodeFile(selectedImagePath)?.asImageBitmap()
-                                    }
+                                    val bitmap by rememberVideoPreviewBitmap(selectedImagePath)
                                     bitmap?.let {
                                         Image(
                                             bitmap = it,
@@ -608,13 +682,12 @@ fun VideoGenScreen(navController: NavController) {
                                     Text(stringResource(R.string.video_gen_select_image))
                                 }
                             }
+                            }
                         }
                     }
-
-                    Spacer(modifier = Modifier.height(12.dp))
                 }
 
-                Card(
+                item(key = "model") { Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -646,11 +719,9 @@ fun VideoGenScreen(navController: NavController) {
                             )
                         }
                     }
-                }
+                } }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OptionalModelCard(
+                item(key = "vae") { OptionalModelCard(
                     title = stringResource(R.string.video_gen_vae_toggle_label),
                     enabled = useVae,
                     onEnabledChange = { enabled ->
@@ -665,11 +736,9 @@ fun VideoGenScreen(navController: NavController) {
                     placeholder = stringResource(R.string.video_gen_select_vae),
                     onSelected = { selectedVaePath = it.path },
                     onGetModels = { navController.navigate(Screen.SDModels.route) }
-                )
+                ) }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                OptionalModelCard(
+                item(key = "t5") { OptionalModelCard(
                     title = stringResource(R.string.video_gen_t5_toggle_label),
                     enabled = useT5xxl,
                     onEnabledChange = { enabled ->
@@ -684,11 +753,9 @@ fun VideoGenScreen(navController: NavController) {
                     placeholder = stringResource(R.string.video_gen_select_t5xxl),
                     onSelected = { selectedT5xxlPath = it.path },
                     onGetModels = { navController.navigate(Screen.SDModels.route) }
-                )
+                ) }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Card(
+                item(key = "prompts") { Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -718,11 +785,21 @@ fun VideoGenScreen(navController: NavController) {
                             shape = RoundedCornerShape(12.dp)
                         )
                     }
+                } }
+
+                item(key = "loras") {
+                    VideoLoraStackCard(
+                        models = compatibleVideoLoraModels,
+                        loras = videoLoras,
+                        highNoiseLoras = videoHighNoiseLoras,
+                        applyMode = videoLoraApplyMode,
+                        onLorasChange = { videoLoras = it },
+                        onHighNoiseLorasChange = { videoHighNoiseLoras = it },
+                        onApplyModeChange = { videoLoraApplyMode = it }
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Card(
+                item(key = "parameters") { Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -867,6 +944,11 @@ fun VideoGenScreen(navController: NavController) {
                             }
                         }
                         Spacer(modifier = Modifier.height(12.dp))
+                        SdSchedulerPicker(
+                            value = selectedScheduler,
+                            onValueChange = { selectedScheduler = it }
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = vaeTiling,
@@ -900,6 +982,34 @@ fun VideoGenScreen(navController: NavController) {
                                 label = { Text(stringResource(R.string.video_gen_mmap_label)) }
                             )
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = diffusionConvDirect,
+                                onClick = { diffusionConvDirect = !diffusionConvDirect },
+                                label = { Text(stringResource(R.string.imagegen_diffusion_conv_direct_label)) }
+                            )
+                            FilterChip(
+                                selected = vaeConvDirect,
+                                onClick = { vaeConvDirect = !vaeConvDirect },
+                                label = { Text(stringResource(R.string.imagegen_vae_conv_direct_label)) }
+                            )
+                        }
+                        acceleratorPlacement?.let { accelerator ->
+                            Spacer(modifier = Modifier.height(12.dp))
+                            SdBackendPlacementControls(
+                                accelerator = accelerator,
+                                textEncoder = textEncoderPlacement,
+                                diffusion = diffusionPlacement,
+                                vae = vaePlacement,
+                                onTextEncoderChange = { textEncoderPlacement = it },
+                                onDiffusionChange = { diffusionPlacement = it },
+                                onVaeChange = { vaePlacement = it }
+                            )
+                        }
                         Spacer(modifier = Modifier.height(16.dp))
                         VideoLocalSdCliMemoryControls(
                             selectedModel = selectedVideoModel,
@@ -927,11 +1037,9 @@ fun VideoGenScreen(navController: NavController) {
                             onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
                         )
                     }
-                }
+                } }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                GenerationCachingCard(
+                item(key = "cache") { GenerationCachingCard(
                     title = stringResource(R.string.gen_cache_title),
                     cacheMode = cacheMode,
                     onCacheModeChange = { cacheMode = it },
@@ -944,11 +1052,9 @@ fun VideoGenScreen(navController: NavController) {
                     guidanceFamily = GenerationCacheGuidanceFamily.VIDEO_DIT,
                     enabled = true,
                     disabledMessage = null
-                )
+                ) }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Card(
+                item(key = "manual-flags") { Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -974,11 +1080,9 @@ fun VideoGenScreen(navController: NavController) {
                             shape = RoundedCornerShape(12.dp)
                         )
                     }
-                }
+                } }
 
-                Spacer(modifier = Modifier.height(16.dp))
-
-                if (isBusy) {
+                item(key = "run-state") { if (isBusy) {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(16.dp),
@@ -1032,11 +1136,10 @@ fun VideoGenScreen(navController: NavController) {
                             fontWeight = FontWeight.Bold
                         )
                     }
-                }
+                } }
 
                 warningMessage?.let { warning ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Card(
+                    item(key = "warning") { Card(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
                         ),
@@ -1050,12 +1153,11 @@ fun VideoGenScreen(navController: NavController) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(warning, color = MaterialTheme.colorScheme.onTertiaryContainer)
                         }
-                    }
+                    } }
                 }
 
                 errorMessage?.let { error ->
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Card(
+                    item(key = "error") { Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -1064,12 +1166,11 @@ fun VideoGenScreen(navController: NavController) {
                             modifier = Modifier.padding(12.dp),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
-                    }
+                    } }
                 }
 
                 if (generationState is VideoGenerationState.Complete) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Card(
+                    item(key = "complete") { Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                         shape = RoundedCornerShape(12.dp)
                     ) {
@@ -1084,10 +1185,8 @@ fun VideoGenScreen(navController: NavController) {
                                 color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
-                    }
+                    } }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
             }
         } else {
             Column(
@@ -1154,6 +1253,21 @@ fun VideoGenScreen(navController: NavController) {
             metadata = metadata,
             onDismiss = { selectedGalleryVideo = null },
             onShare = { shareVideo(metadata) },
+            onInterpolate = {
+                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", Screen.VideoInterpolation.route)
+                selectedGalleryVideo = null
+                navController.navigate(Screen.VideoInterpolation.route)
+            },
+            onUpscale = {
+                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", Screen.VideoUpscaler.route)
+                selectedGalleryVideo = null
+                navController.navigate(Screen.VideoUpscaler.route)
+            },
+            onInterpolateAndUpscale = {
+                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", "interpolate_then_upscale")
+                selectedGalleryVideo = null
+                navController.navigate(Screen.Workflows.route)
+            },
             onCopyInfo = { copyGenerationInfo(metadata) },
             onDelete = { deleteVideo(metadata) }
         )
@@ -1164,6 +1278,175 @@ fun VideoGenScreen(navController: NavController) {
             title = stringResource(R.string.video_gen_help_title),
             sections = buildVideoGenerationHelpSections(selectedMode = selectedMode),
             onDismiss = { showInfoDialog = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun VideoLoraStackCard(
+    models: List<ModelEntity>,
+    loras: List<SdLoraSpec>,
+    highNoiseLoras: List<SdLoraSpec>,
+    applyMode: SdLoraApplyMode?,
+    onLorasChange: (List<SdLoraSpec>) -> Unit,
+    onHighNoiseLorasChange: (List<SdLoraSpec>) -> Unit,
+    onApplyModeChange: (SdLoraApplyMode?) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                stringResource(R.string.sd_workflow_lora_stack_label),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+            )
+            Text(
+                stringResource(R.string.video_gen_lora_stack_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (models.isEmpty()) {
+                Text(
+                    stringResource(R.string.imagegen_no_lora),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                if (loras.isNotEmpty()) {
+                    Text(
+                        stringResource(R.string.video_gen_lora_regular_label),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+                loras.forEachIndexed { index, item ->
+                    VideoLoraItemRow(
+                        index = index,
+                        item = item,
+                        onStrengthChange = { strength ->
+                            onLorasChange(loras.mapIndexed { itemIndex, current ->
+                                if (itemIndex == index) current.copy(strength = strength) else current
+                            })
+                        },
+                        onRemove = { onLorasChange(loras.filterIndexed { itemIndex, _ -> itemIndex != index }) }
+                    )
+                }
+                ModelDropdown(
+                    value = null,
+                    placeholder = stringResource(R.string.video_gen_lora_add),
+                    models = models,
+                    onSelected = { model ->
+                        onLorasChange(loras + SdLoraSpec(path = model.path))
+                    }
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    stringResource(R.string.video_gen_lora_high_noise_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                highNoiseLoras.forEachIndexed { index, item ->
+                    VideoLoraItemRow(
+                        index = index,
+                        item = item,
+                        onStrengthChange = { strength ->
+                            onHighNoiseLorasChange(highNoiseLoras.mapIndexed { itemIndex, current ->
+                                if (itemIndex == index) current.copy(strength = strength, highNoiseOnly = true) else current
+                            })
+                        },
+                        onRemove = {
+                            onHighNoiseLorasChange(highNoiseLoras.filterIndexed { itemIndex, _ -> itemIndex != index })
+                        }
+                    )
+                }
+                ModelDropdown(
+                    value = null,
+                    placeholder = stringResource(R.string.video_gen_lora_add_high_noise),
+                    models = models,
+                    onSelected = { model ->
+                        onHighNoiseLorasChange(highNoiseLoras + SdLoraSpec(path = model.path, highNoiseOnly = true))
+                    }
+                )
+                Text(
+                    stringResource(R.string.imagegen_lora_apply_mode_label),
+                    style = MaterialTheme.typography.labelLarge
+                )
+                var applyExpanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = applyExpanded,
+                    onExpandedChange = { applyExpanded = !applyExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = applyMode?.cliName ?: stringResource(R.string.imagegen_lora_apply_mode_default),
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        trailingIcon = {
+                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = applyExpanded)
+                        },
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = applyExpanded,
+                        onDismissRequest = { applyExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.imagegen_lora_apply_mode_default)) },
+                            onClick = {
+                                onApplyModeChange(null)
+                                applyExpanded = false
+                            }
+                        )
+                        SdLoraApplyMode.entries.forEach { mode ->
+                            DropdownMenuItem(
+                                text = { Text(mode.cliName) },
+                                onClick = {
+                                    onApplyModeChange(mode)
+                                    applyExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VideoLoraItemRow(
+    index: Int,
+    item: SdLoraSpec,
+    onStrengthChange: (Float) -> Unit,
+    onRemove: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "${index + 1}. ${item.filename}",
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.imagegen_lora_remove))
+            }
+        }
+        androidx.compose.material3.Slider(
+            value = item.strength,
+            onValueChange = onStrengthChange,
+            valueRange = SdLoraSpec.MIN_STRENGTH..SdLoraSpec.MAX_STRENGTH,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Text(
+            text = String.format(Locale.US, "%.2f", item.strength),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -1185,6 +1468,7 @@ private fun ModelDropdown(
             value = value?.substringAfterLast("/") ?: placeholder,
             onValueChange = {},
             readOnly = true,
+            singleLine = true,
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(),
@@ -1196,7 +1480,7 @@ private fun ModelDropdown(
         ) {
             models.forEach { model ->
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(model.filename) },
+                    text = { Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     onClick = {
                         onSelected(model)
                         expanded = false
@@ -1476,6 +1760,16 @@ private fun videoSdRuntimeBackendModeLabel(mode: SdRuntimeBackendMode): String =
 }
 
 @Composable
+private fun rememberVideoPreviewBitmap(path: String?): androidx.compose.runtime.State<ImageBitmap?> =
+    produceState<ImageBitmap?>(initialValue = null, key1 = path) {
+        value = path?.let { previewPath ->
+            withContext(Dispatchers.IO) {
+                android.graphics.BitmapFactory.decodeFile(previewPath)?.asImageBitmap()
+            }
+        }
+    }
+
+@Composable
 private fun VideoGalleryCard(
     metadata: GeneratedVideoMetadata,
     onClick: () -> Unit
@@ -1566,6 +1860,9 @@ private fun VideoDetailDialog(
     metadata: GeneratedVideoMetadata,
     onDismiss: () -> Unit,
     onShare: () -> Unit,
+    onInterpolate: () -> Unit,
+    onUpscale: () -> Unit,
+    onInterpolateAndUpscale: () -> Unit,
     onCopyInfo: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1625,6 +1922,16 @@ private fun VideoDetailDialog(
                 ParameterLine(stringResource(R.string.video_gen_height_label), metadata.height.toString())
                 ParameterLine(stringResource(R.string.video_gen_steps_label), metadata.steps.toString())
                 ParameterLine(stringResource(R.string.video_gen_cfg_scale_label), metadata.cfgScale.toString())
+                metadata.generationDurationMs?.let {
+                    ParameterLine(
+                        stringResource(R.string.sd_dist_gallery_total_time_label),
+                        formatGenerationDuration(it)
+                    )
+                }
+                ParameterLine(stringResource(R.string.sd_dist_gallery_created_label), formatVideoGalleryDate(metadata.createdAt))
+                metadata.conditioningDurationMs?.let { ParameterLine(stringResource(R.string.sd_stage_conditioning_label), formatGenerationDuration(it)) }
+                metadata.samplingDurationMs?.let { ParameterLine(stringResource(R.string.sd_stage_sampling_label), formatGenerationDuration(it)) }
+                metadata.decodingDurationMs?.let { ParameterLine(stringResource(R.string.sd_stage_decoding_label), formatGenerationDuration(it)) }
                 metadata.flowShift?.let {
                     ParameterLine(stringResource(R.string.video_gen_flow_shift_label), it.toString())
                 }
@@ -1652,6 +1959,8 @@ private fun VideoDetailDialog(
                     ParameterLine(stringResource(R.string.video_gen_vae_tile_size_label), metadata.vaeTileSize)
                 }
                 ParameterLine(stringResource(R.string.video_gen_diffusion_fa_label), if (metadata.diffusionFa) stringResource(R.string.video_gen_enabled) else stringResource(R.string.video_gen_disabled))
+                ParameterLine(stringResource(R.string.imagegen_diffusion_conv_direct_label), if (metadata.diffusionConvDirect) stringResource(R.string.video_gen_enabled) else stringResource(R.string.video_gen_disabled))
+                ParameterLine(stringResource(R.string.imagegen_vae_conv_direct_label), if (metadata.vaeConvDirect) stringResource(R.string.video_gen_enabled) else stringResource(R.string.video_gen_disabled))
                 ParameterLine(stringResource(R.string.video_gen_mmap_label), if (metadata.mmap) stringResource(R.string.video_gen_enabled) else stringResource(R.string.video_gen_disabled))
                 ParameterLine(stringResource(R.string.sd_models_params_backend_label), metadata.sdParamsBackendMode)
                 ParameterLine(stringResource(R.string.sd_models_runtime_backend_label), metadata.sdRuntimeBackendMode)
@@ -1664,17 +1973,36 @@ private fun VideoDetailDialog(
             }
         },
         confirmButton = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onCopyInfo) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.video_gen_copy_info))
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onInterpolate) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.video_gen_action_interpolate))
+                    }
+                    OutlinedButton(onClick = onUpscale) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.video_gen_action_upscale))
+                    }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = onShare) {
-                    Icon(Icons.Default.Share, contentDescription = null)
+                Button(onClick = onInterpolateAndUpscale, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_share))
+                    Text(stringResource(R.string.video_gen_action_interpolate_upscale))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onCopyInfo) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(stringResource(R.string.video_gen_copy_info))
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Button(onClick = onShare) {
+                        Icon(Icons.Default.Share, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_share))
+                    }
                 }
             }
         },
@@ -1752,14 +2080,23 @@ private fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVi
         "${context.getString(R.string.video_gen_t5_toggle_label)}: ${if (metadata.t5xxlEnabled) (metadata.t5xxlName ?: "-") else context.getString(R.string.video_gen_disabled)}",
         "${context.getString(R.string.video_gen_vae_tiling_label)}: ${if (metadata.vaeTiling) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
         "${context.getString(R.string.video_gen_diffusion_fa_label)}: ${if (metadata.diffusionFa) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
+        "${context.getString(R.string.imagegen_diffusion_conv_direct_label)}: ${if (metadata.diffusionConvDirect) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
+        "${context.getString(R.string.imagegen_vae_conv_direct_label)}: ${if (metadata.vaeConvDirect) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
         "${context.getString(R.string.video_gen_mmap_label)}: ${if (metadata.mmap) context.getString(R.string.video_gen_enabled) else context.getString(R.string.video_gen_disabled)}",
         "${context.getString(R.string.sd_models_params_backend_label)}: ${metadata.sdParamsBackendMode}",
         "${context.getString(R.string.sd_models_runtime_backend_label)}: ${metadata.sdRuntimeBackendMode}"
     )
+    lines.add("${context.getString(R.string.sd_dist_gallery_created_label)}: ${formatVideoGalleryDate(metadata.createdAt)}")
 
     if (metadata.negativePrompt.isNotBlank()) {
         lines.add(2, "${context.getString(R.string.video_gen_negative_prompt_label)}: ${metadata.negativePrompt}")
     }
+    metadata.generationDurationMs?.let {
+        lines.add("${context.getString(R.string.sd_dist_gallery_total_time_label)}: ${formatGenerationDuration(it)}")
+    }
+    metadata.conditioningDurationMs?.let { lines.add("${context.getString(R.string.sd_stage_conditioning, formatGenerationDuration(it))}") }
+    metadata.samplingDurationMs?.let { lines.add("${context.getString(R.string.sd_stage_sampling, formatGenerationDuration(it))}") }
+    metadata.decodingDurationMs?.let { lines.add("${context.getString(R.string.sd_stage_decoding, formatGenerationDuration(it))}") }
     if (metadata.vaeTiling && !metadata.vaeTileSize.isNullOrBlank()) {
         lines.add("${context.getString(R.string.video_gen_vae_tile_size_label)}: ${metadata.vaeTileSize}")
     }
@@ -1784,6 +2121,21 @@ private fun buildVideoGenerationInfoText(context: Context, metadata: GeneratedVi
 
     return lines.joinToString(separator = "\n")
 }
+
+private fun formatGenerationDuration(durationMs: Long): String {
+    val totalSeconds = (durationMs / 1000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600L
+    val minutes = (totalSeconds % 3600L) / 60L
+    val seconds = totalSeconds % 60L
+    return when {
+        hours > 0L -> "${hours}h ${minutes}m ${seconds}s"
+        minutes > 0L -> "${minutes}m ${seconds}s"
+        else -> "${seconds}s"
+    }
+}
+
+private fun formatVideoGalleryDate(timestampMs: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(timestampMs))
 
 private fun formatVideoModeLabel(context: Context, mode: VideoGenerationMode): String {
     return when (mode) {

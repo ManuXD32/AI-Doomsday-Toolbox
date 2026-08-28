@@ -51,6 +51,10 @@ object AiRuntimeJobStore {
         AppDatabase.getDatabase(context).aiRuntimeJobDao().getByJobKey(jobKey)
     }
 
+    suspend fun deleteByConversationId(context: Context, conversationId: Long) = withContext(Dispatchers.IO) {
+        AppDatabase.getDatabase(context).aiRuntimeJobDao().deleteByConversationId(conversationId)
+    }
+
     suspend fun getActiveJobs(context: Context): List<AiRuntimeJobEntity> = withContext(Dispatchers.IO) {
         AppDatabase.getDatabase(context).aiRuntimeJobDao().getActiveJobs()
     }
@@ -62,7 +66,8 @@ object AiRuntimeJobStore {
                 .filter { isJobStale(it, now) }
 
             staleJobs.forEach { job ->
-                AppDatabase.getDatabase(context).aiRuntimeJobDao().updateState(
+                val db = AppDatabase.getDatabase(context)
+                db.aiRuntimeJobDao().updateState(
                     jobId = job.jobId,
                     status = STATUS_FAILED,
                     checkpointJson = job.checkpointJson,
@@ -70,6 +75,15 @@ object AiRuntimeJobStore {
                     errorMessage = "Recovered as stale runtime job",
                     updatedAt = now
                 )
+                if (job.type == TYPE_AGENT_CHAT) {
+                    job.conversationId?.let { conversationId ->
+                        db.agentChatDao().updateResumeState(
+                            conversationId,
+                            AgentService.RESUME_STATE_INTERRUPTED,
+                            "Interrupted because the previous agent runtime became stale."
+                        )
+                    }
+                }
             }
             staleJobs
         }

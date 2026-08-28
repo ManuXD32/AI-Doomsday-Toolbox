@@ -44,8 +44,10 @@ import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.VideoSummaryStateHolder
 import com.example.llamadroid.service.VideoSumupService
 import com.example.llamadroid.service.WhisperLanguages
+import com.example.llamadroid.service.WhisperVadAssetStore
 import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.WhisperVadInlineControl
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
@@ -59,7 +61,9 @@ fun VideoSumupScreen(navController: NavController) {
     val db = remember { AppDatabase.getDatabase(context) }
 
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
-    var selectedWhisperPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedWhisperPath by rememberSaveable {
+        mutableStateOf(settingsRepo.videoSumupWhisperModelPath.value)
+    }
 
     val selectedVideoString by VideoSummaryStateHolder.selectedSourceUri.collectAsState()
     val selectedVideoName by VideoSummaryStateHolder.selectedSourceName.collectAsState()
@@ -77,6 +81,8 @@ fun VideoSumupScreen(navController: NavController) {
 
     val whisperLanguage by settingsRepo.videoSummaryWhisperLanguage.collectAsState()
     val whisperThreads by settingsRepo.videoSummaryWhisperThreads.collectAsState()
+    val whisperVad by settingsRepo.whisperVadConfig.collectAsState()
+    val effectiveWhisperVadPath = WhisperVadAssetStore.resolvePath(context, whisperVad.modelPath)
     val backend by settingsRepo.videoSummaryBackend.collectAsState()
     val ollamaUrl by settingsRepo.videoSummaryOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.videoSummaryLlamaServerUrl.collectAsState()
@@ -100,8 +106,10 @@ fun VideoSumupScreen(navController: NavController) {
     val liteRtMtpEnabled by settingsRepo.videoSummaryLiteRtMtpEnabled.collectAsState()
 
     LaunchedEffect(whisperModels) {
-        if (selectedWhisperPath == null && whisperModels.isNotEmpty()) {
-            selectedWhisperPath = whisperModels.first().path
+        val selectedStillExists = whisperModels.any { it.path == selectedWhisperPath }
+        if (!selectedStillExists) {
+            selectedWhisperPath = whisperModels.firstOrNull()?.path
+            settingsRepo.setVideoSumupWhisperModelPath(selectedWhisperPath)
         }
     }
 
@@ -179,6 +187,7 @@ fun VideoSumupScreen(navController: NavController) {
                                     text = { Text(model.filename) },
                                     onClick = {
                                         selectedWhisperPath = model.path
+                                        settingsRepo.setVideoSumupWhisperModelPath(model.path)
                                         whisperExpanded = false
                                     }
                                 )
@@ -222,6 +231,8 @@ fun VideoSumupScreen(navController: NavController) {
                         valueRange = 1..16,
                         label = stringResource(R.string.label_threads)
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    WhisperVadInlineControl(settingsRepo = settingsRepo)
                 }
             }
 
@@ -405,13 +416,14 @@ fun VideoSumupScreen(navController: NavController) {
                                     whisperModelPath = selectedWhisperPath!!,
                                     language = whisperLanguage,
                                     threads = whisperThreads,
+                                    vadConfig = settingsRepo.whisperVadConfigSnapshot(),
                                     saveToNotes = true,
                                     noteType = NoteType.VIDEO_SUMMARY
                                 )
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = selectedWhisperPath != null && backendReady
+                        enabled = selectedWhisperPath != null && backendReady && (!whisperVad.enabled || effectiveWhisperVadPath != null)
                     ) {
                         Text(stringResource(R.string.video_sumup_btn))
                     }

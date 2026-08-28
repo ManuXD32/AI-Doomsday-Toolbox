@@ -1,23 +1,33 @@
 package com.example.llamadroid.service
 
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdImageInputMode
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.inferSdFamily
+import com.example.llamadroid.sd.activeInOrder
+import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.util.DeviceAcceleration
 import java.io.File
+import java.util.Locale
 
 data class SdBinaryCapabilities(
-    val supportedFlags: Set<String>
+    val supportedFlags: Set<String>,
+    val supportedModes: Set<String> = emptySet(),
+    val allowAll: Boolean = false
 ) {
-    fun supports(flag: String): Boolean = supportedFlags.contains(flag)
+    fun supports(flag: String): Boolean = allowAll || supportedFlags.contains(flag)
+
+    /** `-M` values explicitly advertised by the installed stable-diffusion.cpp binary. */
+    fun supportsMode(mode: String): Boolean =
+        allowAll || mode.lowercase(Locale.US) in supportedModes
 
     companion object {
-        val ALLOW_ALL = SdBinaryCapabilities(emptySet())
+        val ALLOW_ALL = SdBinaryCapabilities(emptySet(), allowAll = true)
     }
 }
 
@@ -29,10 +39,23 @@ class SdUnsupportedFlagsException(
     val flags: List<String>
 ) : IllegalStateException("Unsupported stable-diffusion.cpp flags: ${flags.joinToString(", ")}")
 
+class SdUnsupportedModesException(
+    val modes: List<String>
+) : IllegalStateException("Unsupported stable-diffusion.cpp modes: ${modes.joinToString(", ")}")
+
+class SdDisallowedDistributedFlagException(
+    val flag: String,
+    override val message: String = "Disallowed distributed stable-diffusion.cpp flag: $flag"
+) : IllegalStateException(message)
+
 fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     val flagRegex = Regex("""(?<![A-Za-z0-9_-])(--[A-Za-z0-9][A-Za-z0-9_-]*|-[A-Za-z])(?![A-Za-z0-9_-])""")
+    val nativeModeRegex = Regex("""(?i)\b(?:txt2img|img2img|img_gen|upscale|adetailer|txt2vid|img2vid|vid_gen)\b""")
     return SdBinaryCapabilities(
-        supportedFlags = flagRegex.findAll(helpText).map { it.value }.toSet()
+        supportedFlags = flagRegex.findAll(helpText).map { it.value }.toSet(),
+        supportedModes = nativeModeRegex.findAll(helpText)
+            .map { it.value.lowercase(Locale.US) }
+            .toSet()
     )
 }
 
@@ -60,6 +83,7 @@ fun buildSdCommandArgs(
 ): List<String> {
     val args = mutableListOf<String>()
     val requiredFlags = mutableSetOf<String>()
+    val requiredModes = mutableSetOf<String>()
 
     fun requireFlag(flag: String) {
         if (binaryCapabilities != null &&
@@ -79,8 +103,22 @@ fun buildSdCommandArgs(
         }
     }
 
+    fun requireMode(mode: String) {
+        if (binaryCapabilities != null &&
+            binaryCapabilities != SdBinaryCapabilities.ALLOW_ALL &&
+            !binaryCapabilities.supportsMode(mode)
+        ) {
+            requiredModes += mode
+        }
+    }
+
     when (config.mode) {
         SDMode.TXT2IMG, SDMode.IMG2IMG -> args.addAll(listOf("-M", "img_gen"))
+        SDMode.ADETAILER -> {
+            requireFlag("-M")
+            requireMode("adetailer")
+            args.addAll(listOf("-M", "adetailer"))
+        }
         SDMode.UPSCALE -> args.addAll(listOf("-M", "upscale"))
     }
 
@@ -111,11 +149,27 @@ fun buildSdCommandArgs(
         if (requiredFlags.isNotEmpty()) {
             throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
         }
+        if (requiredModes.isNotEmpty()) {
+            throw SdUnsupportedModesException(requiredModes.toList().sorted())
+        }
         return args
     }
 
     val (family, variant) = inferSdFamilyForConfig(config)
     val spec = resolveSdFamilySpec(family, variant)
+    val adetailerConfig = config.adetailer?.let { raw ->
+        val configured = if (config.mode == SDMode.ADETAILER) {
+            raw.copy(
+                inpaintWidth = raw.inpaintWidth ?: config.width,
+                inpaintHeight = raw.inpaintHeight ?: config.height
+            )
+        } else {
+            raw
+        }
+        validateSdADetailerConfig(configured)
+    }
+    val baseLoras = config.resolvedLoras().also { validateSdLoras(it) }
+    val detailLoras = adetailerConfig?.loras.orEmpty().also { validateSdLoras(it) }
     val missingComponents = spec.requiredRoles.filter { role ->
         when (role) {
             SdComponentRole.VAE -> config.vaePath.isNullOrBlank()
@@ -142,8 +196,10 @@ fun buildSdCommandArgs(
 
     config.vaePath?.let { args.addAll(listOf("--vae", it)) }
     config.taePath?.let {
-        requireFlag("--tae")
-        args.addAll(listOf("--tae", it))
+        // TAESD is a decode-only VAE; TAE/TAEHV remain the family component path.
+        val decoderFlag = if (File(it).name.contains("taesd", ignoreCase = true)) "--taesd" else "--tae"
+        requireFlag(decoderFlag)
+        args.addAll(listOf(decoderFlag, it))
     }
     config.clipLPath?.let { args.addAll(listOf("--clip_l", it)) }
     config.clipGPath?.let {
@@ -163,16 +219,86 @@ fun buildSdCommandArgs(
         requireFlag("--photo-maker")
         args.addAll(listOf("--photo-maker", it))
     }
+    config.ipAdapter?.let { rawAdapter ->
+        val adapter = validateSdIpAdapterConfig(
+            config = rawAdapter,
+            supportsIpAdapter = spec.supportsIpAdapter
+        ) ?: error("IP-Adapter validation returned no configuration")
+        requireFlag("--clip_vision")
+        requireFlag("--ip-adapter")
+        requireFlag("--ip-adapter-image")
+        requireFlag("--ip-adapter-strength")
+        args.addAll(listOf("--clip_vision", adapter.clipVisionPath))
+        args.addAll(listOf("--ip-adapter", adapter.adapterPath))
+        args.addAll(listOf("--ip-adapter-image", adapter.imagePath))
+        args.addAll(
+            listOf(
+                "--ip-adapter-strength",
+                formatSdIpAdapterStrength(adapter.strength)
+            )
+        )
+    }
 
-    args.addAll(listOf("-p", config.prompt))
+    fun loraPromptTokens(items: List<SdLoraSpec>): List<String> = items.activeInOrder().mapNotNull { item ->
+        item.promptTokenName.takeIf { it.isNotBlank() }?.let { name ->
+            "<lora:$name:${formatSdLoraStrength(item.strength)}>"
+        }
+    }
+
+    val promptAdapters = buildList {
+        addAll(loraPromptTokens(baseLoras))
+        config.textualInversionPath?.let { path ->
+            val token = File(path).nameWithoutExtension
+            if (token.isNotBlank()) add(token)
+        }
+    }
+    val effectivePrompt = (promptAdapters + config.prompt)
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+    args.addAll(listOf("-p", effectivePrompt))
     if (config.negativePrompt.isNotBlank()) {
         args.addAll(listOf("-n", config.negativePrompt))
     }
-    args.addAll(listOf("-W", config.width.toString()))
-    args.addAll(listOf("-H", config.height.toString()))
+    config.maskImage?.let {
+        requireFlag("--mask")
+        args.addAll(listOf("--mask", it))
+    }
+    config.imgCfgScale?.takeIf { spec.supportsImgCfgScale }?.let {
+        requireFlag("--img-cfg-scale")
+        args.addAll(listOf("--img-cfg-scale", it.toString()))
+    }
+    adetailerConfig?.let { ad ->
+        requireFlag("--ad-model")
+        requireFlag("--ad-prompt")
+        requireFlag("--ad-negative-prompt")
+        requireFlag("--extra-ad-args")
+        args.addAll(listOf("--ad-model", ad.modelPath))
+        val detailPrompt = (loraPromptTokens(detailLoras) + ad.prompt)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        if (detailPrompt.isNotBlank()) args.addAll(listOf("--ad-prompt", detailPrompt))
+        if (ad.negativePrompt.isNotBlank()) args.addAll(listOf("--ad-negative-prompt", ad.negativePrompt))
+        args.addAll(
+            listOf(
+                "--extra-ad-args",
+                serializeSdADetailerExtraArgs(
+                    config = ad,
+                    includeDenoisingStrength = config.mode != SDMode.ADETAILER
+                )
+            )
+        )
+    }
+    if (config.mode != SDMode.ADETAILER || config.adetailerResizeInput) {
+        args.addAll(listOf("-W", config.width.toString()))
+        args.addAll(listOf("-H", config.height.toString()))
+    }
     args.addAll(listOf("--steps", config.steps.toString()))
     args.addAll(listOf("--cfg-scale", config.cfgScale.toString()))
     args.addAll(listOf("--sampling-method", config.samplingMethod.cliName))
+    config.scheduler?.let {
+        requireFlag("--scheduler")
+        args.addAll(listOf("--scheduler", it.cliName))
+    }
     args.addAll(listOf("-s", config.seed.toString()))
 
     config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
@@ -190,14 +316,29 @@ fun buildSdCommandArgs(
         args.addAll(listOf("--control-strength", config.controlStrength.toString()))
     }
 
-    if (config.loraPath != null) {
-        args.addAll(listOf("--lora-model-dir", File(config.loraPath).parent ?: ""))
-        val loraFilename = File(config.loraPath).name
-        args.addAll(listOf("--lora", "$loraFilename:${config.loraStrength}"))
+    val allLoras = baseLoras + detailLoras
+    val loraDirectories = allLoras
+        .activeInOrder()
+        .mapNotNull { item -> File(item.path).parent?.takeIf { it.isNotBlank() } }
+        .distinct()
+    if (loraDirectories.isNotEmpty()) {
+        requireFlag("--lora-model-dir")
+        loraDirectories.forEach { directory ->
+            args.addAll(listOf("--lora-model-dir", directory))
+        }
         config.loraApplyMode?.let {
             requireFlag("--lora-apply-mode")
             args.addAll(listOf("--lora-apply-mode", it.cliName))
         }
+    }
+    if (config.textualInversionPath != null) {
+        requireFlag("--embd-dir")
+        args.addAll(
+            listOf(
+                "--embd-dir",
+                File(config.textualInversionPath).parent ?: "."
+            )
+        )
     }
 
     if (config.quantizationType.isNotBlank()) {
@@ -211,6 +352,10 @@ fun buildSdCommandArgs(
     if (config.diffusionFa && spec.supportsDiffusionFa) {
         requireFlag("--diffusion-fa")
         args.add("--diffusion-fa")
+    }
+    if (config.diffusionConvDirect) {
+        requireFlag("--diffusion-conv-direct")
+        args.add("--diffusion-conv-direct")
     }
     if (config.mmap && spec.supportsMmap) {
         requireFlag("--mmap")
@@ -231,13 +376,20 @@ fun buildSdCommandArgs(
 
     args.addAll(listOf("-o", config.outputPath))
 
-    if (config.mode == SDMode.IMG2IMG) {
+    if (config.mode == SDMode.IMG2IMG ||
+        (config.mode == SDMode.ADETAILER && config.initImage != null)
+    ) {
         val input = config.initImage
             ?: throw IllegalStateException("Missing input image")
         when (spec.img2imgInputMode) {
             SdImageInputMode.INIT_IMAGE -> {
                 args.addAll(listOf("-i", input))
-                args.addAll(listOf("--strength", config.strength.toString()))
+                val effectiveStrength = if (config.mode == SDMode.ADETAILER) {
+                    adetailerConfig?.denoisingStrength ?: config.strength
+                } else {
+                    config.strength
+                }
+                args.addAll(listOf("--strength", effectiveStrength.toString()))
             }
             SdImageInputMode.REFERENCE_IMAGE -> {
                 requireFlag("-r")
@@ -285,9 +437,15 @@ fun buildSdCommandArgs(
     if (requiredFlags.isNotEmpty()) {
         throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
     }
+    if (requiredModes.isNotEmpty()) {
+        throw SdUnsupportedModesException(requiredModes.toList().sorted())
+    }
 
     return args
 }
+
+private fun formatSdLoraStrength(value: Float): String =
+    String.format(Locale.US, "%.6f", value).trimEnd('0').trimEnd('.')
 
 fun buildSdUpscaleCommandArgs(
     config: SDUpscaleConfig,
@@ -356,7 +514,8 @@ fun appendLocalSdBackendArgs(
     maxVramCpuGiB: String,
     flagSupported: (String) -> Boolean = { true }
 ) {
-    SdRuntimeBackendMode.fromStoredValue(runtimeBackendMode).cliValue?.let { backend ->
+    val explicitBackend = runtimeBackendMode.takeIf { it.contains('=') }
+    (explicitBackend ?: SdRuntimeBackendMode.fromStoredValue(runtimeBackendMode).cliValue)?.let { backend ->
         if (flagSupported("--backend")) {
             args.addAll(listOf("--backend", backend))
         }
@@ -375,6 +534,16 @@ fun appendLocalSdBackendArgs(
 
 fun effectiveSdMaxVramCpuGiBForBinary(sdBinary: File, maxVramCpuGiB: String): String =
     if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) "" else maxVramCpuGiB
+
+/** The upstream device names are `vulkan0` and `opencl0`; CPU keeps text and VAE memory off GPU by default. */
+fun effectiveSdRuntimeBackendModeForBinary(sdBinary: File, requested: String): String {
+    if (requested.contains('=')) return requested
+    return when (sdBinary.name) {
+        "libsd_snapdragon_vulkan.so" -> "te=cpu,diffusion=vulkan0,vae=cpu"
+        "libsd_snapdragon_opencl.so" -> "te=cpu,diffusion=opencl0,vae=cpu"
+        else -> requested
+    }
+}
 
 fun normalizeSdMaxVramCpuGiB(value: String): String? {
     val trimmed = value.trim()

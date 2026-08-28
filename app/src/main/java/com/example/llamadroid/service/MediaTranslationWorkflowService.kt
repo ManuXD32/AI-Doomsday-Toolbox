@@ -74,6 +74,7 @@ data class MediaTranslationJobSpec(
     val whisperModelPath: String,
     val whisperLanguage: String,
     val whisperThreads: Int,
+    val whisperVad: WhisperVadConfig = WhisperVadConfig(),
     val targetLanguage: String,
     val ttsModelPath: String,
     val ttsModelName: String,
@@ -107,6 +108,7 @@ data class SubtitleTranslationJobSpec(
     val whisperModelPath: String?,
     val whisperLanguage: String,
     val whisperThreads: Int,
+    val whisperVad: WhisperVadConfig = WhisperVadConfig(),
     val targetLanguage: String,
     val translateSubtitles: Boolean,
     val burnIntoVideo: Boolean,
@@ -1002,6 +1004,7 @@ object MediaTranslationWorkflowService {
             put("whisperModelPath", whisperModelPath)
             put("whisperLanguage", whisperLanguage)
             put("whisperThreads", whisperThreads)
+            putWhisperVadConfig("whisperVad", whisperVad)
             put("targetLanguage", targetLanguage)
             put("ttsModelPath", ttsModelPath)
             put("ttsModelName", ttsModelName)
@@ -1024,6 +1027,7 @@ object MediaTranslationWorkflowService {
             whisperModelPath = optString("whisperModelPath"),
             whisperLanguage = optString("whisperLanguage", "auto"),
             whisperThreads = optInt("whisperThreads", 4),
+            whisperVad = readWhisperVadConfig("whisperVad"),
             targetLanguage = optString("targetLanguage"),
             ttsModelPath = optString("ttsModelPath"),
             ttsModelName = optString("ttsModelName"),
@@ -1047,6 +1051,7 @@ object MediaTranslationWorkflowService {
             putNullable("whisperModelPath", whisperModelPath)
             put("whisperLanguage", whisperLanguage)
             put("whisperThreads", whisperThreads)
+            putWhisperVadConfig("whisperVad", whisperVad)
             put("targetLanguage", targetLanguage)
             put("translateSubtitles", translateSubtitles)
             put("burnIntoVideo", burnIntoVideo)
@@ -1066,6 +1071,7 @@ object MediaTranslationWorkflowService {
             whisperModelPath = optNullableString("whisperModelPath"),
             whisperLanguage = optString("whisperLanguage", "auto"),
             whisperThreads = optInt("whisperThreads", 4),
+            whisperVad = readWhisperVadConfig("whisperVad"),
             targetLanguage = optString("targetLanguage"),
             translateSubtitles = optBoolean("translateSubtitles", true),
             burnIntoVideo = optBoolean("burnIntoVideo", true),
@@ -1513,6 +1519,7 @@ object MediaTranslationWorkflowService {
                 whisperModelPath = spec.whisperModelPath,
                 whisperLanguage = spec.whisperLanguage,
                 whisperThreads = spec.whisperThreads,
+                whisperVad = spec.whisperVad,
                 mediaDurationMs = sourceDurationMs,
                 baseProgress = 0.18f,
                 progressSpan = 0.1f
@@ -1698,6 +1705,7 @@ object MediaTranslationWorkflowService {
                         ?: throw IllegalStateException(context.getString(R.string.workflow_select_whisper)),
                     whisperLanguage = spec.whisperLanguage,
                     whisperThreads = spec.whisperThreads,
+                    whisperVad = spec.whisperVad,
                     mediaDurationMs = sourceDurationMs,
                     baseProgress = 0.18f,
                     progressSpan = 0.14f
@@ -2432,6 +2440,7 @@ object MediaTranslationWorkflowService {
         whisperModelPath: String,
         whisperLanguage: String,
         whisperThreads: Int,
+        whisperVad: WhisperVadConfig,
         mediaDurationMs: Long,
         baseProgress: Float,
         progressSpan: Float
@@ -2478,6 +2487,7 @@ object MediaTranslationWorkflowService {
                 whisperModelPath = whisperModelPath,
                 whisperLanguage = whisperLanguage,
                 whisperThreads = whisperThreads,
+                whisperVad = whisperVad,
                 mediaDurationMs = mediaDurationMs,
                 baseProgress = baseProgress,
                 progressSpan = progressSpan,
@@ -2512,6 +2522,7 @@ object MediaTranslationWorkflowService {
             whisperModelPath = whisperModelPath,
             whisperLanguage = whisperLanguage,
             whisperThreads = whisperThreads,
+            whisperVad = whisperVad,
             mediaDurationMs = mediaDurationMs,
             baseProgress = baseProgress,
             progressSpan = progressSpan
@@ -2546,6 +2557,7 @@ object MediaTranslationWorkflowService {
         whisperModelPath: String,
         whisperLanguage: String,
         whisperThreads: Int,
+        whisperVad: WhisperVadConfig,
         mediaDurationMs: Long,
         baseProgress: Float,
         progressSpan: Float,
@@ -2559,17 +2571,42 @@ object MediaTranslationWorkflowService {
             ?: throw IllegalStateException(context.getString(R.string.whisper_error_no_model))
         val whisperCandidates = whisperExecutableCandidates(repo, whisper)
         var lastLinkerFailure: WhisperLinkerOutOfMemoryException? = null
+        val effectiveVad = WhisperVadAssetStore.effectiveConfig(
+            context = context,
+            config = whisperVad,
+            purpose = WhisperInvocationPurpose.MEDIA_WORKFLOW
+        )
         whisperCandidates.forEachIndexed { index, whisperCandidate ->
-            val args = listOf(
-                whisperCandidate.absolutePath,
-                "-m", resolvedWhisperModelPath,
-                "-f", audioFile.absolutePath,
-                "-l", whisperLanguage,
-                "-t", whisperThreads.toString(),
-                "--no-gpu",
-                "-otxt",
-                "-osrt",
-                "-of", outputBase.absolutePath
+            val symlinkDir = File(context.filesDir, "ffmpeg_libs").apply { mkdirs() }
+            val capabilityEnvironment = mapOf(
+                "LD_LIBRARY_PATH" to "${symlinkDir.absolutePath}:${repo.getLibraryDir()}",
+                "GGML_BACKEND_PATH" to "/dev/null",
+                "HOME" to context.filesDir.absolutePath,
+                "TMPDIR" to context.cacheDir.absolutePath
+            )
+            val capabilities = if (effectiveVad.enabled) {
+                WhisperBinaryCapabilityCache.capabilitiesFor(
+                    binary = whisperCandidate,
+                    workingDirectory = context.filesDir,
+                    environment = capabilityEnvironment
+                )
+            } else {
+                null
+            }
+            val args = buildWhisperInvocationArgs(
+                request = WhisperInvocationRequest(
+                    binaryPath = whisperCandidate.absolutePath,
+                    modelPath = resolvedWhisperModelPath,
+                    audioPath = audioFile.absolutePath,
+                    language = whisperLanguage,
+                    threads = whisperThreads,
+                    translate = false,
+                    outputFormats = setOf(WhisperOutputFormat.TXT, WhisperOutputFormat.SRT),
+                    outputBasePath = outputBase.absolutePath,
+                    purpose = WhisperInvocationPurpose.MEDIA_WORKFLOW,
+                    vad = effectiveVad
+                ),
+                binaryCapabilities = capabilities
             )
             try {
                 runProcessWithSrtProgress(

@@ -188,6 +188,7 @@ class AgentViewModel(
         val conversation = AgentConversationEntity(
             title = if (projectName.isNotBlank()) projectName else "New Project",
             projectFolder = folderName,
+            planningModeEnabled = true,
             lastAgentRole = AgentService.Companion.AgentRole.ORCHESTRATOR.name
         )
         
