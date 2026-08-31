@@ -7,6 +7,7 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
+import com.example.llamadroid.sd.SdPipelineValidationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -79,7 +80,8 @@ internal class SdToolGenerationRunner(
             maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB)
         )
         try {
-            args.addAll(buildSdCommandArgs(effectiveConfig, binaryCapabilities))
+            val pipeline = resolveSdPipelineForLaunch(context, effectiveConfig)
+            args.addAll(buildSdCommandArgs(effectiveConfig, pipeline, binaryCapabilities))
         } catch (e: SdIpAdapterConfigurationException) {
             throw SdConfigurationException(sdIpAdapterErrorMessage(context, e))
         } catch (e: SdMissingComponentsException) {
@@ -88,6 +90,10 @@ internal class SdToolGenerationRunner(
             throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_flags, e.flags.joinToString(", ")))
         } catch (e: SdUnsupportedModesException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_modes, e.modes.joinToString(", ")))
+        } catch (e: SdPipelineValidationException) {
+            throw IllegalStateException(
+                sdPipelineIssueMessage(context, e.pipeline.blockingIssues.firstOrNull())
+            )
         }
 
         DebugLog.log("[SdToolGenerationRunner] Running command: ${args.joinToString(" ")}")
@@ -103,10 +109,12 @@ internal class SdToolGenerationRunner(
             totalStepsHint = config.steps.coerceAtLeast(1),
             startedAtMs = SystemClock.elapsedRealtime()
         )
+        val nativeOutput = SdNativeOutputBuffer()
         val process = pb.start()
         process.inputStream.bufferedReader().use { reader ->
             var line = reader.readLine()
             while (line != null) {
+                nativeOutput.add(line)
                 DebugLog.log("SD tool: $line")
                 onStatus(line)
                 progressTracker.update(line, SystemClock.elapsedRealtime())?.let(onProgress)
@@ -117,12 +125,21 @@ internal class SdToolGenerationRunner(
         val exitCode = process.waitFor()
         DebugLog.log("[SdToolGenerationRunner] Process exited with code $exitCode")
         if (exitCode != 0) {
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+            val failureReport = SdNativeFailureClassifier.classify(
+                exitCode = exitCode,
+                recentOutput = nativeOutput.snapshot(),
+                stage = progressTracker.currentSnapshot()?.phase,
+                acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(sdBinary)
+            )
+            if (failureReport.category == SdFailureCategory.ACCELERATOR_FAILURE) {
                 val detail = "Stable Diffusion accelerator ${sdBinary.name} failed with exit code $exitCode."
                 DebugLog.log("[SdToolGenerationRunner] $detail")
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
-            throw RuntimeException(context.getString(R.string.imagegen_error_generation_failed, exitCode))
+            throw SdNativeFailureException(
+                report = failureReport,
+                message = sdNativeFailureMessage(context, failureReport)
+            )
         }
 
         return config.outputPath
@@ -153,6 +170,11 @@ internal fun shouldRetrySdGenerationOnCpu(
     error: Throwable
 ): Boolean {
     if (error is SdConfigurationException) return false
+    if (error is SdNativeFailureException &&
+        error.report.category != SdFailureCategory.ACCELERATOR_FAILURE
+    ) {
+        return false
+    }
     if (!DeviceAcceleration.isAcceleratorBinary(sdBinary) ||
         cpuBinary == null ||
         !cpuBinary.exists() ||

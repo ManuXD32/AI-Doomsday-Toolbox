@@ -5800,7 +5800,14 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 samplingMethod = sampler,
                 outputPath = txt2imgFile.absolutePath,
                 threads = threads,
-                isFluxModel = selectedGenerationModel?.type == ModelType.SD_DIFFUSION,
+                modelLayout = selectedGenerationModel?.sdArtifactLayout
+                    ?.let(com.example.llamadroid.sd.SdMainLayout::fromStoredValue)
+                    ?.takeUnless { it == com.example.llamadroid.sd.SdMainLayout.UNKNOWN }
+                    ?: if (selectedGenerationModel?.type == ModelType.SD_CHECKPOINT) {
+                        com.example.llamadroid.sd.SdMainLayout.FULL_MODEL
+                    } else {
+                        com.example.llamadroid.sd.SdMainLayout.STANDALONE_DIFFUSION
+                    },
                 modelFamily = selectedGenerationFamilyEnum?.storedValue,
                 modelVariant = selectedGenerationVariant,
                 vaePath = vaePath,

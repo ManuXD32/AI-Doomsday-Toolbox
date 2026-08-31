@@ -29,6 +29,7 @@ import com.example.llamadroid.onnx.OnnxTxt2ImgPipeline
 import com.example.llamadroid.onnx.isOnnxBackgroundRemovalModel
 import com.example.llamadroid.onnx.isOnnxTxt2ImgBundle
 import com.example.llamadroid.sd.isSdImageMainModel
+import com.example.llamadroid.sd.SdMainLayout
 import com.example.llamadroid.sd.resolvedSdFamily
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.service.containsTraversalSegments
@@ -1500,7 +1501,14 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 outputPath = localTempFile.absolutePath,
                 mode = SDMode.TXT2IMG,
                 threads = sdParams.threads,
-                isFluxModel = spec.usesDiffusionModelFlag,
+                modelLayout = model.sdArtifactLayout
+                    ?.let(SdMainLayout::fromStoredValue)
+                    ?.takeUnless { it == SdMainLayout.UNKNOWN }
+                    ?: if (model.type == ModelType.SD_CHECKPOINT) {
+                        SdMainLayout.FULL_MODEL
+                    } else {
+                        SdMainLayout.STANDALONE_DIFFUSION
+                    },
                 modelFamily = family.storedValue,
                 modelVariant = variant,
                 vaePath = components.vaePath,

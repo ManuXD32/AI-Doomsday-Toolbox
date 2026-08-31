@@ -25,6 +25,8 @@ import com.example.llamadroid.data.model.downloadPartFile
 import com.example.llamadroid.data.model.partFile
 import com.example.llamadroid.data.model.toDownloadTaskEntity
 import com.example.llamadroid.data.model.toPendingDownload
+import com.example.llamadroid.data.model.isStableDiffusionArtifact
+import com.example.llamadroid.sd.withSdArtifactInspection
 import com.example.llamadroid.data.repository.LiteRtModelRepository
 import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
 import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_HF_TREE_BUNDLE
@@ -560,6 +562,21 @@ class DownloadService : Service() {
             } else {
                 pending.onnxCapabilities
             }
+            // Inspect the completed payload before copying it to the canonical
+            // library or inserting a trusted model row.  A failed preflight
+            // leaves the downloaded file in place for recovery/retry.
+            val sdInspection = if (pending.type.isStableDiffusionArtifact()) {
+                onProgress(0.91f, getString(R.string.sd_models_inspecting_artifact))
+                val inspected = ModelRepository.inspectSdArtifact(downloadedFile, pending.type)
+                ModelRepository.validateSdArtifactInspection(
+                    configuredType = pending.type,
+                    inspection = inspected,
+                    configuredFamily = pending.sdFamily
+                ).getOrThrow()
+                inspected
+            } else {
+                null
+            }
             if (ModelLibraryManager.usesManagedExternalCanonicalStorage(pending.type)) {
                 // Single-copy path: the managed external destination is already the canonical runtime file.
             } else if (pending.type == ModelType.ONNX_IMAGE_GEN ||
@@ -593,7 +610,9 @@ class DownloadService : Service() {
                 onnxPipelineFamily = pending.onnxPipelineFamily,
                 onnxReferenceUri = pending.onnxReferenceUri,
                 onnxReferencePath = pending.onnxReferencePath
-            )
+            ).let { candidate ->
+                sdInspection?.let(candidate::withSdArtifactInspection) ?: candidate
+            }
         }
     }
 

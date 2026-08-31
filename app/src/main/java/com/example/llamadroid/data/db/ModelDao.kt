@@ -29,6 +29,9 @@ interface ModelDao {
     
     @Query("SELECT * FROM models WHERE filename = :filename LIMIT 1")
     suspend fun getModelByFilename(filename: String): ModelEntity?
+
+    @Query("SELECT * FROM models WHERE path = :path LIMIT 1")
+    suspend fun getModelByPath(path: String): ModelEntity?
     
     @Query("DELETE FROM models WHERE filename = :filename")
     suspend fun deleteByFilename(filename: String)

@@ -27,7 +27,15 @@ data class ModelEntity(
     val onnxReferenceUri: String? = null,
     val onnxReferencePath: String? = null,
     // Layer count for distributed inference
-    val layerCount: Int = 0  // Number of transformer layers (from GGUF metadata)
+    val layerCount: Int = 0,  // Number of transformer layers (from GGUF metadata)
+    // Stable Diffusion artifact inspection (kept separate from user-configured
+    // sdFamily/sdVariant so diagnostics can explain disagreements).
+    val sdDetectedFamily: String? = null,
+    val sdDetectedRole: String? = null,
+    val sdArtifactLayout: String? = null,
+    val sdInspectionConfidence: String? = null,
+    val sdInspectionVersion: Int = 0,
+    val sdInspectionJson: String? = null
 )
 
 const val SD_CAPABILITY_TXT2IMG = "txt2img"

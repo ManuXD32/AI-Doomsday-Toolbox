@@ -60,13 +60,19 @@ import com.example.llamadroid.data.model.SdWorkflowSelection
 import com.example.llamadroid.data.model.installedSdCuratedModel
 import com.example.llamadroid.data.model.evaluateSdWorkflowGate
 import com.example.llamadroid.data.model.verifySdCuratedFilePayloadCached
+import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
+import com.example.llamadroid.sd.SdArtifactInspection
+import com.example.llamadroid.sd.SdMainLayout
+import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
+import com.example.llamadroid.sd.resolveSdPipeline
 import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.sdArtifactInspection
 import com.example.llamadroid.service.*
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalStorage
@@ -96,6 +102,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
 
     val db = remember { AppDatabase.getDatabase(context) }
+    val modelRepository = remember { ModelRepository(context, db.modelDao()) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
@@ -417,10 +424,42 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         generationModels = allGenerationModels
     )
     val selectedActiveModel = modelsForSelectedMode.firstOrNull { it.path == selectedModelPath }
-    val selectedFamilyInfo = selectedMainModel?.resolvedSdFamily()
+    val selectedInspection = selectedMainModel?.sdArtifactInspection()
+    val selectedFamilyInfo = selectedMainModel?.let { model ->
+        val detectedFamily = SdModelFamily.fromStoredValue(model.sdDetectedFamily)
+        if (detectedFamily != null) {
+            detectedFamily to model.sdVariant?.trim()?.ifBlank { null }
+        } else {
+            model.resolvedSdFamily()
+        }
+    }
     val selectedFamily = selectedFamilyInfo?.first
     val selectedVariant = selectedFamilyInfo?.second
-    val selectedFamilySpec = selectedFamily?.let { resolveSdFamilySpec(it, selectedVariant) }
+    val selectedPipeline = selectedMainModel?.let { model ->
+        resolveSdPipeline(
+            SDConfig(
+                modelPath = model.path,
+                prompt = "",
+                outputPath = "",
+                modelFamily = model.sdFamily,
+                modelVariant = model.sdVariant,
+                modelLayout = model.sdArtifactLayout
+                    ?.let(SdMainLayout::fromStoredValue),
+                vaePath = selectedVaePath,
+                taePath = selectedTaePath,
+                clipLPath = selectedClipLPath,
+                clipGPath = selectedClipGPath,
+                t5xxlPath = selectedT5xxlPath,
+                llmPath = selectedLlmPath,
+                llmVisionPath = selectedLlmVisionPath,
+                photoMakerPath = selectedPhotoMakerPath
+            ),
+            selectedInspection
+        )
+    }
+    val selectedFamilySpec = selectedPipeline?.spec ?: selectedFamily?.let {
+        resolveSdFamilySpec(it, selectedVariant)
+    }
     val localMaxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
     val effectiveCapabilities = run {
         val explicit = selectedMainModel?.sdCapabilities?.parseSdCapabilities().orEmpty()
@@ -432,7 +471,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
     val supportsTxt2Img = selectedMainModel == null || effectiveCapabilities.contains(SD_CAPABILITY_TXT2IMG)
     val supportsImg2Img = selectedMainModel == null || effectiveCapabilities.contains(SD_CAPABILITY_IMG2IMG)
-    val componentRoles = selectedFamilySpec?.let { spec ->
+    val componentRoles = selectedPipeline?.let { pipeline ->
+        (pipeline.requiredExternalRoles + pipeline.optionalExternalRoles).toList()
+    } ?: selectedFamilySpec?.let { spec ->
         listOf(
             SdComponentRole.VAE,
             SdComponentRole.TAE,
@@ -479,7 +520,19 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     )
     val supportsIpAdapter = selectedMode != 2 &&
         selectedFamilySpec?.supportsIpAdapter == true
-    val missingRequiredComponents = selectedFamilySpec?.requiredRoles?.filter { role ->
+    val missingRequiredComponents = selectedPipeline?.requiredExternalRoles?.filter { role ->
+        when (role) {
+            SdComponentRole.VAE -> selectedVaePath.isNullOrBlank()
+            SdComponentRole.TAE -> selectedTaePath.isNullOrBlank()
+            SdComponentRole.CLIP_L -> selectedClipLPath.isNullOrBlank()
+            SdComponentRole.CLIP_G -> selectedClipGPath.isNullOrBlank()
+            SdComponentRole.T5XXL -> selectedT5xxlPath.isNullOrBlank()
+            SdComponentRole.LLM -> selectedLlmPath.isNullOrBlank()
+            SdComponentRole.LLM_VISION -> selectedLlmVisionPath.isNullOrBlank()
+            SdComponentRole.PHOTOMAKER -> selectedPhotoMakerPath.isNullOrBlank()
+            else -> false
+        }
+    } ?: selectedFamilySpec?.requiredRoles?.filter { role ->
         when (role) {
             SdComponentRole.VAE -> selectedVaePath.isNullOrBlank()
             SdComponentRole.TAE -> selectedTaePath.isNullOrBlank()
@@ -492,6 +545,78 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             else -> false
         }
     } ?: emptyList()
+    var componentResetNotice by remember { mutableStateOf<String?>(null) }
+    val componentAvailabilityKey = listOf(
+        compatibleVaeModels,
+        compatibleTaeModels,
+        compatibleClipLModels,
+        compatibleClipGModels,
+        compatibleT5xxlModels,
+        compatibleLlmModels,
+        compatibleLlmVisionModels,
+        compatiblePhotoMakerModels
+    ).joinToString("|") { models -> models.joinToString(",") { it.path } }
+
+    // Re-inspect only the selected model. Existing rows from before inspection
+    // are upgraded lazily when viewed/selected, never by a startup scan.
+    LaunchedEffect(selectedMainModel?.path, selectedMainModel?.sdInspectionVersion) {
+        selectedMainModel?.let { model ->
+            runCatching { modelRepository.ensureSdArtifactInspection(model) }
+        }
+    }
+
+    // Family/layout changes can invalidate restored component paths. Clear only
+    // incompatible selections and surface exactly what was cleared.
+    LaunchedEffect(
+        selectedMainModel?.path,
+        selectedFamily,
+        selectedVariant,
+        componentAvailabilityKey
+    ) {
+        if (selectedMainModel == null || selectedFamily == null) return@LaunchedEffect
+        val cleared = mutableListOf<String>()
+        fun retain(
+            path: String?,
+            models: List<ModelEntity>,
+            label: String,
+            clear: () -> Unit
+        ) {
+            if (path != null && models.none { it.path == path }) {
+                clear()
+                cleared += label
+            }
+        }
+        retain(selectedVaePath, compatibleVaeModels, context.getString(R.string.imagegen_component_vae)) {
+            selectedVaePath = null
+        }
+        retain(selectedTaePath, compatibleTaeModels, context.getString(R.string.imagegen_component_tae)) {
+            selectedTaePath = null
+        }
+        retain(selectedClipLPath, compatibleClipLModels, context.getString(R.string.imagegen_component_clip_l)) {
+            selectedClipLPath = null
+        }
+        retain(selectedClipGPath, compatibleClipGModels, context.getString(R.string.imagegen_component_clip_g)) {
+            selectedClipGPath = null
+        }
+        retain(selectedT5xxlPath, compatibleT5xxlModels, context.getString(R.string.imagegen_component_t5xxl)) {
+            selectedT5xxlPath = null
+        }
+        retain(selectedLlmPath, compatibleLlmModels, context.getString(R.string.imagegen_component_llm)) {
+            selectedLlmPath = null
+        }
+        retain(selectedLlmVisionPath, compatibleLlmVisionModels, context.getString(R.string.imagegen_component_llm_vision)) {
+            selectedLlmVisionPath = null
+        }
+        retain(selectedPhotoMakerPath, compatiblePhotoMakerModels, context.getString(R.string.imagegen_component_photomaker)) {
+            selectedPhotoMakerPath = null
+        }
+        if (cleared.isNotEmpty()) {
+            componentResetNotice = context.getString(
+                R.string.imagegen_components_cleared,
+                cleared.joinToString(", ")
+            )
+        }
+    }
     val imagePreparationScope = rememberCoroutineScope()
     val latestSelectedMode by rememberUpdatedState(selectedMode)
 
@@ -1115,12 +1240,25 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             } == true,
             supportsTxt2Img = supportsTxt2Img,
             supportsImg2Img = supportsImg2Img,
-            hasRequiredComponents = missingRequiredComponents.isEmpty()
+            hasRequiredComponents = missingRequiredComponents.isEmpty() &&
+                selectedPipeline?.blockingIssues?.isEmpty() != false
         )
     )
 
     // Generate function - handles all modes
     val generate: () -> Unit = generate@{
+        if (selectedMode != IMAGE_GEN_MODE_UPSCALE &&
+            selectedPipeline?.blockingIssues?.isNotEmpty() == true
+        ) {
+            errorMessage = context.getString(R.string.imagegen_sd_pipeline_unresolved)
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
+                mode = effectiveSdMode.name,
+                event = "ui_pipeline_preflight_failed",
+                details = selectedPipeline.blockingIssues.joinToString(",") { it.code.name }
+            )
+            return@generate
+        }
         selectedWorkflowPresetId?.let { presetId ->
             SdWorkflowPresetCatalog.byId(presetId)?.let { preset ->
                 val gate = evaluateSdWorkflowGate(
@@ -1341,7 +1479,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     upscaleModel = null,
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
-                    isFluxModel = selectedFamilySpec?.usesDiffusionModelFlag == true,
+                    modelLayout = selectedPipeline?.mainLayout,
                     modelFamily = selectedFamily?.storedValue,
                     modelVariant = selectedVariant,
                     vaePath = selectedVaePath,
@@ -1938,11 +2076,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                             }
                                         } else {
                                             selectedGenerationModelPath = model.path
-                                            if (model.type != ModelType.SD_DIFFUSION) {
-                                                selectedVaePath = null
-                                                selectedClipLPath = null
-                                                selectedT5xxlPath = null
-                                            }
                                         }
                                     }
                                 )
@@ -1953,6 +2086,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         } }
 
+        if (selectedModelPath != null && selectedMode != 2 && selectedInspection != null) item(key = "artifact-inspection") {
+            SdGenerationInspectionCard(selectedInspection)
+        }
         if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) item(key = "components") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
@@ -2319,7 +2455,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     }
                 }
 
-        if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) item(key = "tensor-types") {
+        if (selectedMode != 2 && selectedModelPath != null && selectedPipeline?.mainLayout == SdMainLayout.FULL_MODEL) item(key = "tensor-types") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -3244,6 +3380,34 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
+                componentResetNotice?.let { notice ->
+                    item(key = "component-reset-notice") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    notice,
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                                TextButton(onClick = { componentResetNotice = null }) {
+                                    Text(stringResource(R.string.action_dismiss), maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
                 item(key = "mode") {
                     val modes = listOf(
                         IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
@@ -3487,6 +3651,61 @@ private fun filterSdComponents(
 ): List<ModelEntity> {
     if (family == null) return emptyList()
     return models.filter { it.matchesSdFamily(family, variant) }
+}
+
+@Composable
+private fun SdGenerationInspectionCard(inspection: SdArtifactInspection) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                stringResource(R.string.sd_models_detected_format, inspection.format.storedValue),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                stringResource(
+                    R.string.sd_models_detected_layout,
+                    inspection.artifactLayout.storedValue
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                stringResource(
+                    R.string.sd_models_inspection_confidence,
+                    inspection.confidence.storedValue
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (inspection.confidence == com.example.llamadroid.sd.SdInspectionConfidence.HIGH) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (inspection.warnings.isNotEmpty()) {
+                Text(
+                    stringResource(
+                        R.string.sd_models_inspection_warnings,
+                        inspection.warnings.take(2).joinToString(" • ")
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
 }
 
 private fun componentRoleLabelRes(role: SdComponentRole): Int = when (role) {

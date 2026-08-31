@@ -18,7 +18,9 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdInspectionCache
 import com.example.llamadroid.sd.SdLoraConfigurationException
+import com.example.llamadroid.sd.SdPipelineValidationException
 import com.example.llamadroid.sd.validateSdLoraModelCompatibility
 import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.util.AccelerationWorkload
@@ -657,11 +659,35 @@ class StableDiffusionService : Service() {
             sdRuntimeBackendMode = effectiveSdRuntimeBackendModeForBinary(sdBinary, config.sdRuntimeBackendMode)
         )
         try {
-            args.addAll(
-                buildSdCommandArgs(
-                    config = effectiveConfig,
-                    binaryCapabilities = binaryCapabilities
+            val pipeline = if (effectiveConfig.mode == SDMode.UPSCALE) {
+                null
+            } else {
+                resolveSdPipelineForLaunch(this@StableDiffusionService, effectiveConfig)
+            }
+            pipeline?.let { resolved ->
+                val inspection = resolved.inspection
+                recordModeBreadcrumb(
+                    mode = effectiveConfig.mode,
+                    event = "pipeline_validated",
+                    phase = "inspecting_model",
+                    details = buildList {
+                        add("model=${File(effectiveConfig.modelPath).name}")
+                        add("modelBytes=${File(effectiveConfig.modelPath).length()}")
+                        add("configuredFamily=${effectiveConfig.modelFamily ?: "unknown"}")
+                        add("detectedFamily=${inspection?.detectedFamily?.storedValue ?: "unknown"}")
+                        add("layout=${resolved.mainLayout.storedValue}")
+                        add("inspectionVersion=${inspection?.inspectionVersion ?: 0}")
+                        inspection?.headerFingerprint?.take(16)?.let { add("fingerprint=$it") }
+                        add("binary=${sdBinary.name}")
+                    }.joinToString(" ")
                 )
+            }
+            args.addAll(
+                if (pipeline == null) {
+                    buildSdCommandArgs(effectiveConfig, binaryCapabilities)
+                } else {
+                    buildSdCommandArgs(effectiveConfig, pipeline, binaryCapabilities)
+                }
             )
         } catch (e: SdIpAdapterConfigurationException) {
             throw SdConfigurationException(sdIpAdapterErrorMessage(this@StableDiffusionService, e))
@@ -690,6 +716,10 @@ class StableDiffusionService : Service() {
             )
         } catch (e: SdDisallowedDistributedFlagException) {
             throw IllegalStateException(getString(R.string.sd_dist_error_row_split_not_supported))
+        } catch (e: SdPipelineValidationException) {
+            throw IllegalStateException(
+                sdPipelineIssueMessage(this@StableDiffusionService, e.pipeline.blockingIssues.firstOrNull())
+            )
         }
         DebugLog.log("[StableDiffusionService] Running command: ${args.joinToString(" ")}")
         if (config.mode == SDMode.UPSCALE) {
@@ -718,6 +748,7 @@ class StableDiffusionService : Service() {
             },
             startedAtMs = SystemClock.elapsedRealtime()
         )
+        val nativeOutput = SdNativeOutputBuffer()
         val etaTickerJob = launch {
             while (isActive) {
                 delay(1000)
@@ -741,6 +772,7 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
+                    nativeOutput.add(line)
                     markNativeOutput(config.mode)
                     DebugLog.log("SD: $line")
                     latestStageTimings = latestStageTimings.withLine(line)
@@ -769,12 +801,33 @@ class StableDiffusionService : Service() {
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Process exited with code $exitCode")
         if (exitCode != 0) {
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+            val failureReport = SdNativeFailureClassifier.classify(
+                exitCode = exitCode,
+                recentOutput = nativeOutput.snapshot(),
+                stage = progressTracker.currentSnapshot()?.phase,
+                acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(sdBinary)
+            )
+            recordModeBreadcrumb(
+                mode = config.mode,
+                event = "native_failure_classified",
+                phase = failureReport.stage?.diagnosticName,
+                details = buildString {
+                    append(failureReport.technicalSummary)
+                    append(" model=")
+                    append(File(config.modelPath).name)
+                    append(" binary=")
+                    append(sdBinary.name)
+                }
+            )
+            if (failureReport.category == SdFailureCategory.ACCELERATOR_FAILURE) {
                 val detail = "Stable Diffusion accelerator ${sdBinary.name} failed with exit code $exitCode."
                 DebugLog.log("[StableDiffusionService] $detail")
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
-            throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
+            throw SdNativeFailureException(
+                report = failureReport,
+                message = sdNativeFailureMessage(this@StableDiffusionService, failureReport)
+            )
         }
         if (!File(config.outputPath).isFile) {
             throw RuntimeException(getString(R.string.imagegen_error_output_missing))
@@ -916,6 +969,7 @@ class StableDiffusionService : Service() {
             totalStepsHint = config.upscaleRepeats.coerceAtLeast(1),
             startedAtMs = SystemClock.elapsedRealtime()
         )
+        val nativeOutput = SdNativeOutputBuffer()
         val etaTickerJob = launch {
             while (isActive) {
                 delay(1000)
@@ -939,6 +993,7 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
+                    nativeOutput.add(line)
                     markNativeOutput(SDMode.UPSCALE)
                     DebugLog.log("SD: $line")
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
@@ -966,12 +1021,27 @@ class StableDiffusionService : Service() {
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Upscale process exited with code $exitCode")
         if (exitCode != 0) {
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+            val failureReport = SdNativeFailureClassifier.classify(
+                exitCode = exitCode,
+                recentOutput = nativeOutput.snapshot(),
+                stage = progressTracker.currentSnapshot()?.phase,
+                acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(sdBinary)
+            )
+            recordModeBreadcrumb(
+                mode = SDMode.UPSCALE,
+                event = "native_failure_classified",
+                phase = failureReport.stage?.diagnosticName,
+                details = "${failureReport.technicalSummary} model=${File(config.modelPath).name} binary=${sdBinary.name}"
+            )
+            if (failureReport.category == SdFailureCategory.ACCELERATOR_FAILURE) {
                 val detail = "Stable Diffusion accelerator ${sdBinary.name} failed during upscale with exit code $exitCode."
                 DebugLog.log("[StableDiffusionService] $detail")
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
-            throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
+            throw SdNativeFailureException(
+                report = failureReport,
+                message = sdNativeFailureMessage(this@StableDiffusionService, failureReport)
+            )
         }
 
         config.outputPath
@@ -1051,7 +1121,12 @@ class StableDiffusionService : Service() {
     private fun buildImageProgressStatus(snapshot: SdProgressSnapshot): String {
         val percent = SdProgressTracker.progressPercent(snapshot)
         return when (snapshot.phase) {
+            SdProgressPhase.INSPECTING_MODEL -> getString(R.string.gen_status_inspecting_model)
             SdProgressPhase.PREPARING -> getString(R.string.gen_status_preparing)
+            SdProgressPhase.LOADING_MODEL -> getString(R.string.gen_status_loading_model)
+            SdProgressPhase.LOADING_VAE -> getString(R.string.gen_status_loading_vae)
+            SdProgressPhase.LOADING_TEXT_ENCODERS -> getString(R.string.gen_status_loading_text_encoders)
+            SdProgressPhase.LOADING_LORAS -> getString(R.string.gen_status_loading_loras)
             SdProgressPhase.VAE_ENCODING -> getString(R.string.gen_status_vae_encoding)
             SdProgressPhase.CONDITIONING -> getString(R.string.gen_status_conditioning)
             SdProgressPhase.DIFFUSION -> snapshot.etaSeconds?.let { eta ->
@@ -1759,15 +1834,25 @@ class StableDiffusionService : Service() {
 
     private fun buildSessionDetails(config: SDConfig, workflow: Boolean): String {
         val (family, variant) = inferSdFamilyForConfig(config)
+        val modelFile = File(config.modelPath)
+        val inspection = SdInspectionCache.get(modelFile)
         return buildList {
-            add("model=${File(config.modelPath).name}")
+            add("model=${modelFile.name}")
+            add("modelBytes=${modelFile.takeIf { it.isFile }?.length() ?: -1L}")
             add("size=${config.width}x${config.height}")
             add("steps=${config.steps}")
             add("sampler=${config.samplingMethod.cliName}")
             add("mode=${config.mode.name}")
             add("initImage=${config.initImage != null}")
-            add("family=${family.storedValue}")
+            add("configuredFamily=${family?.storedValue ?: "unknown"}")
             variant?.let { add("variant=$it") }
+            add("configuredLayout=${config.modelLayout?.storedValue ?: "unknown"}")
+            inspection?.let {
+                add("detectedFamily=${it.detectedFamily?.storedValue ?: "unknown"}")
+                add("detectedLayout=${it.artifactLayout.storedValue}")
+                add("inspectionVersion=${it.inspectionVersion}")
+                it.headerFingerprint?.take(16)?.let { fingerprint -> add("fingerprint=$fingerprint") }
+            }
             add("paramsBackend=${config.sdParamsBackendMode}")
             add("runtimeBackend=${config.sdRuntimeBackendMode}")
             if (config.maxVramCpuGiB.isNotBlank()) {

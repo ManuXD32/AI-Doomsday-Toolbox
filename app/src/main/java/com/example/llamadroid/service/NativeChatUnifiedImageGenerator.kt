@@ -9,6 +9,7 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SD_CAPABILITY_TXT2IMG
 import com.example.llamadroid.data.db.parseSdCapabilities
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdMainLayout
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolvedSdFamily
@@ -116,7 +117,14 @@ class NativeChatSdImageGenerator(
                     outputPath = outputFile.absolutePath,
                     mode = SDMode.TXT2IMG,
                     threads = imageParams.threads,
-                    isFluxModel = spec.usesDiffusionModelFlag,
+                    modelLayout = model.sdArtifactLayout
+                        ?.let(SdMainLayout::fromStoredValue)
+                        ?.takeUnless { it == SdMainLayout.UNKNOWN }
+                        ?: if (model.type == ModelType.SD_CHECKPOINT) {
+                            SdMainLayout.FULL_MODEL
+                        } else {
+                            SdMainLayout.STANDALONE_DIFFUSION
+                        },
                     modelFamily = family.storedValue,
                     modelVariant = variant,
                     vaePath = components.vaePath,

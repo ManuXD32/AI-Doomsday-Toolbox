@@ -6,6 +6,10 @@ import com.example.llamadroid.sd.SdParamsBackendMode
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdImageInputMode
+import com.example.llamadroid.sd.SdMainLayout
+import com.example.llamadroid.sd.SdResolvedPipeline
+import com.example.llamadroid.sd.resolveValidatedSdPipeline
+import com.example.llamadroid.sd.SdPipelineValidationException
 import com.example.llamadroid.sd.resolveSdFamilySpec
 import com.example.llamadroid.sd.inferSdFamily
 import com.example.llamadroid.sd.activeInOrder
@@ -59,13 +63,10 @@ fun parseSdBinaryCapabilities(helpText: String): SdBinaryCapabilities {
     )
 }
 
-fun inferSdFamilyForConfig(config: SDConfig): Pair<SdModelFamily, String?> {
+fun inferSdFamilyForConfig(config: SDConfig): Pair<SdModelFamily?, String?> {
     val explicitFamily = SdModelFamily.fromStoredValue(config.modelFamily)
     if (explicitFamily != null) {
         return explicitFamily to config.modelVariant
-    }
-    if (config.isFluxModel) {
-        return SdModelFamily.FLUX_1 to config.modelVariant
     }
 
     val inferredType = when {
@@ -74,11 +75,40 @@ fun inferSdFamilyForConfig(config: SDConfig): Pair<SdModelFamily, String?> {
         else -> ModelType.SD_CHECKPOINT
     }
     val inferred = inferSdFamily(inferredType, config.modelPath, File(config.modelPath).name)
-    return (inferred.first ?: SdModelFamily.CHECKPOINT) to inferred.second
+    return inferred
 }
 
+/**
+ * Compatibility entry point: resolve and validate before constructing native
+ * arguments.  New process runners should resolve the pipeline once and pass it
+ * to the overload below so diagnostics and command construction share exactly
+ * the same structural decision.
+ */
 fun buildSdCommandArgs(
     config: SDConfig,
+    binaryCapabilities: SdBinaryCapabilities? = null
+): List<String> = buildSdCommandArgs(
+    config = config,
+    pipeline = if (config.mode == SDMode.UPSCALE) {
+        SdResolvedPipeline(
+            family = null,
+            variant = null,
+            mainModelPath = config.modelPath,
+            mainLayout = SdMainLayout.UNKNOWN,
+            requiredExternalRoles = emptySet(),
+            optionalExternalRoles = emptySet(),
+            resolvedComponents = emptyMap()
+        )
+    } else {
+        resolveValidatedSdPipeline(config)
+    },
+    binaryCapabilities = binaryCapabilities
+)
+
+/** Build arguments from an already validated pipeline; never infer packaging here. */
+fun buildSdCommandArgs(
+    config: SDConfig,
+    pipeline: SdResolvedPipeline,
     binaryCapabilities: SdBinaryCapabilities? = null
 ): List<String> {
     val args = mutableListOf<String>()
@@ -155,8 +185,12 @@ fun buildSdCommandArgs(
         return args
     }
 
-    val (family, variant) = inferSdFamilyForConfig(config)
-    val spec = resolveSdFamilySpec(family, variant)
+    pipeline.requireValid()
+
+    val family = pipeline.family
+        ?: throw SdPipelineValidationException(pipeline)
+    val variant = pipeline.variant
+    val spec = pipeline.spec ?: resolveSdFamilySpec(family, variant)
     val adetailerConfig = config.adetailer?.let { raw ->
         val configured = if (config.mode == SDMode.ADETAILER) {
             raw.copy(
@@ -170,54 +204,50 @@ fun buildSdCommandArgs(
     }
     val baseLoras = config.resolvedLoras().also { validateSdLoras(it) }
     val detailLoras = adetailerConfig?.loras.orEmpty().also { validateSdLoras(it) }
-    val missingComponents = spec.requiredRoles.filter { role ->
-        when (role) {
-            SdComponentRole.VAE -> config.vaePath.isNullOrBlank()
-            SdComponentRole.TAE -> config.taePath.isNullOrBlank()
-            SdComponentRole.CLIP_L -> config.clipLPath.isNullOrBlank()
-            SdComponentRole.CLIP_G -> config.clipGPath.isNullOrBlank()
-            SdComponentRole.T5XXL -> config.t5xxlPath.isNullOrBlank()
-            SdComponentRole.LLM -> config.llmPath.isNullOrBlank()
-            SdComponentRole.LLM_VISION -> config.llmVisionPath.isNullOrBlank()
-            SdComponentRole.PHOTOMAKER -> config.photoMakerPath.isNullOrBlank()
-            else -> false
-        }
+    val missingComponents = pipeline.requiredExternalRoles.filter { role ->
+        pipeline.pathForRole(role).isNullOrBlank()
     }
     if (missingComponents.isNotEmpty()) {
         throw SdMissingComponentsException(missingComponents)
     }
 
-    if (spec.usesDiffusionModelFlag) {
-        requireFlag("--diffusion-model")
-        args.addAll(listOf("--diffusion-model", config.modelPath))
-    } else {
-        args.addAll(listOf("-m", config.modelPath))
+    when (pipeline.mainLayout) {
+        SdMainLayout.FULL_MODEL -> args.addAll(listOf("-m", pipeline.mainModelPath))
+        SdMainLayout.STANDALONE_DIFFUSION -> {
+            requireFlag("--diffusion-model")
+            args.addAll(listOf("--diffusion-model", pipeline.mainModelPath))
+        }
+        else -> throw SdPipelineValidationException(pipeline)
     }
 
-    config.vaePath?.let { args.addAll(listOf("--vae", it)) }
-    config.taePath?.let {
+    pipeline.pathForRole(SdComponentRole.VAE)?.let { args.addAll(listOf("--vae", it)) }
+    pipeline.pathForRole(SdComponentRole.TAE)?.let {
         // TAESD is a decode-only VAE; TAE/TAEHV remain the family component path.
         val decoderFlag = if (File(it).name.contains("taesd", ignoreCase = true)) "--taesd" else "--tae"
         requireFlag(decoderFlag)
         args.addAll(listOf(decoderFlag, it))
     }
-    config.clipLPath?.let { args.addAll(listOf("--clip_l", it)) }
-    config.clipGPath?.let {
+    pipeline.pathForRole(SdComponentRole.CLIP_L)?.let { args.addAll(listOf("--clip_l", it)) }
+    pipeline.pathForRole(SdComponentRole.CLIP_G)?.let {
         requireFlag("--clip_g")
         args.addAll(listOf("--clip_g", it))
     }
-    config.t5xxlPath?.let { args.addAll(listOf("--t5xxl", it)) }
-    config.llmPath?.let {
+    pipeline.pathForRole(SdComponentRole.T5XXL)?.let { args.addAll(listOf("--t5xxl", it)) }
+    pipeline.pathForRole(SdComponentRole.LLM)?.let {
         requireFlag("--llm")
         args.addAll(listOf("--llm", it))
     }
-    config.llmVisionPath?.let {
+    pipeline.pathForRole(SdComponentRole.LLM_VISION)?.let {
         requireFlag("--llm_vision")
         args.addAll(listOf("--llm_vision", it))
     }
-    config.photoMakerPath?.let {
+    pipeline.pathForRole(SdComponentRole.PHOTOMAKER)?.let {
         requireFlag("--photo-maker")
         args.addAll(listOf("--photo-maker", it))
+    }
+    pipeline.vaeFormatOverride?.let {
+        requireFlag("--vae-format")
+        args.addAll(listOf("--vae-format", it))
     }
     config.ipAdapter?.let { rawAdapter ->
         val adapter = validateSdIpAdapterConfig(
