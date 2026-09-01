@@ -1820,6 +1820,16 @@ private fun MangaTranslationWorkflowContent(
             }
 
             MangaStepCard(number = 2, title = stringResource(R.string.workflow_manga_translation_card_title)) {
+                Text(
+                    stringResource(R.string.workflow_manga_translation_llm_role_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    stringResource(R.string.workflow_manga_translation_llm_role_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 OutlinedTextField(
                     value = targetLanguage,
                     onValueChange = {
@@ -1955,6 +1965,11 @@ private fun MangaTranslationWorkflowContent(
 
             MangaStepCard(number = 3, title = stringResource(R.string.workflow_manga_recognition_title)) {
                 Text(
+                    stringResource(R.string.workflow_manga_ocr_vision_role_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
                     stringResource(R.string.workflow_manga_recognition_help),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1977,23 +1992,30 @@ private fun MangaTranslationWorkflowContent(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Text(
+                        stringResource(R.string.workflow_manga_ocr_vision_role_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.workflow_manga_ocr_pause_restore_notice),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                     MangaInstalledModelPicker(
                         label = stringResource(R.string.workflow_manga_ocr_model),
                         models = ocrModels,
                         selectedPath = translationOptions.llamaOcr.modelPath,
                         onSelected = { model ->
-                            val preset = MangaTranslationSupport.inferOcrPreset(model.filename, model.repoId)
-                            val paired = MangaTranslationSupport.matchProjector(model, projectors)
+                            val selection = MangaTranslationSupport.resolveOcrModelSelection(model, projectors)
                             ocrModelRef = MangaTranslationSupport.modelRef(model)
-                            if (paired != null) {
-                                ocrProjectorRef = MangaTranslationSupport.modelRef(paired)
-                            }
+                            ocrProjectorRef = selection.projector?.let(MangaTranslationSupport::modelRef)
                             translationOptions = translationOptions.copy(
                                 llamaOcr = translationOptions.llamaOcr.copy(
                                     modelPath = model.path,
-                                    mmprojPath = paired?.path ?: translationOptions.llamaOcr.mmprojPath,
-                                    promptPreset = preset,
-                                    customFlags = null
+                                    mmprojPath = selection.projector?.path,
+                                    promptPreset = selection.promptPreset,
+                                    customFlags = selection.promptPreset.recommendedFlags
                                 )
                             )
                         }
@@ -2009,6 +2031,18 @@ private fun MangaTranslationWorkflowContent(
                             )
                         }
                     )
+                    val selectedOcrModel = ocrModels.firstOrNull {
+                        it.path == translationOptions.llamaOcr.modelPath
+                    }
+                    if (selectedOcrModel != null &&
+                        MangaTranslationSupport.matchProjector(selectedOcrModel, projectors) == null
+                    ) {
+                        Text(
+                            stringResource(R.string.workflow_manga_projector_manual_required),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     if (ocrModels.isEmpty() || projectors.isEmpty()) {
                         Text(
                             stringResource(R.string.workflow_manga_no_installed_ocr_models),
@@ -2039,6 +2073,16 @@ private fun MangaTranslationWorkflowContent(
                             },
                             label = stringResource(R.string.pdf_context_size_label)
                         )
+                        if (translationOptions.llamaOcr.contextSize > SettingsRepository.PDF_OCR_CONTEXT_DEFAULT) {
+                            Text(
+                                stringResource(
+                                    R.string.pdf_ocr_llama_context_warning,
+                                    translationOptions.llamaOcr.contextSize
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                         IntInputField(
                             value = translationOptions.llamaOcr.maxTokens,
                             onValueChange = {
@@ -2759,7 +2803,8 @@ private fun MangaQualityReportSummary(report: MangaTranslationQualityReport) {
             report.reconciledOcrAlternatives,
             report.coalescedBubbleFragments,
             report.incompleteTranslationRetries,
-            report.wholeBubblesPreserved
+            report.wholeBubblesPreserved,
+            report.ocrRuntimeFallbacks
         ),
         style = MaterialTheme.typography.bodySmall,
         color = if (report.warningCount > 0) {

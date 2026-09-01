@@ -73,6 +73,9 @@ import kotlin.math.floor
 import kotlin.math.roundToInt
 import com.tom_roush.pdfbox.text.TextPosition
 
+internal fun shouldRecoverLlamaOcrWithMlKit(error: Throwable): Boolean =
+    error !is CancellationException && error !is LlamaOcrRuntimeBlockedException
+
 data class PdfExtractionResult(
     val text: String,
     val totalPages: Int,
@@ -121,7 +124,9 @@ private data class PdfOcrDocumentResult(
     val text: String,
     val totalPages: Int,
     val ocrPages: Int,
-    val emptyPages: Int
+    val emptyPages: Int,
+    /** Whole-provider GGUF failures recovered by rerunning the document through ML Kit. */
+    val ocrRuntimeFallbacks: Int = 0
 ) {
     val pageTexts: List<String> = pages.map { page ->
         page.blocks.joinToString("\n\n") { it.text }.trim()
@@ -285,6 +290,7 @@ class MangaTranslationQualityAccumulator {
     var coalescedBubbleFragments: Int = 0
     var incompleteTranslationRetries: Int = 0
     var wholeBubblesPreserved: Int = 0
+    var ocrRuntimeFallbacks: Int = 0
 }
 
 private data class PdfTranslationDisplayError(
@@ -709,7 +715,10 @@ class PDFService(private val context: Context) {
                     processedPages = progress.processedPages,
                     totalPages = progress.totalPages,
                     translatedBlocks = 0,
-                    totalBlocks = 0
+                    totalBlocks = 0,
+                    currentRegion = progress.currentRegion,
+                    totalRegions = progress.totalRegions,
+                    detailText = progress.detailText
                 )
             )
         }.getOrThrow()
@@ -2686,7 +2695,7 @@ class PDFService(private val context: Context) {
             MangaOcrStrategy.FULL_PAGE
         }
         if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
-            return@withContext collectPdfOcrTextWithLlama(
+            val llamaResult = collectPdfOcrTextWithLlama(
                 pdfUri,
                 options.llamaOcr,
                 resolvedStrategy,
@@ -2694,6 +2703,34 @@ class PDFService(private val context: Context) {
                 exhaustiveLlamaOcrRegions,
                 onProgress
             )
+            if (llamaResult.isSuccess) return@withContext llamaResult
+            val failure = llamaResult.exceptionOrNull()
+                ?: IllegalStateException("GGUF OCR failed without an error.")
+            if (!shouldRecoverLlamaOcrWithMlKit(failure)) {
+                if (failure is CancellationException) throw failure
+                return@withContext Result.failure(failure)
+            }
+            currentCoroutineContext().ensureActive()
+            recordWholeProviderOcrFallback(failure)
+            onProgress?.invoke(
+                PdfExtractionProgress(
+                    processedPages = 0,
+                    totalPages = 0,
+                    textLayerPages = 0,
+                    ocrPages = 0,
+                    emptyPages = 0,
+                    textCharacters = 0,
+                    detailText = context.getString(R.string.pdf_ocr_runtime_stage_mlkit_fallback)
+                )
+            )
+            return@withContext collectPdfOcrText(
+                pdfUri = pdfUri,
+                optionsOverride = options.copy(ocrProvider = PdfOcrProvider.ML_KIT),
+                ocrStrategy = resolvedStrategy,
+                ocrExecutionMode = ocrExecutionMode,
+                exhaustiveLlamaOcrRegions = false,
+                onProgress = onProgress
+            ).map { it.copy(ocrRuntimeFallbacks = it.ocrRuntimeFallbacks + 1) }
         }
         try {
             DebugLog.log("[PDF] Performing OCR on PDF pages")
@@ -2805,7 +2842,7 @@ class PDFService(private val context: Context) {
             MangaOcrStrategy.FULL_PAGE
         }
         if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
-            return@withContext collectImageOcrTextWithLlama(
+            val llamaResult = collectImageOcrTextWithLlama(
                 imageFiles,
                 options.llamaOcr,
                 resolvedStrategy,
@@ -2813,6 +2850,34 @@ class PDFService(private val context: Context) {
                 exhaustiveLlamaOcrRegions,
                 onProgress
             )
+            if (llamaResult.isSuccess) return@withContext llamaResult
+            val failure = llamaResult.exceptionOrNull()
+                ?: IllegalStateException("GGUF OCR failed without an error.")
+            if (!shouldRecoverLlamaOcrWithMlKit(failure)) {
+                if (failure is CancellationException) throw failure
+                return@withContext Result.failure(failure)
+            }
+            currentCoroutineContext().ensureActive()
+            recordWholeProviderOcrFallback(failure)
+            onProgress?.invoke(
+                PdfExtractionProgress(
+                    processedPages = 0,
+                    totalPages = imageFiles.size,
+                    textLayerPages = 0,
+                    ocrPages = 0,
+                    emptyPages = 0,
+                    textCharacters = 0,
+                    detailText = context.getString(R.string.pdf_ocr_runtime_stage_mlkit_fallback)
+                )
+            )
+            return@withContext collectImageOcrText(
+                imageFiles = imageFiles,
+                optionsOverride = options.copy(ocrProvider = PdfOcrProvider.ML_KIT),
+                ocrStrategy = resolvedStrategy,
+                ocrExecutionMode = ocrExecutionMode,
+                exhaustiveLlamaOcrRegions = false,
+                onProgress = onProgress
+            ).map { it.copy(ocrRuntimeFallbacks = it.ocrRuntimeFallbacks + 1) }
         }
         try {
             DebugLog.log("[PDF] Performing OCR directly on ${imageFiles.size} comic images")
@@ -2909,7 +2974,22 @@ class PDFService(private val context: Context) {
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
         runCatching {
-            withLlamaOcrClient(llamaSettings) { client ->
+            withLlamaOcrClient(
+                llamaSettings = llamaSettings,
+                onRuntimeStage = { stage ->
+                    onProgress?.invoke(
+                        PdfExtractionProgress(
+                            processedPages = 0,
+                            totalPages = 0,
+                            textLayerPages = 0,
+                            ocrPages = 0,
+                            emptyPages = 0,
+                            textCharacters = 0,
+                            detailText = llamaOcrRuntimeStageText(stage)
+                        )
+                    )
+                }
+            ) { client ->
                 DebugLog.log("[PDF] Performing llama.cpp GGUF OCR on PDF pages with ${llamaSettings.promptPreset.label}")
                 val cachedPdf = copyPdfToCache(pdfUri)
                 try {
@@ -3004,7 +3084,22 @@ class PDFService(private val context: Context) {
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
         runCatching {
-            withLlamaOcrClient(llamaSettings) { client ->
+            withLlamaOcrClient(
+                llamaSettings = llamaSettings,
+                onRuntimeStage = { stage ->
+                    onProgress?.invoke(
+                        PdfExtractionProgress(
+                            processedPages = 0,
+                            totalPages = imageFiles.size,
+                            textLayerPages = 0,
+                            ocrPages = 0,
+                            emptyPages = 0,
+                            textCharacters = 0,
+                            detailText = llamaOcrRuntimeStageText(stage)
+                        )
+                    )
+                }
+            ) { client ->
                 DebugLog.log("[PDF] Performing llama.cpp GGUF OCR on ${imageFiles.size} comic images with ${llamaSettings.promptPreset.label}")
                 val totalPages = imageFiles.size
                 if (totalPages == 0) throw IllegalStateException("Comic has no image pages")
@@ -3089,6 +3184,7 @@ class PDFService(private val context: Context) {
 
     private suspend fun <T> withLlamaOcrClient(
         llamaSettings: LlamaOcrSettingsSnapshot,
+        onRuntimeStage: (LlamaOcrRuntimeStage) -> Unit = {},
         block: suspend (RemoteSummaryClient) -> T
     ): T {
         val modelPath = requireNotNull(llamaSettings.modelPath?.takeIf { it.isNotBlank() }) {
@@ -3103,84 +3199,64 @@ class PDFService(private val context: Context) {
         require(java.io.File(mmprojPath).isFile) {
             context.getString(R.string.pdf_ocr_llama_error_missing_mmproj)
         }
-
-        val wasRunning = LlamaService.state.value is ServerState.Running
-        val shouldRestoreGeneral = wasRunning &&
-            SettingsRepository.isLlamaServerBackend(settingsRepo.pdfTranslationBackend.value) &&
-            !settingsRepo.selectedModelPath.value.isNullOrBlank()
-        if (llamaSettings.temporarilyReplaceRunningServer) {
-            if (wasRunning) {
-                LlamaServerLauncher.reconfigureForOcr(context, llamaSettings).getOrThrow()
-            } else {
-                LlamaServerLauncher.startForOcr(context, llamaSettings).getOrThrow()
-            }
-            waitForLlamaServerRunning(llamaSettings.port)
-        }
-
-        val snapshot = RemoteSummarySettingsSnapshot(
-            backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
-            ollamaUrl = "",
-            llamaServerUrl = llamaSettings.baseUrl,
-            llamaSwapUrl = "",
-            ollamaModel = null,
-            llamaSwapModel = null,
-            thinkingEnabled = false,
-            llamaServerModelLabel = modelPath.substringAfterLast('/'),
-            llamaServerContextTokens = llamaSettings.contextSize,
-            llamaServerContextLabel = "${llamaSettings.contextSize} tokens",
-            chunkContext = llamaSettings.contextSize,
-            chunkMaxTokens = llamaSettings.maxTokens,
-            mergeContext = llamaSettings.contextSize,
-            mergeMaxTokens = llamaSettings.maxTokens,
-            temperature = 0f,
-            timeoutMinutes = settingsRepo.pdfTranslationTimeoutMinutes.value.coerceAtLeast(2),
-            targetLanguage = settingsRepo.pdfTranslationTargetLanguage.value,
-            summaryPrompt = null,
-            mergePrompt = null
-        )
-        val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
-        try {
-            validateLlamaOcrVisionMetadata(client)
-            return block(client)
-        } finally {
-            client.cancelActiveCall()
-            if (llamaSettings.temporarilyReplaceRunningServer) {
-                if (shouldRestoreGeneral) {
-                    settingsRepo.selectedModelPath.value?.let {
-                        LlamaServerLauncher.reconfigureGeneral(context, it)
-                    }
-                } else {
-                    LlamaServerLauncher.stop(context)
-                    waitForLlamaServerStopped()
-                }
+        return LlamaOcrRuntimeCoordinator(context).withExclusiveOcrSession(
+            ocrSettings = llamaSettings,
+            onStage = onRuntimeStage
+        ) {
+            val snapshot = RemoteSummarySettingsSnapshot(
+                backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
+                ollamaUrl = "",
+                llamaServerUrl = llamaSettings.baseUrl,
+                llamaSwapUrl = "",
+                ollamaModel = null,
+                llamaSwapModel = null,
+                thinkingEnabled = false,
+                llamaServerModelLabel = modelPath.substringAfterLast('/'),
+                llamaServerContextTokens = llamaSettings.contextSize,
+                llamaServerContextLabel = "${llamaSettings.contextSize} tokens",
+                chunkContext = llamaSettings.contextSize,
+                chunkMaxTokens = llamaSettings.maxTokens,
+                mergeContext = llamaSettings.contextSize,
+                mergeMaxTokens = llamaSettings.maxTokens,
+                temperature = 0f,
+                timeoutMinutes = settingsRepo.pdfTranslationTimeoutMinutes.value.coerceAtLeast(2),
+                targetLanguage = settingsRepo.pdfTranslationTargetLanguage.value,
+                summaryPrompt = null,
+                mergePrompt = null
+            )
+            val client = RemoteSummaryClientFactory.fromSnapshot(context, snapshot)
+            try {
+                validateLlamaOcrVisionMetadata(client)
+                block(client)
+            } finally {
+                client.cancelActiveCall()
             }
         }
     }
 
-    private suspend fun waitForLlamaServerRunning(port: Int) {
-        val ready = withTimeoutOrNull(180_000L) {
-            var serverReady = false
-            while (!serverReady) {
-                when (val state = LlamaService.state.value) {
-                    is ServerState.Running -> if (state.port == port) serverReady = true
-                    is ServerState.Error -> throw IllegalStateException(state.message)
-                    else -> Unit
-                }
-                if (!serverReady) {
-                    delay(500L)
-                }
-            }
-            true
-        } == true
-        check(ready) { context.getString(R.string.pdf_ocr_llama_error_server_not_ready) }
-    }
+    private fun llamaOcrRuntimeStageText(stage: LlamaOcrRuntimeStage): String = context.getString(
+        when (stage) {
+            LlamaOcrRuntimeStage.CAPTURING_SERVERS -> R.string.pdf_ocr_runtime_stage_capturing
+            LlamaOcrRuntimeStage.PAUSING_SERVERS -> R.string.pdf_ocr_runtime_stage_pausing
+            LlamaOcrRuntimeStage.STARTING_OCR -> R.string.pdf_ocr_runtime_stage_starting
+            LlamaOcrRuntimeStage.STOPPING_OCR -> R.string.pdf_ocr_runtime_stage_stopping
+            LlamaOcrRuntimeStage.RESTORING_SERVERS -> R.string.pdf_ocr_runtime_stage_restoring
+        }
+    )
 
-    private suspend fun waitForLlamaServerStopped() {
-        withTimeoutOrNull(30_000L) {
-            while (LlamaService.state.value !is ServerState.Stopped) {
-                delay(250L)
-            }
-            true
+    private fun recordWholeProviderOcrFallback(error: Throwable) {
+        val sanitized = error.message.orEmpty()
+            .replace(Regex("/[^\\s]+"), "<path>")
+            .replace(Regex("\\s+"), " ")
+            .take(180)
+        DebugLog.log("[PDF] GGUF OCR failed; continuing with ML Kit: ${error.javaClass.simpleName}: $sanitized")
+        runCatching {
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "llama_ocr_runtime",
+                mode = "LLAMA_CPP_GGUF",
+                event = "mlkit_fallback",
+                details = "error=${error.javaClass.simpleName}:$sanitized"
+            )
         }
     }
 
@@ -5566,6 +5642,7 @@ class PDFService(private val context: Context) {
                 quality.skippedLlamaCropRequests += ocrResult.pages.sumOf { it.skippedLlamaCropRequests }
                 quality.llamaOcrRequests += ocrResult.pages.sumOf { it.llamaOcrRequests }
                 quality.llamaOcrElapsedMs += ocrResult.pages.sumOf { it.llamaOcrElapsedMs }
+                quality.ocrRuntimeFallbacks += ocrResult.ocrRuntimeFallbacks
                 val previewOcrBlocks = ocrResult.blocks.count { it.text.isNotBlank() }.coerceAtLeast(1)
                 DebugLog.log(
                     "[PDF] Manga preview OCR complete with $previewOcrBlocks text block(s); starting translation."
@@ -5653,6 +5730,7 @@ class PDFService(private val context: Context) {
                         coalescedBubbleFragments = quality.coalescedBubbleFragments,
                         incompleteTranslationRetries = quality.incompleteTranslationRetries,
                         wholeBubblesPreserved = quality.wholeBubblesPreserved,
+                        ocrRuntimeFallbacks = quality.ocrRuntimeFallbacks,
                         resolvedReadingDirection = prepared.resolvedReadingDirection
                     )
                 )
@@ -5869,6 +5947,7 @@ class PDFService(private val context: Context) {
                     coalescedBubbleFragments = quality.coalescedBubbleFragments,
                     incompleteTranslationRetries = quality.incompleteTranslationRetries,
                     wholeBubblesPreserved = quality.wholeBubblesPreserved,
+                    ocrRuntimeFallbacks = quality.ocrRuntimeFallbacks,
                     resolvedReadingDirection = when (runConfig?.readingDirection) {
                         MangaReadingDirection.RIGHT_TO_LEFT -> MangaReadingDirection.RIGHT_TO_LEFT
                         else -> MangaReadingDirection.LEFT_TO_RIGHT
@@ -5954,6 +6033,7 @@ class PDFService(private val context: Context) {
             quality.skippedLlamaCropRequests += ocrResult.pages.sumOf { it.skippedLlamaCropRequests }
             quality.llamaOcrRequests += ocrResult.pages.sumOf { it.llamaOcrRequests }
             quality.llamaOcrElapsedMs += ocrResult.pages.sumOf { it.llamaOcrElapsedMs }
+            quality.ocrRuntimeFallbacks += ocrResult.ocrRuntimeFallbacks
             DebugLog.log(
                 "[PDF] Comic OCR produced ${ocrResult.blocks.count { it.text.isNotBlank() }} blocks " +
                     "across ${ocrResult.totalPages} pages for $sourceName"
@@ -6094,6 +6174,7 @@ class PDFService(private val context: Context) {
                 coalescedBubbleFragments = quality.coalescedBubbleFragments,
                 incompleteTranslationRetries = quality.incompleteTranslationRetries,
                 wholeBubblesPreserved = quality.wholeBubblesPreserved,
+                ocrRuntimeFallbacks = quality.ocrRuntimeFallbacks,
                 resolvedReadingDirection = prepared.resolvedReadingDirection
                 )
             )
@@ -6977,67 +7058,76 @@ class PDFService(private val context: Context) {
         imageUri: Uri,
         optionsOverride: PdfTranslationOptionsSnapshot? = null
     ): Result<String> = withContext(Dispatchers.IO) {
+        var bitmap: Bitmap? = null
         try {
             DebugLog.log("[PDF] Performing OCR on image")
             
             // Load bitmap from URI
-            val bitmap = context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
+            bitmap = context.contentResolver.openInputStream(imageUri)?.use { inputStream ->
                 android.graphics.BitmapFactory.decodeStream(inputStream)
             } ?: return@withContext Result.failure(Exception("Could not load image"))
+            val sourceBitmap = requireNotNull(bitmap)
 
             val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
             if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
-                return@withContext runCatching {
-                    try {
-                        withLlamaOcrClient(options.llamaOcr) { client ->
-                            recognizeBitmapWithLlamaOcr(
-                                client = client,
-                                llamaSettings = options.llamaOcr,
-                                bitmap = bitmap,
-                                pageIndex = 0,
-                                pdfWidth = bitmap.width.toFloat(),
-                                pdfHeight = bitmap.height.toFloat(),
-                                ocrStrategy = if (options.bubbleGuidedOcrEnabled) {
-                                    MangaOcrStrategy.HYBRID
-                                } else {
-                                    MangaOcrStrategy.FULL_PAGE
-                                }
-                            ).blocks.joinToString("\n\n") { it.text }.trim()
-                        }.also { text ->
-                            if (text.isBlank()) throw IllegalStateException("No OCR text found")
-                        }
-                    } finally {
-                        bitmap.recycle()
+                val llamaResult = runCatching {
+                    withLlamaOcrClient(options.llamaOcr) { client ->
+                        recognizeBitmapWithLlamaOcr(
+                            client = client,
+                            llamaSettings = options.llamaOcr,
+                            bitmap = sourceBitmap,
+                            pageIndex = 0,
+                            pdfWidth = sourceBitmap.width.toFloat(),
+                            pdfHeight = sourceBitmap.height.toFloat(),
+                            ocrStrategy = if (options.bubbleGuidedOcrEnabled) {
+                                MangaOcrStrategy.HYBRID
+                            } else {
+                                MangaOcrStrategy.FULL_PAGE
+                            }
+                        ).blocks.joinToString("\n\n") { it.text }.trim()
+                    }.also { text ->
+                        if (text.isBlank()) throw IllegalStateException("No OCR text found")
                     }
                 }
+                if (llamaResult.isSuccess) return@withContext llamaResult
+                val failure = llamaResult.exceptionOrNull()
+                    ?: IllegalStateException("GGUF OCR failed without an error.")
+                if (!shouldRecoverLlamaOcrWithMlKit(failure)) {
+                    if (failure is CancellationException) throw failure
+                    return@withContext Result.failure(failure)
+                }
+                currentCoroutineContext().ensureActive()
+                recordWholeProviderOcrFallback(failure)
             }
-            
-            // Use ML Kit Text Recognition
-            val image = InputImage.fromBitmap(bitmap, 0)
-            val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
-            
-            return@withContext suspendCancellableCoroutine { continuation ->
-                recognizer.process(image)
-                    .addOnSuccessListener { result ->
-                        val extractedText = result.textBlocks.joinToString("\n\n") { block ->
-                            block.lines.joinToString("\n") { it.text }
-                        }
-                        DebugLog.log("[PDF] OCR extracted ${extractedText.length} characters")
-                        bitmap.recycle()
-                        recognizer.close()
-                        continuation.resume(Result.success(extractedText))
-                    }
-                    .addOnFailureListener { e ->
-                        DebugLog.log("[PDF] OCR failed: ${e.message}")
-                        bitmap.recycle()
-                        recognizer.close()
-                        continuation.resume(Result.failure(e))
-                    }
-            }
-            
+            recognizeBitmapTextWithMlKit(sourceBitmap)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             DebugLog.log("[PDF] OCR error: ${e.message}")
             Result.failure(e)
+        } finally {
+            bitmap?.takeIf { !it.isRecycled }?.recycle()
+        }
+    }
+
+    private suspend fun recognizeBitmapTextWithMlKit(bitmap: Bitmap): Result<String> {
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { recognizer.close() }
+            recognizer.process(image)
+                .addOnSuccessListener { result ->
+                    val extractedText = result.textBlocks.joinToString("\n\n") { block ->
+                        block.lines.joinToString("\n") { it.text }
+                    }
+                    DebugLog.log("[PDF] OCR extracted ${extractedText.length} characters")
+                    recognizer.close()
+                    if (continuation.isActive) continuation.resume(Result.success(extractedText))
+                }
+                .addOnFailureListener { error ->
+                    DebugLog.log("[PDF] OCR failed: ${error.message}")
+                    recognizer.close()
+                    if (continuation.isActive) continuation.resume(Result.failure(error))
+                }
         }
     }
     /**

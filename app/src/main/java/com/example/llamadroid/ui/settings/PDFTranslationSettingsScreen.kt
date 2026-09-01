@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -19,11 +22,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -31,6 +38,9 @@ import com.example.llamadroid.data.LlamaOcrPromptPreset
 import com.example.llamadroid.data.PdfOcrProvider
 import com.example.llamadroid.data.PdfTranslationQualityMode
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.ModelEntity
+import com.example.llamadroid.service.MangaTranslationSupport
 import com.example.llamadroid.service.PDFTranslationLogic
 import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.RemoteSummaryMetadata
@@ -39,6 +49,7 @@ import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
+import com.example.llamadroid.util.FormatUtils
 
 @Composable
 fun PDFTranslationSettingsScreen(navController: NavController) {
@@ -65,6 +76,14 @@ fun PDFTranslationSettingsScreen(navController: NavController) {
 @Composable
 fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val db = remember { AppDatabase.getDatabase(context) }
+    val installedModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
+    val ocrModels = remember(installedModels) {
+        MangaTranslationSupport.installedOcrModels(installedModels)
+    }
+    val projectors = remember(installedModels) {
+        MangaTranslationSupport.installedProjectors(installedModels)
+    }
     val backend by settingsRepo.pdfTranslationBackend.collectAsState()
     val ollamaUrl by settingsRepo.pdfTranslationOllamaUrl.collectAsState()
     val llamaServerUrl by settingsRepo.pdfTranslationLlamaServerUrl.collectAsState()
@@ -104,6 +123,7 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
     val llamaOcrCustomFlags by settingsRepo.pdfOcrLlamaCustomFlags.collectAsState()
     val llamaOcrCommandTemplate by settingsRepo.pdfOcrLlamaCommandTemplate.collectAsState()
     val llamaOcrReplaceServer by settingsRepo.pdfOcrLlamaReplaceRunningServer.collectAsState()
+    var showOcrExpert by rememberSaveable { mutableStateOf(false) }
 
     fun persistMetadata(metadata: RemoteSummaryMetadata) {
         if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
@@ -114,6 +134,18 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                stringResource(R.string.pdf_translation_llm_role_title),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                stringResource(R.string.pdf_translation_llm_role_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         RemoteSummaryBackendEditor(
                     title = stringResource(R.string.pdf_translation_backend_title),
                     backend = backend,
@@ -191,6 +223,16 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
+                Text(
+                    stringResource(R.string.pdf_ocr_vision_role_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    stringResource(R.string.pdf_ocr_vision_role_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     PdfOcrProvider.entries.forEach { provider ->
                         FilterChip(
@@ -216,21 +258,38 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                     onCheckedChange = settingsRepo::setPdfOcrBubbleGuided
                 )
                 if (ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
-                    OutlinedTextField(
-                        value = llamaOcrModelPath.orEmpty(),
-                        onValueChange = settingsRepo::setPdfOcrLlamaModelPath,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.pdf_ocr_llama_model_path_label)) },
-                        singleLine = true
+                    Text(
+                        stringResource(R.string.pdf_ocr_llama_pause_restore_notice),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
-                    OutlinedTextField(
-                        value = llamaOcrMmprojPath.orEmpty(),
-                        onValueChange = settingsRepo::setPdfOcrLlamaMmprojPath,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.pdf_ocr_llama_mmproj_path_label)) },
-                        singleLine = true,
-                        supportingText = { Text(stringResource(R.string.pdf_ocr_llama_mmproj_path_desc)) }
+                    PdfSettingsInstalledModelPicker(
+                        label = stringResource(R.string.workflow_manga_ocr_model),
+                        models = ocrModels,
+                        selectedPath = llamaOcrModelPath,
+                        onSelected = { model ->
+                            val selection = MangaTranslationSupport.resolveOcrModelSelection(model, projectors)
+                            settingsRepo.setPdfOcrLlamaModelPath(model.path)
+                            settingsRepo.setPdfOcrLlamaPromptPreset(selection.promptPreset)
+                            settingsRepo.setPdfOcrLlamaCustomFlags(selection.promptPreset.recommendedFlags)
+                            // A missing or ambiguous match must not leave a stale
+                            // projector attached to the newly selected model.
+                            settingsRepo.setPdfOcrLlamaMmprojPath(selection.projector?.path)
+                        }
                     )
+                    PdfSettingsInstalledModelPicker(
+                        label = stringResource(R.string.workflow_manga_projector_model),
+                        models = projectors,
+                        selectedPath = llamaOcrMmprojPath,
+                        onSelected = { model -> settingsRepo.setPdfOcrLlamaMmprojPath(model.path) }
+                    )
+                    if (ocrModels.isEmpty() || projectors.isEmpty()) {
+                        Text(
+                            stringResource(R.string.workflow_manga_no_installed_ocr_models),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                     Text(
                         stringResource(R.string.pdf_ocr_llama_prompt_preset_title),
                         fontWeight = FontWeight.Bold
@@ -246,65 +305,104 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                             label = { Text(llamaOcrPromptPresetLabel(preset), maxLines = 1) }
                         )
                     }
-                    OutlinedTextField(
-                        value = llamaOcrCustomPrompt ?: llamaOcrPromptPreset.prompt,
-                        onValueChange = settingsRepo::setPdfOcrLlamaCustomPrompt,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.pdf_ocr_llama_prompt_label)) },
-                        minLines = 2
-                    )
-                    IntInputField(
-                        value = llamaOcrContextSize,
-                        onValueChange = settingsRepo::setPdfOcrLlamaContextSize,
-                        label = stringResource(R.string.pdf_ocr_llama_context_label)
-                    )
-                    IntInputField(
-                        value = llamaOcrMaxTokens,
-                        onValueChange = settingsRepo::setPdfOcrLlamaMaxTokens,
-                        label = stringResource(R.string.pdf_ocr_llama_max_tokens_label)
-                    )
-                    IntInputField(
-                        value = llamaOcrPort,
-                        onValueChange = settingsRepo::setPdfOcrLlamaPort,
-                        label = stringResource(R.string.pdf_ocr_llama_port_label)
-                    )
-                    IntInputField(
-                        value = llamaOcrCacheRam,
-                        onValueChange = settingsRepo::setPdfOcrLlamaCacheRam,
-                        label = stringResource(R.string.pdf_ocr_llama_cache_ram_label)
-                    )
-                    IntSliderWithInput(
-                        value = llamaOcrParallel,
-                        onValueChange = settingsRepo::setPdfOcrLlamaParallel,
-                        valueRange = 1..8,
-                        label = stringResource(R.string.pdf_ocr_llama_parallel_label)
-                    )
-                    TranslationSwitchRow(
-                        title = stringResource(R.string.pdf_ocr_llama_flash_attention_title),
-                        description = stringResource(R.string.pdf_ocr_llama_flash_attention_desc),
-                        checked = llamaOcrFlashAttention,
-                        onCheckedChange = settingsRepo::setPdfOcrLlamaFlashAttention
-                    )
-                    TranslationSwitchRow(
-                        title = stringResource(R.string.pdf_ocr_llama_replace_server_title),
-                        description = stringResource(R.string.pdf_ocr_llama_replace_server_desc),
-                        checked = llamaOcrReplaceServer,
-                        onCheckedChange = settingsRepo::setPdfOcrLlamaReplaceRunningServer
-                    )
-                    OutlinedTextField(
-                        value = llamaOcrCustomFlags.orEmpty(),
-                        onValueChange = settingsRepo::setPdfOcrLlamaCustomFlags,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.pdf_ocr_llama_custom_flags_label)) },
-                        minLines = 2
-                    )
-                    OutlinedTextField(
-                        value = llamaOcrCommandTemplate.orEmpty(),
-                        onValueChange = settingsRepo::setPdfOcrLlamaCommandTemplate,
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.pdf_ocr_llama_command_template_label)) },
-                        minLines = 2
-                    )
+                    androidx.compose.material3.TextButton(
+                        onClick = { showOcrExpert = !showOcrExpert },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            stringResource(
+                                if (showOcrExpert) {
+                                    R.string.pdf_ocr_llama_expert_hide
+                                } else {
+                                    R.string.pdf_ocr_llama_expert_show
+                                }
+                            ),
+                            maxLines = 1
+                        )
+                    }
+                    if (showOcrExpert) {
+                        OutlinedTextField(
+                            value = llamaOcrModelPath.orEmpty(),
+                            onValueChange = settingsRepo::setPdfOcrLlamaModelPath,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.pdf_ocr_llama_model_path_label)) },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = llamaOcrMmprojPath.orEmpty(),
+                            onValueChange = settingsRepo::setPdfOcrLlamaMmprojPath,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.pdf_ocr_llama_mmproj_path_label)) },
+                            singleLine = true,
+                            supportingText = { Text(stringResource(R.string.pdf_ocr_llama_mmproj_path_desc)) }
+                        )
+                        OutlinedTextField(
+                            value = llamaOcrCustomPrompt ?: llamaOcrPromptPreset.prompt,
+                            onValueChange = settingsRepo::setPdfOcrLlamaCustomPrompt,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.pdf_ocr_llama_prompt_label)) },
+                            minLines = 2
+                        )
+                        IntInputField(
+                            value = llamaOcrContextSize,
+                            onValueChange = settingsRepo::setPdfOcrLlamaContextSize,
+                            label = stringResource(R.string.pdf_ocr_llama_context_label)
+                        )
+                        if (llamaOcrContextSize > SettingsRepository.PDF_OCR_CONTEXT_DEFAULT) {
+                            Text(
+                                stringResource(R.string.pdf_ocr_llama_context_warning, llamaOcrContextSize),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        IntInputField(
+                            value = llamaOcrMaxTokens,
+                            onValueChange = settingsRepo::setPdfOcrLlamaMaxTokens,
+                            label = stringResource(R.string.pdf_ocr_llama_max_tokens_label)
+                        )
+                        IntInputField(
+                            value = llamaOcrPort,
+                            onValueChange = settingsRepo::setPdfOcrLlamaPort,
+                            label = stringResource(R.string.pdf_ocr_llama_port_label)
+                        )
+                        IntInputField(
+                            value = llamaOcrCacheRam,
+                            onValueChange = settingsRepo::setPdfOcrLlamaCacheRam,
+                            label = stringResource(R.string.pdf_ocr_llama_cache_ram_label)
+                        )
+                        IntSliderWithInput(
+                            value = llamaOcrParallel,
+                            onValueChange = settingsRepo::setPdfOcrLlamaParallel,
+                            valueRange = 1..8,
+                            label = stringResource(R.string.pdf_ocr_llama_parallel_label)
+                        )
+                        TranslationSwitchRow(
+                            title = stringResource(R.string.pdf_ocr_llama_flash_attention_title),
+                            description = stringResource(R.string.pdf_ocr_llama_flash_attention_desc),
+                            checked = llamaOcrFlashAttention,
+                            onCheckedChange = settingsRepo::setPdfOcrLlamaFlashAttention
+                        )
+                        TranslationSwitchRow(
+                            title = stringResource(R.string.pdf_ocr_llama_replace_server_title),
+                            description = stringResource(R.string.pdf_ocr_llama_replace_server_desc),
+                            checked = llamaOcrReplaceServer,
+                            onCheckedChange = settingsRepo::setPdfOcrLlamaReplaceRunningServer
+                        )
+                        OutlinedTextField(
+                            value = llamaOcrCustomFlags.orEmpty(),
+                            onValueChange = settingsRepo::setPdfOcrLlamaCustomFlags,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.pdf_ocr_llama_custom_flags_label)) },
+                            minLines = 2
+                        )
+                        OutlinedTextField(
+                            value = llamaOcrCommandTemplate.orEmpty(),
+                            onValueChange = settingsRepo::setPdfOcrLlamaCommandTemplate,
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.pdf_ocr_llama_command_template_label)) },
+                            minLines = 2
+                        )
+                    }
                 }
             }
         }
@@ -356,6 +454,70 @@ fun PDFTranslationEmbeddedSettings(settingsRepo: SettingsRepository) {
                         )
                     }
                 }
+    }
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun PdfSettingsInstalledModelPicker(
+    label: String,
+    models: List<ModelEntity>,
+    selectedPath: String?,
+    onSelected: (ModelEntity) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = models.firstOrNull { it.path == selectedPath }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { if (models.isNotEmpty()) expanded = !expanded }
+    ) {
+        OutlinedTextField(
+            value = selected?.filename
+                ?: selectedPath?.let { stringResource(R.string.workflow_manga_legacy_model_unavailable) }
+                ?: stringResource(R.string.workflow_manga_choose_installed_model),
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+            supportingText = selected?.let { model ->
+                {
+                    Text(
+                        "${FormatUtils.Display.formatBytes(context, model.sizeBytes)} • ${model.repoId}",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            models.forEach { model ->
+                DropdownMenuItem(
+                    text = {
+                        Column {
+                            Text(model.filename, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                "${FormatUtils.Display.formatBytes(context, model.sizeBytes)} • ${model.repoId}",
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    },
+                    onClick = {
+                        onSelected(model)
+                        expanded = false
+                    }
+                )
+            }
+        }
     }
 }
 

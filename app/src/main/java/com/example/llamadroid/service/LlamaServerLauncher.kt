@@ -8,6 +8,9 @@ import com.example.llamadroid.ui.ai.AiJobStartupDiagnostics
 import com.example.llamadroid.util.DebugLog
 
 object LlamaServerLauncher {
+    internal fun ocrReservedSessionId(): String =
+        com.example.llamadroid.data.model.LlamaServerSessionIds.OCR
+
     private val ownedServiceActions = setOf(
         LlamaService.ACTION_START,
         LlamaService.ACTION_RECONFIGURE,
@@ -42,6 +45,19 @@ object LlamaServerLauncher {
             component?.packageName == appContext.packageName &&
                 component?.className == LlamaService::class.java.name
         ) { "Command must explicitly target the local LlamaService" }
+
+        // OCR temporarily owns every local llama runtime.  Commands sent through this launcher
+        // are the only regular entry point that can target the legacy service, so reject any
+        // unrelated start/reconfigure/stop while the lease is active.  Recovery uses the same
+        // persisted token as the keyed session commands below.
+        if (action != LlamaService.ACTION_RECOVER &&
+            LlamaOcrExclusiveLeaseStore.rejectsLegacyCommand(
+                appContext,
+                intent.getStringExtra(LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA)
+            )
+        ) {
+            throw IllegalStateException("A GGUF OCR runtime currently owns the local llama server.")
+        }
 
         AiJobStartupDiagnostics.record(
             appContext,
@@ -203,21 +219,63 @@ object LlamaServerLauncher {
         DebugLog.log("LlamaServerLauncher: start FAILED: ${error.message}")
     }
 
-    fun startForOcr(context: Context, settings: LlamaOcrSettingsSnapshot): Result<Unit> = runCatching {
+    /**
+     * Build the complete keyed launch profile for OCR without touching SettingsRepository.  This
+     * pure mapping is intentionally kept public-to-the-module so it can be unit tested without an
+     * Android service or a live native process.
+     */
+    internal fun buildLlamaOcrLaunchProfile(settings: LlamaOcrSettingsSnapshot): LlamaServerLaunchProfile =
+        LlamaServerLaunchProfile(
+            modelPath = settings.modelPath.orEmpty().trim(),
+            mmprojPath = settings.mmprojPath?.trim()?.takeIf { it.isNotBlank() },
+            visionEnabled = !settings.mmprojPath.isNullOrBlank(),
+            host = "127.0.0.1",
+            serverPort = settings.port,
+            threads = 4,
+            batchSize = 512,
+            physicalBatchSize = 512,
+            contextSize = settings.contextSize,
+            temperature = 0f,
+            kvCacheEnabled = false,
+            kvCacheReuse = 0,
+            kvOffloadMode = com.example.llamadroid.data.SettingsRepository.LLAMA_KV_OFFLOAD_CPU,
+            parallel = settings.parallel.coerceAtLeast(1),
+            cacheRam = settings.cacheRam.takeIf { it > 0 },
+            cachePrompt = true,
+            cacheIdleSlots = true,
+            customFlags = composeLlamaOcrFlags(
+                recommendedFlags = settings.promptPreset.recommendedFlags,
+                customFlags = settings.customFlags
+            ).takeIf { it.isNotBlank() },
+            flashAttention = settings.flashAttention,
+            commandTemplate = settings.commandTemplate?.trim()?.takeIf { it.isNotBlank() },
+            speculativeEnabled = false,
+            draftModelPath = null,
+            nativeToolsEnabled = false
+        )
+
+    fun startForOcr(
+        context: Context,
+        settings: LlamaOcrSettingsSnapshot,
+        leaseToken: String? = null
+    ): Result<Unit> = runCatching {
         val appContext = context.applicationContext
-        val modelPath = requireNotNull(settings.modelPath?.takeIf { it.isNotBlank() }) {
+        requireNotNull(settings.modelPath?.takeIf { it.isNotBlank() }) {
             appContext.getString(com.example.llamadroid.R.string.pdf_ocr_llama_error_missing_model)
         }
-        val mmprojPath = requireNotNull(settings.mmprojPath?.takeIf { it.isNotBlank() }) {
+        requireNotNull(settings.mmprojPath?.takeIf { it.isNotBlank() }) {
             appContext.getString(com.example.llamadroid.R.string.pdf_ocr_llama_error_missing_mmproj)
         }
-        DebugLog.log("LlamaServerLauncher: Starting OCR llama-server on port ${settings.port} with preset ${settings.promptPreset.label}")
+        val profile = buildLlamaOcrLaunchProfile(settings)
+        DebugLog.log("LlamaServerLauncher: Starting OCR session ${ocrReservedSessionId()} on port ${settings.port} with preset ${settings.promptPreset.label}")
         AiJobStartupDiagnostics.record(appContext, "llama_ocr_server_start", "pre_launch_state")
-        val intent = Intent(appContext, LlamaService::class.java).apply {
-            action = LlamaService.ACTION_START
-            putOcrSettings(settings, modelPath, mmprojPath)
-        }
-        dispatchOwnedCommand(appContext, intent).getOrThrow()
+        startReservedSession(
+            context = appContext,
+            sessionId = ocrReservedSessionId(),
+            profile = profile,
+            portOverride = settings.port,
+            leaseToken = leaseToken ?: LlamaOcrExclusiveLeaseStore.currentToken(appContext)
+        ).getOrThrow()
         AiJobStartupDiagnostics.record(appContext, "llama_ocr_server_start", "post_launch_state")
     }.onFailure { error ->
         AiJobStartupDiagnostics.record(
@@ -278,7 +336,8 @@ object LlamaServerLauncher {
         context: Context,
         sessionId: String,
         profile: LlamaServerLaunchProfile,
-        portOverride: Int? = null
+        portOverride: Int? = null,
+        leaseToken: String? = null
     ): Result<Unit> = dispatchSessionCommand(
         context,
         Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
@@ -286,15 +345,17 @@ object LlamaServerLauncher {
             putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
             putExtra(LlamaServerSessionService.EXTRA_PROFILE_JSON, LlamaServerLaunchProfile.encode(profile))
             portOverride?.let { putExtra(LlamaServerSessionService.EXTRA_PORT, it) }
+            leaseToken?.let { putExtra(LlamaServerSessionService.EXTRA_LEASE_TOKEN, it) }
         }
     )
 
     /** Stop only the child owned by [sessionId]; no same-UID sweep is performed. */
-    fun stopSession(context: Context, sessionId: String): Result<Unit> = dispatchSessionCommand(
+    fun stopSession(context: Context, sessionId: String, leaseToken: String? = null): Result<Unit> = dispatchSessionCommand(
         context,
         Intent(context.applicationContext, LlamaServerSessionService::class.java).apply {
             action = LlamaServerSessionService.ACTION_STOP
             putExtra(LlamaServerSessionService.EXTRA_SESSION_ID, sessionId)
+            leaseToken?.let { putExtra(LlamaServerSessionService.EXTRA_LEASE_TOKEN, it) }
         }
     )
 
@@ -320,18 +381,29 @@ object LlamaServerLauncher {
         context: Context,
         sessionId: String,
         profile: LlamaServerLaunchProfile,
-        portOverride: Int? = null
+        portOverride: Int? = null,
+        leaseToken: String? = null
     ): Result<Unit> {
         require(com.example.llamadroid.data.model.LlamaServerSessionIds.isReserved(sessionId)) {
             "Reserved session id required for internal launcher compatibility"
         }
-        return startSession(context, sessionId, profile, portOverride)
+        return startSession(context, sessionId, profile, portOverride, leaseToken)
     }
 
     private fun dispatchSessionCommand(context: Context, intent: Intent): Result<Unit> = runCatching {
         val appContext = context.applicationContext
         val action = requireNotNull(intent.action) { "Missing llama session action" }
         require(isOwnedSessionAction(action)) { "Unsupported llama session action: $action" }
+        val sessionId = intent.getStringExtra(LlamaServerSessionService.EXTRA_SESSION_ID).orEmpty()
+        require(sessionId.isNotBlank()) { "Session id is required" }
+        if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(
+                appContext,
+                sessionId,
+                intent.getStringExtra(LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA)
+            )
+        ) {
+            throw IllegalStateException("A GGUF OCR runtime currently owns the local llama sessions.")
+        }
         val component = intent.component
         require(
             component?.packageName == appContext.packageName &&
@@ -346,11 +418,44 @@ object LlamaServerLauncher {
         DebugLog.log("LlamaServerLauncher: dispatched session action=$action")
     }
 
-    fun stop(context: Context): Result<Unit> = runCatching {
+    fun startLegacyProfile(
+        context: Context,
+        profile: LlamaServerLaunchProfile,
+        leaseToken: String? = null
+    ): Result<Unit> = runCatching {
+        require(profile.hasModel()) { "A model is required for the legacy llama-server." }
+        val appContext = context.applicationContext
+        dispatchOwnedCommand(
+            appContext,
+            Intent(appContext, LlamaService::class.java).apply {
+                action = LlamaService.ACTION_START
+                putExtra(LlamaService.EXTRA_MODEL_PATH, profile.modelPath)
+                putExtra(LlamaService.EXTRA_MMPROJ_PATH, profile.mmprojPath)
+                putExtra(LlamaService.EXTRA_ALLOW_SETTINGS_MMPROJ, false)
+                putExtra(LlamaService.EXTRA_SETTINGS_PROFILE, LlamaService.SETTINGS_PROFILE_GENERAL)
+                putExtra(LlamaService.EXTRA_HOST, profile.host)
+                putExtra(LlamaService.EXTRA_PORT, profile.serverPort)
+                putExtra(LlamaService.EXTRA_LAUNCH_PROFILE_JSON, LlamaServerLaunchProfile.encode(profile))
+                leaseToken?.let { putExtra(LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA, it) }
+            }
+        ).getOrThrow()
+    }
+
+    fun stopLegacy(context: Context, leaseToken: String? = null): Result<Unit> = runCatching {
         dispatchOwnedCommand(context.applicationContext, Intent(context.applicationContext, LlamaService::class.java).apply {
             action = LlamaService.ACTION_STOP
+            leaseToken?.let { putExtra(LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA, it) }
         }).getOrThrow()
     }
+
+    fun stopForOcr(context: Context, leaseToken: String? = null): Result<Unit> =
+        stopSession(
+            context = context,
+            sessionId = ocrReservedSessionId(),
+            leaseToken = leaseToken ?: LlamaOcrExclusiveLeaseStore.currentToken(context.applicationContext)
+        )
+
+    fun stop(context: Context): Result<Unit> = stopLegacy(context)
 
     fun recover(context: Context): Result<Unit> =
         dispatchOwnedCommand(context.applicationContext, Intent(context.applicationContext, LlamaService::class.java).apply {

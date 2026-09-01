@@ -33,8 +33,16 @@ class LlamaServerSessionService : Service() {
         when (intent?.action) {
             ACTION_START -> {
                 val profile = LlamaServerLaunchProfile.decode(intent.getStringExtra(EXTRA_PROFILE_JSON))
+                val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
                 if (sessionId.isBlank() || profile == null) {
                     DebugLog.log("LlamaServerSessionService: rejected start with missing session/profile")
+                } else if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(
+                        applicationContext,
+                        sessionId,
+                        leaseToken
+                    )
+                ) {
+                    DebugLog.log("LlamaServerSessionService[$sessionId]: rejected start while OCR lease is active")
                 } else {
                     ensureForeground()
                     val portOverride = intent.takeIf { it.hasExtra(EXTRA_PORT) }
@@ -46,13 +54,28 @@ class LlamaServerSessionService : Service() {
                 }
             }
             ACTION_STOP -> if (sessionId.isNotBlank()) {
-                scope.launch { runtime.stop(sessionId) }
+                val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
+                if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
+                    DebugLog.log("LlamaServerSessionService[$sessionId]: rejected stop while OCR lease is active")
+                } else {
+                    scope.launch { runtime.stop(sessionId) }
+                }
             }
             ACTION_CLEAR_LOGS -> if (sessionId.isNotBlank()) {
-                scope.launch { runtime.clearLogs(sessionId) }
+                val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
+                if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
+                    DebugLog.log("LlamaServerSessionService[$sessionId]: rejected clear while OCR lease is active")
+                } else {
+                    scope.launch { runtime.clearLogs(sessionId) }
+                }
             }
             ACTION_REMOVE -> if (sessionId.isNotBlank()) {
-                scope.launch { runtime.remove(sessionId) }
+                val leaseToken = intent.getStringExtra(EXTRA_LEASE_TOKEN)
+                if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
+                    DebugLog.log("LlamaServerSessionService[$sessionId]: rejected remove while OCR lease is active")
+                } else {
+                    scope.launch { runtime.remove(sessionId) }
+                }
             }
         }
         return START_NOT_STICKY
@@ -84,5 +107,6 @@ class LlamaServerSessionService : Service() {
         const val EXTRA_SESSION_ID = "LLAMA_SESSION_ID"
         const val EXTRA_PROFILE_JSON = "LLAMA_SESSION_PROFILE_JSON"
         const val EXTRA_PORT = "LLAMA_SESSION_PORT"
+        const val EXTRA_LEASE_TOKEN = LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA
     }
 }

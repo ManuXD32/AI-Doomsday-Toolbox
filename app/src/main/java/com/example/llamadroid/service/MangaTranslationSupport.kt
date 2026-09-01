@@ -289,6 +289,7 @@ data class MangaTranslationQualityReport(
     val coalescedBubbleFragments: Int = 0,
     val incompleteTranslationRetries: Int = 0,
     val wholeBubblesPreserved: Int = 0,
+    val ocrRuntimeFallbacks: Int = 0,
     val resolvedReadingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT
 ) {
     val warningCount: Int
@@ -296,7 +297,8 @@ data class MangaTranslationQualityReport(
             visionFallbacks + blankOverlayUnits + clippedOverlayUnits +
             ungroundedOcrResponses + regionalOcrFallbacks + promptLeakRejections +
             skippedLlamaCropRequests + decorativeTextPreserved + skippedOverlayUnits +
-            liteRtRuntimeFallbacks + incompleteTranslationRetries + wholeBubblesPreserved
+            liteRtRuntimeFallbacks + incompleteTranslationRetries + wholeBubblesPreserved +
+            ocrRuntimeFallbacks
 }
 
 data class MangaTranslationPreviewResult(
@@ -370,6 +372,17 @@ data class MangaTemplateModelRef(
     val repositoryId: String,
     val modelType: ModelType,
     val legacyPath: String? = null
+)
+
+/**
+ * The complete, user-visible OCR model choice.  Keeping the inferred preset and
+ * projector together prevents one picker from leaving the other picker pointed
+ * at a stale or incompatible file.
+ */
+data class MangaOcrModelSelection(
+    val model: ModelEntity,
+    val promptPreset: LlamaOcrPromptPreset,
+    val projector: ModelEntity?
 )
 
 data class MangaTranslationCheckpoint(
@@ -593,7 +606,7 @@ object MangaTranslationSupport {
             model.isDownloaded &&
                 model.path.isNotBlank() &&
                 model.filename.endsWith(".gguf", ignoreCase = true) &&
-                model.type in setOf(ModelType.LLM, ModelType.VISION)
+                (model.type == ModelType.VISION || model.isVision)
         }.sortedBy { it.filename.lowercase(Locale.US) }
 
     fun installedProjectors(models: List<ModelEntity>): List<ModelEntity> =
@@ -647,6 +660,22 @@ object MangaTranslationSupport {
         }.singleOrNull()?.let { return it }
         return projectors.singleOrNull()
     }
+
+    /**
+     * Resolve all dependent OCR choices after a model picker change.
+     *
+     * A null projector is intentional: callers must clear any previously
+     * selected projector and make the user choose one when the installed
+     * catalog does not contain an unambiguous match.
+     */
+    fun resolveOcrModelSelection(
+        model: ModelEntity,
+        projectors: List<ModelEntity>
+    ): MangaOcrModelSelection = MangaOcrModelSelection(
+        model = model,
+        promptPreset = inferOcrPreset(model.filename, model.repoId),
+        projector = matchProjector(model, projectors)
+    )
 
     fun inferOcrPreset(modelName: String?, repositoryId: String?): LlamaOcrPromptPreset {
         val hint = "${modelName.orEmpty()} ${repositoryId.orEmpty()}".lowercase(Locale.US)

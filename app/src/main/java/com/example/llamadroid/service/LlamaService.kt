@@ -34,6 +34,36 @@ import com.example.llamadroid.data.binary.EffectiveLlamaBinary
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.util.GGUFParser
 
+/**
+ * A cleanup port is safe to probe only when it came from the currently active controller or
+ * from a recorded owner that was verified against /proc (PID, start time, command and port).
+ * Keeping this decision pure makes it difficult to accidentally reintroduce a default-port sweep
+ * when the isolated runtime process has been recreated.
+ */
+internal enum class LlamaCleanupPortSource {
+    ACTIVE_CONTROLLER,
+    VERIFIED_RECORDED_OWNER
+}
+
+internal data class LlamaCleanupTarget(
+    val port: Int,
+    val source: LlamaCleanupPortSource
+)
+
+internal fun resolveLlamaCleanupTarget(
+    activeControllerPort: Int?,
+    verifiedRecordedOwnerPort: Int?
+): LlamaCleanupTarget? {
+    val activePort = activeControllerPort?.takeIf { it in 1..65535 }
+    if (activePort != null) {
+        return LlamaCleanupTarget(activePort, LlamaCleanupPortSource.ACTIVE_CONTROLLER)
+    }
+    val recordedPort = verifiedRecordedOwnerPort?.takeIf { it in 1..65535 }
+    return recordedPort?.let {
+        LlamaCleanupTarget(it, LlamaCleanupPortSource.VERIFIED_RECORDED_OWNER)
+    }
+}
+
 class LlamaService : Service() {
     
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -123,19 +153,32 @@ class LlamaService : Service() {
             Companion.clearRecentStartupFailure()
             DistributedService.setInferenceRunning(false)
             DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
-            val recoveredPortReleased = recovery.recordedPort?.let { recordedPort ->
-                checkServerPortBind("127.0.0.1", recordedPort).available
-            } ?: true
-            if (recoveredPortReleased) {
+            // A recorded port is meaningful only when the exact owner check above matched and
+            // terminated the recorded process. If matching failed, leave the metadata available
+            // for a later explicit recovery attempt and do not probe an unrelated port.
+            val recoveredPortReleased = when {
+                recovery.recordedPid == null -> true
+                !recovery.matchedRecordedOwner -> null
+                else -> recovery.recordedPort?.let { recordedPort ->
+                    checkServerPortBind("127.0.0.1", recordedPort).available
+                }
+            }
+            if (recoveredPortReleased == true) {
                 Companion.clearRecordedOwner(applicationContext)
                 updateStateForGeneration(generation, ServerState.Stopped)
-            } else {
+            } else if (recoveredPortReleased == false) {
                 updateStateForGeneration(
                     generation,
                     ServerState.Error(
                         getString(R.string.llama_server_cleanup_port_busy, recovery.recordedPort)
                     )
                 )
+            } else {
+                DebugLog.log(
+                    "LlamaService: recorded owner did not match during recovery; " +
+                        "leaving owner metadata intact without probing port=${recovery.recordedPort}"
+                )
+                updateStateForGeneration(generation, ServerState.Stopped)
             }
             DebugLog.log(
                 "LlamaService: recovery completed recordedPid=${recovery.recordedPid} " +
@@ -245,6 +288,18 @@ class LlamaService : Service() {
         var restartMode = START_NOT_STICKY
         try {
             DebugLog.log("LlamaService: onStartCommand action=${intent?.action}")
+            val action = intent?.action
+            val leaseRejected = action != null &&
+                action != ACTION_RECOVER &&
+                LlamaOcrExclusiveLeaseStore.rejectsLegacyCommand(
+                    applicationContext,
+                    intent.getStringExtra(LlamaOcrExclusiveLeaseStore.TOKEN_EXTRA)
+                )
+            if (leaseRejected) {
+                DebugLog.log("LlamaService: rejected action=$action while the GGUF OCR lease is active")
+                stopSelfResult(startId)
+                return START_NOT_STICKY
+            }
             when (intent?.action) {
                 ACTION_START -> {
                     Companion.clearRecentStartupFailure()
@@ -1611,28 +1666,64 @@ class LlamaService : Service() {
             DebugLog.log("LlamaService: ignored stale cleanup generation=$generation")
             return
         }
-        val portToClean = currentServerPort ?: 8080
+        val activeControllerPort = currentServerPort
+        // A restarted isolated service has no controller port in memory. Only use the durable
+        // owner record after validating its exact live process; an unverified recorded port must
+        // never be probed or reported as ours.
+        val verifiedRecordedOwner = if (activeControllerPort == null) {
+            LlamaRuntimeOwnerStore.load(applicationContext)?.takeIf { record ->
+                NativeProcessCleanup.recordedLlamaOwnerIsAliveSync(
+                    rootPid = record.pid,
+                    expectedStartTimeTicks = record.processStartTimeTicks,
+                    expectedPort = record.port
+                )
+            }
+        } else {
+            null
+        }
+        if (verifiedRecordedOwner != null) {
+            val recovered = NativeProcessCleanup.cleanupRecordedLlamaProcessTreeSync(
+                reason = "LlamaService exact-owner stop",
+                rootPid = verifiedRecordedOwner.pid,
+                expectedStartTimeTicks = verifiedRecordedOwner.processStartTimeTicks,
+                expectedPort = verifiedRecordedOwner.port
+            )
+            DebugLog.log(
+                "LlamaService: exact recorded-owner stop pid=${verifiedRecordedOwner.pid} " +
+                    "port=${verifiedRecordedOwner.port} cleaned=$recovered"
+            )
+        }
+        val cleanupTarget = resolveLlamaCleanupTarget(
+            activeControllerPort = activeControllerPort,
+            verifiedRecordedOwnerPort = verifiedRecordedOwner?.port
+        )
         val openClWasActive = processController.activeProcessWasOpenCl()
         val ownedChildPid = processController.ownedChildPid()
         processController.stop()
         DebugLog.log(
             "LlamaService: owned native shutdown complete openCl=$openClWasActive " +
-                "childPid=$ownedChildPid port=$portToClean"
+                "childPid=$ownedChildPid cleanupPort=${cleanupTarget?.port} " +
+                "cleanupSource=${cleanupTarget?.source}"
         )
-        val portReleased = checkServerPortBind("127.0.0.1", portToClean).available
-        if (portReleased) {
-            Companion.clearRecordedOwner(applicationContext)
-        } else {
-            DebugLog.log(
-                "LlamaService: port $portToClean is still occupied after owned shutdown; " +
+        val portReleased = cleanupTarget?.let { target ->
+            checkServerPortBind("127.0.0.1", target.port).available
+        }
+        when {
+            portReleased == true -> Companion.clearRecordedOwner(applicationContext)
+            cleanupTarget != null -> DebugLog.log(
+                "LlamaService: port ${cleanupTarget.port} is still occupied after owned shutdown; " +
                     "preserving the exact owner record for Recover"
+            )
+            else -> DebugLog.log(
+                "LlamaService: no active or verified recorded cleanup port; " +
+                    "released owned process state without probing a port"
             )
         }
         Companion.clearServerLogs(lifecycleGeneration = generation)
         DistributedService.setInferenceRunning(false)
         DeviceAcceleration.reportActiveBinary(AccelerationWorkload.LLM, null)
-        val effectiveError = finalError ?: if (!portReleased) {
-            getString(R.string.llama_server_cleanup_port_busy, portToClean)
+        val effectiveError = finalError ?: if (portReleased == false && cleanupTarget != null) {
+            getString(R.string.llama_server_cleanup_port_busy, cleanupTarget.port)
         } else {
             null
         }
@@ -1670,18 +1761,38 @@ class LlamaService : Service() {
     }
 
     override fun onDestroy() {
-        val recordedOwner = LlamaRuntimeOwnerStore.load(applicationContext)
-        val portToClean = currentServerPort ?: recordedOwner?.port ?: 8080
+        val activeControllerPort = currentServerPort
+        // If Android recreated this service, the ProcessController has no live handle. Reconcile
+        // only a durable owner that still passes the exact PID/start-time/command/port check.
+        val recordedOwnerRecovery = if (activeControllerPort == null) {
+            Companion.recoverRecordedOwner(applicationContext)
+        } else {
+            null
+        }
+        val cleanupTarget = resolveLlamaCleanupTarget(
+            activeControllerPort = activeControllerPort,
+            verifiedRecordedOwnerPort = recordedOwnerRecovery
+                ?.takeIf { it.matchedRecordedOwner }
+                ?.recordedPort
+        )
         val ownedChildPid = processController.ownedChildPid()
         processController.stop()
         DebugLog.log(
-            "LlamaService: destroy cleaned only owned native tree childPid=$ownedChildPid port=$portToClean"
+            "LlamaService: destroy cleaned only owned native tree childPid=$ownedChildPid " +
+                "cleanupPort=${cleanupTarget?.port} cleanupSource=${cleanupTarget?.source} " +
+                "recordedOwnerMatched=${recordedOwnerRecovery?.matchedRecordedOwner == true}"
         )
-        if (checkServerPortBind("127.0.0.1", portToClean).available) {
-            Companion.clearRecordedOwner(applicationContext)
-        } else {
-            DebugLog.log(
-                "LlamaService: destroy left port $portToClean occupied; preserving the exact owner record"
+        when (val portReleased = cleanupTarget?.let { target ->
+            checkServerPortBind("127.0.0.1", target.port).available
+        }) {
+            true -> Companion.clearRecordedOwner(applicationContext)
+            false -> DebugLog.log(
+                "LlamaService: destroy left port ${cleanupTarget?.port} occupied; " +
+                    "preserving the exact owner record"
+            )
+            null -> DebugLog.log(
+                "LlamaService: destroy found no active or verified recorded cleanup port; " +
+                    "released service state without probing a port"
             )
         }
         Companion.clearServerLogs(lifecycleGeneration = lifecycleGeneration)

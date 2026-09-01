@@ -1942,7 +1942,7 @@ class SettingsRepository(private val context: Context) {
     }
 
     private val _pdfOcrLlamaContextSize = MutableStateFlow(
-        prefs.getInt("pdf_ocr_llama_context_size", 16384).coerceIn(2048, 65536)
+        prefs.getInt("pdf_ocr_llama_context_size", PDF_OCR_CONTEXT_DEFAULT).coerceIn(2048, 65536)
     )
     val pdfOcrLlamaContextSize = _pdfOcrLlamaContextSize.asStateFlow()
     fun setPdfOcrLlamaContextSize(value: Int) {
@@ -2058,7 +2058,7 @@ class SettingsRepository(private val context: Context) {
             mmprojPath = null,
             promptPreset = LlamaOcrPromptPreset.GENERIC_OCR,
             customPrompt = null,
-            contextSize = 16384,
+            contextSize = PDF_OCR_CONTEXT_DEFAULT,
             maxTokens = 2600,
             port = 8087,
             flashAttention = false,
@@ -4182,6 +4182,7 @@ class SettingsRepository(private val context: Context) {
         const val KB_EMBED_BACKEND_LITERT = "litert"
         const val PDF_LLAMA_SERVER_DEFAULT_URL = "http://localhost:8080"
         const val PDF_LLAMA_SWAP_DEFAULT_URL = "http://localhost:9292"
+        const val PDF_OCR_CONTEXT_DEFAULT = 8_192
         const val KB_DEFAULT_CHUNK_SIZE = 1_000
         val KB_CHUNK_SIZE_RANGE: IntRange = 400..3_200
         const val KB_DEFAULT_EMBED_BATCH_SIZE = 1_024

@@ -351,7 +351,8 @@ class LlamaServerSessionRuntime(private val context: Context) {
                                 sessionId = sessionId,
                                 pid = pid,
                                 processStartTimeTicks = startTicks,
-                                port = profile.serverPort
+                                port = profile.serverPort,
+                                launchProfileJson = LlamaServerLaunchProfile.encode(profile)
                             )
                         )
                     }

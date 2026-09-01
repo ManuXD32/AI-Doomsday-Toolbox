@@ -10,7 +10,9 @@ data class LlamaServerSessionOwner(
     val sessionId: String,
     val pid: Int,
     val processStartTimeTicks: Long,
-    val port: Int
+    val port: Int,
+    /** Exact launch snapshot for pause/restore; never contains prompts or generated content. */
+    val launchProfileJson: String? = null
 )
 
 class LlamaServerSessionOwnerStore(context: Context) {
@@ -37,4 +39,3 @@ class LlamaServerSessionOwnerStore(context: Context) {
         if (next.isEmpty()) file.delete() else file.writeText(gson.toJson(next, type), Charsets.UTF_8)
     }
 }
-

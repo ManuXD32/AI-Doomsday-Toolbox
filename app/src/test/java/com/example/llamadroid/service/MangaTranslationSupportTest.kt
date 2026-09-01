@@ -43,6 +43,63 @@ class MangaTranslationSupportTest {
         )
     }
 
+    @Test
+    fun `OCR selection clears an ambiguous stale projector and infers Unlimited preset`() {
+        val model = ModelEntity(
+            filename = "Unlimited-OCR-Q4_K_M.gguf",
+            path = "/models/unlimited.gguf",
+            sizeBytes = 20,
+            type = ModelType.VISION,
+            repoId = "org/unlimited-ocr",
+            isDownloaded = true,
+            isVision = true,
+            mmprojPath = "/models/old-incompatible-mmproj.gguf"
+        )
+        val projectors = listOf(
+            ModelEntity(
+                filename = "mmproj-unlimited-f16.gguf",
+                path = "/models/mmproj-a.gguf",
+                sizeBytes = 10,
+                type = ModelType.VISION_PROJECTOR,
+                repoId = "org/unlimited-ocr",
+                isDownloaded = true
+            ),
+            ModelEntity(
+                filename = "mmproj-unlimited-f32.gguf",
+                path = "/models/mmproj-b.gguf",
+                sizeBytes = 11,
+                type = ModelType.VISION_PROJECTOR,
+                repoId = "org/unlimited-ocr",
+                isDownloaded = true
+            )
+        )
+
+        val selection = MangaTranslationSupport.resolveOcrModelSelection(model, projectors)
+
+        assertEquals(LlamaOcrPromptPreset.UNLIMITED_OCR, selection.promptPreset)
+        assertEquals(null, selection.projector)
+    }
+
+    @Test
+    fun `OCR catalog excludes downloaded text-only GGUFs`() {
+        val textOnly = ModelEntity(
+            filename = "gemma-text.gguf",
+            path = "/models/gemma-text.gguf",
+            sizeBytes = 20,
+            type = ModelType.LLM,
+            repoId = "org/gemma",
+            isDownloaded = true,
+            isVision = false
+        )
+        val vision = textOnly.copy(
+            filename = "unlimited-ocr.gguf",
+            path = "/models/unlimited-ocr.gguf",
+            isVision = true
+        )
+
+        assertEquals(listOf(vision), MangaTranslationSupport.installedOcrModels(listOf(textOnly, vision)))
+    }
+
     private fun config(
         profile: MangaTranslationProfile = MangaTranslationProfile.BEST_READING
     ): MangaTranslationRunConfig {
