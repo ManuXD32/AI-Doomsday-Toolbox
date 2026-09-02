@@ -7,14 +7,23 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
+import com.example.llamadroid.sd.SdPipelineValidationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 internal object SdGenerationProcessLock {
     private val mutex = Mutex()
+
+    /**
+     * Exposes only the current lock state for bounded diagnostics. The lock itself remains owned
+     * by the generation runner and is never acquired by a health sample.
+     */
+    val isLocked: Boolean
+        get() = mutex.isLocked
 
     suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
 }
@@ -79,7 +88,8 @@ internal class SdToolGenerationRunner(
             maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(sdBinary, config.maxVramCpuGiB)
         )
         try {
-            args.addAll(buildSdCommandArgs(effectiveConfig, binaryCapabilities))
+            val pipeline = resolveSdPipelineForLaunch(context, effectiveConfig)
+            args.addAll(buildSdCommandArgs(effectiveConfig, pipeline, binaryCapabilities))
         } catch (e: SdIpAdapterConfigurationException) {
             throw SdConfigurationException(sdIpAdapterErrorMessage(context, e))
         } catch (e: SdMissingComponentsException) {
@@ -88,6 +98,10 @@ internal class SdToolGenerationRunner(
             throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_flags, e.flags.joinToString(", ")))
         } catch (e: SdUnsupportedModesException) {
             throw IllegalStateException(context.getString(R.string.imagegen_error_binary_missing_modes, e.modes.joinToString(", ")))
+        } catch (e: SdPipelineValidationException) {
+            throw IllegalStateException(
+                sdPipelineIssueMessage(context, e.pipeline.blockingIssues.firstOrNull())
+            )
         }
 
         DebugLog.log("[SdToolGenerationRunner] Running command: ${args.joinToString(" ")}")
@@ -103,10 +117,12 @@ internal class SdToolGenerationRunner(
             totalStepsHint = config.steps.coerceAtLeast(1),
             startedAtMs = SystemClock.elapsedRealtime()
         )
+        val nativeOutput = SdNativeOutputBuffer()
         val process = pb.start()
         process.inputStream.bufferedReader().use { reader ->
             var line = reader.readLine()
             while (line != null) {
+                nativeOutput.add(line)
                 DebugLog.log("SD tool: $line")
                 onStatus(line)
                 progressTracker.update(line, SystemClock.elapsedRealtime())?.let(onProgress)
@@ -117,12 +133,21 @@ internal class SdToolGenerationRunner(
         val exitCode = process.waitFor()
         DebugLog.log("[SdToolGenerationRunner] Process exited with code $exitCode")
         if (exitCode != 0) {
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+            val failureReport = SdNativeFailureClassifier.classify(
+                exitCode = exitCode,
+                recentOutput = nativeOutput.snapshot(),
+                stage = progressTracker.currentSnapshot()?.phase,
+                acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(sdBinary)
+            )
+            if (failureReport.category == SdFailureCategory.ACCELERATOR_FAILURE) {
                 val detail = "Stable Diffusion accelerator ${sdBinary.name} failed with exit code $exitCode."
                 DebugLog.log("[SdToolGenerationRunner] $detail")
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
-            throw RuntimeException(context.getString(R.string.imagegen_error_generation_failed, exitCode))
+            throw SdNativeFailureException(
+                report = failureReport,
+                message = sdNativeFailureMessage(context, failureReport)
+            )
         }
 
         return config.outputPath
@@ -153,6 +178,11 @@ internal fun shouldRetrySdGenerationOnCpu(
     error: Throwable
 ): Boolean {
     if (error is SdConfigurationException) return false
+    if (error is SdNativeFailureException &&
+        error.report.category != SdFailureCategory.ACCELERATOR_FAILURE
+    ) {
+        return false
+    }
     if (!DeviceAcceleration.isAcceleratorBinary(sdBinary) ||
         cpuBinary == null ||
         !cpuBinary.exists() ||
@@ -197,9 +227,30 @@ internal suspend fun probeSdBinaryCapabilities(
                     environment()["LD_LIBRARY_PATH"] = envPath
                 }
                 .start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            process.waitFor()
-            output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
+            val output = StringBuilder()
+            val outputReader = Thread({
+                runCatching { drainSdCapabilityOutput(process, output) }
+            }, "sd-capability-probe-reader").apply {
+                isDaemon = true
+                start()
+            }
+            try {
+                val finished = process.waitFor(SD_CAPABILITY_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                if (!finished) {
+                    process.destroyForcibly()
+                    process.waitFor(SD_CAPABILITY_PROBE_FORCE_SECONDS, TimeUnit.SECONDS)
+                    null
+                } else {
+                    outputReader.join(SD_CAPABILITY_PROBE_READER_JOIN_MS)
+                    synchronized(output) { output.toString() }
+                        .takeIf { it.isNotBlank() }
+                        ?.let(::parseSdBinaryCapabilities)
+                }
+            } finally {
+                runCatching { process.outputStream.close() }
+                runCatching { process.inputStream.close() }
+                runCatching { process.errorStream.close() }
+            }
         }.getOrNull()
     }
     val capabilities = helpCapabilities.maxByOrNull {
@@ -211,6 +262,25 @@ internal suspend fun probeSdBinaryCapabilities(
         SdBinaryCapabilityCache.capabilities = capabilities
     }
 }
+
+private fun drainSdCapabilityOutput(process: Process, output: StringBuilder) {
+    val buffer = CharArray(4 * 1024)
+    process.inputStream.bufferedReader().use { reader ->
+        while (true) {
+            val read = reader.read(buffer)
+            if (read < 0) break
+            synchronized(output) {
+                val remaining = SD_CAPABILITY_PROBE_OUTPUT_CHARS - output.length
+                if (remaining > 0) output.append(buffer, 0, minOf(read, remaining))
+            }
+        }
+    }
+}
+
+private const val SD_CAPABILITY_PROBE_TIMEOUT_SECONDS = 10L
+private const val SD_CAPABILITY_PROBE_FORCE_SECONDS = 2L
+private const val SD_CAPABILITY_PROBE_READER_JOIN_MS = 2_000L
+private const val SD_CAPABILITY_PROBE_OUTPUT_CHARS = 32 * 1024
 
 internal fun inferSdRuntimeTierSuffix(binaryName: String): String = when {
     binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"

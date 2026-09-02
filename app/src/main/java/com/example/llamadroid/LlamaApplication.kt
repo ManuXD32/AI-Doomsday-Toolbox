@@ -28,6 +28,7 @@ import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.LlamaScheduledTaskScheduler
 import com.example.llamadroid.service.LlamaRuntimeStateProjection
 import com.example.llamadroid.service.LlamaService
+import com.example.llamadroid.service.LlamaOcrRuntimeCoordinator
 import com.example.llamadroid.service.LlamaServerSessionStateStore
 import com.example.llamadroid.service.UnifiedNotificationManager
 import com.example.llamadroid.util.AssetPackManagerUtil
@@ -67,6 +68,20 @@ class LlamaApplication : Application() {
         PhoneWearGateway.start(this)
         installCrashBreadcrumbHandler()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            // A process death can leave the keyed OCR child alive.  Reconcile its metadata-only
+            // lease before any new OCR request is allowed to start; restoration commands carry
+            // the lease token and therefore remain valid across the process boundary.
+            runCatching { LlamaOcrRuntimeCoordinator.recoverStaleLease(this@LlamaApplication) }
+                .fold(
+                    onSuccess = { result ->
+                        result.onFailure {
+                            DebugLog.log("[OCR] stale runtime recovery incomplete: ${it.message}")
+                        }
+                    },
+                    onFailure = { error ->
+                        DebugLog.log("[OCR] stale runtime recovery failed: ${error.message}")
+                    }
+                )
             runRemovedLlmTrainingCleanupOnce()
             pruneLegacyPortableModelRows()
             normalizeLegacyQuadtrixLoraRows()

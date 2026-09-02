@@ -72,6 +72,8 @@ internal fun generationElapsedMs(
 }
 
 private const val LITERT_CHAT_FALLBACK_CONTEXT_TOKENS = 4000
+private const val STREAMING_STATE_UPDATE_INTERVAL_MS = 100L
+private const val STREAMING_PERSIST_INTERVAL_MS = 500L
 
 private val KnownToolImagePathPlaceholders = setOf(
     "image_from_user_input",
@@ -1156,7 +1158,11 @@ class LlamaClientService : Service() {
 
         val source = response.body()?.source() ?: throw Exception("Empty response body from server")
         val reader = BufferedReader(InputStreamReader(source.inputStream()))
-        var rawSequence = progress.content
+        val textAccumulator = LlamaStreamingTextAccumulator(
+            parseThinkingTags = !isContinuation,
+            initialContent = progress.content,
+            initialThinking = progress.thinking
+        )
         var lastUpdate = System.currentTimeMillis()
         var firstDeltaReceived = false
         val needsSpaceCheck = isContinuation && progress.content.isNotEmpty() && !progress.content.last().isWhitespace()
@@ -1215,31 +1221,32 @@ class LlamaClientService : Service() {
                 progress.promptProgress = null
                 progress.statusText = null
                 if (delta.isNotEmpty() && !firstDeltaReceived && needsSpaceCheck && !delta.first().isWhitespace()) {
-                    rawSequence += " "
+                    textAccumulator.appendContent(" ")
                 }
                 firstDeltaReceived = true
                 progress.markFirstTokenReceived()
-                rawSequence += delta
-
-                if (!isContinuation) {
-                    val extracted = extractThinking(rawSequence, dedicatedReasoning)
-                    progress.content = extracted.first
-                    progress.thinking = extracted.second
-                } else {
-                    progress.content = rawSequence
-                }
+                textAccumulator.appendContent(delta)
+                if (!isContinuation) textAccumulator.appendDedicatedThinking(dedicatedReasoning)
 
                 progress.tokenCount++
-                updateStreamingProgress(
-                    chatId = chatId,
-                    taskId = taskId,
-                    assistantMsgId = assistantMsgId,
-                    progress = progress,
-                    lastUpdateMs = lastUpdate
-                ).also { lastUpdate = it }
+                if (shouldPublishStreamingProgress(progress, lastUpdate)) {
+                    val snapshot = textAccumulator.snapshot()
+                    progress.content = snapshot.content
+                    progress.thinking = snapshot.thinking
+                    updateStreamingProgress(
+                        chatId = chatId,
+                        taskId = taskId,
+                        assistantMsgId = assistantMsgId,
+                        progress = progress,
+                        lastUpdateMs = lastUpdate
+                    ).also { lastUpdate = it }
+                }
             } catch (_: Exception) {
             }
         }
+        val completed = textAccumulator.finish()
+        progress.content = completed.content
+        progress.thinking = completed.thinking
     }
 
     private suspend fun streamOllamaResponse(
@@ -1258,7 +1265,11 @@ class LlamaClientService : Service() {
 
         syncOllamaService(server)
 
-        var rawSequence = progress.content
+        val textAccumulator = LlamaStreamingTextAccumulator(
+            parseThinkingTags = false,
+            initialContent = progress.content,
+            initialThinking = progress.thinking
+        )
         var lastUpdate = System.currentTimeMillis()
         var firstDeltaReceived = false
         val needsSpaceCheck = isContinuation && progress.content.isNotEmpty() && !progress.content.last().isWhitespace()
@@ -1278,30 +1289,38 @@ class LlamaClientService : Service() {
 
                 if (contentDelta.isNotEmpty()) {
                     if (!firstDeltaReceived && needsSpaceCheck && !contentDelta.first().isWhitespace()) {
-                        rawSequence += " "
+                        textAccumulator.appendContent(" ")
                     }
                     firstDeltaReceived = true
-                    rawSequence += contentDelta
-                    progress.content = rawSequence
+                    textAccumulator.appendContent(contentDelta)
                 }
                 if (reasoningDelta.isNotEmpty()) {
-                    progress.thinking += reasoningDelta
+                    textAccumulator.appendDedicatedThinking(reasoningDelta)
                 }
 
                 progress.markFirstTokenReceived()
                 progress.tokenCount++
                 progress.lastTokenAtMs = System.currentTimeMillis()
-                runBlocking {
-                    lastUpdate = updateStreamingProgress(
-                        chatId = chatId,
-                        taskId = taskId,
-                        assistantMsgId = assistantMsgId,
-                        progress = progress,
-                        lastUpdateMs = lastUpdate
-                    )
+                if (shouldPublishStreamingProgress(progress, lastUpdate)) {
+                    val snapshot = textAccumulator.snapshot()
+                    progress.content = snapshot.content
+                    progress.thinking = snapshot.thinking
+                    runBlocking {
+                        lastUpdate = updateStreamingProgress(
+                            chatId = chatId,
+                            taskId = taskId,
+                            assistantMsgId = assistantMsgId,
+                            progress = progress,
+                            lastUpdateMs = lastUpdate
+                        )
+                    }
                 }
             }
         ).getOrElse { throw it }
+
+        val completed = textAccumulator.finish()
+        progress.content = completed.content
+        progress.thinking = completed.thinking
 
         progress.promptTokens = result.usage?.promptTokens ?: progress.promptTokens
         result.usage?.completionTokens?.let { completionTokens ->
@@ -1341,7 +1360,13 @@ class LlamaClientService : Service() {
         val model = database.liteRtModelDao().getById(modelId)
             ?: throw IllegalStateException(getString(R.string.litert_error_model_missing))
 
-        var rawSequence = progress.content
+        val baseContent = progress.content
+        val baseThinking = progress.thinking
+        val textAccumulator = LlamaStreamingTextAccumulator(
+            parseThinkingTags = !isContinuation,
+            initialContent = baseContent,
+            initialThinking = baseThinking
+        )
         var lastUpdate = System.currentTimeMillis()
         progress.resetForNewStream()
 
@@ -1354,10 +1379,6 @@ class LlamaClientService : Service() {
             backendMode = backendMode,
             params = liteRtGalleryParams(params)
         )
-        val baseRawSequence = rawSequence
-        val baseContent = progress.content
-        val baseThinking = progress.thinking
-
         suspend fun publishStatus(status: String) {
             progress.statusText = status
             Companion.updateState(
@@ -1378,49 +1399,52 @@ class LlamaClientService : Service() {
             currentCoroutineContext().ensureActive()
             if (delta.isEmpty()) return
             progress.markFirstTokenReceived()
-            rawSequence += delta
-            if (!isContinuation) {
-                val extracted = extractThinking(rawSequence)
-                progress.content = repairLiteRtCompactTextForDisplay(extracted.first)
-                progress.thinking = repairLiteRtCompactTextForDisplay(extracted.second)
-            } else {
-                progress.content = repairLiteRtCompactTextForDisplay(rawSequence)
-            }
-            progress.tokenCount = estimateLiteRtCompletionTokens(
-                "${progress.content}\n${progress.thinking}"
-            ).coerceAtLeast(progress.tokenCount + 1)
+            textAccumulator.appendContent(delta)
+            progress.tokenCount++
             progress.lastTokenAtMs = System.currentTimeMillis()
-            lastUpdate = updateStreamingProgress(
-                chatId = chatId,
-                taskId = taskId,
-                assistantMsgId = assistantMsgId,
-                progress = progress,
-                lastUpdateMs = lastUpdate
-            )
+            if (shouldPublishStreamingProgress(progress, lastUpdate)) {
+                val snapshot = textAccumulator.snapshot()
+                progress.content = repairLiteRtCompactTextForDisplay(snapshot.content)
+                progress.thinking = repairLiteRtCompactTextForDisplay(snapshot.thinking)
+                progress.tokenCount = estimateLiteRtCompletionTokens(
+                    "${progress.content}\n${progress.thinking}"
+                ).coerceAtLeast(progress.tokenCount)
+                lastUpdate = updateStreamingProgress(
+                    chatId = chatId,
+                    taskId = taskId,
+                    assistantMsgId = assistantMsgId,
+                    progress = progress,
+                    lastUpdateMs = lastUpdate
+                )
+            }
         }
 
         suspend fun handleThinkingChunk(delta: String) {
             currentCoroutineContext().ensureActive()
             if (delta.isEmpty() || isContinuation) return
             progress.markFirstTokenReceived()
-            val extracted = extractThinking(rawSequence, delta)
-            progress.content = repairLiteRtCompactTextForDisplay(extracted.first)
-            progress.thinking = repairLiteRtCompactTextForDisplay(extracted.second)
-            progress.tokenCount = estimateLiteRtCompletionTokens(
-                "${progress.content}\n${progress.thinking}"
-            ).coerceAtLeast(progress.tokenCount + 1)
+            textAccumulator.appendDedicatedThinking(delta)
+            progress.tokenCount++
             progress.lastTokenAtMs = System.currentTimeMillis()
-            lastUpdate = updateStreamingProgress(
-                chatId = chatId,
-                taskId = taskId,
-                assistantMsgId = assistantMsgId,
-                progress = progress,
-                lastUpdateMs = lastUpdate
-            )
+            if (shouldPublishStreamingProgress(progress, lastUpdate)) {
+                val snapshot = textAccumulator.snapshot()
+                progress.content = repairLiteRtCompactTextForDisplay(snapshot.content)
+                progress.thinking = repairLiteRtCompactTextForDisplay(snapshot.thinking)
+                progress.tokenCount = estimateLiteRtCompletionTokens(
+                    "${progress.content}\n${progress.thinking}"
+                ).coerceAtLeast(progress.tokenCount)
+                lastUpdate = updateStreamingProgress(
+                    chatId = chatId,
+                    taskId = taskId,
+                    assistantMsgId = assistantMsgId,
+                    progress = progress,
+                    lastUpdateMs = lastUpdate
+                )
+            }
         }
 
         fun resetAfterFailedAcceleratorAttempt() {
-            rawSequence = baseRawSequence
+            textAccumulator.reset(baseContent, baseThinking)
             progress.content = baseContent
             progress.thinking = baseThinking
             progress.resetForNewStream()
@@ -1435,6 +1459,10 @@ class LlamaClientService : Service() {
             onThinkingChunk = ::handleThinkingChunk,
             onAcceleratorFailureReset = ::resetAfterFailedAcceleratorAttempt
         )
+
+        val completed = textAccumulator.finish()
+        progress.content = repairLiteRtCompactTextForDisplay(completed.content)
+        progress.thinking = repairLiteRtCompactTextForDisplay(completed.thinking)
 
         progress.promptTokens = stats.promptTokens
         progress.completionTokens = stats.completionTokens
@@ -1549,12 +1577,32 @@ class LlamaClientService : Service() {
         val samplingParams = LlamaServerSamplingParams.fromParams(params)
         val maxOutputTokens = nativeChatMaxOutputTokens(params)
 
-        var rawSequence = progress.content
+        val textAccumulator = LlamaStreamingTextAccumulator(
+            parseThinkingTags = false,
+            initialContent = progress.content,
+            initialThinking = progress.thinking
+        )
         var lastUpdate = System.currentTimeMillis()
         progress.resetForNewStream()
         progress.statusText = null
         val executedToolSignatures = mutableSetOf<String>()
         val completedMutatingToolCounts = mutableMapOf<String, Int>()
+
+        fun syncTextAccumulator(force: Boolean = false) {
+            if (!force && !shouldPublishStreamingProgress(progress, lastUpdate)) return
+            val snapshot = textAccumulator.snapshot()
+            progress.content = snapshot.content
+            progress.thinking = snapshot.thinking
+            runBlocking {
+                lastUpdate = updateStreamingProgress(
+                    chatId = chatId,
+                    taskId = taskId,
+                    assistantMsgId = assistantMsgId,
+                    progress = progress,
+                    lastUpdateMs = lastUpdate
+                )
+            }
+        }
 
         suspend fun runModelCall(availableTools: List<AgentTool>): OllamaService.ChatResponse {
             progress.statusText = null
@@ -1567,24 +1615,15 @@ class LlamaClientService : Service() {
 
                 progress.statusText = null
                 if (contentDelta.isNotEmpty()) {
-                    rawSequence += contentDelta
-                    progress.content = rawSequence
+                    textAccumulator.appendContent(contentDelta)
                 }
                 if (reasoningDelta.isNotEmpty()) {
-                    progress.thinking += reasoningDelta
+                    textAccumulator.appendDedicatedThinking(reasoningDelta)
                 }
 
                 progress.markFirstTokenReceived()
                 progress.tokenCount++
-                runBlocking {
-                    lastUpdate = updateStreamingProgress(
-                        chatId = chatId,
-                        taskId = taskId,
-                        assistantMsgId = assistantMsgId,
-                        progress = progress,
-                        lastUpdateMs = lastUpdate
-                    )
-                }
+                syncTextAccumulator()
             }
 
             return if (server.isOllamaEngine()) {
@@ -1670,13 +1709,13 @@ class LlamaClientService : Service() {
 
         fun appendFallbackContent(response: OllamaService.ChatResponse) {
             val content = response.message.content
-            if (content.isNotBlank() && !rawSequence.endsWith(content)) {
-                rawSequence += content
-                progress.content = rawSequence
+            if (content.isNotBlank() && !textAccumulator.rawContent().endsWith(content)) {
+                textAccumulator.appendContent(content)
             }
-            if (progress.thinking.isBlank() && !response.message.thinking.isNullOrBlank()) {
-                progress.thinking = response.message.thinking.orEmpty()
+            if (textAccumulator.snapshot().thinking.isBlank() && !response.message.thinking.isNullOrBlank()) {
+                textAccumulator.appendDedicatedThinking(response.message.thinking.orEmpty())
             }
+            syncTextAccumulator(force = true)
         }
 
         suspend fun executeToolCallWithRetry(
@@ -1764,7 +1803,7 @@ class LlamaClientService : Service() {
 
         repeat(effectiveToolConfig.maxToolRounds) { round ->
             currentCoroutineContext().ensureActive()
-            val visibleContentBeforeModelCall = rawSequence
+            val visibleContentBeforeModelCall = textAccumulator.rawContent()
             val response = runModelCall(tools)
             mergeUsage(response)
 
@@ -1786,8 +1825,8 @@ class LlamaClientService : Service() {
                 return
             }
 
-            rawSequence = visibleContentBeforeModelCall
-            progress.content = rawSequence
+            textAccumulator.reset(visibleContentBeforeModelCall, progress.thinking)
+            progress.content = visibleContentBeforeModelCall
             lastUpdate = updateStreamingProgress(
                 chatId = chatId,
                 taskId = taskId,
@@ -3210,27 +3249,31 @@ class LlamaClientService : Service() {
         progress: StreamingProgress,
         lastUpdateMs: Long
     ): Long {
+        val nowMs = System.currentTimeMillis()
         val elapsed = progress.generationElapsedSeconds()
         val tps = if (elapsed > 0.0) progress.tokenCount / elapsed else 0.0
         maybeRecordPowerDiagnostics(progress)
 
-        Companion.updateState(
-            GenerationState.Generating(
-                chatId = chatId,
-                content = progress.content,
-                thinking = progress.thinking.takeIf { it.isNotBlank() },
-                tokenCount = progress.tokenCount,
-                tokensPerSecond = tps,
-                statusText = progress.statusText,
-                promptProgress = progress.promptProgress,
-                promptProcessed = progress.promptProcessed,
-                promptTotal = progress.promptTotal,
-                promptCached = progress.promptCached,
-                toolEvents = progress.toolEvents.toList()
+        if (nowMs - progress.lastStateUpdateMs >= STREAMING_STATE_UPDATE_INTERVAL_MS) {
+            Companion.updateState(
+                GenerationState.Generating(
+                    chatId = chatId,
+                    content = progress.content,
+                    thinking = progress.thinking.takeIf { it.isNotBlank() },
+                    tokenCount = progress.tokenCount,
+                    tokensPerSecond = tps,
+                    statusText = progress.statusText,
+                    promptProgress = progress.promptProgress,
+                    promptProcessed = progress.promptProcessed,
+                    promptTotal = progress.promptTotal,
+                    promptCached = progress.promptCached,
+                    toolEvents = progress.toolEvents.toList()
+                )
             )
-        )
+            progress.lastStateUpdateMs = nowMs
+        }
 
-        if (System.currentTimeMillis() - lastUpdateMs <= 500) {
+        if (nowMs - lastUpdateMs <= STREAMING_PERSIST_INTERVAL_MS) {
             return lastUpdateMs
         }
 
@@ -3249,7 +3292,7 @@ class LlamaClientService : Service() {
         } else {
             progress.content
         }
-        val words = progressContext.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val words = progressContext.takeLast(512).trim().split(Regex("\\s+")).filter { it.isNotBlank() }
         val lastWords = words.takeLast(7).joinToString(" ")
         val progressText = if (lastWords.isBlank()) {
             "%d tok · %.1f t/s".format(progress.tokenCount, tps)
@@ -3259,6 +3302,14 @@ class LlamaClientService : Service() {
         UnifiedNotificationManager.updateProgress(taskId, 0.5f, progressText)
         return System.currentTimeMillis()
     }
+
+    private fun shouldPublishStreamingProgress(
+        progress: StreamingProgress,
+        lastPersistMs: Long,
+        nowMs: Long = System.currentTimeMillis()
+    ): Boolean =
+        nowMs - progress.lastStateUpdateMs >= STREAMING_STATE_UPDATE_INTERVAL_MS ||
+            nowMs - lastPersistMs > STREAMING_PERSIST_INTERVAL_MS
 
     private fun publishToolStatus(
         chatId: Long,
@@ -3794,6 +3845,7 @@ class LlamaClientService : Service() {
         val toolEvents: MutableList<ToolActivityEvent> = mutableListOf(),
         val generatedImagePaths: MutableList<String> = mutableListOf(),
         var lastPowerDiagnosticMs: Long = 0L,
+        var lastStateUpdateMs: Long = 0L,
         var lastTokenAtMs: Long = System.currentTimeMillis()
     ) {
         fun resetForNewStream(nowMs: Long = System.currentTimeMillis()) {
@@ -3807,6 +3859,7 @@ class LlamaClientService : Service() {
             promptProcessed = 0
             promptTotal = 0
             promptCached = 0
+            lastStateUpdateMs = 0L
             lastTokenAtMs = nowMs
         }
 

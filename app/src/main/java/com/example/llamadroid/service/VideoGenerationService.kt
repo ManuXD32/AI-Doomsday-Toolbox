@@ -362,6 +362,7 @@ class VideoGenerationService : Service() {
                 appendLocalSdBackendArgs(
                     args = args,
                     paramsBackendMode = config.sdParamsBackendMode,
+                    paramsBackendSpec = config.sdParamsBackendSpec,
                     runtimeBackendMode = effectiveSdRuntimeBackendModeForBinary(candidateBinary, config.sdRuntimeBackendMode),
                     maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(candidateBinary, config.maxVramCpuGiB),
                     flagSupported = { flag ->
@@ -571,6 +572,7 @@ class VideoGenerationService : Service() {
             vaeConvDirect = config.vaeConvDirect,
             mmap = config.mmap,
             sdParamsBackendMode = config.sdParamsBackendMode,
+            sdParamsBackendSpec = config.sdParamsBackendSpec,
             sdRuntimeBackendMode = config.sdRuntimeBackendMode,
             maxVramCpuGiB = config.maxVramCpuGiB,
             distributedRuntime = config.distributedRuntime,

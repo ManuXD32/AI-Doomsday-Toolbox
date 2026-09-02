@@ -55,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 
@@ -170,6 +171,14 @@ fun LlamaApp(
         }
     }
     val scope = remember { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    DisposableEffect(scope) {
+        onDispose {
+            // TamaAgentService is lazily shared by the root composition. Cancelling this
+            // scope when the app leaves composition releases its background jobs and prevents
+            // a stale agent coroutine from retaining the root UI after activity recreation.
+            scope.cancel()
+        }
+    }
     val tamaAgentServiceHolder = remember {
         lazy {
             TamaAgentService(

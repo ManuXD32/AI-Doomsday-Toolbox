@@ -43,7 +43,9 @@ enum class MangaOcrStrategy {
     HYBRID,
     ADAPTIVE,
     FULL_PAGE,
-    BUBBLE_ONLY
+    BUBBLE_ONLY,
+    /** User-painted page regions; one OCR request is made per connected region. */
+    PAINTED_REGIONS
 }
 
 enum class MangaOcrExecutionMode {
@@ -147,7 +149,9 @@ data class MangaTranslationRunConfig(
     val pageImageContextAvailable: Boolean,
     val pageImageContextReason: String? = null,
     val ocrModelRef: MangaTemplateModelRef? = null,
-    val ocrProjectorRef: MangaTemplateModelRef? = null
+    val ocrProjectorRef: MangaTemplateModelRef? = null,
+    val paintedOcrWorkspace: MangaPaintedOcrWorkspaceRef? = null,
+    val paintedOcrReviewComplete: Boolean = false
 ) {
     constructor(
         profile: MangaTranslationProfile,
@@ -245,7 +249,10 @@ enum class MangaPreflightCode {
     LITERT_MODEL_MISSING,
     OCR_MODEL_MISSING,
     OCR_MMPROJ_MISSING,
-    VISION_UNAVAILABLE
+    VISION_UNAVAILABLE,
+    PAINTED_OCR_WORKSPACE_MISSING,
+    PAINTED_OCR_REVIEW_REQUIRED,
+    PAINTED_OCR_SOURCE_CHANGED
 }
 
 data class MangaPreflightIssue(
@@ -289,6 +296,7 @@ data class MangaTranslationQualityReport(
     val coalescedBubbleFragments: Int = 0,
     val incompleteTranslationRetries: Int = 0,
     val wholeBubblesPreserved: Int = 0,
+    val ocrRuntimeFallbacks: Int = 0,
     val resolvedReadingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT
 ) {
     val warningCount: Int
@@ -296,7 +304,8 @@ data class MangaTranslationQualityReport(
             visionFallbacks + blankOverlayUnits + clippedOverlayUnits +
             ungroundedOcrResponses + regionalOcrFallbacks + promptLeakRejections +
             skippedLlamaCropRequests + decorativeTextPreserved + skippedOverlayUnits +
-            liteRtRuntimeFallbacks + incompleteTranslationRetries + wholeBubblesPreserved
+            liteRtRuntimeFallbacks + incompleteTranslationRetries + wholeBubblesPreserved +
+            ocrRuntimeFallbacks
 }
 
 data class MangaTranslationPreviewResult(
@@ -370,6 +379,17 @@ data class MangaTemplateModelRef(
     val repositoryId: String,
     val modelType: ModelType,
     val legacyPath: String? = null
+)
+
+/**
+ * The complete, user-visible OCR model choice.  Keeping the inferred preset and
+ * projector together prevents one picker from leaving the other picker pointed
+ * at a stale or incompatible file.
+ */
+data class MangaOcrModelSelection(
+    val model: ModelEntity,
+    val promptPreset: LlamaOcrPromptPreset,
+    val projector: ModelEntity?
 )
 
 data class MangaTranslationCheckpoint(
@@ -593,7 +613,7 @@ object MangaTranslationSupport {
             model.isDownloaded &&
                 model.path.isNotBlank() &&
                 model.filename.endsWith(".gguf", ignoreCase = true) &&
-                model.type in setOf(ModelType.LLM, ModelType.VISION)
+                (model.type == ModelType.VISION || model.isVision)
         }.sortedBy { it.filename.lowercase(Locale.US) }
 
     fun installedProjectors(models: List<ModelEntity>): List<ModelEntity> =
@@ -647,6 +667,22 @@ object MangaTranslationSupport {
         }.singleOrNull()?.let { return it }
         return projectors.singleOrNull()
     }
+
+    /**
+     * Resolve all dependent OCR choices after a model picker change.
+     *
+     * A null projector is intentional: callers must clear any previously
+     * selected projector and make the user choose one when the installed
+     * catalog does not contain an unambiguous match.
+     */
+    fun resolveOcrModelSelection(
+        model: ModelEntity,
+        projectors: List<ModelEntity>
+    ): MangaOcrModelSelection = MangaOcrModelSelection(
+        model = model,
+        promptPreset = inferOcrPreset(model.filename, model.repoId),
+        projector = matchProjector(model, projectors)
+    )
 
     fun inferOcrPreset(modelName: String?, repositoryId: String?): LlamaOcrPromptPreset {
         val hint = "${modelName.orEmpty()} ${repositoryId.orEmpty()}".lowercase(Locale.US)
@@ -778,6 +814,19 @@ object MangaTranslationSupport {
         }
         if (spec.config.behavior.pageImageContextEnabled && !spec.config.pageImageContextAvailable) {
             issues += MangaPreflightIssue(MangaPreflightCode.VISION_UNAVAILABLE, MangaPreflightSeverity.WARNING)
+        }
+        if (spec.config.behavior.ocrStrategy == MangaOcrStrategy.PAINTED_REGIONS) {
+            if (spec.config.paintedOcrWorkspace == null) {
+                issues += MangaPreflightIssue(
+                    MangaPreflightCode.PAINTED_OCR_WORKSPACE_MISSING,
+                    MangaPreflightSeverity.BLOCKING
+                )
+            } else if (!spec.config.paintedOcrReviewComplete) {
+                issues += MangaPreflightIssue(
+                    MangaPreflightCode.PAINTED_OCR_REVIEW_REQUIRED,
+                    MangaPreflightSeverity.BLOCKING
+                )
+            }
         }
         return MangaTranslationPreflight(issues.distinct())
     }
@@ -1031,6 +1080,8 @@ object MangaTranslationSupport {
             .put("pageImageContextReason", config.pageImageContextReason)
             .put("ocrModelRef", templateModelRefToJson(config.ocrModelRef))
             .put("ocrProjectorRef", templateModelRefToJson(config.ocrProjectorRef))
+            .put("paintedOcrWorkspace", paintedOcrWorkspaceToJson(config.paintedOcrWorkspace))
+            .put("paintedOcrReviewComplete", config.paintedOcrReviewComplete)
             .put("behavior", JSONObject()
                 .put("ocrStrategy", config.behavior.ocrStrategy.name)
                 .put("pageUnderstandingEnabled", config.behavior.pageUnderstandingEnabled)
@@ -1085,6 +1136,19 @@ object MangaTranslationSupport {
                     .put("commandTemplate", llamaOcr.commandTemplate)
                     .put("temporarilyReplaceRunningServer", llamaOcr.temporarilyReplaceRunningServer)))
     }
+
+    /**
+     * Serialize reusable workflow settings without binding a template to a document's painted
+     * page workspace. The selected strategy is retained; masks and workspace IDs are always
+     * recreated for the next source selection.
+     */
+    fun runConfigToTemplateJson(config: MangaTranslationRunConfig): JSONObject =
+        runConfigToJson(
+            config.copy(
+                paintedOcrWorkspace = null,
+                paintedOcrReviewComplete = false
+            )
+        )
 
     fun runConfigFromJson(json: JSONObject, fallback: MangaTranslationRunConfig): MangaTranslationRunConfig {
         val profile = enumValueOrDefault(json.optString("profile"), fallback.profile)
@@ -1192,7 +1256,39 @@ object MangaTranslationSupport {
             ocrModelRef = templateModelRefFromJson(json.optJSONObject("ocrModelRef"))
                 ?: fallback.ocrModelRef,
             ocrProjectorRef = templateModelRefFromJson(json.optJSONObject("ocrProjectorRef"))
-                ?: fallback.ocrProjectorRef
+                ?: fallback.ocrProjectorRef,
+            // A present null explicitly clears a workspace when applying a reusable template;
+            // older manifests that predate the field still inherit the fallback for backwards
+            // compatibility.
+            paintedOcrWorkspace = if (json.has("paintedOcrWorkspace")) {
+                paintedOcrWorkspaceFromJson(json.optJSONObject("paintedOcrWorkspace"))
+            } else {
+                fallback.paintedOcrWorkspace
+            },
+            paintedOcrReviewComplete = if (json.has("paintedOcrReviewComplete")) {
+                json.optBoolean("paintedOcrReviewComplete", false)
+            } else {
+                fallback.paintedOcrReviewComplete
+            }
+        )
+    }
+
+    private fun paintedOcrWorkspaceToJson(ref: MangaPaintedOcrWorkspaceRef?): Any =
+        ref?.let {
+            JSONObject()
+                .put("workspaceId", it.workspaceId)
+                .put("revision", it.revision)
+                .put("sourceFingerprint", it.sourceFingerprint)
+        } ?: JSONObject.NULL
+
+    private fun paintedOcrWorkspaceFromJson(json: JSONObject?): MangaPaintedOcrWorkspaceRef? {
+        if (json == null) return null
+        val id = json.optString("workspaceId").trim()
+        if (id.isBlank()) return null
+        return MangaPaintedOcrWorkspaceRef(
+            workspaceId = id,
+            revision = json.optLong("revision", 0L).coerceAtLeast(0L),
+            sourceFingerprint = json.optNullableString("sourceFingerprint")
         )
     }
 

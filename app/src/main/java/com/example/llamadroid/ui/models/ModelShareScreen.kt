@@ -17,6 +17,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,6 +48,7 @@ import com.example.llamadroid.R
 @Composable
 fun ModelShareScreen(navController: NavController) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     
@@ -66,25 +71,53 @@ fun ModelShareScreen(navController: NavController) {
         }
     }
     
-    // Bind service
-    DisposableEffect(Unit) {
+    fun bindShareService() {
+        if (isBound) return
         android.util.Log.i("ModelShareScreen", "Starting and binding to ModelShareService")
         val intent = Intent(context, ModelShareService::class.java)
         context.startService(intent)
-        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        isBound = runCatching {
+            context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        }.getOrDefault(false)
+    }
+
+    fun unbindShareService() {
+        android.util.Log.i("ModelShareScreen", "Unbinding from ModelShareService")
+        if (isBound) {
+            runCatching { context.unbindService(connection) }
+        }
+        isBound = false
+        service = null
+    }
+
+    // The share screen intentionally starts its service while visible, but it must not retain a
+    // binding while the destination is backgrounded or sitting in the navigation back stack.
+    DisposableEffect(context, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> bindShareService()
+                Lifecycle.Event.ON_STOP -> unbindShareService()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            bindShareService()
+        }
         
         onDispose {
-            android.util.Log.i("ModelShareScreen", "Unbinding from ModelShareService")
-            if (isBound) {
-                context.unbindService(connection)
-            }
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            unbindShareService()
         }
     }
     
     // Observe service state
-    val isRunning by service?.isRunning?.collectAsState() ?: remember { mutableStateOf(false) }
-    val serverUrls by service?.serverUrls?.collectAsState() ?: remember { mutableStateOf(emptyList<Pair<String, String>>()) }
-    val activeDownloads by service?.activeDownloads?.collectAsState() ?: remember { mutableStateOf(0) }
+    val isRunning by service?.isRunning?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(false) }
+    val serverUrls by service?.serverUrls?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(emptyList<Pair<String, String>>()) }
+    val activeDownloads by service?.activeDownloads?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(0) }
     
     // Load models - check file existence instead of isDownloaded flag
     var models by remember { mutableStateOf<List<ModelEntity>>(emptyList()) }
@@ -98,6 +131,13 @@ fun ModelShareScreen(navController: NavController) {
     
     // QR code bitmaps for each interface
     var qrBitmaps by remember { mutableStateOf<List<Triple<String, String, Bitmap?>>>(emptyList()) }
+    DisposableEffect(qrBitmaps) {
+        onDispose {
+            qrBitmaps.forEach { (_, _, bitmap) ->
+                if (bitmap != null && !bitmap.isRecycled) bitmap.recycle()
+            }
+        }
+    }
     LaunchedEffect(serverUrls) {
         qrBitmaps = serverUrls.map { (ifName, url) ->
             val bitmap = withContext(Dispatchers.Default) {

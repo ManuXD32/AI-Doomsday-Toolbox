@@ -13,10 +13,19 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.parseOnnxCapabilities
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
-import com.example.llamadroid.sd.buildSdCompatProfiles
-import com.example.llamadroid.sd.defaultCompatProfilesFor
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
 import com.example.llamadroid.sd.inferSdFamily
+import com.example.llamadroid.sd.resolveSdCompatProfiles
+import com.example.llamadroid.sd.SdArtifactInspection
+import com.example.llamadroid.sd.SdArtifactInspector
+import com.example.llamadroid.sd.SdArtifactRole
+import com.example.llamadroid.sd.SdInspectionConfidence
+import com.example.llamadroid.sd.SdModelFamily
+import com.example.llamadroid.sd.SdInspectionCache
+import com.example.llamadroid.sd.needsSdArtifactInspection
+import com.example.llamadroid.sd.sdArtifactInspection
+import com.example.llamadroid.sd.withSdArtifactInspection
+import com.example.llamadroid.sd.normalizeSdParamsBackendSpec
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_SUPERTONIC_CATALOG_BUNDLE
@@ -275,9 +284,13 @@ class ModelRepository(
         val inferredFamily = inferSdFamily(type, repoId, filename)
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
         val resolvedVariant = sdVariant ?: inferredFamily.second
-        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(inferredFamily.first, type)
-        val resolvedCompatProfiles = sdCompatProfiles ?: buildSdCompatProfiles(
-            *defaultCompatProfilesFor(type).toTypedArray()
+        val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
+        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
+        val resolvedCompatProfiles = resolveSdCompatProfiles(
+            type = type,
+            explicitProfiles = sdCompatProfiles,
+            family = resolvedFamilyEnum,
+            variant = resolvedVariant
         )
         
         val progressKey = buildDownloadTaskId(repoId, localFilename, type)
@@ -331,9 +344,22 @@ class ModelRepository(
                     onnxReferenceUri = onnxReferenceUri,
                     onnxReferencePath = onnxReferencePath
                 )
-                modelDao.insertModel(entity)
-                DownloadProgressHolder.removeProgress(progressKey)
-                DebugLog.log("ModelRepository: Saved $localFilename to DB as $type")
+                try {
+                    // insertModel performs the same bounded SD inspection used
+                    // by the foreground service before trusting this row.
+                    insertModel(entity)
+                    DownloadProgressHolder.removeProgress(progressKey)
+                    DebugLog.log("ModelRepository: Saved $localFilename to DB as $type")
+                } catch (error: Exception) {
+                    // Keep the completed file and task metadata recoverable;
+                    // only the trusted model row is withheld.
+                    DownloadProgressHolder.updateProgress(progressKey, -1f)
+                    DownloadProgressHolder.updateStatus(
+                        progressKey,
+                        "Model inspection failed: ${error.message.orEmpty()}"
+                    )
+                    DebugLog.log("ModelRepository: Refused unverified $localFilename: ${error.message}")
+                }
                 break
             } else if (progress < 0f && progress != DownloadProgressHolder.INDETERMINATE) {
                 // Download failed
@@ -382,9 +408,13 @@ class ModelRepository(
         val inferredFamily = inferSdFamily(type, repoId, filename)
         val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
         val resolvedVariant = sdVariant ?: inferredFamily.second
-        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(inferredFamily.first, type)
-        val resolvedCompatProfiles = sdCompatProfiles ?: buildSdCompatProfiles(
-            *defaultCompatProfilesFor(type).toTypedArray()
+        val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
+        val resolvedCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, type)
+        val resolvedCompatProfiles = resolveSdCompatProfiles(
+            type = type,
+            explicitProfiles = sdCompatProfiles,
+            family = resolvedFamilyEnum,
+            variant = resolvedVariant
         )
         
         // Use unique progress key
@@ -557,11 +587,136 @@ class ModelRepository(
     }
     
     suspend fun insertModel(model: ModelEntity) {
-        modelDao.insertModel(model)
+        modelDao.insertModel(enrichSdModelForStorage(model))
+    }
+
+    /**
+     * Inspect a selected SD artifact before callers move it into a managed
+     * directory or create a trusted model row.  The inspector only reads
+     * bounded headers/descriptors and never unpickles legacy checkpoints.
+     */
+    suspend fun inspectSdArtifact(
+        file: File,
+        configuredType: ModelType,
+        configuredFamily: String? = null,
+        force: Boolean = false
+    ): SdArtifactInspection = withContext(Dispatchers.IO) {
+        val inspection = SdInspectionCache.inspect(
+            file = file,
+            configuredRole = configuredType.sdArtifactRole(),
+            force = force
+        )
+        validateSdArtifactInspection(configuredType, inspection, configuredFamily).getOrThrow()
+        inspection
+    }
+
+    /**
+     * Inspect a selected Storage Access Framework document before import.
+     * Only a bounded header prefix is read; the source model is never copied
+     * or handed to a native backend by this method.
+     */
+    suspend fun inspectSdArtifact(
+        uri: Uri,
+        displayName: String?,
+        configuredType: ModelType,
+        configuredFamily: String? = null
+    ): SdArtifactInspection = withContext(Dispatchers.IO) {
+        val inspection = SdArtifactInspector().inspect(
+            contentResolver = context.contentResolver,
+            uri = uri,
+            displayName = displayName,
+            configuredRole = configuredType.sdArtifactRole(),
+            temporaryDirectory = context.cacheDir
+        )
+        validateSdArtifactInspection(configuredType, inspection, configuredFamily).getOrThrow()
+        inspection
+    }
+
+    /** Re-inspect a stale/legacy row lazily before it is shown or launched. */
+    suspend fun ensureSdArtifactInspection(
+        model: ModelEntity,
+        force: Boolean = false
+    ): ModelEntity = withContext(Dispatchers.IO) {
+        if (!model.type.isStableDiffusionArtifact()) return@withContext model
+        val file = File(model.path)
+        if (!file.exists() || !file.isFile) return@withContext model
+
+        val cached = model.sdArtifactInspection()
+        if (!force && cached != null && !model.needsSdArtifactInspection(file)) {
+            return@withContext model
+        }
+
+        // Lazy detection must still persist high-confidence contradictions so
+        // the model-management UI can show the detected evidence and explain
+        // why launch is blocked. Import/download trust validation remains in
+        // insertModel/enrichSdModelForStorage and still throws on blockers.
+        val inspection = SdInspectionCache.inspect(
+            file = file,
+            configuredRole = model.type.sdArtifactRole(),
+            force = force
+        )
+        val enriched = model.withSdArtifactInspection(inspection)
+        if (enriched != model) modelDao.insertModel(enriched)
+        enriched
+    }
+
+    /**
+     * Sequential bulk upgrade used by an explicit “detect all” action. Header
+     * inspection is bounded and serialized so a large model library cannot
+     * allocate one parser buffer per artifact or start a native model load.
+     */
+    suspend fun ensureSdArtifactInspections(
+        models: Iterable<ModelEntity>,
+        force: Boolean = false,
+        onProgress: (completed: Int, total: Int) -> Unit = { _, _ -> }
+    ): List<ModelEntity> = withContext(Dispatchers.IO) {
+        val candidates = models.filter { it.type.isStableDiffusionArtifact() }.toList()
+        val total = candidates.size
+        candidates.mapIndexed { index, model ->
+            val result = runCatching { ensureSdArtifactInspection(model, force) }
+                .getOrDefault(model)
+            onProgress(index + 1, total)
+            result
+        }
+    }
+
+    private suspend fun enrichSdModelForStorage(model: ModelEntity): ModelEntity {
+        if (!model.type.isStableDiffusionArtifact()) return model
+        val file = File(model.path)
+        if (!file.exists() || !file.isFile) return model
+
+        val cached = model.sdArtifactInspection()
+        if (cached != null && !model.needsSdArtifactInspection(file)) {
+            // Re-validate persisted summaries when an artifact is inserted or
+            // updated through a trust boundary. Lazy UI detection deliberately
+            // stores contradictions; trusted insertion must not.
+            validateSdArtifactInspection(model.type, cached, model.sdFamily).getOrThrow()
+            return model
+        }
+
+        val inspection = SdInspectionCache.inspect(
+            file = file,
+            configuredRole = model.type.sdArtifactRole()
+        )
+        validateSdArtifactInspection(model.type, inspection, model.sdFamily).getOrThrow()
+        return model.withSdArtifactInspection(inspection)
     }
 
     suspend fun updateVisionSupport(filename: String, isVision: Boolean) {
         modelDao.updateVisionSupport(filename, isVision)
+    }
+
+    /**
+     * Remember local SD parameter residency for a model/component. The value is
+     * normalized before persistence and never affects distributed launches.
+     */
+    suspend fun updateSdParamsBackendSpec(
+        model: ModelEntity,
+        spec: String
+    ): ModelEntity = withContext(Dispatchers.IO) {
+        val normalized = normalizeSdParamsBackendSpec(spec, model.sdParamsBackendMode)
+        modelDao.updateSdParamsBackendSpec(model.filename, normalized)
+        model.copy(sdParamsBackendSpec = normalized)
     }
 
     fun huggingFaceToken(): String =
@@ -587,6 +742,7 @@ class ModelRepository(
         sdVariant: String? = original.sdVariant,
         sdCompatProfiles: String? = original.sdCompatProfiles,
         sdParamsBackendMode: String = original.sdParamsBackendMode,
+        sdParamsBackendSpec: String = original.sdParamsBackendSpec,
         sdRuntimeBackendMode: String = original.sdRuntimeBackendMode,
         onnxCapabilities: String? = original.onnxCapabilities,
         onnxAssetKind: String? = original.onnxAssetKind,
@@ -603,6 +759,18 @@ class ModelRepository(
             val sourceFile = File(original.path)
             if (!sourceFile.exists()) {
                 return@withContext Result.failure(IllegalStateException("Model file not found"))
+            }
+            // Validate the payload before any rename or library synchronization.
+            // This keeps a failed edit recoverable and prevents a contradictory
+            // role/family from becoming trusted metadata.
+            val preflightInspection = if (newType.isStableDiffusionArtifact()) {
+                runCatching {
+                    inspectSdArtifact(sourceFile, newType, sdFamily)
+                }.getOrElse { error ->
+                    return@withContext Result.failure(error)
+                }
+            } else {
+                null
             }
             val isManagedSource = isManagedModelPath(sourceFile)
 
@@ -637,25 +805,37 @@ class ModelRepository(
                 sourceFile
             }
             val inferredFamily = inferSdFamily(newType, original.repoId, normalizedFilename)
+            val resolvedFamily = sdFamily ?: inferredFamily.first?.storedValue
+            val resolvedVariant = sdVariant ?: inferredFamily.second
+            val resolvedFamilyEnum = SdModelFamily.fromStoredValue(resolvedFamily)
             val updated = original.copy(
                 filename = normalizedFilename,
                 path = if (isManagedSource) finalFile.absolutePath else original.path,
                 sizeBytes = if (finalFile.exists()) finalFile.length() else original.sizeBytes,
                 type = newType,
-                sdCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(inferredFamily.first, newType),
-                sdFamily = sdFamily ?: inferredFamily.first?.storedValue,
-                sdVariant = sdVariant ?: inferredFamily.second,
-                sdCompatProfiles = sdCompatProfiles ?: buildSdCompatProfiles(
-                    *defaultCompatProfilesFor(newType).toTypedArray()
+                sdCapabilities = sdCapabilities ?: defaultCapabilitiesForFamily(resolvedFamilyEnum, newType),
+                sdFamily = resolvedFamily,
+                sdVariant = resolvedVariant,
+                sdCompatProfiles = resolveSdCompatProfiles(
+                    type = newType,
+                    explicitProfiles = sdCompatProfiles,
+                    family = resolvedFamilyEnum,
+                    variant = resolvedVariant
                 ),
                 sdParamsBackendMode = sdParamsBackendMode,
+                sdParamsBackendSpec = normalizeSdParamsBackendSpec(
+                    sdParamsBackendSpec,
+                    sdParamsBackendMode
+                ),
                 sdRuntimeBackendMode = sdRuntimeBackendMode,
                 onnxCapabilities = onnxCapabilities,
                 onnxAssetKind = onnxAssetKind,
                 onnxPipelineFamily = onnxPipelineFamily,
                 onnxReferenceUri = onnxReferenceUri,
                 onnxReferencePath = onnxReferencePath ?: original.onnxReferencePath
-            )
+            ).let { candidate ->
+                preflightInspection?.let(candidate::withSdArtifactInspection) ?: candidate
+            }
 
             modelDao.insertModel(updated)
             if (original.filename != updated.filename) {
@@ -714,6 +894,96 @@ class ModelRepository(
         private const val HF_PREFS_NAME = "litert_model_repository"
         private const val HF_TOKEN_KEY = "hugging_face_token"
         private const val MANAGED_MODEL_STORAGE_RECONCILED_KEY = "managed_model_storage_reconciled_v2"
+
+        /** Synchronous, payload-free inspection for foreground services. */
+        fun inspectSdArtifact(
+            file: File,
+            configuredType: ModelType,
+            force: Boolean = false
+        ): SdArtifactInspection = SdInspectionCache.inspect(
+            file = file,
+            configuredRole = configuredType.sdArtifactRole(),
+            force = force
+        )
+
+        /**
+         * Validate structural evidence against the role/family selected by the
+         * user or curated metadata.  Unknown/low-confidence evidence remains
+         * manually configurable; high-confidence contradictions are blockers.
+         */
+        fun validateSdArtifactInspection(
+            configuredType: ModelType,
+            inspection: SdArtifactInspection,
+            configuredFamily: String? = null
+        ): Result<SdArtifactInspection> {
+            if (!configuredType.isStableDiffusionArtifact()) return Result.success(inspection)
+
+            val warnings = inspection.warnings.map { it.lowercase(Locale.US) }
+            val structuralFailure = inspection.format == com.example.llamadroid.sd.SdArtifactFormat.UNKNOWN ||
+                (inspection.format != com.example.llamadroid.sd.SdArtifactFormat.CKPT &&
+                    (inspection.tensorCount == 0L || warnings.any { warning ->
+                        warning.contains("truncated") ||
+                            warning.contains("invalid") ||
+                            warning.contains("failed") ||
+                            warning.contains("not valid") ||
+                            warning.contains("exceeds") ||
+                            warning.contains("no tensor")
+                    }))
+            // CKPT is intentionally never deserialized.  It is accepted only
+            // as an explicitly configured full model at low confidence.
+            if (structuralFailure ||
+                (inspection.format == com.example.llamadroid.sd.SdArtifactFormat.CKPT &&
+                    configuredType != ModelType.SD_CHECKPOINT)
+            ) {
+                return Result.failure(
+                    SdArtifactValidationException(
+                        code = SdArtifactValidationCode.INVALID_ARTIFACT,
+                        detail = "Stable Diffusion artifact headers are malformed, unsupported, or incomplete"
+                    )
+                )
+            }
+
+            val expectedRole = configuredType.sdArtifactRole()
+            val detectedRole = inspection.detectedRole
+            val roleContradiction = inspection.confidence == SdInspectionConfidence.HIGH &&
+                expectedRole != null && detectedRole != null &&
+                when (expectedRole) {
+                    SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
+                        detectedRole != SdArtifactRole.MAIN_MODEL
+                    // SD_DIFFUSION is the generic standalone-diffusion
+                    // storage role, but the import UI also uses it for
+                    // architecture-specific SD3 files. Structural layout is
+                    // authoritative: retain the generic row type while
+                    // allowing a proven full model to be resolved as -m.
+                    SdArtifactRole.STANDALONE_DIFFUSION ->
+                        detectedRole != SdArtifactRole.STANDALONE_DIFFUSION &&
+                            !(configuredType == ModelType.SD_DIFFUSION &&
+                                detectedRole == SdArtifactRole.FULL_MODEL)
+                    else -> detectedRole != expectedRole
+                }
+            if (roleContradiction) {
+                return Result.failure(
+                    SdArtifactValidationException(
+                        code = SdArtifactValidationCode.ROLE_CONTRADICTION,
+                        detail = "Detected role ${detectedRole?.storedValue} contradicts configured role ${expectedRole?.storedValue}"
+                    )
+                )
+            }
+
+            val configuredFamilyEnum = SdModelFamily.fromStoredValue(configuredFamily)
+            if (inspection.confidence == SdInspectionConfidence.HIGH &&
+                configuredFamilyEnum != null && inspection.detectedFamily != null &&
+                configuredFamilyEnum != inspection.detectedFamily
+            ) {
+                return Result.failure(
+                    SdArtifactValidationException(
+                        code = SdArtifactValidationCode.FAMILY_CONTRADICTION,
+                        detail = "Detected family ${inspection.detectedFamily.storedValue} contradicts configured family ${configuredFamilyEnum.storedValue}"
+                    )
+                )
+            }
+            return Result.success(inspection)
+        }
 
         fun resolveOnnxCapabilities(
             explicitCapabilities: String?,
@@ -973,6 +1243,54 @@ class ModelRepository(
         }.getOrDefault(first.absolutePath == second.absolutePath)
     }
 }
+
+/** Stable Diffusion file types that are structurally inspectable. */
+fun ModelType.isStableDiffusionArtifact(): Boolean = when (this) {
+    ModelType.SD_CHECKPOINT,
+    ModelType.SD_VAE,
+    ModelType.SD_LORA,
+    ModelType.SD_DIFFUSION,
+    ModelType.SD_CLIP_L,
+    ModelType.SD_CLIP_G,
+    ModelType.SD_T5XXL,
+    ModelType.SD_TAE,
+    ModelType.SD_CONTROLNET,
+    ModelType.SD_PHOTOMAKER,
+    ModelType.SD_CLIP_VISION,
+    ModelType.SD_IP_ADAPTER -> true
+    // Textual-inversion .pt files, native upscalers, and ADetailer ONNX
+    // detectors are SD features but not SafeTensors/GGUF pipeline artifacts.
+    // Keep their established validators instead of treating their formats as
+    // corrupt model headers.
+    ModelType.SD_TEXTUAL_INVERSION,
+    ModelType.SD_UPSCALER,
+    ModelType.SD_ADETAILER -> false
+    else -> false
+}
+
+private fun ModelType.sdArtifactRole(): SdArtifactRole? = when (this) {
+    ModelType.SD_CHECKPOINT -> SdArtifactRole.FULL_MODEL
+    ModelType.SD_DIFFUSION -> SdArtifactRole.STANDALONE_DIFFUSION
+    ModelType.SD_VAE -> SdArtifactRole.VAE
+    ModelType.SD_TAE -> SdArtifactRole.TAE
+    ModelType.SD_CLIP_L -> SdArtifactRole.CLIP_L
+    ModelType.SD_CLIP_G -> SdArtifactRole.CLIP_G
+    ModelType.SD_T5XXL -> SdArtifactRole.T5XXL
+    ModelType.SD_LORA -> SdArtifactRole.LORA
+    ModelType.SD_CONTROLNET -> SdArtifactRole.CONTROLNET
+    else -> null
+}
+
+enum class SdArtifactValidationCode {
+    INVALID_ARTIFACT,
+    ROLE_CONTRADICTION,
+    FAMILY_CONTRADICTION
+}
+
+class SdArtifactValidationException(
+    val code: SdArtifactValidationCode,
+    detail: String
+) : IllegalStateException(detail)
 
 fun buildDownloadTaskId(repoId: String, filename: String, type: ModelType): String {
     val repo = repoId.trim().ifBlank { "local" }

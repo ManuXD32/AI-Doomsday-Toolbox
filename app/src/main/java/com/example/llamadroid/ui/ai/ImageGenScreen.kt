@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,13 +61,28 @@ import com.example.llamadroid.data.model.SdWorkflowSelection
 import com.example.llamadroid.data.model.installedSdCuratedModel
 import com.example.llamadroid.data.model.evaluateSdWorkflowGate
 import com.example.llamadroid.data.model.verifySdCuratedFilePayloadCached
+import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.sd.SdParamsBackendMode
+import com.example.llamadroid.sd.SdParamsBackendProfile
+import com.example.llamadroid.sd.SdParamsBackendPreset
+import com.example.llamadroid.sd.SdActiveRunComponents
+import com.example.llamadroid.sd.SdParamsModule
+import com.example.llamadroid.sd.SdParamsResidency
+import com.example.llamadroid.sd.forArtifact
+import com.example.llamadroid.sd.paramsModules
+import com.example.llamadroid.sd.resolveSdParamsBackendProfile
+import com.example.llamadroid.sd.resolveSdParamsBackendProfileForArtifacts
 import com.example.llamadroid.sd.SdRuntimeBackendMode
+import com.example.llamadroid.sd.SdArtifactInspection
+import com.example.llamadroid.sd.SdMainLayout
+import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.effectiveSdCompatProfiles
 import com.example.llamadroid.sd.isSdImageMainModel
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.resolveSdFamilySpec
+import com.example.llamadroid.sd.resolveSdPipeline
 import com.example.llamadroid.sd.resolvedSdFamily
+import com.example.llamadroid.sd.sdArtifactInspection
 import com.example.llamadroid.service.*
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalConfig
 import com.example.llamadroid.onnx.OnnxBackgroundRemovalStorage
@@ -96,6 +112,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
 
     val db = remember { AppDatabase.getDatabase(context) }
+    val modelRepository = remember { ModelRepository(context, db.modelDao()) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
@@ -417,10 +434,42 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         generationModels = allGenerationModels
     )
     val selectedActiveModel = modelsForSelectedMode.firstOrNull { it.path == selectedModelPath }
-    val selectedFamilyInfo = selectedMainModel?.resolvedSdFamily()
+    val selectedInspection = selectedMainModel?.sdArtifactInspection()
+    val selectedFamilyInfo = selectedMainModel?.let { model ->
+        val detectedFamily = SdModelFamily.fromStoredValue(model.sdDetectedFamily)
+        if (detectedFamily != null) {
+            detectedFamily to model.sdVariant?.trim()?.ifBlank { null }
+        } else {
+            model.resolvedSdFamily()
+        }
+    }
     val selectedFamily = selectedFamilyInfo?.first
     val selectedVariant = selectedFamilyInfo?.second
-    val selectedFamilySpec = selectedFamily?.let { resolveSdFamilySpec(it, selectedVariant) }
+    val selectedPipeline = selectedMainModel?.let { model ->
+        resolveSdPipeline(
+            SDConfig(
+                modelPath = model.path,
+                prompt = "",
+                outputPath = "",
+                modelFamily = model.sdFamily,
+                modelVariant = model.sdVariant,
+                modelLayout = model.sdArtifactLayout
+                    ?.let(SdMainLayout::fromStoredValue),
+                vaePath = selectedVaePath,
+                taePath = selectedTaePath,
+                clipLPath = selectedClipLPath,
+                clipGPath = selectedClipGPath,
+                t5xxlPath = selectedT5xxlPath,
+                llmPath = selectedLlmPath,
+                llmVisionPath = selectedLlmVisionPath,
+                photoMakerPath = selectedPhotoMakerPath
+            ),
+            selectedInspection
+        )
+    }
+    val selectedFamilySpec = selectedPipeline?.spec ?: selectedFamily?.let {
+        resolveSdFamilySpec(it, selectedVariant)
+    }
     val localMaxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
     val effectiveCapabilities = run {
         val explicit = selectedMainModel?.sdCapabilities?.parseSdCapabilities().orEmpty()
@@ -432,7 +481,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
     val supportsTxt2Img = selectedMainModel == null || effectiveCapabilities.contains(SD_CAPABILITY_TXT2IMG)
     val supportsImg2Img = selectedMainModel == null || effectiveCapabilities.contains(SD_CAPABILITY_IMG2IMG)
-    val componentRoles = selectedFamilySpec?.let { spec ->
+    val componentRoles = selectedPipeline?.let { pipeline ->
+        (pipeline.requiredExternalRoles + pipeline.optionalExternalRoles).toList()
+    } ?: selectedFamilySpec?.let { spec ->
         listOf(
             SdComponentRole.VAE,
             SdComponentRole.TAE,
@@ -477,9 +528,115 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         selectedFamily,
         selectedVariant
     )
+    // The run-screen profile is reconstructed from the artifacts that are
+    // actually selected. Keep each artifact's own preference scoped to the
+    // modules it can own; a VAE must never inherit diffusion/text-encoder
+    // assignments merely because it was selected alongside a checkpoint.
+    val selectedProfileMainModel = if (selectedMode == IMAGE_GEN_MODE_UPSCALE) {
+        selectedActiveModel
+    } else {
+        selectedMainModel
+    }
+    val selectedProfileArtifacts = listOf(
+        selectedProfileMainModel,
+        vaeModels.firstOrNull { it.path == selectedVaePath },
+        taeModels.firstOrNull { it.path == selectedTaePath },
+        clipLModels.firstOrNull { it.path == selectedClipLPath },
+        clipGModels.firstOrNull { it.path == selectedClipGPath },
+        t5xxlModels.firstOrNull { it.path == selectedT5xxlPath },
+        controlNetModels.firstOrNull { controlNetEnabled && it.path == selectedControlNetPath },
+        photoMakerModels.firstOrNull { it.path == selectedPhotoMakerPath },
+        clipVisionModels.firstOrNull { ipAdapterEnabled && it.path == selectedClipVisionPath },
+        compatibleAdetailerModels.firstOrNull {
+            selectedMode == IMAGE_GEN_MODE_ADETAILER && it.path == adetailerModelPath
+        }
+    )
+    val activeSdParamsModules = remember(
+        selectedMode,
+        selectedProfileMainModel,
+        selectedInspection,
+        selectedVaePath,
+        selectedTaePath,
+        selectedClipLPath,
+        selectedClipGPath,
+        selectedT5xxlPath,
+        selectedLlmPath,
+        selectedLlmVisionPath,
+        selectedPhotoMakerPath,
+        controlNetEnabled,
+        selectedControlNetPath,
+        ipAdapterEnabled,
+        selectedIpAdapterPath,
+        selectedClipVisionPath,
+        adetailerModelPath
+    ) {
+        val isUpscale = selectedMode == IMAGE_GEN_MODE_UPSCALE
+        val inspection = selectedInspection
+        val fullModel = selectedProfileMainModel != null && (
+            inspection?.artifactLayout == SdMainLayout.FULL_MODEL ||
+                SdMainLayout.fromStoredValue(selectedProfileMainModel.sdArtifactLayout) == SdMainLayout.FULL_MODEL
+            )
+        val bundledTextEncoders = inspection?.let {
+            it.containsClipL || it.containsClipG || it.containsT5xxl || it.containsLlm
+        } == true || (inspection?.isInspected != true && fullModel)
+        val bundledVae = inspection?.containsVae == true || (inspection?.isInspected != true && fullModel)
+        SdActiveRunComponents(
+            diffusion = !isUpscale && selectedProfileMainModel != null,
+            textEncoders = !isUpscale && (
+                bundledTextEncoders ||
+                    !selectedClipLPath.isNullOrBlank() ||
+                    !selectedClipGPath.isNullOrBlank() ||
+                    !selectedT5xxlPath.isNullOrBlank() ||
+                    !selectedLlmPath.isNullOrBlank() ||
+                    !selectedLlmVisionPath.isNullOrBlank()
+                ),
+            clipVision = !isUpscale && ipAdapterEnabled &&
+                (!selectedIpAdapterPath.isNullOrBlank() || !selectedClipVisionPath.isNullOrBlank()),
+            vae = !isUpscale && (
+                bundledVae || !selectedVaePath.isNullOrBlank() || !selectedTaePath.isNullOrBlank()
+                ),
+            controlNet = !isUpscale && controlNetEnabled && !selectedControlNetPath.isNullOrBlank(),
+            photoMaker = !isUpscale && !selectedPhotoMakerPath.isNullOrBlank(),
+            upscaler = isUpscale && selectedProfileMainModel != null,
+            detector = !isUpscale && selectedMode == IMAGE_GEN_MODE_ADETAILER &&
+                !adetailerModelPath.isNullOrBlank()
+        ).paramsModules()
+    }
+    val profileSelectionIdentity = listOf(
+        selectedProfileMainModel,
+        selectedVaePath to vaeModels.firstOrNull { it.path == selectedVaePath },
+        selectedTaePath to taeModels.firstOrNull { it.path == selectedTaePath },
+        selectedClipLPath to clipLModels.firstOrNull { it.path == selectedClipLPath },
+        selectedClipGPath to clipGModels.firstOrNull { it.path == selectedClipGPath },
+        selectedT5xxlPath to t5xxlModels.firstOrNull { it.path == selectedT5xxlPath },
+        selectedControlNetPath to controlNetModels.firstOrNull { it.path == selectedControlNetPath },
+        selectedPhotoMakerPath to photoMakerModels.firstOrNull { it.path == selectedPhotoMakerPath },
+        selectedClipVisionPath to clipVisionModels.firstOrNull { it.path == selectedClipVisionPath }
+    ).joinToString("|") { item ->
+        when (item) {
+            is ModelEntity -> "${item.path}:${item.sdArtifactLayout.orEmpty()}:loaded"
+            is Pair<*, *> -> "${(item.first as? String).orEmpty()}:${(item.second as? ModelEntity)?.path ?: "pending"}"
+            else -> "none"
+        }
+    } + "|controlEnabled=$controlNetEnabled|ipAdapterEnabled=$ipAdapterEnabled" +
+        "|detailer=${selectedMode == IMAGE_GEN_MODE_ADETAILER}:${adetailerModelPath.orEmpty()}"
     val supportsIpAdapter = selectedMode != 2 &&
         selectedFamilySpec?.supportsIpAdapter == true
-    val missingRequiredComponents = selectedFamilySpec?.requiredRoles?.filter { role ->
+    val supportsLora = selectedMode != 2 &&
+        selectedFamilySpec?.optionalRoles?.contains(SdComponentRole.LORA) == true
+    val missingRequiredComponents = selectedPipeline?.requiredExternalRoles?.filter { role ->
+        when (role) {
+            SdComponentRole.VAE -> selectedVaePath.isNullOrBlank()
+            SdComponentRole.TAE -> selectedTaePath.isNullOrBlank()
+            SdComponentRole.CLIP_L -> selectedClipLPath.isNullOrBlank()
+            SdComponentRole.CLIP_G -> selectedClipGPath.isNullOrBlank()
+            SdComponentRole.T5XXL -> selectedT5xxlPath.isNullOrBlank()
+            SdComponentRole.LLM -> selectedLlmPath.isNullOrBlank()
+            SdComponentRole.LLM_VISION -> selectedLlmVisionPath.isNullOrBlank()
+            SdComponentRole.PHOTOMAKER -> selectedPhotoMakerPath.isNullOrBlank()
+            else -> false
+        }
+    } ?: selectedFamilySpec?.requiredRoles?.filter { role ->
         when (role) {
             SdComponentRole.VAE -> selectedVaePath.isNullOrBlank()
             SdComponentRole.TAE -> selectedTaePath.isNullOrBlank()
@@ -492,6 +649,89 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             else -> false
         }
     } ?: emptyList()
+    var componentResetNotice by remember { mutableStateOf<String?>(null) }
+    val componentAvailabilityKey = listOf(
+        compatibleVaeModels,
+        compatibleTaeModels,
+        compatibleClipLModels,
+        compatibleClipGModels,
+        compatibleT5xxlModels,
+        compatibleLlmModels,
+        compatibleLlmVisionModels,
+        compatiblePhotoMakerModels
+    ).joinToString("|") { models -> models.joinToString(",") { it.path } }
+
+    // Re-inspect only the selected model. Existing rows from before inspection
+    // are upgraded lazily when viewed/selected, never by a startup scan.
+    LaunchedEffect(selectedMainModel?.path, selectedMainModel?.sdInspectionVersion) {
+        selectedMainModel?.let { model ->
+            runCatching { modelRepository.ensureSdArtifactInspection(model) }
+        }
+    }
+
+    // Family/layout changes can invalidate restored component paths. Clear only
+    // incompatible selections and surface exactly what was cleared.
+    LaunchedEffect(
+        selectedMainModel?.path,
+        selectedFamily,
+        selectedVariant,
+        componentAvailabilityKey
+    ) {
+        if (selectedMainModel == null || selectedFamily == null) return@LaunchedEffect
+        val cleared = mutableListOf<String>()
+        fun retain(
+            path: String?,
+            models: List<ModelEntity>,
+            label: String,
+            clear: () -> Unit
+        ) {
+            if (path != null && models.none { it.path == path }) {
+                clear()
+                cleared += label
+            }
+        }
+        retain(selectedVaePath, compatibleVaeModels, context.getString(R.string.imagegen_component_vae)) {
+            selectedVaePath = null
+        }
+        retain(selectedTaePath, compatibleTaeModels, context.getString(R.string.imagegen_component_tae)) {
+            selectedTaePath = null
+        }
+        retain(selectedClipLPath, compatibleClipLModels, context.getString(R.string.imagegen_component_clip_l)) {
+            selectedClipLPath = null
+        }
+        retain(selectedClipGPath, compatibleClipGModels, context.getString(R.string.imagegen_component_clip_g)) {
+            selectedClipGPath = null
+        }
+        retain(selectedT5xxlPath, compatibleT5xxlModels, context.getString(R.string.imagegen_component_t5xxl)) {
+            selectedT5xxlPath = null
+        }
+        retain(selectedLlmPath, compatibleLlmModels, context.getString(R.string.imagegen_component_llm)) {
+            selectedLlmPath = null
+        }
+        retain(selectedLlmVisionPath, compatibleLlmVisionModels, context.getString(R.string.imagegen_component_llm_vision)) {
+            selectedLlmVisionPath = null
+        }
+        retain(selectedPhotoMakerPath, compatiblePhotoMakerModels, context.getString(R.string.imagegen_component_photomaker)) {
+            selectedPhotoMakerPath = null
+        }
+        if (cleared.isNotEmpty()) {
+            componentResetNotice = context.getString(
+                R.string.imagegen_components_cleared,
+                cleared.joinToString(", ")
+            )
+        }
+    }
+
+    LaunchedEffect(selectedMainModel?.path, selectedFamily, selectedVariant, compatibleLoraModels) {
+        if (!supportsLora || selectedFamily == null || loraStack.isEmpty()) return@LaunchedEffect
+        val retained = loraStack.filter { item -> compatibleLoraModels.any { it.path == item.path } }
+        if (retained.size != loraStack.size) {
+            loraStack = retained
+            selectedLoraPath = retained.firstOrNull()?.path
+            if (retained.isEmpty()) loraEnabled = false
+            componentResetNotice = context.getString(R.string.imagegen_loras_cleared_incompatible)
+        }
+    }
     val imagePreparationScope = rememberCoroutineScope()
     val latestSelectedMode by rememberUpdatedState(selectedMode)
 
@@ -814,6 +1054,63 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     var scmMask by remember { mutableStateOf(restoredDraft?.optString("scmMask").orEmpty()) }
     var scmPolicy by remember { mutableStateOf(SdCacheScmPolicy.fromStoredValue(restoredDraft?.optString("scmPolicy").orEmpty().ifBlank { null })) }
     var manualCommandFlags by remember { mutableStateOf(restoredDraft?.optString("flags").orEmpty()) }
+    var sdParamsBackendMode by remember {
+        mutableStateOf(
+            SdParamsBackendMode.fromStoredValue(restoredDraft?.optString("paramsBackendMode"))
+        )
+    }
+    var sdParamsBackendSpec by remember {
+        mutableStateOf(
+            restoredDraft?.optString("paramsBackendSpec").orEmpty().ifBlank { "auto" }
+        )
+    }
+    var sdRuntimeBackendMode by remember {
+        mutableStateOf(
+            SdRuntimeBackendMode.fromStoredValue(restoredDraft?.optString("runtimeBackendMode"))
+        )
+    }
+
+    // Restore only after selected component rows have appeared in their
+    // collectors. The identity includes a pending/loaded marker, but not the
+    // profile itself, so saving a user's edit cannot immediately overwrite it.
+    var restoredProfileSelectionKey by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(profileSelectionIdentity) {
+        if (restoredProfileSelectionKey == profileSelectionIdentity) return@LaunchedEffect
+        val restoredProfile = resolveSdParamsBackendProfileForArtifacts(selectedProfileArtifacts)
+        sdParamsBackendSpec = restoredProfile.storedValue
+        if (restoredProfile.warnings.isNotEmpty()) {
+            componentResetNotice = context.getString(R.string.sd_params_backend_conflict)
+        }
+        restoredProfileSelectionKey = profileSelectionIdentity
+    }
+
+    // Remember each projection on the selected artifact. This is a local
+    // convenience profile only; distributed command builders deliberately do
+    // not read these rows or inherit the local placement.
+    LaunchedEffect(
+        sdParamsBackendSpec,
+        profileSelectionIdentity,
+        restoredProfileSelectionKey,
+        selectedProfileMainModel?.path
+    ) {
+        if (restoredProfileSelectionKey != profileSelectionIdentity) return@LaunchedEffect
+        val main = selectedProfileMainModel ?: return@LaunchedEffect
+        val normalized = resolveSdParamsBackendProfile(
+            sdParamsBackendSpec,
+            main.sdParamsBackendMode
+        )
+        withContext(Dispatchers.IO) {
+            selectedProfileArtifacts
+                .filterNotNull()
+                .distinctBy { it.path }
+                .forEach { model ->
+                    modelRepository.updateSdParamsBackendSpec(
+                        model,
+                        normalized.forArtifact(model).storedValue
+                    )
+                }
+        }
+    }
 
     fun currentIpAdapterDraftState(): SdIpAdapterDraftState =
         SdIpAdapterDraftState(
@@ -851,6 +1148,8 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 put("adConfidence", adetailerConfidence); put("adDenoising", adetailerDenoising); put("adMaskBlur", adetailerMaskBlur)
                 put("adPadding", adetailerPadding); put("adMaxDetections", adetailerMaxDetections); put("adResizeInput", adetailerResizeInput); put("adAdvanced", adetailerAdvancedArgs)
                 put("width", width); put("height", height); put("steps", steps); put("cfg", cfgScale); put("seed", seed); put("sampler", selectedSampler.name); put("scheduler", selectedScheduler?.cliName); put("cacheMode", cacheMode?.cliName); put("cacheOption", cacheOption); put("scmMask", scmMask); put("scmPolicy", scmPolicy?.cliName); put("flags", manualCommandFlags)
+                put("paramsBackendMode", sdParamsBackendMode.storedValue); put("runtimeBackendMode", sdRuntimeBackendMode.storedValue)
+                put("paramsBackendSpec", sdParamsBackendSpec)
                 put("tePlacement", textEncoderPlacement); put("diffusionPlacement", diffusionPlacement); put("vaePlacement", vaePlacement)
                 putSdIpAdapterDraft(currentIpAdapterDraftState())
             }
@@ -1115,12 +1414,25 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             } == true,
             supportsTxt2Img = supportsTxt2Img,
             supportsImg2Img = supportsImg2Img,
-            hasRequiredComponents = missingRequiredComponents.isEmpty()
+            hasRequiredComponents = missingRequiredComponents.isEmpty() &&
+                selectedPipeline?.blockingIssues?.isEmpty() != false
         )
     )
 
     // Generate function - handles all modes
     val generate: () -> Unit = generate@{
+        if (selectedMode != IMAGE_GEN_MODE_UPSCALE &&
+            selectedPipeline?.blockingIssues?.isNotEmpty() == true
+        ) {
+            errorMessage = context.getString(R.string.imagegen_sd_pipeline_unresolved)
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
+                mode = effectiveSdMode.name,
+                event = "ui_pipeline_preflight_failed",
+                details = selectedPipeline.blockingIssues.joinToString(",") { it.code.name }
+            )
+            return@generate
+        }
         selectedWorkflowPresetId?.let { presetId ->
             SdWorkflowPresetCatalog.byId(presetId)?.let { preset ->
                 val gate = evaluateSdWorkflowGate(
@@ -1273,10 +1585,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     inputImagePath = inputImagePath ?: "",
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
-                    sdParamsBackendMode = selectedActiveModel?.sdParamsBackendMode ?: "auto",
+                    sdParamsBackendSpec = sdParamsBackendSpec,
+                    sdParamsBackendMode = sdParamsBackendMode.storedValue,
                     sdRuntimeBackendMode = acceleratorPlacement?.let {
                         "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
-                    } ?: selectedActiveModel?.sdRuntimeBackendMode ?: "auto",
+                    } ?: sdRuntimeBackendMode.storedValue,
                     maxVramCpuGiB = localMaxVramCpuGiB,
                     customFlags = manualCommandFlags
                 )
@@ -1341,7 +1654,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     upscaleModel = null,
                     upscaleRepeats = upscaleRepeats,
                     threads = threadCount,
-                    isFluxModel = selectedFamilySpec?.usesDiffusionModelFlag == true,
+                    modelLayout = selectedPipeline?.mainLayout,
                     modelFamily = selectedFamily?.storedValue,
                     modelVariant = selectedVariant,
                     vaePath = selectedVaePath,
@@ -1385,10 +1698,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     vaeConvDirect = vaeConvDirectEnabled,
                     qwenImageZeroCondT = qwenImageZeroCondTEnabled,
                     chromaDisableDitMask = chromaDisableDitMaskEnabled,
-                    sdParamsBackendMode = selectedMainModel?.sdParamsBackendMode ?: "auto",
+                    sdParamsBackendSpec = sdParamsBackendSpec,
+                    sdParamsBackendMode = sdParamsBackendMode.storedValue,
                     sdRuntimeBackendMode = acceleratorPlacement?.let {
                         "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"
-                    } ?: selectedMainModel?.sdRuntimeBackendMode ?: "auto",
+                    } ?: sdRuntimeBackendMode.storedValue,
                     maxVramCpuGiB = localMaxVramCpuGiB,
                     vaeTiling = sdVaeTiling,
                     vaeTileOverlap = sdVaeTileOverlap,
@@ -1938,11 +2252,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                             }
                                         } else {
                                             selectedGenerationModelPath = model.path
-                                            if (model.type != ModelType.SD_DIFFUSION) {
-                                                selectedVaePath = null
-                                                selectedClipLPath = null
-                                                selectedT5xxlPath = null
-                                            }
                                         }
                                     }
                                 )
@@ -1953,6 +2262,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         } }
 
+        if (selectedModelPath != null && selectedMode != 2 && selectedInspection != null) item(key = "artifact-inspection") {
+            SdGenerationInspectionCard(selectedInspection)
+        }
         if (selectedModelPath != null && selectedMode != 2 && componentRoles.isNotEmpty()) item(key = "components") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
@@ -2096,7 +2408,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         }
 
-        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || compatibleLoraModels.isNotEmpty())) item(key = "adapters") {
+        if (selectedMode != 2 && (compatibleControlNetModels.isNotEmpty() || supportsLora)) item(key = "adapters") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -2147,33 +2459,53 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         }
                     }
 
-                    if (compatibleLoraModels.isNotEmpty()) {
+                    if (supportsLora) {
                         Spacer(modifier = Modifier.height(12.dp))
-                        LabeledSwitchRow(
-                            label = componentRoleLabel(SdComponentRole.LORA),
-                            checked = loraEnabled,
-                            onCheckedChange = {
-                                loraEnabled = it
-                                if (!it) {
-                                    selectedLoraPath = null
-                                    selectedLoraApplyMode = null
-                                    loraStack = emptyList()
-                                } else if (loraStack.isEmpty()) {
-                                    compatibleLoraModels.firstOrNull()?.let { model ->
-                                        selectedLoraPath = model.path
-                                        loraStack = listOf(SdLoraSpec(model.path, loraStrength))
+                        if (compatibleLoraModels.isEmpty()) {
+                            // Keep the LoRA affordance visible even before the
+                            // first adapter is imported. A switch with no
+                            // selectable value would otherwise look broken and
+                            // silently leave the run without a LoRA.
+                            Text(
+                                stringResource(R.string.imagegen_no_lora),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            OutlinedButton(
+                                onClick = { navController.navigate(Screen.SDModels.route) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    stringResource(R.string.imagegen_manage_lora),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        } else {
+                            LabeledSwitchRow(
+                                label = componentRoleLabel(SdComponentRole.LORA),
+                                checked = loraEnabled,
+                                onCheckedChange = {
+                                    loraEnabled = it
+                                    if (!it) {
+                                        selectedLoraPath = null
+                                        selectedLoraApplyMode = null
+                                        loraStack = emptyList()
+                                    } else if (loraStack.isEmpty()) {
+                                        compatibleLoraModels.firstOrNull()?.let { model ->
+                                            selectedLoraPath = model.path
+                                            loraStack = listOf(SdLoraSpec(model.path, loraStrength))
+                                        }
                                     }
                                 }
-                            }
-                        )
-                        if (loraEnabled) {
+                            )
+                        }
+                        if (compatibleLoraModels.isNotEmpty() && loraEnabled) {
                             Spacer(modifier = Modifier.height(8.dp))
                             if (loraStack.isEmpty()) {
-                                Text(
-                                    stringResource(R.string.imagegen_no_lora),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Text(stringResource(R.string.imagegen_no_lora))
                             }
                             loraStack.forEachIndexed { index, item ->
                                 Card(
@@ -2197,8 +2529,42 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                             )
                                             IconButton(
                                                 onClick = {
+                                                    if (index > 0) {
+                                                        val reordered = loraStack.toMutableList()
+                                                        val moved = reordered.removeAt(index)
+                                                        reordered.add(index - 1, moved)
+                                                        loraStack = reordered
+                                                        selectedLoraPath = reordered.firstOrNull()?.path
+                                                    }
+                                                },
+                                                enabled = index > 0
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.KeyboardArrowUp,
+                                                    contentDescription = stringResource(R.string.imagegen_lora_move_up)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
+                                                    if (index < loraStack.lastIndex) {
+                                                        val reordered = loraStack.toMutableList()
+                                                        val moved = reordered.removeAt(index)
+                                                        reordered.add(index + 1, moved)
+                                                        loraStack = reordered
+                                                        selectedLoraPath = reordered.firstOrNull()?.path
+                                                    }
+                                                },
+                                                enabled = index < loraStack.lastIndex
+                                            ) {
+                                                Icon(
+                                                    Icons.Default.KeyboardArrowDown,
+                                                    contentDescription = stringResource(R.string.imagegen_lora_move_down)
+                                                )
+                                            }
+                                            IconButton(
+                                                onClick = {
                                                     loraStack = loraStack.filterIndexed { itemIndex, _ -> itemIndex != index }
-                                                    if (index == 0) selectedLoraPath = loraStack.firstOrNull()?.path
+                                                    selectedLoraPath = loraStack.firstOrNull()?.path
                                                 }
                                             ) {
                                                 Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.imagegen_lora_remove))
@@ -2249,6 +2615,48 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                 Icon(Icons.Default.Add, contentDescription = null)
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(stringResource(R.string.imagegen_lora_add))
+                            }
+                            if (selectedFamilySpec?.supportsLoraApplyMode == true) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                var loraApplyExpanded by remember { mutableStateOf(false) }
+                                ExposedDropdownMenuBox(
+                                    expanded = loraApplyExpanded,
+                                    onExpandedChange = { loraApplyExpanded = !loraApplyExpanded }
+                                ) {
+                                    OutlinedTextField(
+                                        value = selectedLoraApplyMode?.cliName
+                                            ?: stringResource(R.string.imagegen_lora_apply_mode_default),
+                                        onValueChange = {},
+                                        readOnly = true,
+                                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                        label = { Text(stringResource(R.string.imagegen_lora_apply_mode_label)) },
+                                        trailingIcon = {
+                                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = loraApplyExpanded)
+                                        },
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = loraApplyExpanded,
+                                        onDismissRequest = { loraApplyExpanded = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.imagegen_lora_apply_mode_default)) },
+                                            onClick = {
+                                                selectedLoraApplyMode = null
+                                                loraApplyExpanded = false
+                                            }
+                                        )
+                                        SdLoraApplyMode.entries.forEach { mode ->
+                                            DropdownMenuItem(
+                                                text = { Text(mode.cliName) },
+                                                onClick = {
+                                                    selectedLoraApplyMode = mode
+                                                    loraApplyExpanded = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2319,7 +2727,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     }
                 }
 
-        if (selectedMode != 2 && selectedModelPath != null && selectedFamilySpec?.usesDiffusionModelFlag != true) item(key = "tensor-types") {
+        if (selectedMode != 2 && selectedModelPath != null && selectedPipeline?.mainLayout == SdMainLayout.FULL_MODEL) item(key = "tensor-types") {
             Spacer(modifier = Modifier.height(12.dp))
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -2573,27 +2981,21 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
                         Spacer(modifier = Modifier.height(16.dp))
                         LocalSdCliMemoryControls(
-                            selectedModel = selectedActiveModel,
+                            paramsSpec = sdParamsBackendSpec,
+                            activeModules = activeSdParamsModules,
+                            runtimeMode = sdRuntimeBackendMode,
+                            enabled = selectedActiveModel != null,
                             maxRamEnabled = sdMaxCpuRamEnabled,
                             maxRamGiB = sdMaxCpuRamGiB,
-                            onParamsBackendChange = { mode ->
-                                selectedActiveModel?.let { model ->
-                                    scope.launch {
-                                        db.modelDao().insertModel(
-                                            model.copy(sdParamsBackendMode = mode.storedValue)
-                                        )
-                                    }
+                            onParamsBackendChange = {
+                                sdParamsBackendSpec = it
+                                sdParamsBackendMode = if (it.equals("disk", ignoreCase = true)) {
+                                    SdParamsBackendMode.DISK
+                                } else {
+                                    SdParamsBackendMode.AUTO
                                 }
                             },
-                            onRuntimeBackendChange = { mode ->
-                                selectedActiveModel?.let { model ->
-                                    scope.launch {
-                                        db.modelDao().insertModel(
-                                            model.copy(sdRuntimeBackendMode = mode.storedValue)
-                                        )
-                                    }
-                                }
-                            },
+                            onRuntimeBackendChange = { sdRuntimeBackendMode = it },
                             onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
                             onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
                         )
@@ -2725,49 +3127,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             checked = vaeConvDirectEnabled,
                             onCheckedChange = { vaeConvDirectEnabled = it }
                         )
-                    }
-
-                    if (loraEnabled && selectedFamilySpec.supportsLoraApplyMode) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        var loraApplyExpanded by remember { mutableStateOf(false) }
-                        ExposedDropdownMenuBox(
-                            expanded = loraApplyExpanded,
-                            onExpandedChange = { loraApplyExpanded = !loraApplyExpanded }
-                        ) {
-                            OutlinedTextField(
-                                value = selectedLoraApplyMode?.cliName
-                                    ?: stringResource(R.string.imagegen_lora_apply_mode_default),
-                                onValueChange = {},
-                                readOnly = true,
-                                modifier = Modifier.fillMaxWidth().menuAnchor(),
-                                label = { Text(stringResource(R.string.imagegen_lora_apply_mode_label)) },
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = loraApplyExpanded)
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            ExposedDropdownMenu(
-                                expanded = loraApplyExpanded,
-                                onDismissRequest = { loraApplyExpanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(R.string.imagegen_lora_apply_mode_default)) },
-                                    onClick = {
-                                        selectedLoraApplyMode = null
-                                        loraApplyExpanded = false
-                                    }
-                                )
-                                SdLoraApplyMode.entries.forEach { mode ->
-                                    DropdownMenuItem(
-                                        text = { Text(mode.cliName) },
-                                        onClick = {
-                                            selectedLoraApplyMode = mode
-                                            loraApplyExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
                     }
 
                     if (selectedFamilySpec.supportsQwenImageZeroCondT) {
@@ -3244,6 +3603,34 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 16.dp)
             ) {
+                componentResetNotice?.let { notice ->
+                    item(key = "component-reset-notice") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    notice,
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                                TextButton(onClick = { componentResetNotice = null }) {
+                                    Text(stringResource(R.string.action_dismiss), maxLines = 1)
+                                }
+                            }
+                        }
+                    }
+                }
                 item(key = "mode") {
                     val modes = listOf(
                         IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
@@ -3489,6 +3876,61 @@ private fun filterSdComponents(
     return models.filter { it.matchesSdFamily(family, variant) }
 }
 
+@Composable
+private fun SdGenerationInspectionCard(inspection: SdArtifactInspection) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(
+                stringResource(R.string.sd_models_detected_format, inspection.format.storedValue),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                stringResource(
+                    R.string.sd_models_detected_layout,
+                    inspection.artifactLayout.storedValue
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                stringResource(
+                    R.string.sd_models_inspection_confidence,
+                    inspection.confidence.storedValue
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (inspection.confidence == com.example.llamadroid.sd.SdInspectionConfidence.HIGH) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (inspection.warnings.isNotEmpty()) {
+                Text(
+                    stringResource(
+                        R.string.sd_models_inspection_warnings,
+                        inspection.warnings.take(2).joinToString(" • ")
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
 private fun componentRoleLabelRes(role: SdComponentRole): Int = when (role) {
     SdComponentRole.MAIN_MODEL -> R.string.imagegen_component_main_model
     SdComponentRole.VAE -> R.string.imagegen_component_vae
@@ -3596,16 +4038,17 @@ private fun LabeledSwitchRow(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LocalSdCliMemoryControls(
-    selectedModel: ModelEntity?,
+    paramsSpec: String,
+    activeModules: Set<SdParamsModule>,
+    runtimeMode: SdRuntimeBackendMode,
+    enabled: Boolean,
     maxRamEnabled: Boolean,
     maxRamGiB: String,
-    onParamsBackendChange: (SdParamsBackendMode) -> Unit,
+    onParamsBackendChange: (String) -> Unit,
     onRuntimeBackendChange: (SdRuntimeBackendMode) -> Unit,
     onMaxRamEnabledChange: (Boolean) -> Unit,
     onMaxRamGiBChange: (String) -> Unit
 ) {
-    val paramsMode = SdParamsBackendMode.fromStoredValue(selectedModel?.sdParamsBackendMode)
-    val runtimeMode = SdRuntimeBackendMode.fromStoredValue(selectedModel?.sdRuntimeBackendMode)
     Text(
         stringResource(R.string.sd_models_local_backend_title),
         style = MaterialTheme.typography.titleSmall,
@@ -3617,20 +4060,18 @@ private fun LocalSdCliMemoryControls(
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
     Spacer(modifier = Modifier.height(8.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        SdParamsBackendDropdown(
-            modifier = Modifier.weight(1f),
-            value = paramsMode,
-            enabled = selectedModel != null,
+    Column(modifier = Modifier.fillMaxWidth()) {
+        SdParamsBackendProfileControls(
+            value = paramsSpec,
+            activeModules = activeModules,
+            enabled = enabled,
             onValueChange = onParamsBackendChange
         )
+        Spacer(modifier = Modifier.height(8.dp))
         SdRuntimeBackendDropdown(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
             value = runtimeMode,
-            enabled = selectedModel != null,
+            enabled = enabled,
             onValueChange = onRuntimeBackendChange
         )
     }
@@ -3660,46 +4101,173 @@ private fun LocalSdCliMemoryControls(
     }
 }
 
+/**
+ * Run-screen authoritative parameter placement. The selected model's saved
+ * profile is used as the initial value; changing a preset or row immediately
+ * changes the immutable SDConfig that will be sent to the native service.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SdParamsBackendDropdown(
-    modifier: Modifier = Modifier,
-    value: SdParamsBackendMode,
+private fun SdParamsBackendProfileControls(
+    value: String,
+    activeModules: Set<SdParamsModule>,
     enabled: Boolean,
-    onValueChange: (SdParamsBackendMode) -> Unit
+    onValueChange: (String) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var profile by remember(value) {
+        mutableStateOf(resolveSdParamsBackendProfile(value))
+    }
+    var presetExpanded by remember { mutableStateOf(false) }
+    // The chosen value changes whenever a row is edited. Keeping expansion
+    // independent from that value prevents the entire editor from collapsing
+    // after every component selection.
+    var rowsVisible by rememberSaveable { mutableStateOf(false) }
+
+    fun setProfile(next: SdParamsBackendProfile) {
+        profile = next
+        onValueChange(next.storedValue)
+    }
+
+    val presetLabel = when (profile.preset) {
+        SdParamsBackendPreset.NORMAL -> stringResource(R.string.sd_params_backend_normal)
+        SdParamsBackendPreset.TEXT_ENCODERS_ON_DISK -> stringResource(R.string.sd_params_backend_te_disk)
+        SdParamsBackendPreset.EVERYTHING_ON_DISK -> stringResource(R.string.sd_params_backend_everything_disk)
+        SdParamsBackendPreset.MIXED -> stringResource(R.string.sd_params_backend_custom)
+    }
+
     ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { if (enabled) expanded = !expanded },
-        modifier = modifier
+        expanded = presetExpanded,
+        onExpandedChange = { if (enabled) presetExpanded = !presetExpanded }
     ) {
         OutlinedTextField(
-            value = sdParamsBackendModeLabel(value),
+            value = presetLabel,
             onValueChange = {},
             readOnly = true,
             enabled = enabled,
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(),
-            label = { Text(stringResource(R.string.sd_models_params_backend_label)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            shape = RoundedCornerShape(12.dp)
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            label = { Text(stringResource(R.string.sd_params_backend_title)) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = presetExpanded) },
+            shape = RoundedCornerShape(12.dp),
+            supportingText = {
+                Text(
+                    stringResource(
+                        R.string.sd_params_backend_current,
+                        profile.cliValue ?: stringResource(R.string.sd_params_backend_module_auto)
+                    )
+                )
+            }
         )
         ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
+            expanded = presetExpanded,
+            onDismissRequest = { presetExpanded = false }
         ) {
-            SdParamsBackendMode.entries.forEach { mode ->
+            listOf(
+                SdParamsBackendPreset.NORMAL,
+                SdParamsBackendPreset.TEXT_ENCODERS_ON_DISK,
+                SdParamsBackendPreset.EVERYTHING_ON_DISK
+            ).forEach { preset ->
                 DropdownMenuItem(
-                    text = { Text(sdParamsBackendModeLabel(mode)) },
+                    text = {
+                        Text(
+                            when (preset) {
+                                SdParamsBackendPreset.NORMAL -> stringResource(R.string.sd_params_backend_normal)
+                                SdParamsBackendPreset.TEXT_ENCODERS_ON_DISK -> stringResource(R.string.sd_params_backend_te_disk)
+                                SdParamsBackendPreset.EVERYTHING_ON_DISK -> stringResource(R.string.sd_params_backend_everything_disk)
+                                SdParamsBackendPreset.MIXED -> stringResource(R.string.sd_params_backend_custom)
+                            }
+                        )
+                    },
                     onClick = {
-                        onValueChange(mode)
-                        expanded = false
+                        setProfile(SdParamsBackendProfile.forPreset(preset))
+                        presetExpanded = false
                     }
                 )
             }
         }
+    }
+
+    Spacer(modifier = Modifier.height(6.dp))
+    Text(
+        stringResource(R.string.sd_params_backend_group_help),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    TextButton(
+        onClick = { rowsVisible = !rowsVisible },
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Text(
+            if (rowsVisible) {
+                stringResource(R.string.sd_params_backend_close_rows)
+            } else {
+                stringResource(R.string.sd_params_backend_open_rows)
+            },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+    if (rowsVisible) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            SdParamsModule.entries.filter { it in activeModules }.forEach { module ->
+                var moduleExpanded by remember(module, value) { mutableStateOf(false) }
+                val residency = profile.assignments[module] ?: SdParamsResidency.AUTO
+                ExposedDropdownMenuBox(
+                    expanded = moduleExpanded,
+                    onExpandedChange = { if (enabled) moduleExpanded = !moduleExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = "${module.cliName}: ${if (residency == SdParamsResidency.DISK) stringResource(R.string.sd_params_backend_module_disk) else stringResource(R.string.sd_params_backend_module_auto)}",
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                        label = { Text(module.cliName) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = moduleExpanded) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = moduleExpanded,
+                        onDismissRequest = { moduleExpanded = false }
+                    ) {
+                        listOf(SdParamsResidency.AUTO, SdParamsResidency.DISK).forEach { choice ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (choice == SdParamsResidency.DISK) {
+                                            stringResource(R.string.sd_params_backend_module_disk)
+                                        } else {
+                                            stringResource(R.string.sd_params_backend_module_auto)
+                                        }
+                                    )
+                                },
+                                onClick = {
+                                    setProfile(
+                                        if (choice == SdParamsResidency.AUTO) {
+                                            profile.copy(assignments = profile.assignments - module)
+                                        } else {
+                                            profile.withModule(module, choice)
+                                        }
+                                    )
+                                    moduleExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (profile.warnings.any { it.contains("te", ignoreCase = true) }) {
+        Text(
+            stringResource(R.string.sd_params_backend_conflict),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.tertiary
+        )
     }
 }
 
@@ -3744,12 +4312,6 @@ private fun SdRuntimeBackendDropdown(
             }
         }
     }
-}
-
-@Composable
-private fun sdParamsBackendModeLabel(mode: SdParamsBackendMode): String = when (mode) {
-    SdParamsBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
-    SdParamsBackendMode.DISK -> stringResource(R.string.sd_models_params_backend_disk)
 }
 
 @Composable

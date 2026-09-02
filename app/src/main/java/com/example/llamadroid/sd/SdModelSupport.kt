@@ -97,7 +97,6 @@ enum class SdLoraApplyMode(val cliName: String) {
 data class SdModelFamilySpec(
     val family: SdModelFamily,
     val variant: String? = null,
-    val usesDiffusionModelFlag: Boolean,
     val cacheArchitecture: SdCacheArchitecture,
     val img2imgInputMode: SdImageInputMode = SdImageInputMode.INIT_IMAGE,
     val defaultCapabilities: String? = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
@@ -131,6 +130,61 @@ fun buildSdCompatProfiles(vararg tokens: String?): String? {
     return normalized.joinToString(",").ifBlank { null }
 }
 
+/**
+ * Return an exact checkpoint-generation profile for components whose weights
+ * are tied to a base checkpoint.  An IP-Adapter or CLIP-Vision filename with a
+ * clear SD1/SDXL marker must not remain compatible with both generations.
+ */
+fun exactSdCheckpointComponentProfile(
+    type: ModelType,
+    family: SdModelFamily?,
+    variant: String?
+): String? {
+    if (type != ModelType.SD_IP_ADAPTER && type != ModelType.SD_CLIP_VISION) return null
+    if (family != SdModelFamily.CHECKPOINT) return null
+    val normalizedVariant = variant
+        ?.trim()
+        ?.lowercase()
+        ?.replace('-', '_')
+        ?.takeIf { it.isNotBlank() }
+        ?: return null
+    val canonicalVariant = when {
+        normalizedVariant == "sdxl" || normalizedVariant.startsWith("sdxl_") -> "sdxl"
+        normalizedVariant == "sd1" || normalizedVariant.startsWith("sd1_") ||
+            normalizedVariant.startsWith("sd15") || normalizedVariant.startsWith("sd_1") -> "sd1"
+        else -> return null
+    }
+    return buildSdCompatProfiles("${SdModelFamily.CHECKPOINT.storedValue}:$canonicalVariant")
+}
+
+/**
+ * Resolve default compatibility metadata while preserving explicit caller
+ * choices. The exact old broad default is narrowed only when filename
+ * inference supplied an unambiguous checkpoint generation.
+ */
+fun resolveSdCompatProfiles(
+    type: ModelType,
+    explicitProfiles: String?,
+    family: SdModelFamily?,
+    variant: String?
+): String? {
+    val exactProfile = exactSdCheckpointComponentProfile(type, family, variant)
+    val oldBroadDefault = setOf(
+        "${SdModelFamily.CHECKPOINT.storedValue}:sd1",
+        "${SdModelFamily.CHECKPOINT.storedValue}:sdxl"
+    )
+    if (explicitProfiles != null) {
+        // Treat all ordering/whitespace variants of the exact legacy value as
+        // generated defaults, while leaving any other explicit profile set
+        // untouched.
+        if (explicitProfiles.parseSdCompatProfiles() == oldBroadDefault && exactProfile != null) {
+            return exactProfile
+        }
+        return explicitProfiles
+    }
+    return exactProfile ?: buildSdCompatProfiles(*defaultCompatProfilesFor(type).toTypedArray())
+}
+
 fun SdModelFamily.compatTokens(variant: String? = null): Set<String> = buildSet {
     add(storedValue)
     variant
@@ -162,9 +216,16 @@ fun ModelEntity.sdCompatProfileTokens(): Set<String> = sdCompatProfiles.parseSdC
 fun ModelEntity.sdVariantToken(): String? = sdVariant?.trim()?.ifBlank { null }?.lowercase()
 
 fun ModelEntity.effectiveSdCompatProfiles(): Set<String> {
-    val explicit = sdCompatProfileTokens()
-    if (explicit.isNotEmpty()) return explicit
-    return defaultCompatProfilesFor(type)
+    val inferred = inferSdFamily(type, repoId, filename)
+    val family = sdFamilyEnum() ?: inferred.first
+    val variant = sdVariantToken() ?: inferred.second
+    val resolved = resolveSdCompatProfiles(
+        type = type,
+        explicitProfiles = sdCompatProfiles,
+        family = family,
+        variant = variant
+    )
+    return resolved.parseSdCompatProfiles()
 }
 
 fun ModelEntity.isSdImageSupportModel(): Boolean =
@@ -194,6 +255,7 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.CHROMA.storedValue,
         SdModelFamily.QWEN_IMAGE.storedValue,
         SdModelFamily.QWEN_IMAGE_EDIT.storedValue,
+        SdModelFamily.SD3.storedValue,
         SdModelFamily.Z_IMAGE.storedValue,
         SdModelFamily.OVIS_IMAGE.storedValue,
         SdModelFamily.ANIMA.storedValue
@@ -252,14 +314,28 @@ fun inferSdFamily(
                 SdModelFamily.CHECKPOINT to "sdxl"
             haystack.contains("sd2") || haystack.contains("2.1") ->
                 SdModelFamily.CHECKPOINT to "sd2"
-            else -> SdModelFamily.CHECKPOINT to "sd1"
+            haystack.contains("sd1") || haystack.contains("sd-1") ||
+                haystack.contains("sd15") || haystack.contains("sd-1-5") ||
+                haystack.contains("sd-v1") || haystack.contains("sd_v1") ->
+                SdModelFamily.CHECKPOINT to "sd1"
+            else -> null to null
         }
         ModelType.SD_CLIP_VISION,
         ModelType.SD_IP_ADAPTER -> when {
             haystack.contains("sdxl") -> SdModelFamily.CHECKPOINT to "sdxl"
-            else -> SdModelFamily.CHECKPOINT to "sd1"
+            haystack.contains("sd1") || haystack.contains("sd-1") ||
+                haystack.contains("sd15") || haystack.contains("sd-1-5") ||
+                haystack.contains("sd_1_5") || haystack.contains("sd1_5") ||
+                haystack.contains("sd-v1") || haystack.contains("sd_v1") ->
+                SdModelFamily.CHECKPOINT to "sd1"
+            else -> null to null
         }
         ModelType.SD_DIFFUSION -> when {
+            haystack.contains("sd3.5") || haystack.contains("sd3_5") ||
+                haystack.contains("sd3-medium") || haystack.contains("sd3_medium") ||
+                haystack.contains("stable-diffusion-3") || haystack.contains("stable diffusion 3") ||
+                Regex("(?:^|[^a-z0-9])sd3(?:[^a-z0-9]|$)").containsMatchIn(haystack) ->
+                SdModelFamily.SD3 to inferSdVariant(type, haystack)
             haystack.contains("kontext") -> SdModelFamily.FLUX_KONTEXT to inferSdVariant(type, haystack)
             haystack.contains("flux.2") || haystack.contains("flux-2") || haystack.contains("klein") ->
                 SdModelFamily.FLUX_2 to inferSdVariant(type, haystack)
@@ -277,7 +353,7 @@ fun inferSdFamily(
                 SdModelFamily.OVIS_IMAGE to inferSdVariant(type, haystack)
             haystack.contains("anima") ->
                 SdModelFamily.ANIMA to inferSdVariant(type, haystack)
-            else -> SdModelFamily.FLUX_1 to inferSdVariant(type, haystack)
+            else -> null to null
         }
         else -> null to null
     }
@@ -289,9 +365,13 @@ private fun inferSdVariant(type: ModelType, haystack: String): String? = when (t
         haystack.contains("sd2") || haystack.contains("2.1") -> "sd2"
         haystack.contains("sd3.5-large") || haystack.contains("sd3.5_large") -> "sd3_5_large"
         haystack.contains("sd3") -> "sd3"
-        else -> "sd1"
+        else -> null
     }
     ModelType.SD_DIFFUSION -> when {
+        haystack.contains("sd3.5-large") || haystack.contains("sd3.5_large") -> "sd3_5_large"
+        haystack.contains("sd3.5") || haystack.contains("sd3_5") -> "sd3_5"
+        haystack.contains("sd3-medium") || haystack.contains("sd3_medium") -> "sd3_medium"
+        haystack.contains("sd3") -> "sd3"
         haystack.contains("schnell") -> "schnell"
         haystack.contains("dev") -> "dev"
         haystack.contains("2509") -> "2509"
@@ -339,7 +419,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.CHECKPOINT -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = false,
         cacheArchitecture = SdCacheArchitecture.UNET,
         img2imgInputMode = SdImageInputMode.INIT_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG),
@@ -358,7 +437,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.SD3 -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = false,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.INIT_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
@@ -367,7 +445,10 @@ fun resolveSdFamilySpec(
             SdComponentRole.CLIP_G,
             SdComponentRole.T5XXL
         ),
-        optionalRoles = setOf(SdComponentRole.LORA),
+        // Packaging is resolved separately.  VAE is an optional external
+        // override for a full SD3 artifact and a required role for a
+        // standalone SD3 artifact (see SdPipelineResolver).
+        optionalRoles = setOf(SdComponentRole.VAE, SdComponentRole.LORA),
         supportsMmap = true,
         supportsDiffusionFa = true,
         supportsVaeConvDirect = true,
@@ -376,7 +457,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.FLUX_1 -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.INIT_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
@@ -394,7 +474,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.FLUX_KONTEXT -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.REFERENCE_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG),
@@ -412,7 +491,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.FLUX_2 -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.REFERENCE_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG),
@@ -429,7 +507,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.CHROMA -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.INIT_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
@@ -447,7 +524,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.CHROMA_RADIANCE -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.INIT_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
@@ -462,7 +538,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.QWEN_IMAGE -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.REFERENCE_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
@@ -479,7 +554,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.QWEN_IMAGE_EDIT -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         img2imgInputMode = SdImageInputMode.REFERENCE_IMAGE,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG),
@@ -497,7 +571,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.Z_IMAGE -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
         requiredRoles = setOf(
@@ -511,7 +584,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.OVIS_IMAGE -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
         requiredRoles = setOf(
@@ -525,7 +597,6 @@ fun resolveSdFamilySpec(
     SdModelFamily.ANIMA -> SdModelFamilySpec(
         family = family,
         variant = variant,
-        usesDiffusionModelFlag = true,
         cacheArchitecture = SdCacheArchitecture.DIT,
         defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_TXT2IMG),
         requiredRoles = setOf(

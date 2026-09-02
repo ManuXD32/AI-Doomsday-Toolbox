@@ -72,6 +72,7 @@ data class SdGeneratedImageMetadata(
     val scmMask: String,
     val scmPolicy: SdCacheScmPolicy?,
     val sdParamsBackendMode: String,
+    val sdParamsBackendSpec: String = "auto",
     val sdRuntimeBackendMode: String,
     val maxVramCpuGiB: String,
     val distributedRuntime: SdDistributedRuntimeConfig,
@@ -166,6 +167,7 @@ data class SdGeneratedImageMetadata(
         put("scmMask", scmMask)
         put("scmPolicy", scmPolicy?.name)
         put("sdParamsBackendMode", sdParamsBackendMode)
+        put("sdParamsBackendSpec", sdParamsBackendSpec)
         put("sdRuntimeBackendMode", sdRuntimeBackendMode)
         put("maxVramCpuGiB", maxVramCpuGiB)
         put("distributedEnabled", distributedRuntime.enabled)
@@ -283,6 +285,7 @@ data class SdGeneratedImageMetadata(
                 scmMask = config.scmMask,
                 scmPolicy = config.scmPolicy,
                 sdParamsBackendMode = config.sdParamsBackendMode,
+                sdParamsBackendSpec = config.sdParamsBackendSpec,
                 sdRuntimeBackendMode = config.sdRuntimeBackendMode,
                 maxVramCpuGiB = config.maxVramCpuGiB,
                 distributedRuntime = config.distributedRuntime,
@@ -375,6 +378,7 @@ data class SdGeneratedImageMetadata(
                 scmMask = "",
                 scmPolicy = null,
                 sdParamsBackendMode = config.sdParamsBackendMode,
+                sdParamsBackendSpec = config.sdParamsBackendSpec,
                 sdRuntimeBackendMode = config.sdRuntimeBackendMode,
                 maxVramCpuGiB = config.maxVramCpuGiB,
                 distributedRuntime = config.distributedRuntime,
@@ -464,6 +468,7 @@ data class SdGeneratedImageMetadata(
                 scmMask = json.optString("scmMask"),
                 scmPolicy = SdCacheScmPolicy.fromStoredValue(json.optString("scmPolicy").ifBlank { null }),
                 sdParamsBackendMode = json.optString("sdParamsBackendMode", "auto"),
+                sdParamsBackendSpec = json.optString("sdParamsBackendSpec", "auto"),
                 sdRuntimeBackendMode = json.optString("sdRuntimeBackendMode", "auto"),
                 maxVramCpuGiB = json.optString("maxVramCpuGiB"),
                 distributedRuntime = SdDistributedRuntimeConfig(

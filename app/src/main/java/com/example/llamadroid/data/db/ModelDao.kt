@@ -29,6 +29,9 @@ interface ModelDao {
     
     @Query("SELECT * FROM models WHERE filename = :filename LIMIT 1")
     suspend fun getModelByFilename(filename: String): ModelEntity?
+
+    @Query("SELECT * FROM models WHERE path = :path LIMIT 1")
+    suspend fun getModelByPath(path: String): ModelEntity?
     
     @Query("DELETE FROM models WHERE filename = :filename")
     suspend fun deleteByFilename(filename: String)
@@ -51,4 +54,8 @@ interface ModelDao {
 
     @Query("UPDATE models SET isVision = :isVision WHERE filename = :filename")
     suspend fun updateVisionSupport(filename: String, isVision: Boolean)
+
+    /** Persist only the local SD parameter residency profile. */
+    @Query("UPDATE models SET sdParamsBackendSpec = :spec WHERE filename = :filename")
+    suspend fun updateSdParamsBackendSpec(filename: String, spec: String)
 }

@@ -3404,6 +3404,55 @@ object Migrations {
         }
     }
 
+    /**
+     * Persist bounded SD artifact-inspection facts without touching model files.
+     *
+     * The nullable columns intentionally remain separate from the editable
+     * sdFamily/sdVariant fields. Existing rows are left uninspected and are
+     * re-inspected lazily when the model is viewed/selected/launched.
+     */
+    val MIGRATION_110_111 = object : Migration(110, 111) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 110 -> 111: SD artifact inspection")
+            if (!columnExists(db, "models", "sdDetectedFamily")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdDetectedFamily` TEXT")
+            }
+            if (!columnExists(db, "models", "sdDetectedRole")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdDetectedRole` TEXT")
+            }
+            if (!columnExists(db, "models", "sdArtifactLayout")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdArtifactLayout` TEXT")
+            }
+            if (!columnExists(db, "models", "sdInspectionConfidence")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdInspectionConfidence` TEXT")
+            }
+            if (!columnExists(db, "models", "sdInspectionVersion")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdInspectionVersion` INTEGER NOT NULL DEFAULT 0")
+            }
+            if (!columnExists(db, "models", "sdInspectionJson")) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sdInspectionJson` TEXT")
+            }
+            DebugLog.log("[DB] Migration 110 -> 111 complete")
+        }
+    }
+
+    /**
+     * Persist the local stable-diffusion.cpp parameter-module residency
+     * profile. Existing `sdParamsBackendMode` values remain the compatibility
+     * fallback, so upgrades do not change the behavior of old rows.
+     */
+    val MIGRATION_111_112 = object : Migration(111, 112) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 111 -> 112: SD parameter residency")
+            if (!columnExists(db, "models", "sdParamsBackendSpec")) {
+                db.execSQL(
+                    "ALTER TABLE `models` ADD COLUMN `sdParamsBackendSpec` TEXT NOT NULL DEFAULT 'auto'"
+                )
+            }
+            DebugLog.log("[DB] Migration 111 -> 112 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3487,7 +3536,9 @@ object Migrations {
         MIGRATION_106_107,
         MIGRATION_107_108,
         MIGRATION_108_109,
-        MIGRATION_109_110
+        MIGRATION_109_110,
+        MIGRATION_110_111,
+        MIGRATION_111_112
     )
     /**
      * Check if a column exists in a table.

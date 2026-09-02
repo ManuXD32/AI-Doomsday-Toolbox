@@ -466,6 +466,7 @@ fun VideoGenScreen(navController: NavController) {
             loras = videoLoras,
             highNoiseLoras = videoHighNoiseLoras,
             loraApplyMode = videoLoraApplyMode,
+            sdParamsBackendSpec = selectedVideoModel?.sdParamsBackendSpec ?: "auto",
             sdParamsBackendMode = selectedVideoModel?.sdParamsBackendMode ?: "auto",
             sdRuntimeBackendMode = acceleratorPlacement?.let {
                 "te=$textEncoderPlacement,diffusion=$diffusionPlacement,vae=$vaePlacement"

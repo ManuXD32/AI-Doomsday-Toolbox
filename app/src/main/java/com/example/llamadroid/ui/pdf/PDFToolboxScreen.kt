@@ -43,6 +43,7 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.service.*
+import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
@@ -1487,7 +1488,8 @@ private fun GuidedPdfOcrTool(
                             Text(
                                 source.lastPathSegment ?: stringResource(R.string.pdf_selected_file),
                                 modifier = Modifier.weight(1f),
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                             IconButton(onClick = onClearSource, enabled = !running) {
                                 Icon(Icons.Default.Close, stringResource(R.string.action_remove))
@@ -1498,6 +1500,16 @@ private fun GuidedPdfOcrTool(
             }
             item {
                 GuidedPdfStepCard(2, stringResource(R.string.pdf_guided_recognition)) {
+                    Text(
+                        stringResource(R.string.pdf_ocr_vision_role_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        stringResource(R.string.pdf_ocr_vision_role_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     PdfOcrProvider.entries.forEach { provider ->
                         PdfGuidedChoice(
                             text = if (provider == PdfOcrProvider.ML_KIT) {
@@ -1510,19 +1522,23 @@ private fun GuidedPdfOcrTool(
                         )
                     }
                     if (options.ocrProvider == PdfOcrProvider.LLAMA_CPP_GGUF) {
+                        Text(
+                            stringResource(R.string.pdf_ocr_llama_pause_restore_notice),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                         PdfInstalledModelPicker(
                             label = stringResource(R.string.workflow_manga_ocr_model),
                             models = ocrModels,
                             selectedPath = options.llamaOcr.modelPath,
                             onSelected = { model ->
-                                val preset = MangaTranslationSupport.inferOcrPreset(model.filename, model.repoId)
-                                val projector = MangaTranslationSupport.matchProjector(model, projectors)
+                                val selection = MangaTranslationSupport.resolveOcrModelSelection(model, projectors)
                                 options = options.copy(
                                     llamaOcr = options.llamaOcr.copy(
                                         modelPath = model.path,
-                                        mmprojPath = projector?.path ?: options.llamaOcr.mmprojPath,
-                                        promptPreset = preset,
-                                        customFlags = preset.recommendedFlags
+                                        mmprojPath = selection.projector?.path,
+                                        promptPreset = selection.promptPreset,
+                                        customFlags = selection.promptPreset.recommendedFlags
                                     )
                                 )
                             }
@@ -1535,6 +1551,18 @@ private fun GuidedPdfOcrTool(
                                 options = options.copy(llamaOcr = options.llamaOcr.copy(mmprojPath = model.path))
                             }
                         )
+                        val selectedOcrModel = ocrModels.firstOrNull {
+                            it.path == options.llamaOcr.modelPath
+                        }
+                        if (selectedOcrModel != null &&
+                            MangaTranslationSupport.matchProjector(selectedOcrModel, projectors) == null
+                        ) {
+                            Text(
+                                stringResource(R.string.workflow_manga_projector_manual_required),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
                         if (ocrModels.isEmpty() || projectors.isEmpty()) {
                             OutlinedButton(onClick = onOpenModels, modifier = Modifier.fillMaxWidth()) {
                                 Icon(Icons.Default.ViewInAr, null)
@@ -1551,6 +1579,34 @@ private fun GuidedPdfOcrTool(
                             Text(stringResource(R.string.workflow_manga_expert_settings))
                         }
                         if (showExpert) {
+                            IntInputField(
+                                value = options.llamaOcr.contextSize,
+                                onValueChange = { value ->
+                                    options = options.copy(
+                                        llamaOcr = options.llamaOcr.copy(contextSize = value)
+                                    )
+                                },
+                                label = stringResource(R.string.pdf_ocr_llama_context_label)
+                            )
+                            if (options.llamaOcr.contextSize > SettingsRepository.PDF_OCR_CONTEXT_DEFAULT) {
+                                Text(
+                                    stringResource(
+                                        R.string.pdf_ocr_llama_context_warning,
+                                        options.llamaOcr.contextSize
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                            }
+                            IntInputField(
+                                value = options.llamaOcr.maxTokens,
+                                onValueChange = { value ->
+                                    options = options.copy(
+                                        llamaOcr = options.llamaOcr.copy(maxTokens = value)
+                                    )
+                                },
+                                label = stringResource(R.string.pdf_ocr_llama_max_tokens_label)
+                            )
                             OutlinedTextField(
                                 value = options.llamaOcr.port.toString(),
                                 onValueChange = { value ->
@@ -1884,6 +1940,16 @@ private fun ControlledPdfTranslationEditor(
     onOptionsChange: (PdfTranslationOptionsSnapshot) -> Unit
 ) {
     val context = LocalContext.current
+    Text(
+        stringResource(R.string.pdf_translation_llm_role_title),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.Bold
+    )
+    Text(
+        stringResource(R.string.pdf_translation_llm_role_desc),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
     OutlinedTextField(
         value = settings.targetLanguage,
         onValueChange = { onSettingsChange(settings.copy(targetLanguage = it)) },
@@ -1999,6 +2065,7 @@ private fun PdfInstalledModelPicker(
                 ?: stringResource(R.string.workflow_manga_choose_installed_model),
             onValueChange = {},
             readOnly = true,
+            singleLine = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             modifier = Modifier
@@ -2010,11 +2077,12 @@ private fun PdfInstalledModelPicker(
                 DropdownMenuItem(
                     text = {
                         Column {
-                            Text(model.filename, maxLines = 1)
+                            Text(model.filename, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                             Text(
                                 "${FormatUtils.Display.formatBytes(LocalContext.current, model.sizeBytes)} • ${model.repoId}",
                                 style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                         }
                     },

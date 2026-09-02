@@ -19,6 +19,11 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,6 +59,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import java.io.File
 
 private const val MODEL_STORAGE_REFRESH_MILLIS = 15_000L
@@ -100,7 +107,9 @@ fun ModelManagerScreen(navController: NavController) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
     val repo = remember { ModelRepository(context, db.modelDao()) }
-    val viewModel = remember { ModelManagerViewModel(repo) }
+    val viewModel: ModelManagerViewModel = viewModel(
+        factory = ModelManagerViewModelFactory(repo)
+    )
     
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf(
@@ -109,7 +118,7 @@ fun ModelManagerScreen(navController: NavController) {
         stringResource(R.string.models_tab_discover)
     )
     
-    val progressMap by viewModel.downloadProgress.collectAsState()
+    val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val managerDownloadTypeNames = remember {
         listOf(
             ModelType.LLM,
@@ -123,7 +132,7 @@ fun ModelManagerScreen(navController: NavController) {
     }
     val managerDownloadTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
-        .collectAsState(initial = emptyList())
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     val managerProgressKeys = remember(managerDownloadTasks) {
         managerDownloadTasks.map { it.progressKey }.toSet()
     }
@@ -187,18 +196,23 @@ fun ModelManagerScreen(navController: NavController) {
 @Composable
 fun InstalledTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
-    val models by viewModel.installedModels.collectAsState()
+    val models by viewModel.installedModels.collectAsStateWithLifecycle()
     var storageSnapshot by remember(models) {
-        mutableStateOf(readModelStorageSnapshot(models))
+        // StatFs is cheap but still a filesystem query; initialize from metadata and let the
+        // visible-route refresh perform the actual query off the main thread.
+        mutableStateOf(ModelStorageSnapshot(0L, 0L, models.sumOf { it.sizeBytes.coerceAtLeast(0L) }))
     }
 
-    LaunchedEffect(models) {
-        while (true) {
-            storageSnapshot = withContext(Dispatchers.IO) {
-                readModelStorageSnapshot(models)
+    LaunchedEffect(models, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (currentCoroutineContext().isActive) {
+                storageSnapshot = withContext(Dispatchers.IO) {
+                    readModelStorageSnapshot(models)
+                }
+                delay(MODEL_STORAGE_REFRESH_MILLIS)
             }
-            delay(MODEL_STORAGE_REFRESH_MILLIS)
         }
     }
     
@@ -557,7 +571,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
         if (showRenameDialog && modelToRename != null) {
             val db = remember { com.example.llamadroid.data.db.AppDatabase.getDatabase(context) }
             val settingsRepository = remember { com.example.llamadroid.data.SettingsRepository(context) }
-            val selectedEmbeddingModelPath by settingsRepository.selectedEmbeddingModelPath.collectAsState()
+            val selectedEmbeddingModelPath by settingsRepository.selectedEmbeddingModelPath.collectAsStateWithLifecycle()
             AlertDialog(
                 onDismissRequest = { showRenameDialog = false },
                 title = { Text(stringResource(R.string.models_edit_title)) },
@@ -1182,7 +1196,7 @@ private fun replaceImportedFile(tempFile: File, targetFile: File) {
 fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
-    val progressMap by viewModel.downloadProgress.collectAsState()
+    val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
     val modelTypes = remember {
         listOf(
             ModelType.LLM,
@@ -1197,7 +1211,7 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
     val managerDownloadTypeNames = remember(modelTypes) { modelTypes.map { it.name } }
     val storedManagerTasks by db.downloadTaskDao()
         .observeByModelTypes(managerDownloadTypeNames)
-        .collectAsState(initial = emptyList())
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     val managerProgressKeys = remember(storedManagerTasks) {
         storedManagerTasks.map { it.progressKey }.toSet()
     }
@@ -1335,17 +1349,17 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
 @Composable
 fun DiscoverTab(viewModel: ModelManagerViewModel) {
     var query by rememberSaveable { mutableStateOf("") }
-    val results by viewModel.searchResults.collectAsState()
-    val isSearching by viewModel.isSearching.collectAsState()
-    val progressMap by viewModel.downloadProgress.collectAsState()
-    val repoVisionCache by viewModel.repoVisionCache.collectAsState()
+    val results by viewModel.searchResults.collectAsStateWithLifecycle()
+    val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val repoVisionCache by viewModel.repoVisionCache.collectAsStateWithLifecycle()
     
-    val selectedRepoId by viewModel.selectedRepoId.collectAsState()
-    val availableFiles by viewModel.availableFiles.collectAsState()
-    val hasVisionSupport by viewModel.hasVisionSupport.collectAsState()
-    val visionFiles by viewModel.visionFiles.collectAsState()
-    val showVisionPrompt by viewModel.showVisionPrompt.collectAsState()
-    val pendingVisionDownload by viewModel.pendingVisionDownload.collectAsState()
+    val selectedRepoId by viewModel.selectedRepoId.collectAsStateWithLifecycle()
+    val availableFiles by viewModel.availableFiles.collectAsStateWithLifecycle()
+    val hasVisionSupport by viewModel.hasVisionSupport.collectAsStateWithLifecycle()
+    val visionFiles by viewModel.visionFiles.collectAsStateWithLifecycle()
+    val showVisionPrompt by viewModel.showVisionPrompt.collectAsStateWithLifecycle()
+    val pendingVisionDownload by viewModel.pendingVisionDownload.collectAsStateWithLifecycle()
     
     // Vision projector download prompt
     if (showVisionPrompt && pendingVisionDownload != null) {

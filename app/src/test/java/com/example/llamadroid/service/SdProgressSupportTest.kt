@@ -136,6 +136,28 @@ class SdProgressSupportTest {
     }
 
     @Test
+    fun `native loading lines expose pre sampling phases`() {
+        val tracker = SdProgressTracker(totalStepsHint = 20, startedAtMs = 0L)
+
+        assertEquals(
+            SdProgressPhase.LOADING_MODEL,
+            tracker.update("loading diffusion model from '/models/sd3.safetensors'", 1L)?.phase
+        )
+        assertEquals(
+            SdProgressPhase.LOADING_VAE,
+            tracker.update("loading vae from '/models/vae.safetensors'", 2L)?.phase
+        )
+        assertEquals(
+            SdProgressPhase.LOADING_TEXT_ENCODERS,
+            tracker.update("loading clip_g from '/models/clip_g.safetensors'", 3L)?.phase
+        )
+        assertEquals(
+            SdProgressPhase.LOADING_LORAS,
+            tracker.update("loading lora style.safetensors", 4L)?.phase
+        )
+    }
+
+    @Test
     fun `multiple ADetailer passes aggregate monotonically`() {
         val tracker = SdProgressTracker(totalStepsHint = 20, startedAtMs = 0L)
         val snapshots = buildList {

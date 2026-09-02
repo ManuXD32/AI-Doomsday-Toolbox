@@ -19,6 +19,8 @@ data class ModelEntity(
     val sdVariant: String? = null,
     val sdCompatProfiles: String? = null,
     val sdParamsBackendMode: String = "auto",
+    /** Normalized per-module stable-diffusion.cpp parameter residency. */
+    val sdParamsBackendSpec: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     // ONNX-specific fields
     val onnxCapabilities: String? = null, // Comma-separated: "txt2img,img2img"
@@ -27,7 +29,15 @@ data class ModelEntity(
     val onnxReferenceUri: String? = null,
     val onnxReferencePath: String? = null,
     // Layer count for distributed inference
-    val layerCount: Int = 0  // Number of transformer layers (from GGUF metadata)
+    val layerCount: Int = 0,  // Number of transformer layers (from GGUF metadata)
+    // Stable Diffusion artifact inspection (kept separate from user-configured
+    // sdFamily/sdVariant so diagnostics can explain disagreements).
+    val sdDetectedFamily: String? = null,
+    val sdDetectedRole: String? = null,
+    val sdArtifactLayout: String? = null,
+    val sdInspectionConfidence: String? = null,
+    val sdInspectionVersion: Int = 0,
+    val sdInspectionJson: String? = null
 )
 
 const val SD_CAPABILITY_TXT2IMG = "txt2img"
@@ -97,8 +107,9 @@ enum class ModelType {
     SD_LORA,          // LoRA for SD
     SD_TEXTUAL_INVERSION, // Prompt embedding for stable-diffusion.cpp
     SD_UPSCALER,      // ESRGAN upscaling model
-    // FLUX-specific types (multi-component architecture)
-    SD_DIFFUSION,     // Standalone diffusion/transformer model (FLUX)
+    // Standalone Stable Diffusion diffusion/transformer component (generic;
+    // FLUX, SD3, and future families all use this configured role).
+    SD_DIFFUSION,
     SD_CLIP_L,        // CLIP-L text encoder (for FLUX)
     SD_CLIP_G,        // CLIP-G text encoder (for SD3)
     SD_T5XXL,         // T5-XXL text encoder (for FLUX)

@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -69,17 +70,19 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 @Composable
 fun WorkerModeScreen(navController: NavController) {
     val context = LocalContext.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val scrollState = rememberScrollState()
     
-    val isRunning by DistributedService.isRunning.collectAsState()
-    val localIp by DistributedService.localIp.collectAsState()
-    val workerPort by DistributedService.workerPort.collectAsState()
-    val workerRamMB by DistributedService.workerRamMB.collectAsState()
-    val connectionCount by DistributedService.connectionCount.collectAsState()
+    val isRunning by DistributedService.isRunning.collectAsStateWithLifecycle()
+    val localIp by DistributedService.localIp.collectAsStateWithLifecycle()
+    val workerPort by DistributedService.workerPort.collectAsStateWithLifecycle()
+    val workerRamMB by DistributedService.workerRamMB.collectAsStateWithLifecycle()
+    val connectionCount by DistributedService.connectionCount.collectAsStateWithLifecycle()
     
     // System Monitor for RAM Card
     val systemMonitor = remember { SystemMonitor(context) }
-    val stats by systemMonitor.observeStats().collectAsState(initial = SystemStats(0, 0, 0f, 0f))
+    val stats by systemMonitor.observeStats()
+        .collectAsStateWithLifecycle(initialValue = SystemStats(0, 0, 0f, 0f))
     
     // Get device name (try user-set name first, fallback to model)
     val deviceName = remember { 
@@ -106,6 +109,13 @@ fun WorkerModeScreen(navController: NavController) {
     
     // QR Code generation
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    DisposableEffect(qrBitmap) {
+        onDispose {
+            qrBitmap?.let { bitmap ->
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+        }
+    }
     
     // Web Monitor State
     var masterIp by remember { mutableStateOf("") }
@@ -114,6 +124,42 @@ fun WorkerModeScreen(navController: NavController) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var isFullScreen by remember { mutableStateOf(false) }
+
+    // WebView owns native resources and a renderer process. Keep it reusable while this
+    // route is alive, but pause it while the route is backgrounded and destroy it on route
+    // disposal. The updated-state reference ensures disposal sees the latest instance.
+    val currentWebView by rememberUpdatedState(webViewInstance)
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                    currentWebView?.onPause()
+                    currentWebView?.pauseTimers()
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    currentWebView?.resumeTimers()
+                    currentWebView?.onResume()
+                }
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            currentWebView?.let { view ->
+                runCatching {
+                    view.stopLoading()
+                    view.loadUrl("about:blank")
+                    view.webViewClient = WebViewClient()
+                    view.webChromeClient = null
+                    view.removeAllViews()
+                    view.destroy()
+                }
+            }
+            webViewRef = null
+            webViewInstance = null
+        }
+    }
     
     LaunchedEffect(isRunning, localIp, workerPort) {
         if (isRunning && localIp != null) {
@@ -121,6 +167,8 @@ fun WorkerModeScreen(navController: NavController) {
                 val connectionString = "$localIp:$workerPort"
                 qrBitmap = generateQrCode(connectionString, 200)
             }
+        } else {
+            qrBitmap = null
         }
     }
     
@@ -587,16 +635,15 @@ fun WorkerModeScreen(navController: NavController) {
                                                 webViewInstance = this // Save instance
                                             }
                                         
-                                        // CRITICAL: Manual Lifecycle Management
-                                        // We do NOT want Compose to pause the WebView when the Activity pauses/stops
-                                        // because we want it to keep running in the background (Service is valid).
-                                        // So we detach it from the parent but DO NOT call onPause() or destroy().
+                                        // Detach before Compose reuses the same WebView for the full-screen
+                                        // overlay. Route-level lifecycle handling pauses it when hidden and
+                                        // destroys it once the route is disposed.
                                         
                                         if (view.parent != null) {
                                             (view.parent as? android.view.ViewGroup)?.removeView(view)
                                         }
                                         
-                                        // Force resume timers just in case
+                                        // Ensure a resumed route can render after a previous pause.
                                         view.resumeTimers()
                                         
                                         view
@@ -606,31 +653,13 @@ fun WorkerModeScreen(navController: NavController) {
                                                 view.loadUrl("http://$masterIp:$masterPort")
                                             }
                                         },
-                                        // Disable automatic lifecycle handling to prevent pausing
+                                        // The route-level lifecycle effect owns pause/resume and final cleanup.
                                         onRelease = { 
-                                            // Do nothing here to keep it alive
+                                            // Keep the instance for the full-screen reparenting path.
                                         },
                                         modifier = Modifier.fillMaxSize()
                                     )
                                     
-                                    // Hack to keep WebView alive when Activity behaves like a background process
-                                    DisposableEffect(Unit) {
-                                        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-                                            if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE || 
-                                                event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
-                                                // Activity is pausing, but we want WebView to keep running
-                                                // We must explicitly tell it to resume timers/JS if the system paused it
-                                                webViewInstance?.resumeTimers()
-                                                webViewInstance?.onResume()
-                                            }
-                                        }
-                                        val lifecycle = (context as? androidx.activity.ComponentActivity)?.lifecycle
-                                        lifecycle?.addObserver(observer)
-                                        
-                                        onDispose {
-                                            lifecycle?.removeObserver(observer)
-                                        }
-                                    }
                                 }
                             } else {
                                 // Placeholder when full screen
@@ -734,9 +763,9 @@ fun WorkerModeScreen(navController: NavController) {
                                  android.view.ViewGroup.LayoutParams.MATCH_PARENT
                              )
                         },
-                        // Disable automatic lifecycle handling
+                        // The route-level lifecycle effect owns pause/resume and final cleanup.
                         onRelease = { 
-                            // Do nothing here to keep it alive
+                            // Keep the instance for the inline reparenting path.
                         },
                         modifier = Modifier.fillMaxSize()
                 )

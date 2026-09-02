@@ -1,0 +1,18 @@
+<resources>
+    <string name="sd_params_backend_title">Parameter residency</string>
+    <string name="sd_params_backend_normal">Normal (automatic)</string>
+    <string name="sd_params_backend_te_disk">Text encoders on disk</string>
+    <string name="sd_params_backend_everything_disk">Everything on disk</string>
+    <string name="sd_params_backend_custom">Custom module placement</string>
+    <string name="sd_params_backend_module_auto">Automatic</string>
+    <string name="sd_params_backend_module_disk">Disk</string>
+    <string name="sd_params_backend_group_help">CLIP-L, CLIP-G, and T5 share the upstream te group.</string>
+    <string name="sd_params_backend_conflict">Conflicting text-encoder preferences were resolved to Disk.</string>
+    <string name="sd_params_backend_current">Current: %1$s</string>
+    <string name="sd_params_backend_open_rows">Edit component placement</string>
+    <string name="sd_params_backend_close_rows">Hide component placement</string>
+    <string name="imagegen_manage_lora">Import or manage LoRAs</string>
+    <string name="imagegen_loras_cleared_incompatible">Incompatible LoRAs were cleared for the selected model.</string>
+    <string name="imagegen_lora_move_up">Move LoRA up</string>
+    <string name="imagegen_lora_move_down">Move LoRA down</string>
+</resources>

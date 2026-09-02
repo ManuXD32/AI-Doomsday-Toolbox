@@ -105,6 +105,46 @@ internal class InpaintMaskRaster private constructor(
         }
     }
 
+    /** Fills a hard-edged rectangle. Shape tools use the same mutable mask as brushes. */
+    fun paintRectangle(left: Float, top: Float, right: Float, bottom: Float, erase: Boolean) {
+        if (!left.isFinite() || !top.isFinite() || !right.isFinite() || !bottom.isFinite()) return
+        val startX = floor(min(left, right)).toInt().coerceIn(0, width - 1)
+        val endX = ceil(max(left, right)).toInt().coerceIn(0, width)
+        val startY = floor(min(top, bottom)).toInt().coerceIn(0, height - 1)
+        val endY = ceil(max(top, bottom)).toInt().coerceIn(0, height)
+        if (endX <= startX || endY <= startY) return
+        val value = if (erase) 0 else 255.toByte()
+        for (y in startY until endY) {
+            for (x in startX until endX) pixels[y * width + x] = value
+        }
+    }
+
+    /** Fills a hard-edged ellipse bounded by the supplied rectangle. */
+    fun paintEllipse(left: Float, top: Float, right: Float, bottom: Float, erase: Boolean) {
+        if (!left.isFinite() || !top.isFinite() || !right.isFinite() || !bottom.isFinite()) return
+        val normalizedLeft = min(left, right)
+        val normalizedRight = max(left, right)
+        val normalizedTop = min(top, bottom)
+        val normalizedBottom = max(top, bottom)
+        val radiusX = (normalizedRight - normalizedLeft) / 2f
+        val radiusY = (normalizedBottom - normalizedTop) / 2f
+        if (radiusX <= 0f || radiusY <= 0f) return
+        val centerX = normalizedLeft + radiusX
+        val centerY = normalizedTop + radiusY
+        val startX = floor(normalizedLeft).toInt().coerceIn(0, width - 1)
+        val endX = ceil(normalizedRight).toInt().coerceIn(0, width)
+        val startY = floor(normalizedTop).toInt().coerceIn(0, height - 1)
+        val endY = ceil(normalizedBottom).toInt().coerceIn(0, height)
+        val value = if (erase) 0 else 255.toByte()
+        for (y in startY until endY) {
+            for (x in startX until endX) {
+                val dx = (x + 0.5f - centerX) / radiusX
+                val dy = (y + 0.5f - centerY) / radiusY
+                if (dx * dx + dy * dy <= 1f) pixels[y * width + x] = value
+            }
+        }
+    }
+
     /** ARGB overlay pixels used by the editor: masked areas are translucent red. */
     fun toOverlayArgb(maxAlpha: Int = 150): IntArray {
         val safeMaxAlpha = maxAlpha.coerceIn(0, 255)

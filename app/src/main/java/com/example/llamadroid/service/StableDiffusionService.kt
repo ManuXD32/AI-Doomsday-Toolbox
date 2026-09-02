@@ -18,7 +18,9 @@ import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdInspectionCache
 import com.example.llamadroid.sd.SdLoraConfigurationException
+import com.example.llamadroid.sd.SdPipelineValidationException
 import com.example.llamadroid.sd.validateSdLoraModelCompatibility
 import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.util.AccelerationWorkload
@@ -66,6 +68,12 @@ class StableDiffusionService : Service() {
     private lateinit var powerManager: PowerManager
     private var wakeLock: PowerManager.WakeLock? = null
     private var stallMonitorJob: Job? = null
+    @Volatile
+    private var postRunHealthJob: Job? = null
+    @Volatile
+    private var postRunHealthGeneration: Long = 0L
+    private var idleStopJob: Job? = null
+    @Volatile private var latestStartId: Int = 0
     @Volatile
     private var latestStageTimings = SdStageTimings()
 
@@ -151,6 +159,9 @@ class StableDiffusionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
+        idleStopJob?.cancel()
+        idleStopJob = null
         recordServiceBreadcrumb("start_command", intent?.action)
         when (intent?.action) {
             ACTION_START_GENERATION -> {
@@ -325,6 +336,7 @@ class StableDiffusionService : Service() {
         useWorkflowStateHolder: Boolean,
         useDistributedStateHolder: Boolean
     ) {
+        cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
         modeStateHolder.updatePrompt(config.prompt)
         ensureWakeLockHeld()
@@ -394,6 +406,7 @@ class StableDiffusionService : Service() {
     }
 
     private fun startUpscale(config: SDUpscaleConfig, useDistributedStateHolder: Boolean) {
+        cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
         ensureWakeLockHeld()
         modeSessionIds[laneFor(SDMode.UPSCALE, useDistributedStateHolder)] = GenerationDiagnosticsStore.startSession(
@@ -461,6 +474,7 @@ class StableDiffusionService : Service() {
     }
 
     private fun startWorkflow(workflowConfig: SDWorkflowConfig) {
+        cancelPostRunHealthSampling()
         val txt2imgHolder = SDModeStateHolder.workflowTxt2img
         val upscaleHolder = SDModeStateHolder.workflowUpscale
         txt2imgHolder.reset()
@@ -657,11 +671,35 @@ class StableDiffusionService : Service() {
             sdRuntimeBackendMode = effectiveSdRuntimeBackendModeForBinary(sdBinary, config.sdRuntimeBackendMode)
         )
         try {
-            args.addAll(
-                buildSdCommandArgs(
-                    config = effectiveConfig,
-                    binaryCapabilities = binaryCapabilities
+            val pipeline = if (effectiveConfig.mode == SDMode.UPSCALE) {
+                null
+            } else {
+                resolveSdPipelineForLaunch(this@StableDiffusionService, effectiveConfig)
+            }
+            pipeline?.let { resolved ->
+                val inspection = resolved.inspection
+                recordModeBreadcrumb(
+                    mode = effectiveConfig.mode,
+                    event = "pipeline_validated",
+                    phase = "inspecting_model",
+                    details = buildList {
+                        add("model=${File(effectiveConfig.modelPath).name}")
+                        add("modelBytes=${File(effectiveConfig.modelPath).length()}")
+                        add("configuredFamily=${effectiveConfig.modelFamily ?: "unknown"}")
+                        add("detectedFamily=${inspection?.detectedFamily?.storedValue ?: "unknown"}")
+                        add("layout=${resolved.mainLayout.storedValue}")
+                        add("inspectionVersion=${inspection?.inspectionVersion ?: 0}")
+                        inspection?.headerFingerprint?.take(16)?.let { add("fingerprint=$it") }
+                        add("binary=${sdBinary.name}")
+                    }.joinToString(" ")
                 )
+            }
+            args.addAll(
+                if (pipeline == null) {
+                    buildSdCommandArgs(effectiveConfig, binaryCapabilities)
+                } else {
+                    buildSdCommandArgs(effectiveConfig, pipeline, binaryCapabilities)
+                }
             )
         } catch (e: SdIpAdapterConfigurationException) {
             throw SdConfigurationException(sdIpAdapterErrorMessage(this@StableDiffusionService, e))
@@ -690,6 +728,10 @@ class StableDiffusionService : Service() {
             )
         } catch (e: SdDisallowedDistributedFlagException) {
             throw IllegalStateException(getString(R.string.sd_dist_error_row_split_not_supported))
+        } catch (e: SdPipelineValidationException) {
+            throw IllegalStateException(
+                sdPipelineIssueMessage(this@StableDiffusionService, e.pipeline.blockingIssues.firstOrNull())
+            )
         }
         DebugLog.log("[StableDiffusionService] Running command: ${args.joinToString(" ")}")
         if (config.mode == SDMode.UPSCALE) {
@@ -718,6 +760,7 @@ class StableDiffusionService : Service() {
             },
             startedAtMs = SystemClock.elapsedRealtime()
         )
+        val nativeOutput = SdNativeOutputBuffer()
         val etaTickerJob = launch {
             while (isActive) {
                 delay(1000)
@@ -741,6 +784,7 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
+                    nativeOutput.add(line)
                     markNativeOutput(config.mode)
                     DebugLog.log("SD: $line")
                     latestStageTimings = latestStageTimings.withLine(line)
@@ -769,12 +813,33 @@ class StableDiffusionService : Service() {
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Process exited with code $exitCode")
         if (exitCode != 0) {
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+            val failureReport = SdNativeFailureClassifier.classify(
+                exitCode = exitCode,
+                recentOutput = nativeOutput.snapshot(),
+                stage = progressTracker.currentSnapshot()?.phase,
+                acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(sdBinary)
+            )
+            recordModeBreadcrumb(
+                mode = config.mode,
+                event = "native_failure_classified",
+                phase = failureReport.stage?.diagnosticName,
+                details = buildString {
+                    append(failureReport.technicalSummary)
+                    append(" model=")
+                    append(File(config.modelPath).name)
+                    append(" binary=")
+                    append(sdBinary.name)
+                }
+            )
+            if (failureReport.category == SdFailureCategory.ACCELERATOR_FAILURE) {
                 val detail = "Stable Diffusion accelerator ${sdBinary.name} failed with exit code $exitCode."
                 DebugLog.log("[StableDiffusionService] $detail")
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
-            throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
+            throw SdNativeFailureException(
+                report = failureReport,
+                message = sdNativeFailureMessage(this@StableDiffusionService, failureReport)
+            )
         }
         if (!File(config.outputPath).isFile) {
             throw RuntimeException(getString(R.string.imagegen_error_output_missing))
@@ -916,6 +981,7 @@ class StableDiffusionService : Service() {
             totalStepsHint = config.upscaleRepeats.coerceAtLeast(1),
             startedAtMs = SystemClock.elapsedRealtime()
         )
+        val nativeOutput = SdNativeOutputBuffer()
         val etaTickerJob = launch {
             while (isActive) {
                 delay(1000)
@@ -939,6 +1005,7 @@ class StableDiffusionService : Service() {
             process.inputStream.bufferedReader().use { reader ->
                 var line = reader.readLine()
                 while (line != null) {
+                    nativeOutput.add(line)
                     markNativeOutput(SDMode.UPSCALE)
                     DebugLog.log("SD: $line")
                     progressTracker.update(line, SystemClock.elapsedRealtime())?.let { parsedSnapshot ->
@@ -966,12 +1033,27 @@ class StableDiffusionService : Service() {
         val exitCode = process.waitFor()
         DebugLog.log("[StableDiffusionService] Upscale process exited with code $exitCode")
         if (exitCode != 0) {
-            if (DeviceAcceleration.isAcceleratorBinary(sdBinary)) {
+            val failureReport = SdNativeFailureClassifier.classify(
+                exitCode = exitCode,
+                recentOutput = nativeOutput.snapshot(),
+                stage = progressTracker.currentSnapshot()?.phase,
+                acceleratorBinary = DeviceAcceleration.isAcceleratorBinary(sdBinary)
+            )
+            recordModeBreadcrumb(
+                mode = SDMode.UPSCALE,
+                event = "native_failure_classified",
+                phase = failureReport.stage?.diagnosticName,
+                details = "${failureReport.technicalSummary} model=${File(config.modelPath).name} binary=${sdBinary.name}"
+            )
+            if (failureReport.category == SdFailureCategory.ACCELERATOR_FAILURE) {
                 val detail = "Stable Diffusion accelerator ${sdBinary.name} failed during upscale with exit code $exitCode."
                 DebugLog.log("[StableDiffusionService] $detail")
                 DeviceAcceleration.reportRuntimeFailure(AccelerationWorkload.STABLE_DIFFUSION, detail)
             }
-            throw RuntimeException(getString(R.string.imagegen_error_generation_failed, exitCode))
+            throw SdNativeFailureException(
+                report = failureReport,
+                message = sdNativeFailureMessage(this@StableDiffusionService, failureReport)
+            )
         }
 
         config.outputPath
@@ -982,7 +1064,7 @@ class StableDiffusionService : Service() {
         recordModeBreadcrumb(mode, "cancel_requested")
         val (job, process) = removeModeRuntime(mode, useDistributedStateHolder)
         job?.cancel(CancellationException(getString(R.string.action_cancelled)))
-        process?.destroy()
+        process?.let { terminateNativeProcess(it, "cancel ${mode.name}") }
         clearDiagnostics(mode)
 
         getModeStateHolder(mode, false, useDistributedStateHolder).updateState(SDGenerationState.Idle)
@@ -1002,7 +1084,7 @@ class StableDiffusionService : Service() {
         recordModeBreadcrumb(SDMode.UPSCALE, "workflow_cancel_requested")
         workflowJob?.cancel(CancellationException(getString(R.string.action_cancelled)))
         workflowJob = null
-        clearAllModeProcesses().forEach { it.destroy() }
+        clearAllModeProcesses().forEach { terminateNativeProcess(it, "cancel workflow") }
         clearDiagnostics(SDMode.TXT2IMG)
         clearDiagnostics(SDMode.UPSCALE)
         SDModeStateHolder.workflowTxt2img.reset()
@@ -1051,7 +1133,12 @@ class StableDiffusionService : Service() {
     private fun buildImageProgressStatus(snapshot: SdProgressSnapshot): String {
         val percent = SdProgressTracker.progressPercent(snapshot)
         return when (snapshot.phase) {
+            SdProgressPhase.INSPECTING_MODEL -> getString(R.string.gen_status_inspecting_model)
             SdProgressPhase.PREPARING -> getString(R.string.gen_status_preparing)
+            SdProgressPhase.LOADING_MODEL -> getString(R.string.gen_status_loading_model)
+            SdProgressPhase.LOADING_VAE -> getString(R.string.gen_status_loading_vae)
+            SdProgressPhase.LOADING_TEXT_ENCODERS -> getString(R.string.gen_status_loading_text_encoders)
+            SdProgressPhase.LOADING_LORAS -> getString(R.string.gen_status_loading_loras)
             SdProgressPhase.VAE_ENCODING -> getString(R.string.gen_status_vae_encoding)
             SdProgressPhase.CONDITIONING -> getString(R.string.gen_status_conditioning)
             SdProgressPhase.DIFFUSION -> snapshot.etaSeconds?.let { eta ->
@@ -1213,6 +1300,98 @@ class StableDiffusionService : Service() {
         if (!hasActiveWork()) {
             modeDiagnostics.clear()
             DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, null)
+            schedulePostRunHealthSampling()
+            // This is a started, unbound service. Releasing the service object
+            // after each completed/cancelled batch drops its executor, process
+            // handles, diagnostics and notification state instead of retaining
+            // them in the UI process until the whole app is force-stopped.
+            idleStopJob?.cancel()
+            val idleStartId = latestStartId
+            idleStopJob = serviceScope.launch {
+                delay(IDLE_SERVICE_STOP_DELAY_MS)
+                if (!hasActiveWork()) {
+                    recordServiceBreadcrumb("idle_service_stop_requested")
+                    stopSelfResult(idleStartId)
+                }
+            }
+        }
+    }
+
+    /**
+     * Records a small resource sample at the end of a run and, when the service remains alive, a
+     * second sample after the normal post-run settling window. If Android tears the normally
+     * unbound service down during that short idle-stop grace period, [onDestroy] records the
+     * pending second sample before cancellation. This is intentionally independent from
+     * [idleStopJob]: a health sample must never keep an otherwise idle service alive.
+     */
+    private fun schedulePostRunHealthSampling() {
+        if (postRunHealthJob?.isActive == true) return
+
+        val generation = ++postRunHealthGeneration
+        recordPostRunHealthSnapshot("completion")
+        val samplingJob = serviceScope.launch {
+            try {
+                delay(POST_RUN_HEALTH_DELAY_MS)
+                if (isActive && generation == postRunHealthGeneration && !hasActiveWork()) {
+                    recordPostRunHealthSnapshot("delayed")
+                }
+            } finally {
+                if (generation == postRunHealthGeneration) {
+                    postRunHealthJob = null
+                }
+            }
+        }
+        // A concurrent start/destroy invalidates this sample. Do not retain a cancelled job in
+        // the field, and do not allow a stale coroutine to clear a newer sampling job.
+        if (generation == postRunHealthGeneration) {
+            postRunHealthJob = samplingJob
+        } else {
+            samplingJob.cancel()
+        }
+    }
+
+    private fun cancelPostRunHealthSampling() {
+        postRunHealthGeneration += 1L
+        postRunHealthJob?.cancel()
+        postRunHealthJob = null
+    }
+
+    private fun recordPostRunHealthSnapshot(sample: String) {
+        val (activeWorkCount, activeProcessCount) = activeRuntimeCounts()
+        val snapshot = SdPostRunHealthSnapshot.capture(
+            activeWorkCount = activeWorkCount,
+            activeProcessCount = activeProcessCount,
+            generationLockHeld = SdGenerationProcessLock.isLocked,
+            wakeLockHeld = wakeLock?.isHeld == true
+        )
+        recordServiceBreadcrumb(
+            event = if (sample == "completion") {
+                "post_run_health_snapshot"
+            } else {
+                "post_run_health_snapshot_delayed"
+            },
+            details = snapshot.toDetails(sample)
+        )
+    }
+
+    private fun activeRuntimeCounts(): Pair<Int, Int> = synchronized(modeLifecycleLock) {
+        val activeModeWork = modeJobs.values.count { it.isActive }
+        val activeWorkflowWork = if (workflowJob?.isActive == true) 1 else 0
+        val activeProcesses = modeProcesses.values.count { process ->
+            runCatching { process.isAlive }.getOrDefault(false)
+        }
+        (activeModeWork + activeWorkflowWork) to activeProcesses
+    }
+
+    private fun terminateNativeProcess(process: Process, reason: String) {
+        runCatching { process.outputStream.close() }
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
+        runCatching {
+            if (process.isAlive) process.destroy()
+            if (process.isAlive) process.destroyForcibly()
+        }.onFailure { error ->
+            DebugLog.log("[StableDiffusionService] Failed to terminate native process for $reason: ${error.message}")
         }
     }
 
@@ -1546,6 +1725,8 @@ class StableDiffusionService : Service() {
 
         stallMonitorJob?.cancel()
         stallMonitorJob = null
+        idleStopJob?.cancel()
+        idleStopJob = null
         modeDiagnostics.clear()
         failForegroundTask(message)
         releaseWakeLocksForTimeout()
@@ -1653,7 +1834,12 @@ class StableDiffusionService : Service() {
 
     override fun onDestroy() {
         recordServiceBreadcrumb("service_destroyed")
-        clearAllModeProcesses().forEach { it.destroy() }
+        // The ordinary idle stop is intentionally shorter than the two-second settling window.
+        // Preserve a useful second post-run sample at teardown instead of silently losing it.
+        if (postRunHealthJob?.isActive == true) {
+            recordPostRunHealthSnapshot("destroyed")
+        }
+        clearAllModeProcesses().forEach { terminateNativeProcess(it, "service destroy") }
         clearAllModeJobs().forEach { it.cancel() }
         modeSessionIds.clear()
         workflowJob?.cancel()
@@ -1661,6 +1847,9 @@ class StableDiffusionService : Service() {
         modeDiagnostics.clear()
         stallMonitorJob?.cancel()
         stallMonitorJob = null
+        cancelPostRunHealthSampling()
+        idleStopJob?.cancel()
+        idleStopJob = null
         serviceScope.cancel()
         dismissForegroundTask()
         if (wakeLock?.isHeld == true) {
@@ -1759,16 +1948,26 @@ class StableDiffusionService : Service() {
 
     private fun buildSessionDetails(config: SDConfig, workflow: Boolean): String {
         val (family, variant) = inferSdFamilyForConfig(config)
+        val modelFile = File(config.modelPath)
+        val inspection = SdInspectionCache.get(modelFile)
         return buildList {
-            add("model=${File(config.modelPath).name}")
+            add("model=${modelFile.name}")
+            add("modelBytes=${modelFile.takeIf { it.isFile }?.length() ?: -1L}")
             add("size=${config.width}x${config.height}")
             add("steps=${config.steps}")
             add("sampler=${config.samplingMethod.cliName}")
             add("mode=${config.mode.name}")
             add("initImage=${config.initImage != null}")
-            add("family=${family.storedValue}")
+            add("configuredFamily=${family?.storedValue ?: "unknown"}")
             variant?.let { add("variant=$it") }
-            add("paramsBackend=${config.sdParamsBackendMode}")
+            add("configuredLayout=${config.modelLayout?.storedValue ?: "unknown"}")
+            inspection?.let {
+                add("detectedFamily=${it.detectedFamily?.storedValue ?: "unknown"}")
+                add("detectedLayout=${it.artifactLayout.storedValue}")
+                add("inspectionVersion=${it.inspectionVersion}")
+                it.headerFingerprint?.take(16)?.let { fingerprint -> add("fingerprint=$fingerprint") }
+            }
+            add("paramsBackend=${config.sdParamsBackendSpec}")
             add("runtimeBackend=${config.sdRuntimeBackendMode}")
             if (config.maxVramCpuGiB.isNotBlank()) {
                 add("maxVramCpuGiB=${config.maxVramCpuGiB}")
@@ -1782,7 +1981,7 @@ class StableDiffusionService : Service() {
         add("input=${File(config.inputImagePath).name}")
         add("repeats=${config.upscaleRepeats}")
         add("threads=${config.threads}")
-        add("paramsBackend=${config.sdParamsBackendMode}")
+        add("paramsBackend=${config.sdParamsBackendSpec}")
         add("runtimeBackend=${config.sdRuntimeBackendMode}")
         if (config.maxVramCpuGiB.isNotBlank()) {
             add("maxVramCpuGiB=${config.maxVramCpuGiB}")
@@ -1913,6 +2112,8 @@ class StableDiffusionService : Service() {
         private const val EXTRA_USE_WORKFLOW_STATE_HOLDER = "extra_sd_use_workflow_holder"
         private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_sd_use_distributed_holder"
         private const val WORKFLOW_OUTPUT_SUBFOLDER = "workflow"
+        private const val IDLE_SERVICE_STOP_DELAY_MS = 250L
+        private const val POST_RUN_HEALTH_DELAY_MS = 2_000L
         private const val STALL_MONITOR_INTERVAL_MS = 15_000L
         private const val DEFAULT_NATIVE_OUTPUT_WINDOW_MS = 5 * 60_000L
         private const val DIAGNOSTIC_SOURCE = "image_generation"

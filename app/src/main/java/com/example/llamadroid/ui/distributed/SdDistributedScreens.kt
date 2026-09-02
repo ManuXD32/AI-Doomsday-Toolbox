@@ -1047,8 +1047,11 @@ fun SdDistributedMasterScreen(navController: NavController) {
                 inputImagePath = imageInputPath,
                 outputPath = outputFile.absolutePath,
                 threads = runtimeThreads.toIntOrNull() ?: -1,
-                sdParamsBackendMode = imageSelectedUpscaler?.sdParamsBackendMode ?: "auto",
-                sdRuntimeBackendMode = imageSelectedUpscaler?.sdRuntimeBackendMode ?: "auto",
+                // Distributed placement is selected by the remote runtime;
+                // never inherit the local model's remembered residency.
+                sdParamsBackendSpec = "auto",
+                sdParamsBackendMode = "auto",
+                sdRuntimeBackendMode = "auto",
                 maxVramCpuGiB = "",
                 distributedRuntime = runtimeConfig,
                 customFlags = imageCustomFlags
@@ -1106,8 +1109,10 @@ fun SdDistributedMasterScreen(navController: NavController) {
                 flowShift = imageFlowShift.toFloatOrNull(),
                 diffusionFa = diffusionFa,
                 mmap = mmap,
-                sdParamsBackendMode = imageSelectedModel?.sdParamsBackendMode ?: "auto",
-                sdRuntimeBackendMode = imageSelectedModel?.sdRuntimeBackendMode ?: "auto",
+                // Keep local parameter residency out of distributed commands.
+                sdParamsBackendSpec = "auto",
+                sdParamsBackendMode = "auto",
+                sdRuntimeBackendMode = "auto",
                 quantizationType = quantization,
                 distributedRuntime = runtimeConfig,
                 customFlags = imageCustomFlags
@@ -1203,8 +1208,11 @@ fun SdDistributedMasterScreen(navController: NavController) {
             diffusionFa = diffusionFa,
             mmap = mmap,
             threads = runtimeThreads.toIntOrNull() ?: -1,
-            sdParamsBackendMode = videoSelectedModel?.sdParamsBackendMode ?: "auto",
-            sdRuntimeBackendMode = videoSelectedModel?.sdRuntimeBackendMode ?: "auto",
+            // Distributed placement is negotiated independently of local
+            // model-row preferences.
+            sdParamsBackendSpec = "auto",
+            sdParamsBackendMode = "auto",
+            sdRuntimeBackendMode = "auto",
             maxVramCpuGiB = "",
             distributedRuntime = runtimeConfig,
             customFlags = videoCustomFlags

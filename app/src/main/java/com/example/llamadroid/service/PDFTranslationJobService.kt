@@ -263,7 +263,9 @@ object PDFTranslationJobService {
         if (currentJob?.isActive == true) return false
 
         val appContext = context.applicationContext
-        val preflight = MangaTranslationSupport.preflight(spec)
+        MangaPaintedOcrWorkspaceManager.sweepAbandoned(appContext)
+        val validatedSpec = validatePaintedSpec(appContext, spec)
+        val preflight = MangaTranslationSupport.preflight(validatedSpec)
         if (!preflight.canRun) {
             _state.value = PdfTranslationJobState(
                 isRunning = false,
@@ -276,8 +278,8 @@ object PDFTranslationJobService {
             isRunning = true,
             kind = PdfTranslationJobKind.MANGA_BATCH,
             progressMessage = appContext.getString(R.string.pdf_translation_background_started),
-            totalFiles = spec.sources.size,
-            capturedConfigFingerprint = spec.config.fingerprint()
+            totalFiles = validatedSpec.sources.size,
+            capturedConfigFingerprint = validatedSpec.config.fingerprint()
         )
         RemoteSummaryProtection.acquire(appContext)
         MangaTranslationForegroundService.start(
@@ -291,7 +293,7 @@ object PDFTranslationJobService {
             try {
                 val result = try {
                     PDFService(appContext).translateMangaBatch(
-                        spec = spec,
+                        spec = validatedSpec,
                         executionController = controller,
                         onFileStarted = { index, total, name ->
                             _state.update {
@@ -325,8 +327,8 @@ object PDFTranslationJobService {
                             successMessage = message,
                             mangaResults = results,
                             progressFraction = 1f,
-                            totalFiles = spec.sources.size,
-                            capturedConfigFingerprint = spec.config.fingerprint()
+                            totalFiles = validatedSpec.sources.size,
+                            capturedConfigFingerprint = validatedSpec.config.fingerprint()
                         )
                     },
                     onFailure = { error ->
@@ -336,8 +338,8 @@ object PDFTranslationJobService {
                                 kind = PdfTranslationJobKind.MANGA_BATCH,
                                 cancelled = true,
                                 mangaResults = (error as? PDFTranslationCancelledException)?.mangaResults.orEmpty(),
-                                totalFiles = spec.sources.size,
-                                capturedConfigFingerprint = spec.config.fingerprint()
+                                totalFiles = validatedSpec.sources.size,
+                                capturedConfigFingerprint = validatedSpec.config.fingerprint()
                             )
                         } else {
                             val display = displayError(error, appContext)
@@ -346,8 +348,8 @@ object PDFTranslationJobService {
                                 kind = PdfTranslationJobKind.MANGA_BATCH,
                                 errorMessage = display.first,
                                 errorDetails = display.second,
-                                totalFiles = spec.sources.size,
-                                capturedConfigFingerprint = spec.config.fingerprint()
+                                totalFiles = validatedSpec.sources.size,
+                                capturedConfigFingerprint = validatedSpec.config.fingerprint()
                             )
                         }
                     }
@@ -366,7 +368,9 @@ object PDFTranslationJobService {
     fun startMangaPreview(context: Context, spec: MangaTranslationJobSpec): Boolean {
         if (currentJob?.isActive == true) return false
         val appContext = context.applicationContext
-        val preflight = MangaTranslationSupport.preflight(spec)
+        MangaPaintedOcrWorkspaceManager.sweepAbandoned(appContext)
+        val validatedSpec = validatePaintedSpec(appContext, spec)
+        val preflight = MangaTranslationSupport.preflight(validatedSpec)
         if (!preflight.canRun) {
             _state.value = PdfTranslationJobState(
                 kind = PdfTranslationJobKind.MANGA_PREVIEW,
@@ -383,13 +387,13 @@ object PDFTranslationJobService {
             totalFiles = 1,
             currentFileIndex = 1,
             currentFileName = spec.sources.firstOrNull()?.displayName,
-            capturedConfigFingerprint = spec.config.fingerprint()
+            capturedConfigFingerprint = validatedSpec.config.fingerprint()
         )
         RemoteSummaryProtection.acquire(appContext)
         currentJob = serviceScope.launch {
             try {
                 val result = PDFService(appContext).previewMangaFirstPage(
-                    spec = spec,
+                    spec = validatedSpec,
                     executionController = controller
                 ) { progress ->
                     publishMangaProgress(appContext, progress)
@@ -400,7 +404,7 @@ object PDFTranslationJobService {
                             kind = PdfTranslationJobKind.MANGA_PREVIEW,
                             progressFraction = 1f,
                             successMessage = appContext.getString(R.string.workflow_manga_preview_ready),
-                            capturedConfigFingerprint = spec.config.fingerprint(),
+                            capturedConfigFingerprint = validatedSpec.config.fingerprint(),
                             mangaPreview = preview
                         )
                     },
@@ -431,6 +435,25 @@ object PDFTranslationJobService {
 
     fun clearTerminalMessages() {
         _state.update { it.copy(successMessage = null, errorMessage = null, errorDetails = null, cancelled = false) }
+    }
+
+    private fun validatePaintedSpec(
+        context: Context,
+        spec: MangaTranslationJobSpec
+    ): MangaTranslationJobSpec {
+        if (spec.config.behavior.ocrStrategy != MangaOcrStrategy.PAINTED_REGIONS) return spec
+        val workspace = spec.config.paintedOcrWorkspace?.let { ref ->
+            MangaPaintedOcrWorkspaceManager.invalidateIfSourcesChanged(context, ref)
+        }
+        val workspaceSources = workspace?.pages?.map { it.sourceUri }?.distinct()
+        val expectedSources = spec.sources.map { it.uri.toString() }
+        return spec.copy(
+            config = spec.config.copy(
+                paintedOcrWorkspace = workspace?.currentRef,
+                paintedOcrReviewComplete = workspace != null &&
+                    workspace.isReady && workspaceSources == expectedSources
+            )
+        )
     }
 
     fun cancel() {

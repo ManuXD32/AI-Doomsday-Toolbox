@@ -19,7 +19,12 @@ data class SdProgressSnapshot(
 )
 
 enum class SdProgressPhase {
+    INSPECTING_MODEL,
     PREPARING,
+    LOADING_MODEL,
+    LOADING_VAE,
+    LOADING_TEXT_ENCODERS,
+    LOADING_LORAS,
     VAE_ENCODING,
     CONDITIONING,
     DIFFUSION,
@@ -102,6 +107,9 @@ class SdProgressTracker(
         }
     }
 
+    @Synchronized
+    fun currentSnapshot(): SdProgressSnapshot? = lastSnapshot
+
     private fun buildDiffusionSnapshot(
         currentStep: Int,
         totalSteps: Int,
@@ -146,7 +154,12 @@ class SdProgressTracker(
         activePhase = phase
         estimatedCompletionAtMs = null
         val progress = when (phase) {
+            SdProgressPhase.INSPECTING_MODEL -> aggregatePassProgress(INSPECTING_PROGRESS)
             SdProgressPhase.PREPARING -> aggregatePassProgress(PREPARING_PROGRESS)
+            SdProgressPhase.LOADING_MODEL -> aggregatePassProgress(LOADING_MODEL_PROGRESS)
+            SdProgressPhase.LOADING_VAE -> aggregatePassProgress(LOADING_VAE_PROGRESS)
+            SdProgressPhase.LOADING_TEXT_ENCODERS -> aggregatePassProgress(LOADING_TEXT_ENCODERS_PROGRESS)
+            SdProgressPhase.LOADING_LORAS -> aggregatePassProgress(LOADING_LORAS_PROGRESS)
             SdProgressPhase.VAE_ENCODING -> aggregatePassProgress(VAE_ENCODING_PROGRESS)
             SdProgressPhase.CONDITIONING -> aggregatePassProgress(CONDITIONING_PROGRESS)
             SdProgressPhase.DIFFUSION -> aggregatePassProgress(DIFFUSION_START)
@@ -212,6 +225,18 @@ class SdProgressTracker(
             SAVE_RESULT_REGEX.containsMatchIn(line) || IMAGES_SAVED_REGEX.containsMatchIn(line) ->
                 SdProgressPhase.SAVING
             ADETAILER_APPLIED_REGEX.containsMatchIn(line) -> SdProgressPhase.COMPOSITING
+            "loading vae from" in normalized ||
+                "loading tae from" in normalized ||
+                "loading taesd from" in normalized -> SdProgressPhase.LOADING_VAE
+            "loading clip_l from" in normalized ||
+                "loading clip_g from" in normalized ||
+                "loading t5xxl from" in normalized ||
+                "loading llm from" in normalized ||
+                "loading text encoder" in normalized -> SdProgressPhase.LOADING_TEXT_ENCODERS
+            "loading lora" in normalized || "applying lora" in normalized ->
+                SdProgressPhase.LOADING_LORAS
+            "loading model from" in normalized ||
+                "loading diffusion model from" in normalized -> SdProgressPhase.LOADING_MODEL
             DECODING_LATENTS_REGEX.containsMatchIn(line) ||
                 "vae decode graph" in normalized ||
                 "decode_first_stage" in normalized ||
@@ -248,8 +273,13 @@ class SdProgressTracker(
     }
 
     companion object {
+        private const val INSPECTING_PROGRESS = 0.01f
         private const val PREPARING_PROGRESS = 0.02f
-        private const val VAE_ENCODING_PROGRESS = 0.06f
+        private const val LOADING_MODEL_PROGRESS = 0.03f
+        private const val LOADING_VAE_PROGRESS = 0.05f
+        private const val LOADING_TEXT_ENCODERS_PROGRESS = 0.07f
+        private const val LOADING_LORAS_PROGRESS = 0.08f
+        private const val VAE_ENCODING_PROGRESS = 0.09f
         private const val CONDITIONING_PROGRESS = 0.10f
         private const val DIFFUSION_START = 0.12f
         private const val DIFFUSION_SPAN = 0.70f

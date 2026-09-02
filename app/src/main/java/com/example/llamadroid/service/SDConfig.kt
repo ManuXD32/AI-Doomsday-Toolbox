@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import android.os.Parcelable
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdLoraApplyMode
+import com.example.llamadroid.sd.SdMainLayout
 import kotlinx.parcelize.Parcelize
 
 @Parcelize
@@ -51,10 +52,14 @@ data class SDConfig(
     val scmMask: String = "",
     val scmPolicy: SdCacheScmPolicy? = null,
     // Backward-compatible hint kept while older UI paths are migrated.
+    // It is intentionally ignored by pipeline resolution; use modelLayout or
+    // inspected artifact evidence instead.
     val isFluxModel: Boolean = false,
     // Family metadata and components
     val modelFamily: String? = null,
     val modelVariant: String? = null,
+    /** Explicit layout selected by the user or restored from inspected metadata. */
+    val modelLayout: SdMainLayout? = null,
     val vaePath: String? = null,
     val taePath: String? = null,
     val clipLPath: String? = null,
@@ -92,6 +97,12 @@ data class SDConfig(
     val vaeConvDirect: Boolean = false,
     val qwenImageZeroCondT: Boolean = false,
     val chromaDisableDitMask: Boolean = false,
+    /**
+     * Normalized stable-diffusion.cpp parameter-module residency.  `auto`
+     * retains the legacy behavior; non-default values are emitted as
+     * `--params-backend` only for local launches.
+     */
+    val sdParamsBackendSpec: String = "auto",
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
@@ -128,6 +139,7 @@ data class SDUpscaleConfig(
     val outputPath: String,
     val upscaleRepeats: Int = 1,
     val threads: Int = -1,
+    val sdParamsBackendSpec: String = "auto",
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",

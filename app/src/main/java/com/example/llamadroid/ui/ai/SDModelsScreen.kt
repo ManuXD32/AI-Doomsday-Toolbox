@@ -14,6 +14,8 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -21,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -45,17 +48,25 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.isStableDiffusionArtifact
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.sd.SdModelFamily
-import com.example.llamadroid.sd.SdParamsBackendMode
-import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdComponentRole
+import com.example.llamadroid.sd.SdArtifactInspection
+import com.example.llamadroid.sd.SdArtifactInspector
+import com.example.llamadroid.sd.SdArtifactRole
+import com.example.llamadroid.sd.SdInspectionConfidence
 import com.example.llamadroid.sd.buildSdCompatProfiles
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
 import com.example.llamadroid.sd.defaultCompatProfilesFor
 import com.example.llamadroid.sd.inferSdFamily
+import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.parseSdCompatProfiles
 import com.example.llamadroid.sd.sdFamilyEnum
+import com.example.llamadroid.sd.sdArtifactInspection
+import com.example.llamadroid.sd.withSdArtifactInspection
+import com.example.llamadroid.data.model.SdArtifactValidationException
+import com.example.llamadroid.service.smokeCheckSdADetailerDetector
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -124,6 +135,20 @@ private val SD_MANAGER_SELECTION_TYPES = SDModelSelectionType.entries
         it == SDModelSelectionType.IMAGE_LLM || it == SDModelSelectionType.IMAGE_LLM_VISION
     }
 
+private enum class SdInspectionRowStatus {
+    IDLE,
+    RUNNING,
+    SUCCEEDED,
+    FAILED
+}
+
+private data class SdInspectionRowState(
+    val status: SdInspectionRowStatus = SdInspectionRowStatus.IDLE,
+    val detail: String? = null
+)
+
+private class SdAdetailerImportException : Exception()
+
 /**
  * SDModelsScreen - Manage Stable Diffusion models with HuggingFace search
  */
@@ -143,7 +168,7 @@ fun SDModelsScreen(navController: NavController) {
     val sdUpscalers by db.modelDao().getModelsByType(ModelType.SD_UPSCALER)
         .collectAsState(initial = emptyList())
     
-    // FLUX-specific component types
+    // Standalone diffusion and side-component types
     val sdDiffusionModels by db.modelDao().getModelsByType(ModelType.SD_DIFFUSION)
         .collectAsState(initial = emptyList())
     val sdClipLModels by db.modelDao().getModelsByType(ModelType.SD_CLIP_L)
@@ -244,7 +269,7 @@ fun SDModelsScreen(navController: NavController) {
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
 
-            // === FLUX Diffusion Models ===
+            // === Standalone Diffusion Models ===
             SDSearchSuggestion(
                 "⚡ FLUX Schnell Q4 (8GB+)",
                 "city96/FLUX.1-schnell-gguf",
@@ -406,7 +431,9 @@ fun SDModelsScreen(navController: NavController) {
                 }
             },
             text = {
-                LazyColumn {
+                LazyColumn(
+                    modifier = Modifier.heightIn(max = 400.dp)
+                ) {
                     items(availableFiles) { fileInfo ->
                         Card(
                             onClick = {
@@ -453,7 +480,9 @@ fun SDModelsScreen(navController: NavController) {
                                     Text(
                                         fileInfo.filename,
                                         style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
                                         fileInfo.formattedSize(),
@@ -538,7 +567,11 @@ fun SDModelsScreen(navController: NavController) {
                                 onClick = { selectedDiscoverType = type }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(type.labelRes))
+                            Text(
+                                stringResource(type.labelRes),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                     item {
@@ -729,6 +762,94 @@ private fun InstalledSDModelsTab(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+
+    // The installed rows are emitted from separate Room flows, so keep one
+    // deterministic list for bulk inspection.  Inspection only reads bounded
+    // headers/descriptors and runs on Dispatchers.IO; it never starts the
+    // native runtime or asks sdcpp to load model weights.
+    val allInstalledModels = listOf(
+        checkpoints,
+        upscalers,
+        diffusionModels,
+        clipLModels,
+        clipGModels,
+        t5xxlModels,
+        taeModels,
+        vaeModels,
+        controlNetModels,
+        loraModels,
+        photoMakerModels,
+        clipVisionModels,
+        ipAdapterModels,
+        adetailerModels
+    ).flatten()
+        .filter { it.type.isStableDiffusionArtifact() }
+        .distinctBy { it.path }
+    val inspectionStates = remember { mutableStateMapOf<String, SdInspectionRowState>() }
+    var isInspectingAll by remember { mutableStateOf(false) }
+    var inspectedCount by remember { mutableIntStateOf(0) }
+    var inspectionFailureCount by remember { mutableIntStateOf(0) }
+    var inspectionSummaryVisible by remember { mutableStateOf(false) }
+
+    suspend fun inspectInstalledModel(model: ModelEntity): Result<ModelEntity> =
+        withContext(Dispatchers.IO) {
+            runCatching { repository.ensureSdArtifactInspection(model) }
+        }
+
+    val inspectOne: (ModelEntity) -> Unit = { model ->
+        val currentState = inspectionStates[model.path]
+        if (!isInspectingAll && currentState?.status != SdInspectionRowStatus.RUNNING) {
+            inspectionSummaryVisible = false
+            inspectionStates[model.path] = SdInspectionRowState(SdInspectionRowStatus.RUNNING)
+            scope.launch {
+                val result = inspectInstalledModel(model)
+                result.fold(
+                    onSuccess = {
+                        inspectionStates[model.path] =
+                            SdInspectionRowState(SdInspectionRowStatus.SUCCEEDED)
+                    },
+                    onFailure = { error ->
+                        inspectionStates[model.path] = SdInspectionRowState(
+                            status = SdInspectionRowStatus.FAILED,
+                            detail = error.message?.replace(Regex("\\s+"), " ")?.trim()?.take(180)
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    val inspectAll: () -> Unit = {
+        if (!isInspectingAll && allInstalledModels.isNotEmpty()) {
+            inspectionSummaryVisible = false
+            isInspectingAll = true
+            inspectedCount = 0
+            inspectionFailureCount = 0
+            scope.launch {
+                allInstalledModels.forEachIndexed { index, model ->
+                    inspectionStates[model.path] =
+                        SdInspectionRowState(SdInspectionRowStatus.RUNNING)
+                    val result = inspectInstalledModel(model)
+                    result.fold(
+                        onSuccess = {
+                            inspectionStates[model.path] =
+                                SdInspectionRowState(SdInspectionRowStatus.SUCCEEDED)
+                        },
+                        onFailure = { error ->
+                            inspectionFailureCount++
+                            inspectionStates[model.path] = SdInspectionRowState(
+                                status = SdInspectionRowStatus.FAILED,
+                                detail = error.message?.replace(Regex("\\s+"), " ")?.trim()?.take(180)
+                            )
+                        }
+                    )
+                    inspectedCount = index + 1
+                }
+                isInspectingAll = false
+                inspectionSummaryVisible = true
+            }
+        }
+    }
     
     // Import state - FILE FIRST approach (FAB launches picker, then show dialog)
     var showImportDialog by remember { mutableStateOf(false) }
@@ -740,13 +861,16 @@ private fun InstalledSDModelsTab(
     var importSdFamily by remember { mutableStateOf<SdModelFamily?>(null) }
     var importSdVariant by remember { mutableStateOf("") }
     var importCompatProfiles by remember { mutableStateOf("") }
-    var importParamsBackendMode by remember { mutableStateOf(SdParamsBackendMode.AUTO) }
-    var importRuntimeBackendMode by remember { mutableStateOf(SdRuntimeBackendMode.AUTO) }
+    var pendingInspection by remember { mutableStateOf<SdArtifactInspection?>(null) }
+    var pendingInspectionError by remember { mutableStateOf<String?>(null) }
+    var isInspectingPending by remember { mutableStateOf(false) }
+    var inspectionSelectionType by remember { mutableStateOf<SDModelSelectionType?>(null) }
 
     // Import progress tracking
     var isImporting by remember { mutableStateOf(false) }
     var importProgress by remember { mutableFloatStateOf(0f) }
     var importingFilename by remember { mutableStateOf("") }
+    var importError by remember { mutableStateOf<String?>(null) }
     
     // Export state
     var pendingExportModel by remember { mutableStateOf<ModelEntity?>(null) }
@@ -759,16 +883,30 @@ private fun InstalledSDModelsTab(
     var editSdFamily by remember { mutableStateOf<SdModelFamily?>(null) }
     var editSdVariant by remember { mutableStateOf("") }
     var editCompatProfiles by remember { mutableStateOf("") }
-    var editParamsBackendMode by remember { mutableStateOf(SdParamsBackendMode.AUTO) }
-    var editRuntimeBackendMode by remember { mutableStateOf(SdRuntimeBackendMode.AUTO) }
 
     LaunchedEffect(editingModel) {
         editingModel?.let { model ->
             editSdFamily = model.sdFamilyEnum()
             editSdVariant = model.sdVariant.orEmpty()
-            editCompatProfiles = model.sdCompatProfiles.orEmpty()
-            editParamsBackendMode = SdParamsBackendMode.fromStoredValue(model.sdParamsBackendMode)
-            editRuntimeBackendMode = SdRuntimeBackendMode.fromStoredValue(model.sdRuntimeBackendMode)
+            editCompatProfiles = initialCompatProfilesForModel(model)
+        }
+    }
+
+    // Changing a model's role to an IP-Adapter should initialize its side
+    // compatibility from the edited filename/repository, not reuse a broad
+    // profile set from the previously selected role.
+    LaunchedEffect(editingModel, selectedEditType) {
+        val model = editingModel ?: return@LaunchedEffect
+        if (selectedEditType == SDModelSelectionType.IP_ADAPTER) {
+            editCompatProfiles = if (model.type == ModelType.SD_IP_ADAPTER) {
+                initialCompatProfilesForModel(model)
+            } else {
+                initialCompatProfilesForSelection(
+                    selectionType = selectedEditType,
+                    repoId = model.repoId,
+                    filename = editedFilename.ifBlank { model.filename }
+                ).orEmpty()
+            }
         }
     }
     
@@ -817,6 +955,73 @@ private fun InstalledSDModelsTab(
         pendingExportModel = model
         exportPicker.launch(null)
     }
+
+    // Start a bounded, payload-free SAF probe immediately after selection so
+    // detected evidence can correct the filename's guessed role before the
+    // repository applies role validation. This never launches sdcpp or copies
+    // model tensor payloads.
+    val inspectSelectedUri: (android.net.Uri, String, SDModelSelectionType) -> Unit =
+        { uri, filename, initialType ->
+            pendingInspection = null
+            pendingInspectionError = null
+            isInspectingPending = true
+            inspectionSelectionType = initialType
+            scope.launch(Dispatchers.IO) {
+                val result = runCatching {
+                    SdArtifactInspector().inspect(
+                        contentResolver = context.contentResolver,
+                        uri = uri,
+                        displayName = filename,
+                        temporaryDirectory = context.cacheDir
+                    )
+                }
+                withContext(Dispatchers.Main) {
+                    if (pendingUri != uri) return@withContext
+                    if (!selectedImportType.storedType.isStableDiffusionArtifact()) {
+                        isInspectingPending = false
+                        pendingInspection = null
+                        pendingInspectionError = null
+                        inspectionSelectionType = null
+                        return@withContext
+                    }
+                    isInspectingPending = false
+                    result.fold(
+                        onSuccess = { inspection ->
+                            pendingInspection = inspection
+                            pendingInspectionError = null
+                            if (inspectionSelectionType == selectedImportType) {
+                                detectedSelectionType(inspection.detectedRole)?.let { detectedType ->
+                                    selectedImportType = detectedType
+                                }
+                            }
+                            inspection.detectedFamily?.let { detectedFamily ->
+                                importSdFamily = detectedFamily
+                            }
+                        },
+                        onFailure = { error ->
+                            pendingInspection = null
+                            pendingInspectionError = error.message
+                        }
+                    )
+                }
+            }
+        }
+
+    val selectImportType: (SDModelSelectionType) -> Unit = { type ->
+        if (selectedImportType != type) {
+            selectedImportType = type
+            pendingUri?.let { uri ->
+                if (type.storedType.isStableDiffusionArtifact()) {
+                    inspectSelectedUri(uri, pendingFilename, type)
+                } else {
+                    pendingInspection = null
+                    pendingInspectionError = null
+                    isInspectingPending = false
+                    inspectionSelectionType = null
+                }
+            }
+        }
+    }
     
     // File picker - FAB triggers this directly
     val filePicker = rememberLauncherForActivityResult(
@@ -824,6 +1029,7 @@ private fun InstalledSDModelsTab(
     ) { uri ->
         uri?.let {
             try {
+                importError = null
                 pendingUri = it
                 // Get filename
                 val cursor = context.contentResolver.query(it, null, null, null, null)
@@ -860,7 +1066,20 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 // Show import dialog after file is selected
-                showImportDialog = true
+                showImportDialog = pendingUri != null
+                if (pendingUri != null) {
+                    if (selectedImportType.storedType.isStableDiffusionArtifact()) {
+                        inspectSelectedUri(it, pendingFilename, selectedImportType)
+                    } else {
+                        // Upscalers, textual inversions, and ADetailer
+                        // detectors use their own safe validators. Do not run
+                        // the SafeTensors/GGUF probe against .pth/.pt/.onnx.
+                        pendingInspection = null
+                        pendingInspectionError = null
+                        isInspectingPending = false
+                        inspectionSelectionType = null
+                    }
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -869,6 +1088,12 @@ private fun InstalledSDModelsTab(
     
     // Combined import dialog (type selection + capabilities)
     if (showImportDialog && pendingUri != null) {
+        val selectionNeedsInspection = selectedImportType.storedType.isStableDiffusionArtifact()
+        val selectionInspectionBlock = pendingInspection
+            ?.takeIf { selectionNeedsInspection }
+            ?.let { inspection ->
+                inspectionBlockForSelection(inspection, selectedImportType, importSdFamily)
+            }
         LaunchedEffect(selectedImportType, pendingFilename) {
             val metadata = defaultSdMetadataForSelection(
                 selectionType = selectedImportType,
@@ -890,10 +1115,19 @@ private fun InstalledSDModelsTab(
                 supportsImg2Img = SD_CAPABILITY_IMG2IMG in defaultCaps
             }
         }
+        LaunchedEffect(pendingInspection) {
+            pendingInspection?.detectedFamily?.let { detectedFamily ->
+                importSdFamily = detectedFamily
+            }
+        }
         AlertDialog(
             onDismissRequest = { 
                 showImportDialog = false
                 pendingUri = null
+                pendingInspection = null
+                pendingInspectionError = null
+                isInspectingPending = false
+                inspectionSelectionType = null
             },
             title = { Text(stringResource(R.string.sd_models_import_title)) },
             text = {
@@ -901,6 +1135,58 @@ private fun InstalledSDModelsTab(
                     modifier = Modifier.heightIn(max = 400.dp)
                 ) {
                     item {
+                        if (isInspectingPending) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        stringResource(R.string.sd_models_inspection_selection_title),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        stringResource(R.string.sd_models_inspection_selection_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                        } else if (selectionInspectionBlock != null) {
+                            Text(
+                                stringResource(R.string.sd_models_inspection_selection_blocked),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        } else if (selectionNeedsInspection && pendingInspectionError != null) {
+                            Text(
+                                stringResource(R.string.sd_models_inspection_selection_unavailable),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                maxLines = 4,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        } else if (selectionNeedsInspection) {
+                            pendingInspection?.let { inspection ->
+                                SdSelectedArtifactSummary(inspection)
+                                Spacer(modifier = Modifier.height(12.dp))
+                            }
+                        }
+
                         // Editable filename
                         Text(stringResource(R.string.sd_models_filename_label), style = MaterialTheme.typography.labelMedium)
                         Spacer(modifier = Modifier.height(4.dp))
@@ -925,17 +1211,21 @@ private fun InstalledSDModelsTab(
                                 .fillMaxWidth()
                                 .selectable(
                                     selected = selectedImportType == type,
-                                    onClick = { selectedImportType = type }
+                                    onClick = { selectImportType(type) }
                                 )
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
                                 selected = selectedImportType == type,
-                                onClick = { selectedImportType = type }
+                                onClick = { selectImportType(type) }
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(type.labelRes))
+                            Text(
+                                stringResource(type.labelRes),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                     
@@ -977,13 +1267,14 @@ private fun InstalledSDModelsTab(
                             compatProfiles = importCompatProfiles,
                             onCompatProfilesChange = { importCompatProfiles = it }
                         )
-                        if (supportsLocalSdBackendPreferences(selectedImportType)) {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            SDBackendPreferencesEditor(
-                                paramsBackendMode = importParamsBackendMode,
-                                onParamsBackendModeChange = { importParamsBackendMode = it },
-                                runtimeBackendMode = importRuntimeBackendMode,
-                                onRuntimeBackendModeChange = { importRuntimeBackendMode = it }
+                        if (isImageMainSelection(selectedImportType) && importSdFamily == null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                stringResource(R.string.sd_models_manual_configuration_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                                maxLines = 4,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
@@ -1015,7 +1306,7 @@ private fun InstalledSDModelsTab(
                     importingFilename = filename
                     
                     scope.launch(Dispatchers.IO) {
-                        importSDModel(
+                        val result = importSDModel(
                             context = context,
                             repository = repository,
                             uri = uri,
@@ -1029,38 +1320,57 @@ private fun InstalledSDModelsTab(
                             } else {
                                 null
                             },
-                            sdParamsBackendMode = if (supportsLocalSdBackendPreferences(selectedImportType)) {
-                                importParamsBackendMode.storedValue
-                            } else {
-                                SdParamsBackendMode.AUTO.storedValue
-                            },
-                            sdRuntimeBackendMode = if (supportsLocalSdBackendPreferences(selectedImportType)) {
-                                importRuntimeBackendMode.storedValue
-                            } else {
-                                SdRuntimeBackendMode.AUTO.storedValue
-                            }
                         ) { progress ->
                             importProgress = progress
                         }
-                        isImporting = false
-                        
-                        // Show FLUX component reminder if importing a FLUX model
-                        if (type == ModelType.SD_DIFFUSION || type == ModelType.SD_CLIP_L || 
-                            type == ModelType.SD_T5XXL || type == ModelType.SD_VAE) {
-                            settingsRepo.setShowFluxReminderPending(true)
+                        withContext(Dispatchers.Main) {
+                            isImporting = false
+                            result.onFailure { error ->
+                                val message = when (error) {
+                                    is SdArtifactValidationException ->
+                                        context.getString(R.string.sd_models_import_validation_failed)
+                                    is SdAdetailerImportException ->
+                                        context.getString(R.string.imagegen_adetailer_error_incompatible_detector)
+                                    else -> context.getString(
+                                        R.string.sd_models_import_failed,
+                                        error.message ?: context.getString(R.string.error_generic)
+                                    )
+                                }
+                                importError = message
+                                android.widget.Toast.makeText(
+                                    context,
+                                    message,
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            // Show the component reminder for a successfully
+                            // imported standalone artifact.
+                            if (result.isSuccess && (
+                                type == ModelType.SD_DIFFUSION ||
+                                    type == ModelType.SD_CLIP_L ||
+                                    type == ModelType.SD_CLIP_G ||
+                                    type == ModelType.SD_T5XXL ||
+                                    type == ModelType.SD_VAE
+                                )) {
+                                settingsRepo.setShowFluxReminderPending(true)
+                            }
                         }
                     }
                     
                     // Reset
                     pendingUri = null
                     pendingFilename = ""
+                    pendingInspection = null
+                    pendingInspectionError = null
+                    isInspectingPending = false
+                    inspectionSelectionType = null
                     selectedImportType = SDModelSelectionType.CHECKPOINT
                     supportsTxt2Img = true
                     supportsImg2Img = true
                     importSdFamily = null
                     importSdVariant = ""
                     importCompatProfiles = ""
-                }) {
+                }, enabled = !isInspectingPending && selectionInspectionBlock == null) {
                     Text(stringResource(R.string.action_import))
                 }
             },
@@ -1069,6 +1379,10 @@ private fun InstalledSDModelsTab(
                     showImportDialog = false
                     pendingUri = null
                     pendingFilename = ""
+                    pendingInspection = null
+                    pendingInspectionError = null
+                    isInspectingPending = false
+                    inspectionSelectionType = null
                     selectedImportType = SDModelSelectionType.CHECKPOINT
                     supportsTxt2Img = true
                     supportsImg2Img = true
@@ -1120,6 +1434,26 @@ private fun InstalledSDModelsTab(
             confirmButton = { /* No confirm button */ }
         )
     }
+
+    importError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { importError = null },
+            title = { Text(stringResource(R.string.sd_models_import_error_title)) },
+            text = {
+                Text(
+                    message,
+                    modifier = Modifier
+                        .heightIn(max = 240.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { importError = null }) {
+                    Text(stringResource(R.string.action_dismiss))
+                }
+            }
+        )
+    }
     
     Box(modifier = Modifier.fillMaxSize()) {
         val hasAnyModels = checkpoints.isNotEmpty() || upscalers.isNotEmpty() ||
@@ -1165,6 +1499,17 @@ private fun InstalledSDModelsTab(
                 contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item(key = "sd-artifact-inspection-control") {
+                    SdInspectionControl(
+                        totalModels = allInstalledModels.size,
+                        inspectedModels = inspectedCount,
+                        failedModels = inspectionFailureCount,
+                        isInspecting = isInspectingAll,
+                        showSummary = inspectionSummaryVisible,
+                        onInspectAll = inspectAll
+                    )
+                }
+
                 // SD/SDXL Checkpoints
                 if (checkpoints.isNotEmpty()) {
                     item {
@@ -1180,6 +1525,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1191,12 +1539,12 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 
-                // FLUX Diffusion Models
+                // Standalone Diffusion Models
                 if (diffusionModels.isNotEmpty()) {
                     item {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            stringResource(R.string.sd_models_flux_diffusion_label, diffusionModels.size),
+                            stringResource(R.string.sd_models_standalone_diffusion_label, diffusionModels.size),
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
@@ -1207,6 +1555,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1234,6 +1585,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1261,6 +1615,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1287,6 +1644,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1295,7 +1655,7 @@ private fun InstalledSDModelsTab(
                                 editSupportsImg2Img = checkpointSupportsImg2Img(model)
                                 editSdFamily = model.sdFamilyEnum()
                                 editSdVariant = model.sdVariant.orEmpty()
-                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                                editCompatProfiles = initialCompatProfilesForModel(model)
                             }
                         )
                     }
@@ -1316,6 +1676,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1346,6 +1709,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1373,6 +1739,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1400,6 +1769,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1426,6 +1798,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1455,6 +1830,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1484,6 +1862,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1492,7 +1873,7 @@ private fun InstalledSDModelsTab(
                                 editSupportsImg2Img = checkpointSupportsImg2Img(model)
                                 editSdFamily = model.sdFamilyEnum()
                                 editSdVariant = model.sdVariant.orEmpty()
-                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                                editCompatProfiles = initialCompatProfilesForModel(model)
                             }
                         )
                     }
@@ -1513,6 +1894,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1541,6 +1925,9 @@ private fun InstalledSDModelsTab(
                             capabilities = installedCapabilitiesFor(model),
                             onDelete = { pendingDeleteModel = model },
                             onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path]
+                                ?: SdInspectionRowState(),
                             onEdit = {
                                 editingModel = model
                                 editedFilename = model.filename
@@ -1595,7 +1982,11 @@ private fun InstalledSDModelsTab(
                                     onClick = { selectedEditType = type }
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(type.labelRes))
+                                Text(
+                                    stringResource(type.labelRes),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
 
@@ -1636,13 +2027,16 @@ private fun InstalledSDModelsTab(
                                 compatProfiles = editCompatProfiles,
                                 onCompatProfilesChange = { editCompatProfiles = it }
                             )
-                            if (supportsLocalSdBackendPreferences(selectedEditType)) {
-                                Spacer(modifier = Modifier.height(16.dp))
-                                SDBackendPreferencesEditor(
-                                    paramsBackendMode = editParamsBackendMode,
-                                    onParamsBackendModeChange = { editParamsBackendMode = it },
-                                    runtimeBackendMode = editRuntimeBackendMode,
-                                    onRuntimeBackendModeChange = { editRuntimeBackendMode = it }
+                            if (isImageMainSelection(selectedEditType) &&
+                                editingModel?.sdInspectionConfidence != SdInspectionConfidence.HIGH.storedValue
+                            ) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    stringResource(R.string.sd_models_manual_configuration_warning),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.tertiary,
+                                    maxLines = 4,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
@@ -1673,16 +2067,6 @@ private fun InstalledSDModelsTab(
                                     } else {
                                         null
                                     },
-                                    sdParamsBackendMode = if (supportsLocalSdBackendPreferences(selectedEditType)) {
-                                        editParamsBackendMode.storedValue
-                                    } else {
-                                        SdParamsBackendMode.AUTO.storedValue
-                                    },
-                                    sdRuntimeBackendMode = if (supportsLocalSdBackendPreferences(selectedEditType)) {
-                                        editRuntimeBackendMode.storedValue
-                                    } else {
-                                        SdRuntimeBackendMode.AUTO.storedValue
-                                    }
                                 )
 
                                 result.onSuccess { updated ->
@@ -1695,6 +2079,7 @@ private fun InstalledSDModelsTab(
                                     if (
                                         updated.type == ModelType.SD_DIFFUSION ||
                                         updated.type == ModelType.SD_CLIP_L ||
+                                        updated.type == ModelType.SD_CLIP_G ||
                                         updated.type == ModelType.SD_T5XXL ||
                                         updated.type == ModelType.SD_VAE
                                     ) {
@@ -1776,19 +2161,21 @@ private suspend fun importSDModel(
     sdFamily: String? = null,
     sdVariant: String? = null,
     sdCompatProfiles: String? = null,
-    sdParamsBackendMode: String = SdParamsBackendMode.AUTO.storedValue,
-    sdRuntimeBackendMode: String = SdRuntimeBackendMode.AUTO.storedValue,
     onProgress: (Float) -> Unit = {}
-) {
+) : Result<ModelEntity> {
     var tempFile: File? = null
-    try {
+    var targetFile: File? = null
+    var previousFile: File? = null
+    var replacementStarted = false
+    var databaseCommitted = false
+    return try {
         val requestedFilename = filename.ifBlank { "imported_sd_model.safetensors" }
         val targetFilename = ModelLibraryManager.canonicalFilename(requestedFilename)
         val fileSize = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use {
             it.length
         } ?: 0L
         val runtimeDir = repository.getModelDir(type).apply { mkdirs() }
-        val targetFile = File(runtimeDir, targetFilename)
+        targetFile = File(runtimeDir, targetFilename)
         tempFile = File(runtimeDir, "$targetFilename.importing")
         context.contentResolver.openInputStream(uri)?.use { input ->
             tempFile!!.outputStream().use { output ->
@@ -1807,36 +2194,88 @@ private suspend fun importSDModel(
                 }
             }
         } ?: error("Unable to open selected SD model")
-        replaceImportedSdFile(tempFile!!, targetFile)
-        val finalPath = targetFile.absolutePath
-
-        onProgress(1f)
-        val existing = AppDatabase.getDatabase(context).modelDao().getModelByFilename(targetFilename)
-        if (existing != null && existing.path != finalPath) {
-            repository.deleteModelArtifacts(existing)
+        // Inspect the completed temporary file before the final rename.  This
+        // is the trust boundary for local imports: malformed payloads and
+        // high-confidence role/family contradictions never become model rows.
+        onProgress(0.98f)
+        val inspection: SdArtifactInspection? = when (type) {
+            ModelType.SD_ADETAILER -> {
+                if (!smokeCheckSdADetailerDetector(tempFile!!)) {
+                    throw SdAdetailerImportException()
+                }
+                null
+            }
+            // These established SD assets are not SafeTensors/GGUF pipeline
+            // artifacts. Keep .pth/.pt opaque and leave validation to their
+            // consuming runtime instead of attempting to parse or unpickle.
+            ModelType.SD_UPSCALER,
+            ModelType.SD_TEXTUAL_INVERSION -> null
+            else -> repository.inspectSdArtifact(
+                file = tempFile!!,
+                configuredType = type,
+                configuredFamily = sdFamily,
+                force = true
+            )
         }
-        val finalFile = File(finalPath)
-
+        val finalTargetFile = targetFile ?: error("Unable to prepare import destination")
+        val finalPath = finalTargetFile.absolutePath
+        val existing = AppDatabase.getDatabase(context).modelDao().getModelByFilename(targetFilename)
         val modelEntity = ModelEntity(
             filename = targetFilename,
             path = finalPath,
-            sizeBytes = finalFile.length(),
+            sizeBytes = tempFile!!.length(),
             type = type,
             repoId = "custom-import/$targetFilename",
             isDownloaded = false,
             sdCapabilities = capabilities,
             sdFamily = sdFamily,
             sdVariant = sdVariant,
-            sdCompatProfiles = sdCompatProfiles,
-            sdParamsBackendMode = sdParamsBackendMode,
-            sdRuntimeBackendMode = sdRuntimeBackendMode
-        )
+            sdCompatProfiles = sdCompatProfiles
+        ).let { entity ->
+            inspection?.let { entity.withSdArtifactInspection(it) } ?: entity
+        }
+
+        // Keep an existing file recoverable if the database write fails.  The
+        // temporary source remains in place until the replacement is complete.
+        if (finalTargetFile.exists()) {
+            previousFile = File(runtimeDir, ".$targetFilename.previous-${System.currentTimeMillis()}")
+            check(finalTargetFile.renameTo(previousFile!!)) { "Unable to stage the existing model file" }
+        }
+        replacementStarted = true
+        replaceImportedSdFile(tempFile!!, finalTargetFile)
         repository.insertModel(modelEntity)
+        databaseCommitted = true
+        if (existing != null && existing.path != finalPath) {
+            runCatching { repository.deleteModelArtifacts(existing) }
+                .onFailure { error ->
+                    com.example.llamadroid.util.DebugLog.log(
+                        "[SD-IMPORT] Existing artifact cleanup deferred: ${error.message}"
+                    )
+                }
+        }
+        previousFile?.delete()
+        onProgress(1f)
         com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Imported: $targetFilename as ${type.name}")
+        Result.success(modelEntity)
     } catch (e: Exception) {
-        tempFile?.takeIf { it.exists() }?.delete()
+        // Do not delete the temporary artifact.  A failed inspection/import is
+        // recoverable and can be retried without selecting the source again.
+        if (replacementStarted && !databaseCommitted) {
+            previousFile?.takeIf { it.exists() }?.let { backup ->
+                targetFile?.let { target ->
+                    if (target.exists()) {
+                        val failedCopy = File(
+                            target.parentFile,
+                            "${target.name}.failed-${System.currentTimeMillis()}"
+                        )
+                        target.renameTo(failedCopy)
+                    }
+                    backup.renameTo(target)
+                }
+            }
+        }
         com.example.llamadroid.util.DebugLog.log("[SD-IMPORT] Failed: ${e.message}")
-        e.printStackTrace()
+        Result.failure(e)
     }
 }
 
@@ -1896,11 +2335,61 @@ private fun defaultSdMetadataForSelection(
             )
         }
         requiresCompatProfiles(selectionType) -> SdMetadataDraft(
-            compatProfiles = buildSdCompatProfiles(
-                *defaultCompatProfilesFor(selectionType.storedType).toTypedArray()
-            )
+            compatProfiles = initialCompatProfilesForSelection(selectionType, repoId, filename)
         )
         else -> SdMetadataDraft()
+    }
+}
+
+/**
+ * Seed side-component compatibility from the artifact hint when one is
+ * available. IP-Adapter files are commonly named for SDXL or SD 1.x; using
+ * the old broad `checkpoint:sd1,checkpoint:sdxl` default for an inferred SDXL
+ * adapter makes the row look valid for the wrong base model. Keep the broad
+ * defaults only when no family can be inferred.
+ */
+private fun initialCompatProfilesForSelection(
+    selectionType: SDModelSelectionType,
+    repoId: String,
+    filename: String
+): String? {
+    if (selectionType != SDModelSelectionType.IP_ADAPTER) {
+        return buildSdCompatProfiles(
+            *defaultCompatProfilesFor(selectionType.storedType).toTypedArray()
+        )
+    }
+    val inferred = inferSdFamily(selectionType.storedType, repoId, filename)
+    val family = inferred.first
+    if (family == null) {
+        return buildSdCompatProfiles(
+            *defaultCompatProfilesFor(selectionType.storedType).toTypedArray()
+        )
+    }
+    val variant = inferred.second?.trim()?.ifBlank { null }
+    return buildSdCompatProfiles(
+        variant?.let { "${family.storedValue}:$it" } ?: family.storedValue
+    )
+}
+
+/**
+ * Preserve explicit component choices while collapsing legacy broad defaults
+ * to a known inferred profile. A genuinely conflicting manual choice remains
+ * visible so the row can be marked invalid instead of being silently changed.
+ */
+private fun initialCompatProfilesForModel(model: ModelEntity): String {
+    if (model.type != ModelType.SD_IP_ADAPTER) return model.sdCompatProfiles.orEmpty()
+    val inferred = inferSdFamily(model.type, model.repoId, model.filename)
+    val family = inferred.first ?: return model.sdCompatProfiles.orEmpty()
+    val variant = inferred.second?.trim()?.ifBlank { null }
+    val inferredToken = variant?.let { "${family.storedValue}:$it" } ?: family.storedValue
+    val explicit = model.sdCompatProfiles.parseSdCompatProfiles()
+    if (explicit.isEmpty()) return inferredToken
+
+    val legacyDefaults = defaultCompatProfilesFor(model.type) + family.storedValue
+    return when {
+        explicit.all { it in legacyDefaults } -> inferredToken
+        inferredToken in explicit -> inferredToken
+        else -> model.sdCompatProfiles.orEmpty()
     }
 }
 
@@ -1992,6 +2481,17 @@ private fun inferSelectionType(repoId: String, filename: String): SDModelSelecti
         SDModelSelectionType.TAE
     filename.contains("clip_g") || filename.contains("clip-g") || repoId.contains("clip-g") ->
         SDModelSelectionType.CLIP_G
+    // Start the bounded inspection with the generic standalone role for
+    // architecture names that are not FLUX. A full SD3 checkpoint is
+    // corrected back to CHECKPOINT when its header proves that layout.
+    filename.contains("sd3") || filename.contains("stable-diffusion-3") ||
+        repoId.contains("sd3") || repoId.contains("stable-diffusion-3") ||
+        filename.contains("chroma") || repoId.contains("chroma") ||
+        filename.contains("qwen-image") || repoId.contains("qwen-image") ||
+        filename.contains("z-image") || repoId.contains("z-image") ||
+        filename.contains("ovis") || repoId.contains("ovis") ||
+        filename.contains("anima") || repoId.contains("anima") ->
+        SDModelSelectionType.DIFFUSION
     (repoId.contains("flux") && (filename.endsWith(".gguf") || filename.contains("diffusion"))) ||
         repoId.contains("qwen-image") || repoId.contains("qwen image") ||
         repoId.contains("chroma") || repoId.contains("z-image") || repoId.contains("ovis") ||
@@ -2072,7 +2572,7 @@ private fun SDMetadataEditor(
             onExpandedChange = { familyExpanded = !familyExpanded }
         ) {
             OutlinedTextField(
-                value = sdFamily?.storedValue ?: "",
+                value = sdFamily?.let { stringResource(sdFamilyLabelRes(it)) }.orEmpty(),
                 onValueChange = {},
                 readOnly = true,
                 modifier = Modifier.fillMaxWidth().menuAnchor(),
@@ -2085,7 +2585,13 @@ private fun SDMetadataEditor(
             ) {
                 selectableFamiliesFor(selectionType).forEach { family ->
                     DropdownMenuItem(
-                        text = { Text(family.storedValue) },
+                        text = {
+                            Text(
+                                stringResource(sdFamilyLabelRes(family)),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
                         onClick = {
                             onSdFamilyChange(family)
                             familyExpanded = false
@@ -2190,120 +2696,30 @@ private fun SDMetadataEditor(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SDBackendPreferencesEditor(
-    paramsBackendMode: SdParamsBackendMode,
-    onParamsBackendModeChange: (SdParamsBackendMode) -> Unit,
-    runtimeBackendMode: SdRuntimeBackendMode,
-    onRuntimeBackendModeChange: (SdRuntimeBackendMode) -> Unit
-) {
-    Text(stringResource(R.string.sd_models_local_backend_title), style = MaterialTheme.typography.labelMedium)
-    Spacer(modifier = Modifier.height(8.dp))
-    Text(
-        stringResource(R.string.sd_models_local_backend_desc),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    Spacer(modifier = Modifier.height(12.dp))
-
-    var paramsExpanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = paramsExpanded,
-        onExpandedChange = { paramsExpanded = !paramsExpanded }
-    ) {
-        OutlinedTextField(
-            value = sdParamsBackendModeLabel(paramsBackendMode),
-            onValueChange = {},
-            readOnly = true,
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
-            label = { Text(stringResource(R.string.sd_models_params_backend_label)) },
-            supportingText = { Text(stringResource(R.string.sd_models_params_backend_help)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = paramsExpanded) }
-        )
-        ExposedDropdownMenu(
-            expanded = paramsExpanded,
-            onDismissRequest = { paramsExpanded = false }
-        ) {
-            SdParamsBackendMode.entries.forEach { mode ->
-                DropdownMenuItem(
-                    text = { Text(sdParamsBackendModeLabel(mode)) },
-                    onClick = {
-                        onParamsBackendModeChange(mode)
-                        paramsExpanded = false
-                    }
-                )
-            }
-        }
-    }
-
-    Spacer(modifier = Modifier.height(12.dp))
-    var runtimeExpanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(
-        expanded = runtimeExpanded,
-        onExpandedChange = { runtimeExpanded = !runtimeExpanded }
-    ) {
-        OutlinedTextField(
-            value = sdRuntimeBackendModeLabel(runtimeBackendMode),
-            onValueChange = {},
-            readOnly = true,
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
-            label = { Text(stringResource(R.string.sd_models_runtime_backend_label)) },
-            supportingText = { Text(stringResource(R.string.sd_models_runtime_backend_help)) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = runtimeExpanded) }
-        )
-        ExposedDropdownMenu(
-            expanded = runtimeExpanded,
-            onDismissRequest = { runtimeExpanded = false }
-        ) {
-            SdRuntimeBackendMode.entries.forEach { mode ->
-                DropdownMenuItem(
-                    text = { Text(sdRuntimeBackendModeLabel(mode)) },
-                    onClick = {
-                        onRuntimeBackendModeChange(mode)
-                        runtimeExpanded = false
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun sdParamsBackendModeLabel(mode: SdParamsBackendMode): String = when (mode) {
-    SdParamsBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
-    SdParamsBackendMode.DISK -> stringResource(R.string.sd_models_params_backend_disk)
-}
-
-@Composable
-private fun sdRuntimeBackendModeLabel(mode: SdRuntimeBackendMode): String = when (mode) {
-    SdRuntimeBackendMode.AUTO -> stringResource(R.string.sd_models_backend_auto)
-    SdRuntimeBackendMode.CPU -> stringResource(R.string.sd_models_runtime_backend_cpu)
-}
-
-private fun supportsLocalSdBackendPreferences(selectionType: SDModelSelectionType): Boolean =
-    selectionType == SDModelSelectionType.CHECKPOINT ||
-        selectionType == SDModelSelectionType.DIFFUSION ||
-        selectionType == SDModelSelectionType.UPSCALER
-
 private fun selectableFamiliesFor(selectionType: SDModelSelectionType): List<SdModelFamily> = when (selectionType) {
-    SDModelSelectionType.CHECKPOINT -> listOf(
-        SdModelFamily.CHECKPOINT,
-        SdModelFamily.SD3
-    )
-    SDModelSelectionType.DIFFUSION -> listOf(
-        SdModelFamily.FLUX_1,
-        SdModelFamily.FLUX_KONTEXT,
-        SdModelFamily.FLUX_2,
-        SdModelFamily.CHROMA,
-        SdModelFamily.CHROMA_RADIANCE,
-        SdModelFamily.QWEN_IMAGE,
-        SdModelFamily.QWEN_IMAGE_EDIT,
-        SdModelFamily.Z_IMAGE,
-        SdModelFamily.OVIS_IMAGE,
-        SdModelFamily.ANIMA
-    )
+    // Architecture and packaging are independent: a family may be distributed
+    // as a full checkpoint or a standalone diffusion artifact. Keep both main
+    // roles derived from the complete enum and let inspection/pipeline
+    // resolution decide whether the selected file's actual layout is valid.
+    SDModelSelectionType.CHECKPOINT,
+    SDModelSelectionType.DIFFUSION -> SdModelFamily.entries
     else -> emptyList()
+}
+
+@StringRes
+private fun sdFamilyLabelRes(family: SdModelFamily): Int = when (family) {
+    SdModelFamily.CHECKPOINT -> R.string.sd_models_family_checkpoint
+    SdModelFamily.SD3 -> R.string.sd_models_family_sd3
+    SdModelFamily.FLUX_1 -> R.string.sd_models_family_flux1
+    SdModelFamily.FLUX_KONTEXT -> R.string.sd_models_family_flux_kontext
+    SdModelFamily.FLUX_2 -> R.string.sd_models_family_flux2
+    SdModelFamily.CHROMA -> R.string.sd_models_family_chroma
+    SdModelFamily.CHROMA_RADIANCE -> R.string.sd_models_family_chroma_radiance
+    SdModelFamily.QWEN_IMAGE -> R.string.sd_models_family_qwen_image
+    SdModelFamily.QWEN_IMAGE_EDIT -> R.string.sd_models_family_qwen_image_edit
+    SdModelFamily.Z_IMAGE -> R.string.sd_models_family_z_image
+    SdModelFamily.OVIS_IMAGE -> R.string.sd_models_family_ovis_image
+    SdModelFamily.ANIMA -> R.string.sd_models_family_anima
 }
 
 private fun compatProfileSuggestionsFor(selectionType: SDModelSelectionType): List<String> {
@@ -2348,12 +2764,239 @@ private fun compatProfileSuggestionsFor(selectionType: SDModelSelectionType): Li
 }
 
 @Composable
+private fun SdInspectionControl(
+    totalModels: Int,
+    inspectedModels: Int,
+    failedModels: Int,
+    isInspecting: Boolean,
+    showSummary: Boolean,
+    onInspectAll: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.42f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                stringResource(R.string.sd_models_detection_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.sd_models_detection_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onInspectAll,
+                enabled = totalModels > 0 && !isInspecting,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (isInspecting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        stringResource(
+                            R.string.sd_models_detection_progress,
+                            inspectedModels,
+                            totalModels
+                        ),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.sd_models_detect_all))
+                }
+            }
+            if (isInspecting) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = {
+                        if (totalModels == 0) 0f else inspectedModels.toFloat() / totalModels
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else if (showSummary) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    stringResource(
+                        R.string.sd_models_detection_summary,
+                        inspectedModels,
+                        failedModels
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (failedModels == 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.error
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun hasStaleSdCompatibilityMetadata(model: ModelEntity): Boolean {
+    val inferred = inferSdFamily(model.type, model.repoId, model.filename)
+    val inferredFamily = inferred.first ?: return false
+    val configured = model.sdCompatProfiles.parseSdCompatProfiles()
+    if (configured.isEmpty()) return false
+    return !model.matchesSdFamily(inferredFamily, inferred.second)
+}
+
+@Composable
+private fun SdSelectedArtifactSummary(inspection: SdArtifactInspection) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(8.dp)
+    ) {
+        Text(
+            stringResource(R.string.sd_models_detected_format, inspection.format.storedValue),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            stringResource(
+                R.string.sd_models_detected_family,
+                inspection.detectedFamily?.let { stringResource(sdFamilyLabelRes(it)) }
+                    ?: stringResource(R.string.sd_models_unknown_value)
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            stringResource(
+                R.string.sd_models_detected_role,
+                inspection.detectedRole?.storedValue
+                    ?: stringResource(R.string.sd_models_unknown_value)
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Text(
+            stringResource(
+                R.string.sd_models_detected_layout,
+                inspection.artifactLayout.storedValue
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (inspection.warnings.isNotEmpty()) {
+            Text(
+                stringResource(
+                    R.string.sd_models_inspection_warnings,
+                    inspection.warnings.take(2).joinToString(" • ")
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+private fun detectedSelectionType(role: SdArtifactRole?): SDModelSelectionType? = when (role) {
+    SdArtifactRole.FULL_MODEL,
+    SdArtifactRole.MAIN_MODEL -> SDModelSelectionType.CHECKPOINT
+    SdArtifactRole.STANDALONE_DIFFUSION -> SDModelSelectionType.DIFFUSION
+    SdArtifactRole.VAE -> SDModelSelectionType.VAE
+    SdArtifactRole.TAE -> SDModelSelectionType.TAE
+    SdArtifactRole.CLIP_L -> SDModelSelectionType.CLIP_L
+    SdArtifactRole.CLIP_G -> SDModelSelectionType.CLIP_G
+    SdArtifactRole.T5XXL -> SDModelSelectionType.T5XXL
+    // Preserve the dedicated image-LLM/projector route when the artifact is
+    // genuinely classified as one of those roles; encoder roles above remain
+    // Stable Diffusion component selections.
+    SdArtifactRole.LLM -> SDModelSelectionType.IMAGE_LLM
+    SdArtifactRole.LLM_VISION -> SDModelSelectionType.IMAGE_LLM_VISION
+    SdArtifactRole.LORA -> SDModelSelectionType.LORA
+    SdArtifactRole.CONTROLNET -> SDModelSelectionType.CONTROLNET
+    SdArtifactRole.UNKNOWN,
+    null -> null
+}
+
+private fun expectedRoleForSelection(selectionType: SDModelSelectionType): SdArtifactRole? = when (selectionType) {
+    SDModelSelectionType.CHECKPOINT -> SdArtifactRole.FULL_MODEL
+    SDModelSelectionType.DIFFUSION,
+    SDModelSelectionType.VIDEO_GEN -> SdArtifactRole.STANDALONE_DIFFUSION
+    SDModelSelectionType.VAE -> SdArtifactRole.VAE
+    SDModelSelectionType.TAE -> SdArtifactRole.TAE
+    SDModelSelectionType.CLIP_L -> SdArtifactRole.CLIP_L
+    SDModelSelectionType.CLIP_G -> SdArtifactRole.CLIP_G
+    SDModelSelectionType.T5XXL -> SdArtifactRole.T5XXL
+    SDModelSelectionType.IMAGE_LLM -> SdArtifactRole.LLM
+    SDModelSelectionType.IMAGE_LLM_VISION -> SdArtifactRole.LLM_VISION
+    SDModelSelectionType.LORA -> SdArtifactRole.LORA
+    SDModelSelectionType.CONTROLNET -> SdArtifactRole.CONTROLNET
+    else -> null
+}
+
+private fun inspectionBlockForSelection(
+    inspection: SdArtifactInspection,
+    selectionType: SDModelSelectionType,
+    configuredFamily: SdModelFamily?
+): String? {
+    if (!inspection.isInspected || !inspection.isStructurallyUsable) return "invalid"
+    val expectedRole = expectedRoleForSelection(selectionType)
+    val detectedRole = inspection.detectedRole
+    if (inspection.confidence == SdInspectionConfidence.HIGH &&
+        expectedRole != null && detectedRole != null &&
+        when (expectedRole) {
+            SdArtifactRole.FULL_MODEL -> detectedRole != SdArtifactRole.FULL_MODEL &&
+                detectedRole != SdArtifactRole.MAIN_MODEL
+            else -> detectedRole != expectedRole
+        }
+    ) {
+        return "role"
+    }
+    if (inspection.confidence == SdInspectionConfidence.HIGH &&
+        configuredFamily != null && inspection.detectedFamily != null &&
+        configuredFamily != inspection.detectedFamily
+    ) {
+        return "family"
+    }
+    return null
+}
+
+@Composable
 private fun InstalledModelCard(
     model: ModelEntity,
     capabilities: List<SDCapability>,
     onDelete: () -> Unit,
     onExport: () -> Unit = {},
-    onEdit: () -> Unit = {}
+    onEdit: () -> Unit = {},
+    onInspect: () -> Unit = {},
+    inspectionState: SdInspectionRowState = SdInspectionRowState()
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -2372,7 +3015,9 @@ private fun InstalledModelCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         model.filename,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         FormatUtils.formatFileSize(model.sizeBytes),
@@ -2383,14 +3028,27 @@ private fun InstalledModelCard(
                         Text(
                             text = family + model.sdVariant?.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty(),
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     model.sdCompatProfiles?.takeIf { it.isNotBlank() }?.let { compat ->
                         Text(
                             text = compat,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    if (hasStaleSdCompatibilityMetadata(model)) {
+                        Text(
+                            stringResource(R.string.sd_models_compatibility_invalid),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -2426,9 +3084,222 @@ private fun InstalledModelCard(
                     CapabilityBadge(cap)
                 }
             }
+            SdInspectionEvidence(
+                model = model,
+                state = inspectionState,
+                onInspect = onInspect
+            )
         }
     }
 }
+
+/** Compact, bounded structural evidence shown without exposing model payloads. */
+@Composable
+private fun SdInspectionEvidence(
+    model: ModelEntity,
+    state: SdInspectionRowState,
+    onInspect: () -> Unit
+) {
+    if (!model.type.isStableDiffusionArtifact()) return
+    val inspection = remember(
+        model.sdInspectionJson,
+        model.sdInspectionVersion,
+        model.sdDetectedFamily,
+        model.sdDetectedRole,
+        model.sdArtifactLayout,
+        model.sdInspectionConfidence
+    ) { model.sdArtifactInspection() }
+    var detailsExpanded by rememberSaveable(model.path) { mutableStateOf(false) }
+    Spacer(modifier = Modifier.height(8.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                RoundedCornerShape(8.dp)
+            )
+            .padding(8.dp)
+    ) {
+        if (inspection == null || !inspection.isInspected) {
+            Text(
+                stringResource(R.string.sd_models_inspection_unavailable),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        } else {
+            // Keep the actionable classification visible in the card while
+            // putting the less frequently needed structural facts behind a
+            // full-width disclosure. Every line is bounded for narrow phones.
+            Text(
+                stringResource(R.string.sd_models_detected_format, inspection.format.storedValue),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                stringResource(
+                    R.string.sd_models_detected_family,
+                    inspection.detectedFamily?.let { stringResource(sdFamilyLabelRes(it)) }
+                        ?: stringResource(R.string.sd_models_unknown_value)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                stringResource(
+                    R.string.sd_models_detected_role,
+                    inspection.detectedRole?.storedValue
+                        ?: stringResource(R.string.sd_models_unknown_value)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (inspection.warnings.isNotEmpty()) {
+                Text(
+                    stringResource(
+                        R.string.sd_models_inspection_warnings,
+                        inspection.warnings.take(3).joinToString(" • ")
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (!inspection.isStructurallyUsable) {
+                Text(
+                    stringResource(R.string.sd_models_inspection_structurally_invalid),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            TextButton(
+                onClick = { detailsExpanded = !detailsExpanded },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = if (detailsExpanded) {
+                        Icons.Default.ExpandLess
+                    } else {
+                        Icons.Default.ExpandMore
+                    },
+                    contentDescription = null
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    stringResource(
+                        if (detailsExpanded) {
+                            R.string.sd_models_inspection_hide_details
+                        } else {
+                            R.string.sd_models_inspection_show_details
+                        }
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (detailsExpanded) {
+                Text(
+                    stringResource(
+                        R.string.sd_models_detected_layout,
+                        inspection.artifactLayout.storedValue
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    stringResource(
+                        R.string.sd_models_detected_components,
+                        inspectionComponentSummary(inspection)
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    stringResource(
+                        R.string.sd_models_inspection_confidence,
+                        inspection.confidence.storedValue
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (inspection.confidence == SdInspectionConfidence.HIGH) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        if (state.status == SdInspectionRowStatus.FAILED) {
+            Text(
+                stringResource(
+                    R.string.sd_models_inspection_failed_short,
+                    state.detail ?: stringResource(R.string.error_generic)
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (state.status == SdInspectionRowStatus.SUCCEEDED) {
+            Text(
+                stringResource(R.string.sd_models_inspection_updated),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        TextButton(
+            onClick = onInspect,
+            enabled = state.status != SdInspectionRowStatus.RUNNING,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (state.status == SdInspectionRowStatus.RUNNING) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.sd_models_inspecting_artifact))
+            } else {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    stringResource(
+                        if (inspection?.isInspected == true) {
+                            R.string.sd_models_inspection_retry
+                        } else {
+                            R.string.sd_models_detect
+                        }
+                    )
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun inspectionComponentSummary(inspection: SdArtifactInspection): String = buildList {
+    if (inspection.containsDiffusion) add(stringResource(R.string.sd_models_component_diffusion))
+    if (inspection.containsVae) add("VAE")
+    if (inspection.containsClipL) add("CLIP-L")
+    if (inspection.containsClipG) add("CLIP-G")
+    if (inspection.containsT5xxl) add("T5-XXL")
+    if (inspection.containsLlm) add("LLM")
+}.joinToString(", ").ifBlank { stringResource(R.string.sd_models_component_none) }
 
 @Composable
 private fun DownloadingTab(

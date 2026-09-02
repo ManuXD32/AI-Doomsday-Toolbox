@@ -52,6 +52,8 @@ data class VideoGenerationConfig(
     val mmap: Boolean = true,
     val threads: Int = -1,
     val sdParamsBackendMode: String = "auto",
+    /** Normalized local module residency; distributed placement remains separate. */
+    val sdParamsBackendSpec: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig = SdDistributedRuntimeConfig(),
@@ -125,6 +127,7 @@ data class GeneratedVideoMetadata(
     val vaeConvDirect: Boolean = false,
     val mmap: Boolean,
     val sdParamsBackendMode: String = "auto",
+    val sdParamsBackendSpec: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
     val distributedRuntime: SdDistributedRuntimeConfig,
@@ -183,6 +186,7 @@ data class GeneratedVideoMetadata(
         put("vaeConvDirect", vaeConvDirect)
         put("mmap", mmap)
         put("sdParamsBackendMode", sdParamsBackendMode)
+        put("sdParamsBackendSpec", sdParamsBackendSpec)
         put("sdRuntimeBackendMode", sdRuntimeBackendMode)
         put("maxVramCpuGiB", maxVramCpuGiB)
         put("distributedEnabled", distributedRuntime.enabled)
@@ -261,6 +265,7 @@ data class GeneratedVideoMetadata(
                 vaeConvDirect = json.optBoolean("vaeConvDirect", false),
                 mmap = json.optBoolean("mmap", true),
                 sdParamsBackendMode = json.optString("sdParamsBackendMode", "auto"),
+                sdParamsBackendSpec = json.optString("sdParamsBackendSpec", "auto"),
                 sdRuntimeBackendMode = json.optString("sdRuntimeBackendMode", "auto"),
                 maxVramCpuGiB = json.optString("maxVramCpuGiB"),
                 distributedRuntime = SdDistributedRuntimeConfig(

@@ -2,35 +2,42 @@ package com.example.llamadroid.ui.dashboard
 
 import android.content.Context
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.service.LlamaServerLauncher
 import com.example.llamadroid.service.LlamaService
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.util.SystemMonitor
 import com.example.llamadroid.util.SystemStats
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.flowOn
 
 class DashboardViewModel(
     private val systemMonitor: SystemMonitor
     // private val llamaService: LlamaService (Using singleton/static for MVP or manual DI)
 ) : ViewModel() {
 
-    private val _stats = MutableStateFlow(SystemStats(0, 0, 0f, 0f))
-    val stats = _stats.asStateFlow()
-    // In real app, bind to service. For now assume we poll or observe static singleton
-    // Bind to service state
+    /**
+     * Keep the monitor cold until the route is actually visible.
+     *
+     * The old implementation collected in [viewModelScope]. Because the dashboard used to
+     * construct the ViewModel with `remember`, every visit left another `/proc` and sysfs
+     * sampler behind. Lifecycle-aware Compose collection now starts/stops this WhileSubscribed
+     * flow with the dashboard route instead.
+     */
+    val stats: StateFlow<SystemStats> = systemMonitor.observeStats()
+        .flowOn(Dispatchers.IO)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000L),
+            initialValue = SystemStats(0, 0, 0f, 0f)
+        )
+
+    // Bind to service state. LlamaService owns the process lifecycle.
     val serverState = LlamaService.state 
-    
-    init {
-        viewModelScope.launch {
-            systemMonitor.observeStats().collect {
-                _stats.value = it
-            }
-        }
-    }
 
     fun startServer(context: Context, modelPath: String? = null) {
         LlamaServerLauncher.start(context, modelPath)
@@ -42,6 +49,18 @@ class DashboardViewModel(
 
     fun recoverServer(context: Context) {
         LlamaServerLauncher.recover(context)
+    }
+}
+
+class DashboardViewModelFactory(
+    private val systemMonitor: SystemMonitor
+) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(DashboardViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return DashboardViewModel(systemMonitor) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }
 }
 
