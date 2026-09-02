@@ -1134,6 +1134,9 @@ object MangaTranslationSupport {
                     .put("parallel", llamaOcr.parallel)
                     .put("customFlags", llamaOcr.customFlags)
                     .put("commandTemplate", llamaOcr.commandTemplate)
+                    // This marker distinguishes an explicit user opt-in from the old
+                    // default, which was serialized as true in legacy manga drafts.
+                    .put("temporarilyReplaceRunningServerConfigured", true)
                     .put("temporarilyReplaceRunningServer", llamaOcr.temporarilyReplaceRunningServer)))
     }
 
@@ -1201,6 +1204,12 @@ object MangaTranslationSupport {
         val oldOptions = fallback.translationOptions
         val llamaJson = optionsJson?.optJSONObject("llamaOcr")
         val oldLlama = oldOptions.llamaOcr
+        // Legacy manga drafts had this value set to true by default. Only a config
+        // written by the new UI may opt into interrupting an existing llama server.
+        val temporaryServerReplacementConfigured = llamaJson?.optBoolean(
+            "temporarilyReplaceRunningServerConfigured",
+            false
+        ) == true
         val options = oldOptions.copy(
             usePageScreenshotContext = optionsJson?.optBoolean("usePageScreenshotContext", oldOptions.usePageScreenshotContext)
                 ?: oldOptions.usePageScreenshotContext,
@@ -1227,10 +1236,11 @@ object MangaTranslationSupport {
                 parallel = llamaJson?.optInt("parallel", oldLlama.parallel) ?: oldLlama.parallel,
                 customFlags = llamaJson?.optNullableString("customFlags") ?: oldLlama.customFlags,
                 commandTemplate = llamaJson?.optNullableString("commandTemplate") ?: oldLlama.commandTemplate,
-                temporarilyReplaceRunningServer = llamaJson?.optBoolean(
-                    "temporarilyReplaceRunningServer",
-                    oldLlama.temporarilyReplaceRunningServer
-                ) ?: oldLlama.temporarilyReplaceRunningServer
+                temporarilyReplaceRunningServer = if (temporaryServerReplacementConfigured) {
+                    llamaJson?.optBoolean("temporarilyReplaceRunningServer", false) ?: false
+                } else {
+                    false
+                }
             )
         )
         return fallback.copy(

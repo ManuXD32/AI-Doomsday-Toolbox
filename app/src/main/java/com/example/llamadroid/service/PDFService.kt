@@ -729,6 +729,7 @@ class PDFService(private val context: Context) {
                 paintedWorkspace = mangaConfig.paintedOcrWorkspace,
                 paintedSourceUri = pdfUri.toString(),
                 readingDirection = mangaConfig.readingDirection,
+                translationSettings = settingsOverride ?: mangaConfig.translationSettings,
                 onProgress = { progress ->
                     onProgress?.invoke(
                         PdfOcrTranslationProgress(
@@ -2968,6 +2969,7 @@ class PDFService(private val context: Context) {
         paintedWorkspace: MangaPaintedOcrWorkspaceRef? = null,
         paintedSourceUri: String? = null,
         readingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT,
+        translationSettings: RemoteSummarySettingsSnapshot? = null,
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
         val options = optionsOverride ?: settingsRepo.pdfTranslationOptionsSnapshot()
@@ -2986,6 +2988,7 @@ class PDFService(private val context: Context) {
                 paintedWorkspace = paintedWorkspace,
                 paintedSourceUri = paintedSourceUri,
                 readingDirection = readingDirection,
+                translationSettings = translationSettings,
                 onProgress = onProgress
             )
             if (llamaResult.isSuccess) return@withContext llamaResult
@@ -3017,6 +3020,7 @@ class PDFService(private val context: Context) {
                 paintedWorkspace = paintedWorkspace,
                 paintedSourceUri = paintedSourceUri,
                 readingDirection = readingDirection,
+                translationSettings = translationSettings,
                 onProgress = onProgress
             ).map { it.copy(ocrRuntimeFallbacks = it.ocrRuntimeFallbacks + 1) }
         }
@@ -3233,11 +3237,13 @@ class PDFService(private val context: Context) {
         paintedWorkspace: MangaPaintedOcrWorkspaceRef? = null,
         paintedSourceUri: String? = null,
         readingDirection: MangaReadingDirection = MangaReadingDirection.LEFT_TO_RIGHT,
+        translationSettings: RemoteSummarySettingsSnapshot? = null,
         onProgress: ((PdfExtractionProgress) -> Unit)? = null
     ): Result<PdfOcrDocumentResult> = withContext(Dispatchers.IO) {
         runCatching {
             withLlamaOcrClient(
                 llamaSettings = llamaSettings,
+                preferredTranslationServerUrl = preferredLocalLlamaServerUrl(translationSettings),
                 onRuntimeStage = { stage ->
                     onProgress?.invoke(
                         PdfExtractionProgress(
@@ -3350,6 +3356,7 @@ class PDFService(private val context: Context) {
     private suspend fun <T> withLlamaOcrClient(
         llamaSettings: LlamaOcrSettingsSnapshot,
         onRuntimeStage: (LlamaOcrRuntimeStage) -> Unit = {},
+        preferredTranslationServerUrl: String? = null,
         block: suspend (RemoteSummaryClient) -> T
     ): T {
         val modelPath = requireNotNull(llamaSettings.modelPath?.takeIf { it.isNotBlank() }) {
@@ -3366,7 +3373,8 @@ class PDFService(private val context: Context) {
         }
         return LlamaOcrRuntimeCoordinator(context).withExclusiveOcrSession(
             ocrSettings = llamaSettings,
-            onStage = onRuntimeStage
+            onStage = onRuntimeStage,
+            preferredTranslationServerUrl = preferredTranslationServerUrl
         ) {
             val snapshot = RemoteSummarySettingsSnapshot(
                 backend = SettingsRepository.PDF_BACKEND_LLAMA_SERVER,
@@ -3398,6 +3406,16 @@ class PDFService(private val context: Context) {
             }
         }
     }
+
+    /** Only a locally selected llama-server can be part of the opt-in OCR hand-off. */
+    private fun preferredLocalLlamaServerUrl(
+        translationSettings: RemoteSummarySettingsSnapshot?
+    ): String? = translationSettings
+        ?.takeIf {
+            SettingsRepository.normalizeOllamaOrLlamaBackend(it.backend) ==
+                SettingsRepository.PDF_BACKEND_LLAMA_SERVER
+        }
+        ?.llamaServerUrl
 
     private fun llamaOcrRuntimeStageText(stage: LlamaOcrRuntimeStage): String = context.getString(
         when (stage) {
@@ -6135,7 +6153,8 @@ class PDFService(private val context: Context) {
                     exhaustiveLlamaOcrRegions = runtimeConfig.behavior.exhaustiveLlamaOcrRegions,
                     paintedWorkspace = runtimeConfig.paintedOcrWorkspace,
                     paintedSourceUri = source.uri.toString(),
-                    readingDirection = runtimeConfig.readingDirection
+                    readingDirection = runtimeConfig.readingDirection,
+                    translationSettings = runtimeConfig.translationSettings
                 ) { progress ->
                     onProgress?.invoke(
                         PdfOcrTranslationProgress(
@@ -6529,7 +6548,8 @@ class PDFService(private val context: Context) {
                 exhaustiveLlamaOcrRegions = runConfig?.behavior?.exhaustiveLlamaOcrRegions == true,
                 paintedWorkspace = runConfig?.paintedOcrWorkspace,
                 paintedSourceUri = cbzUri.toString(),
-                readingDirection = runConfig?.readingDirection ?: MangaReadingDirection.LEFT_TO_RIGHT
+                readingDirection = runConfig?.readingDirection ?: MangaReadingDirection.LEFT_TO_RIGHT,
+                translationSettings = settingsOverride ?: runConfig?.translationSettings
             ) { progress ->
                 onProgress?.invoke(
                     PdfOcrTranslationProgress(

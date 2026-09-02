@@ -2,6 +2,7 @@
 ARCHITECTURE.md
 .adt_patch_backups
 .adt_backups
+qa-artifacts
 
 # Built application files
 *.apk

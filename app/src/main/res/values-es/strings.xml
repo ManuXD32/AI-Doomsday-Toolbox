@@ -2239,7 +2239,7 @@
     <string name="pdf_ocr_llama_flash_attention_title">Flash attention para OCR</string>
     <string name="pdf_ocr_llama_flash_attention_desc">Actívalo solo con modelos OCR y dispositivos que sepas que funcionan con ello.</string>
     <string name="pdf_ocr_llama_replace_server_title">Reemplazar temporalmente llama-server en ejecución</string>
-    <string name="pdf_ocr_llama_replace_server_desc">Pausa todas las tarjetas llama-server activas de la app mientras se ejecuta el OCR y después restaura sus perfiles exactos. Los runtimes distribuidos nunca se detienen automáticamente.</string>
+    <string name="pdf_ocr_llama_replace_server_desc">Pausa el servidor llama.cpp de la app seleccionado o el primer servidor detectado si no coincide ninguna selección mientras se ejecuta el OCR. También se pausa otro servidor de la app que ocupe el puerto OCR cuando sea necesario. Todos los perfiles pausados se restauran antes de continuar; los runtimes distribuidos nunca se detienen automáticamente.</string>
     <string name="pdf_ocr_llama_expert_show">Mostrar ajustes expertos</string>
     <string name="pdf_ocr_llama_expert_hide">Ocultar ajustes expertos</string>
     <string name="pdf_ocr_llama_projector_manual_required">No se encontró un proyector coincidente sin ambigüedad. Elige el proyector explícitamente antes de ejecutar el OCR.</string>
@@ -2250,6 +2250,8 @@
     <string name="pdf_ocr_runtime_distributed_active">Hay un maestro o trabajador llama distribuido activo. Detenlo antes de usar OCR GGUF; los runtimes distribuidos nunca se pausan automáticamente.</string>
     <string name="pdf_ocr_runtime_recovery_pending">La sesión de OCR GGUF anterior aún está restaurando los servidores locales. Espera a que termine la recuperación antes de iniciar otro trabajo OCR.</string>
     <string name="pdf_ocr_runtime_local_active">Hay un servidor llama local activo. Activa el reemplazo temporal para pausarlo y restaurarlo con seguridad, o detenlo antes de ejecutar OCR GGUF.</string>
+    <string name="pdf_ocr_runtime_port_busy_coexist">El puerto OCR %1$d ya está en uso. Los servidores llama existentes se dejaron ejecutándose. Elige otro puerto OCR o activa el reemplazo temporal para un servidor gestionado por la app.</string>
+    <string name="pdf_ocr_runtime_port_busy_unmanaged">El puerto OCR %1$d está ocupado por un servidor que la app no gestiona. No se detuvo porque no se puede restaurar de forma segura.</string>
     <string name="pdf_ocr_runtime_stage_capturing">Comprobando servidores llama locales activos…</string>
     <string name="pdf_ocr_runtime_stage_pausing">Pausando servidores llama locales activos…</string>
     <string name="pdf_ocr_runtime_stage_starting">Iniciando el modelo de visión OCR…</string>
@@ -8312,7 +8314,7 @@
     <string name="workflow_manga_recognition_help">ML Kit funciona sin configuración. El OCR GGUF usa modelos de visión ya instalados en este teléfono.</string>
     <string name="workflow_manga_ocr_vision_role_title">Modelo de visión OCR</string>
     <string name="workflow_manga_ocr_vision_role_desc">Selecciona un GGUF multimodal descargado y su proyector correspondiente. Unlimited-OCR pertenece a este rol, no al LLM de traducción.</string>
-    <string name="workflow_manga_ocr_pause_restore_notice">El OCR GGUF pausa temporalmente las tarjetas llama-server activas de la app para mantener un solo modelo local residente y después las restaura. Los runtimes distribuidos no se detienen automáticamente.</string>
+    <string name="workflow_manga_ocr_pause_restore_notice">De forma predeterminada, el OCR GGUF no toca los servidores llama.cpp en ejecución. Usa solo el ajuste opcional de abajo cuando el OCR necesite usar temporalmente un servidor administrado; se restaurará antes de traducir. Los runtimes distribuidos nunca se detienen automáticamente.</string>
     <string name="workflow_manga_llama_fast_preview_note">La vista previa rápida usa geometría de ML Kit, una pasada de contexto de página completa con llama.cpp y solo unos pocos refinamientos de recorte. Usa Personalizado → OCR llama.cpp exhaustivo para la pasada lenta por todas las regiones.</string>
     <string name="workflow_manga_ocr_model">Modelo OCR</string>
     <string name="workflow_manga_projector_model">Proyector de visión</string>

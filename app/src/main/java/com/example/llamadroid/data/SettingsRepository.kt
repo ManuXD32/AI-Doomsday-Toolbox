@@ -2066,7 +2066,11 @@ class SettingsRepository(private val context: Context) {
             parallel = 1,
             customFlags = LlamaOcrPromptPreset.GENERIC_OCR.recommendedFlags,
             commandTemplate = null,
-            temporarilyReplaceRunningServer = true
+            // Manga OCR must not interrupt an already-running llama.cpp server unless
+            // the user explicitly opts into the temporary replacement flow in the
+            // manga workflow screen. Legacy configs are decoded as disabled because their
+            // previously serialized true value was an implicit default, not a user choice.
+            temporarilyReplaceRunningServer = false
         )
         val translationConfig = com.example.llamadroid.service.DocumentTranslationRunConfig(
             settings = settings,

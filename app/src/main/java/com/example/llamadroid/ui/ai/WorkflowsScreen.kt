@@ -2085,6 +2085,19 @@ private fun MangaTranslationWorkflowContent(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    MangaOutputSwitchRow(
+                        title = stringResource(R.string.workflow_manga_ocr_replace_server_title),
+                        description = stringResource(R.string.workflow_manga_ocr_replace_server_desc),
+                        checked = translationOptions.llamaOcr.temporarilyReplaceRunningServer,
+                        enabled = !isRunning,
+                        onCheckedChange = { enabled ->
+                            translationOptions = translationOptions.copy(
+                                llamaOcr = translationOptions.llamaOcr.copy(
+                                    temporarilyReplaceRunningServer = enabled
+                                )
+                            )
+                        }
+                    )
                     MangaInstalledModelPicker(
                         label = stringResource(R.string.workflow_manga_ocr_model),
                         models = ocrModels,
