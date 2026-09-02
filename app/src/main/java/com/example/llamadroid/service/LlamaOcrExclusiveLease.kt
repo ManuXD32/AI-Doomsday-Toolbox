@@ -154,12 +154,22 @@ internal object LlamaOcrExclusiveLeaseStore {
         suppliedToken: String?
     ): Boolean {
         val lease = read(context) ?: return false
-        return sessionId.isBlank() || suppliedToken != lease.token
+        if (sessionId.isBlank()) return true
+        // Replacement mode now captures only the selected translation runtime and, when needed,
+        // the OCR-port occupant. Unselected server cards remain usable while OCR runs. The OCR
+        // reserved session itself always requires the lease token so an unrelated command cannot
+        // replace the OCR process during the hand-off.
+        val ownedByLease = sessionId == lease.ocrSessionId ||
+            lease.capturedRuntimes.any { it.sessionId == sessionId }
+        return ownedByLease && suppliedToken != lease.token
     }
 
     fun rejectsLegacyCommand(context: Context, suppliedToken: String?): Boolean {
         val lease = read(context) ?: return false
-        return suppliedToken != lease.token
+        val legacyCaptured = lease.capturedRuntimes.any {
+            it.kind == LlamaOcrCapturedRuntimeKind.LEGACY
+        }
+        return legacyCaptured && suppliedToken != lease.token
     }
 
     private fun writeLocked(context: Context, lease: LlamaOcrExclusiveLease) {

@@ -289,6 +289,53 @@ class MangaTranslationSupportTest {
     }
 
     @Test
+    fun `legacy manga config cannot opt into replacing a running server`() {
+        // Simulate a v4 config written before the explicit opt-in marker existed.
+        val legacyJson = MangaTranslationSupport.runConfigToJson(config())
+        legacyJson.getJSONObject("options")
+            .getJSONObject("llamaOcr")
+            .remove("temporarilyReplaceRunningServerConfigured")
+
+        val restored = MangaTranslationSupport.runConfigFromJson(legacyJson, config())
+
+        assertFalse(restored.translationOptions.llamaOcr.temporarilyReplaceRunningServer)
+    }
+
+    @Test
+    fun `new manga config marker preserves explicit server replacement choice`() {
+        val original = config()
+        val json = MangaTranslationSupport.runConfigToJson(original)
+        val llamaJson = json.getJSONObject("options").getJSONObject("llamaOcr")
+
+        assertTrue(llamaJson.getBoolean("temporarilyReplaceRunningServerConfigured"))
+        assertTrue(llamaJson.getBoolean("temporarilyReplaceRunningServer"))
+        assertTrue(
+            MangaTranslationSupport.runConfigFromJson(json, config())
+                .translationOptions.llamaOcr.temporarilyReplaceRunningServer
+        )
+    }
+
+    @Test
+    fun `new manga config marker preserves explicit disabled replacement choice`() {
+        val original = config().let { current ->
+            current.copy(
+                ocrConfig = current.ocrConfig.copy(
+                    llamaOcr = current.ocrConfig.llamaOcr.copy(
+                        temporarilyReplaceRunningServer = false
+                    )
+                )
+            )
+        }
+
+        val restored = MangaTranslationSupport.runConfigFromJson(
+            MangaTranslationSupport.runConfigToJson(original),
+            config()
+        )
+
+        assertFalse(restored.translationOptions.llamaOcr.temporarilyReplaceRunningServer)
+    }
+
+    @Test
     fun `template serialization keeps painted strategy but strips content workspace`() {
         val painted = config().copy(
             behavior = config().behavior.copy(ocrStrategy = MangaOcrStrategy.PAINTED_REGIONS),

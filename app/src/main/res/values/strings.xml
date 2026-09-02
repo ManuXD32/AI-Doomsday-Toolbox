@@ -2088,7 +2088,7 @@
     <string name="pdf_ocr_llama_flash_attention_title">OCR flash attention</string>
     <string name="pdf_ocr_llama_flash_attention_desc">Enable only for OCR models and devices that are known to work with it.</string>
     <string name="pdf_ocr_llama_replace_server_title">Temporarily replace running llama-server</string>
-    <string name="pdf_ocr_llama_replace_server_desc">Pause all active app-owned llama-server cards while OCR runs, then restore their exact profiles. Distributed runtimes are never stopped automatically.</string>
+    <string name="pdf_ocr_llama_replace_server_desc">Pause the selected app-owned llama.cpp server, or the first detected server when no selection matches, while OCR runs. A different app-owned OCR-port occupant is also paused when required. Every paused profile is restored before continuing; distributed runtimes are never stopped automatically.</string>
     <string name="pdf_ocr_llama_expert_show">Show Expert settings</string>
     <string name="pdf_ocr_llama_expert_hide">Hide Expert settings</string>
     <string name="pdf_ocr_llama_projector_manual_required">No unambiguous projector match was found. Choose the projector explicitly before running OCR.</string>
@@ -2099,6 +2099,8 @@
     <string name="pdf_ocr_runtime_distributed_active">A distributed llama master or worker is active. Stop it before using GGUF OCR; distributed runtimes are never paused automatically.</string>
     <string name="pdf_ocr_runtime_recovery_pending">The previous GGUF OCR session is still restoring local servers. Wait for recovery to finish before starting another OCR job.</string>
     <string name="pdf_ocr_runtime_local_active">A local llama server is active. Enable temporary replacement to pause and restore it safely, or stop it before running GGUF OCR.</string>
+    <string name="pdf_ocr_runtime_port_busy_coexist">OCR port %1$d is already in use. Existing llama servers were left running. Choose another OCR port or enable temporary replacement for an app-managed server.</string>
+    <string name="pdf_ocr_runtime_port_busy_unmanaged">OCR port %1$d is occupied by a server that is not managed by the app. It was not stopped because it cannot be safely restored.</string>
     <string name="pdf_ocr_runtime_stage_capturing">Checking active local llama servers…</string>
     <string name="pdf_ocr_runtime_stage_pausing">Pausing active local llama servers…</string>
     <string name="pdf_ocr_runtime_stage_starting">Starting the OCR vision model…</string>
@@ -8315,7 +8317,7 @@
     <string name="workflow_manga_recognition_help">ML Kit works without setup. GGUF OCR uses vision models already installed on this phone.</string>
     <string name="workflow_manga_ocr_vision_role_title">OCR vision model</string>
     <string name="workflow_manga_ocr_vision_role_desc">Select a downloaded multimodal GGUF and its matching projector. Unlimited-OCR belongs in this role, not Translation LLM.</string>
-    <string name="workflow_manga_ocr_pause_restore_notice">GGUF OCR temporarily pauses active app-owned llama-server cards so only one local model is resident, then restores them. Distributed runtimes are not stopped automatically.</string>
+    <string name="workflow_manga_ocr_pause_restore_notice">By default, GGUF OCR leaves running llama.cpp servers untouched. Use the opt-in setting below only when OCR needs to temporarily use a managed server; it is restored before translation. Distributed runtimes are never stopped automatically.</string>
     <string name="workflow_manga_llama_fast_preview_note">Fast preview uses ML Kit geometry, one full-page llama.cpp context pass, and only a few targeted crop refinements. Use Custom → Exhaustive llama.cpp OCR for the slower all-region pass.</string>
     <string name="workflow_manga_ocr_model">OCR model</string>
     <string name="workflow_manga_projector_model">Vision projector</string>

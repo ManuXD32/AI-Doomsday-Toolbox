@@ -45,16 +45,18 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
     suspend fun <T> withExclusiveOcrSession(
         ocrSettings: LlamaOcrSettingsSnapshot,
         onStage: (LlamaOcrRuntimeStage) -> Unit = {},
+        preferredTranslationServerUrl: String? = null,
         block: suspend () -> T
     ): T = processMutex.withLock {
         withContext(Dispatchers.IO) {
-            execute(ocrSettings, onStage, block)
+            execute(ocrSettings, onStage, preferredTranslationServerUrl, block)
         }
     }
 
     private suspend fun <T> execute(
         ocrSettings: LlamaOcrSettingsSnapshot,
         onStage: (LlamaOcrRuntimeStage) -> Unit,
+        preferredTranslationServerUrl: String?,
         block: suspend () -> T
     ): T {
         if (distributedRuntimeIsActive()) {
@@ -76,14 +78,23 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
             appContext.getString(R.string.pdf_ocr_llama_error_missing_mmproj)
         }
 
-        emitStage(onStage, LlamaOcrRuntimeStage.CAPTURING_SERVERS)
-        val captured = captureActiveRuntimes()
-        if (!ocrSettings.temporarilyReplaceRunningServer && captured.isNotEmpty()) {
-            throw LlamaOcrRuntimeBlockedException(
-                appContext.getString(R.string.pdf_ocr_runtime_local_active)
-            )
+        // Coexistence is the safe default. Do not even inspect the app-owned server catalog in
+        // this mode: it must not acquire a lease, pause a card, or restart a server selected for
+        // another task. The only conflict we need to reject is an already-bound OCR port.
+        if (!ocrSettings.temporarilyReplaceRunningServer) {
+            return executeCoexistingOcr(ocrSettings, ocrProfile, onStage, block)
         }
-        val duplicatePort = captured
+
+        emitStage(onStage, LlamaOcrRuntimeStage.CAPTURING_SERVERS)
+        val capturedCatalog = captureActiveRuntimes()
+        val preferredTranslationPort = localLlamaServerPort(preferredTranslationServerUrl)
+        val pausePlan = planLlamaOcrRuntimePause(
+            capturedRuntimes = capturedCatalog,
+            ocrPort = ocrProfile.serverPort,
+            temporarilyReplaceRunningServer = true,
+            preferredTranslationPort = preferredTranslationPort
+        )
+        val duplicatePort = capturedCatalog
             .mapNotNull(LlamaOcrCapturedRuntime::port)
             .groupingBy { it }
             .eachCount()
@@ -96,6 +107,20 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
         // A standalone OCR launch from an earlier app version may have left internal:ocr alive.
         // Validate every restorable card first, so a missing preset always aborts before any stop.
         stopOrphanedOcrSession(ocrSettings.port)
+
+        val ocrPortBusy = !checkLlamaServerPort("127.0.0.1", ocrProfile.serverPort).available
+        val knownOcrPortRuntime = capturedCatalog.firstOrNull { it.port == ocrProfile.serverPort }
+        if (ocrPortBusy && knownOcrPortRuntime == null) {
+            // A process outside the managed catalog owns the port. It cannot be restored safely,
+            // so even the opt-in mode refuses to kill it.
+            throw LlamaOcrRuntimeBlockedException(
+                appContext.getString(
+                    R.string.pdf_ocr_runtime_port_busy_unmanaged,
+                    ocrProfile.serverPort
+                )
+            )
+        }
+        val captured = pausePlan.runtimesToPause
 
         var lease = LlamaOcrExclusiveLeaseStore.create(appContext, ocrProfile, captured)
         record(lease, "capture", ocrSettings)
@@ -122,13 +147,94 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
             throw error
         } finally {
             val cleanupFailure = withContext(NonCancellable) {
-                cleanupAndRestore(lease, ocrSettings, onStage)
+                cleanupAndRestore(
+                    originalLease = lease,
+                    ocrSettings = ocrSettings,
+                    onStage = onStage,
+                    preferredTranslationPort = pausePlan.preferredTranslationPort
+                )
             }
             if (cleanupFailure != null) {
                 if (primaryFailure != null) {
                     primaryFailure.addSuppressed(cleanupFailure)
                 } else {
                     throw cleanupFailure
+                }
+            }
+        }
+    }
+
+    /**
+     * Runs OCR on its own reserved session while leaving every pre-existing local server alone.
+     * There is deliberately no durable lease in this path. A lease is an interruption boundary;
+     * coexistence does not need one and retaining it would unnecessarily block the user's other
+     * server controls while OCR is running.
+     */
+    private suspend fun <T> executeCoexistingOcr(
+        ocrSettings: LlamaOcrSettingsSnapshot,
+        ocrProfile: LlamaServerLaunchProfile,
+        onStage: (LlamaOcrRuntimeStage) -> Unit,
+        block: suspend () -> T
+    ): T {
+        emitStage(onStage, LlamaOcrRuntimeStage.CAPTURING_SERVERS)
+        if (!checkLlamaServerPort("127.0.0.1", ocrProfile.serverPort).available) {
+            throw LlamaOcrRuntimeBlockedException(
+                appContext.getString(
+                    R.string.pdf_ocr_runtime_port_busy_coexist,
+                    ocrProfile.serverPort
+                )
+            )
+        }
+
+        var startRequested = false
+        var primaryFailure: Throwable? = null
+        try {
+            emitStage(onStage, LlamaOcrRuntimeStage.STARTING_OCR)
+            startRequested = true
+            LlamaServerLauncher.startForOcr(appContext, ocrSettings).getOrThrow()
+            waitForSessionRunning(
+                sessionId = LlamaServerSessionIds.OCR,
+                port = ocrProfile.serverPort,
+                timeoutMs = OCR_START_TIMEOUT_MS
+            )
+            recordSimple(
+                event = "coexist_ocr_started",
+                details = "ocrSession=${LlamaServerSessionIds.OCR} ocrPort=${ocrProfile.serverPort}"
+            )
+            return block()
+        } catch (error: Throwable) {
+            primaryFailure = error
+            recordSimple(
+                event = "ocr_failed",
+                details = "mode=coexist error=${error.javaClass.simpleName}:${sanitize(error.message)}"
+            )
+            throw error
+        } finally {
+            if (startRequested) {
+                val cleanupFailure = withContext(NonCancellable) {
+                    runCatching {
+                        emitStage(onStage, LlamaOcrRuntimeStage.STOPPING_OCR)
+                        LlamaServerLauncher.stopForOcr(appContext).getOrThrow()
+                        waitForSessionStopped(
+                            sessionId = LlamaServerSessionIds.OCR,
+                            port = ocrProfile.serverPort
+                        )
+                        recordSimple(
+                            event = "coexist_ocr_stopped",
+                            details = "ocrSession=${LlamaServerSessionIds.OCR} ocrPort=${ocrProfile.serverPort}"
+                        )
+                    }.exceptionOrNull()
+                }
+                if (cleanupFailure != null) {
+                    recordSimple(
+                        event = "coexist_ocr_stop_failed",
+                        details = "error=${cleanupFailure.javaClass.simpleName}:${sanitize(cleanupFailure.message)}"
+                    )
+                    if (primaryFailure != null) {
+                        primaryFailure.addSuppressed(cleanupFailure)
+                    } else {
+                        throw cleanupFailure
+                    }
                 }
             }
         }
@@ -316,7 +422,8 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
     private suspend fun cleanupAndRestore(
         originalLease: LlamaOcrExclusiveLease,
         ocrSettings: LlamaOcrSettingsSnapshot,
-        onStage: (LlamaOcrRuntimeStage) -> Unit = {}
+        onStage: (LlamaOcrRuntimeStage) -> Unit = {},
+        preferredTranslationPort: Int? = null
     ): Throwable? {
         var lease = originalLease
         val stopFailure = runCatching {
@@ -343,7 +450,7 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
         emitStage(onStage, LlamaOcrRuntimeStage.RESTORING_SERVERS)
         runCatching { lease = phase(lease, LlamaOcrLeasePhase.RESTORING, ocrSettings) }
             .onFailure(restoreFailures::add)
-        val translationPort = settings.serverPort.value
+        val translationPort = preferredTranslationPort ?: settings.serverPort.value
         val ordered = orderLlamaOcrRestoration(lease.capturedRuntimes, translationPort)
         ordered.forEach { captured ->
             val failure = runCatching {
@@ -516,16 +623,18 @@ internal class LlamaOcrRuntimeCoordinator(private val context: Context) {
         error: Throwable,
         ocrSettings: LlamaOcrSettingsSnapshot
     ) {
-        val sanitized = error.message.orEmpty()
-            .replace(Regex("/[^\\s]+"), "<path>")
-            .replace(Regex("\\s+"), " ")
-            .take(180)
+        val sanitized = sanitize(error.message)
         recordSimple(
             event = event,
             details = "phase=${lease.phase.name.lowercase()} preset=${ocrSettings.promptPreset.name} " +
                 "context=${ocrSettings.contextSize} error=${error.javaClass.simpleName}:$sanitized"
         )
     }
+
+    private fun sanitize(message: String?): String = message.orEmpty()
+        .replace(Regex("/[^\\s]+"), "<path>")
+        .replace(Regex("\\s+"), " ")
+        .take(180)
 
     private fun recordSimple(event: String, details: String) {
         runCatching {

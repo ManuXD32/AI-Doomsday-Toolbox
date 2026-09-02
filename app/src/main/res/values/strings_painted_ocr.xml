@@ -43,4 +43,6 @@
     <string name="workflow_manga_painted_error_open_pdf">Unable to open the PDF source.</string>
     <string name="workflow_manga_painted_error_decode_page">Unable to decode this comic page.</string>
     <string name="workflow_manga_painted_error_mask_too_large">The painted mask preview is too large.</string>
+    <string name="workflow_manga_ocr_replace_server_title">Allow OCR to temporarily replace a running llama.cpp server</string>
+    <string name="workflow_manga_ocr_replace_server_desc">When enabled, OCR may stop the app-owned llama.cpp server used for translation (or the first detected local server), then restart it and wait until it is ready before translation. Leave disabled to keep existing servers running.</string>
 </resources>

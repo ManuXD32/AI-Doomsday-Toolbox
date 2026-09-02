@@ -43,4 +43,6 @@
     <string name="workflow_manga_painted_error_open_pdf">No se puede abrir el PDF de origen.</string>
     <string name="workflow_manga_painted_error_decode_page">No se puede decodificar esta página del cómic.</string>
     <string name="workflow_manga_painted_error_mask_too_large">La vista previa de la máscara pintada es demasiado grande.</string>
+    <string name="workflow_manga_ocr_replace_server_title">Permitir que el OCR reemplace temporalmente un servidor llama.cpp activo</string>
+    <string name="workflow_manga_ocr_replace_server_desc">Al activarlo, el OCR puede detener el servidor llama.cpp de la app usado para la traducción (o el primer servidor local detectado), reiniciarlo y esperar a que esté listo antes de traducir. Déjalo desactivado para mantener los servidores existentes en ejecución.</string>
 </resources>
