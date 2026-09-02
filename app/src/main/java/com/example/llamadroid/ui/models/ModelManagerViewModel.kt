@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.models
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llamadroid.data.api.HfModelDto
 import com.example.llamadroid.data.db.ModelEntity
@@ -242,5 +243,22 @@ class ModelManagerViewModel(
                 DebugLog.log("Failed to import model: ${e.message}")
             }
         }
+    }
+}
+
+/**
+ * Route-owned factory for the model manager. The screen must obtain this ViewModel from the
+ * NavBackStackEntry's ViewModelStore so its repository collectors and search jobs are cancelled
+ * when the route is removed instead of leaking a manually remembered instance.
+ */
+class ModelManagerViewModelFactory(
+    private val repository: ModelRepository
+) : ViewModelProvider.Factory {
+    override fun <T : ViewModel> create(modelClass: Class<T>): T {
+        if (modelClass.isAssignableFrom(ModelManagerViewModel::class.java)) {
+            @Suppress("UNCHECKED_CAST")
+            return ModelManagerViewModel(repository) as T
+        }
+        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }
 }

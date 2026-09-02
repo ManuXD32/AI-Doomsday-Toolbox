@@ -17,6 +17,11 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +44,8 @@ import com.example.llamadroid.data.model.ZimRepository
 import com.example.llamadroid.util.FormatUtils
 import com.example.llamadroid.service.DownloadService
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.AssetPackManagerUtil.AssetPack
 import java.io.File
@@ -173,7 +180,8 @@ private fun FolderSetupScreen(
 fun InstalledZimsTab(repo: ZimRepository, navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val installedZims by repo.getInstalledZims().collectAsState(initial = emptyList())
+    val installedZims by repo.getInstalledZims()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     
     // Rename dialog state
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -949,16 +957,19 @@ fun CatalogEntryCard(
 @Composable
 fun DownloadingTab() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val downloadManager = remember { 
         context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager 
     }
     var activeDownloads by remember { mutableStateOf<List<DownloadInfo>>(emptyList()) }
     
     // Poll for active downloads
-    LaunchedEffect(Unit) {
-        while (true) {
-            activeDownloads = getActiveDownloads(downloadManager)
-            kotlinx.coroutines.delay(1000) // Update every second
+    LaunchedEffect(downloadManager, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (currentCoroutineContext().isActive) {
+                activeDownloads = getActiveDownloads(downloadManager)
+                kotlinx.coroutines.delay(1000) // Update every second
+            }
         }
     }
     
@@ -1060,37 +1071,82 @@ fun DownloadingTab() {
 @Composable
 fun ZimShareTab() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
-    val installedZims by db.zimDao().getAllZims().collectAsState(initial = emptyList())
+    val installedZims by db.zimDao().getAllZims()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     
     // Service connection for ZimShareService
     var shareService by remember { mutableStateOf<com.example.llamadroid.service.ZimShareService?>(null) }
+    var serviceBound by remember { mutableStateOf(false) }
     val serviceConnection = remember {
         object : android.content.ServiceConnection {
             override fun onServiceConnected(name: android.content.ComponentName?, binder: android.os.IBinder?) {
                 shareService = (binder as? com.example.llamadroid.service.ZimShareService.LocalBinder)?.getService()
+                serviceBound = true
             }
             override fun onServiceDisconnected(name: android.content.ComponentName?) {
                 shareService = null
+                serviceBound = false
             }
         }
     }
-    
-    DisposableEffect(context) {
+
+    fun bindShareServiceIfNeeded() {
+        if (serviceBound) return
         val intent = android.content.Intent(context, com.example.llamadroid.service.ZimShareService::class.java)
-        context.bindService(intent, serviceConnection, android.content.Context.BIND_AUTO_CREATE)
+        serviceBound = runCatching {
+            // A share tab observes an existing service; only the button below may start it.
+            context.bindService(intent, serviceConnection, 0)
+        }.getOrDefault(false)
+    }
+
+    fun unbindShareService() {
+        if (serviceBound) {
+            runCatching { context.unbindService(serviceConnection) }
+        }
+        serviceBound = false
+        shareService = null
+    }
+
+    DisposableEffect(context, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> bindShareServiceIfNeeded()
+                Lifecycle.Event.ON_STOP -> unbindShareService()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            bindShareServiceIfNeeded()
+        }
         onDispose {
-            context.unbindService(serviceConnection)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            unbindShareService()
         }
     }
-    
-    val isRunning by shareService?.isRunning?.collectAsState() ?: remember { mutableStateOf(false) }
-    val serverUrls by shareService?.serverUrls?.collectAsState() ?: remember { mutableStateOf(emptyList<Pair<String, String>>()) }
-    val activeDownloads by shareService?.activeDownloads?.collectAsState() ?: remember { mutableStateOf(0) }
+
+    val isRunning by shareService?.isRunning?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(false) }
+    val serverUrls by shareService?.serverUrls?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(emptyList<Pair<String, String>>()) }
+    val activeDownloads by shareService?.activeDownloads?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(0) }
     
     // QR code generation
     var qrBitmaps by remember { mutableStateOf<Map<String, android.graphics.Bitmap?>>(emptyMap()) }
+
+    qrBitmaps.values.forEach { bitmap ->
+        DisposableEffect(bitmap) {
+            onDispose {
+                bitmap?.let { value ->
+                    if (!value.isRecycled) value.recycle()
+                }
+            }
+        }
+    }
     
     LaunchedEffect(serverUrls) {
         if (serverUrls.isNotEmpty()) {
@@ -1111,6 +1167,8 @@ fun ZimShareTab() {
                 }
                 qrBitmaps = bitmaps
             }
+        } else {
+            qrBitmaps = emptyMap()
         }
     }
     
@@ -1167,8 +1225,17 @@ fun ZimShareTab() {
                                 val intent = android.content.Intent(context, com.example.llamadroid.service.ZimShareService::class.java)
                                 context.startForegroundService(intent)
                                 scope.launch {
-                                    kotlinx.coroutines.delay(500)
-                                    shareService?.startServer()
+                                    repeat(8) {
+                                        if (!lifecycleOwner.lifecycle.currentState
+                                                .isAtLeast(Lifecycle.State.STARTED)
+                                        ) return@launch
+                                        bindShareServiceIfNeeded()
+                                        shareService?.let { service ->
+                                            service.startServer()
+                                            return@launch
+                                        }
+                                        kotlinx.coroutines.delay(250L)
+                                    }
                                 }
                             }
                         },
@@ -1313,7 +1380,8 @@ private fun getActiveDownloads(downloadManager: android.app.DownloadManager): Li
 fun KiwixSettingsTab(
     settings: SettingsRepository
 ) {
-    val kiwixRemoteAccess by settings.kiwixRemoteAccess.collectAsState()
+    val kiwixRemoteAccess by settings.kiwixRemoteAccess
+        .collectAsStateWithLifecycle(initialValue = false)
     val context = LocalContext.current
     
     LazyColumn(

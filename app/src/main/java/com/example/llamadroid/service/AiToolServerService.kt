@@ -801,6 +801,7 @@ class AiToolServerService : Service() {
                                 outputPath = outputFile.absolutePath,
                                 upscaleRepeats = body.optInt("upscaleRepeats", 1),
                                 threads = body.optInt("threads", -1),
+                                sdParamsBackendSpec = body.optString("sdParamsBackendSpec").ifBlank { sdModel?.sdParamsBackendSpec ?: "auto" },
                                 sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
                                 sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
                                 maxVramCpuGiB = sdMaxVramCpuGiB
@@ -891,6 +892,7 @@ class AiToolServerService : Service() {
                                 qwenImageZeroCondT = body.optBoolean("qwenImageZeroCondT", false),
                                 chromaDisableDitMask = body.optBoolean("chromaDisableDitMask", false),
                                 quantizationType = body.optString("quantizationType"),
+                                sdParamsBackendSpec = body.optString("sdParamsBackendSpec").ifBlank { sdModel?.sdParamsBackendSpec ?: "auto" },
                                 sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
                                 sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
                                 maxVramCpuGiB = sdMaxVramCpuGiB
@@ -970,6 +972,7 @@ class AiToolServerService : Service() {
                         diffusionFa = body.optBoolean("diffusionFa", true),
                         mmap = body.optBoolean("mmap", true),
                         threads = body.optInt("threads", -1),
+                        sdParamsBackendSpec = body.optString("sdParamsBackendSpec").ifBlank { sdModel?.sdParamsBackendSpec ?: "auto" },
                         sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
                         sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
                         maxVramCpuGiB = sdMaxVramCpuGiB
@@ -1631,6 +1634,7 @@ class AiToolServerService : Service() {
                 photoMakerPath = body.optNullableString("photoMakerPath"),
                 loras = body.readSdLoras("loras"),
                 loraApplyMode = parseEnumOrNull<SdLoraApplyMode>(body.optString("loraApplyMode")),
+                sdParamsBackendSpec = body.optString("sdParamsBackendSpec").ifBlank { sdModel?.sdParamsBackendSpec ?: "auto" },
                 sdParamsBackendMode = body.optString("sdParamsBackendMode").ifBlank { sdModel?.sdParamsBackendMode ?: "auto" },
                 sdRuntimeBackendMode = body.optString("sdRuntimeBackendMode").ifBlank { sdModel?.sdRuntimeBackendMode ?: "auto" },
                 maxVramCpuGiB = sdMaxVramCpuGiB
@@ -1643,6 +1647,7 @@ class AiToolServerService : Service() {
                 upscaleRepeats = body.optInt("upscaleRepeats", 1),
                 mode = SDMode.UPSCALE,
                 threads = body.optInt("upscaleThreads", 4),
+                sdParamsBackendSpec = body.optString("upscalerSdParamsBackendSpec").ifBlank { upscalerModel?.sdParamsBackendSpec ?: "auto" },
                 sdParamsBackendMode = body.optString("upscalerSdParamsBackendMode").ifBlank { upscalerModel?.sdParamsBackendMode ?: "auto" },
                 sdRuntimeBackendMode = body.optString("upscalerSdRuntimeBackendMode").ifBlank { upscalerModel?.sdRuntimeBackendMode ?: "auto" },
                 maxVramCpuGiB = sdMaxVramCpuGiB
@@ -4265,6 +4270,7 @@ class AiToolServerService : Service() {
 
         private fun sdRuntimeFields(): List<JSONObject> = listOf(
             fieldJson("threads", "number", "CPU threads", "Hilos CPU", defaultValue = -1, min = -1.0, step = 1.0, section = "Runtime"),
+            fieldJson("sdParamsBackendSpec", "text", "Parameter residency", "Residencia de parámetros", defaultValue = "auto", section = "Runtime"),
             fieldJson("cacheMode", "select", "Cache mode", "Modo cache", options = enumOptions<SdCacheMode>(), section = "Runtime"),
             fieldJson("cacheOption", "text", "Cache option", "Opcion cache", section = "Runtime"),
             fieldJson("scmMask", "text", "SCM mask", "Mascara SCM", section = "Runtime"),

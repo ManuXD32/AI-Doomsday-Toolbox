@@ -1527,6 +1527,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                 vaeConvDirect = sdParams.vaeConvDirect && spec.supportsVaeConvDirect,
                 qwenImageZeroCondT = sdParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
                 chromaDisableDitMask = sdParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask,
+                sdParamsBackendSpec = model.sdParamsBackendSpec,
                 sdParamsBackendMode = model.sdParamsBackendMode,
                 sdRuntimeBackendMode = model.sdRuntimeBackendMode,
                 maxVramCpuGiB = if (settingsRepo.sdMaxCpuRamEnabled.value) settingsRepo.sdMaxCpuRamGiB.value else ""

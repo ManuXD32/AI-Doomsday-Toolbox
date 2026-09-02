@@ -97,6 +97,12 @@ data class SDConfig(
     val vaeConvDirect: Boolean = false,
     val qwenImageZeroCondT: Boolean = false,
     val chromaDisableDitMask: Boolean = false,
+    /**
+     * Normalized stable-diffusion.cpp parameter-module residency.  `auto`
+     * retains the legacy behavior; non-default values are emitted as
+     * `--params-backend` only for local launches.
+     */
+    val sdParamsBackendSpec: String = "auto",
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",
@@ -133,6 +139,7 @@ data class SDUpscaleConfig(
     val outputPath: String,
     val upscaleRepeats: Int = 1,
     val threads: Int = -1,
+    val sdParamsBackendSpec: String = "auto",
     val sdParamsBackendMode: String = "auto",
     val sdRuntimeBackendMode: String = "auto",
     val maxVramCpuGiB: String = "",

@@ -5009,6 +5009,9 @@ Keep it brief but capture essential details."""
         saveJsonDraft("sd_ip_adapter_last_used", draft)
     fun videoGenerationDraft(): JSONObject? = readJsonDraft("sd_video_generation_draft")
     fun setVideoGenerationDraft(draft: JSONObject) = saveJsonDraft("sd_video_generation_draft", draft)
+    fun mangaTranslationUiDraft(): JSONObject? = readJsonDraft("manga_translation_ui_draft")
+    fun setMangaTranslationUiDraft(draft: JSONObject) =
+        saveJsonDraft("manga_translation_ui_draft", draft)
 
     private fun readJsonDraft(key: String): JSONObject? = prefs.getString(key, null)
         ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }

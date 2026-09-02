@@ -69,6 +69,12 @@ class StableDiffusionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var stallMonitorJob: Job? = null
     @Volatile
+    private var postRunHealthJob: Job? = null
+    @Volatile
+    private var postRunHealthGeneration: Long = 0L
+    private var idleStopJob: Job? = null
+    @Volatile private var latestStartId: Int = 0
+    @Volatile
     private var latestStageTimings = SdStageTimings()
 
     private val _generationState = kotlinx.coroutines.flow.MutableStateFlow<SDGenerationState>(SDGenerationState.Idle)
@@ -153,6 +159,9 @@ class StableDiffusionService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
+        idleStopJob?.cancel()
+        idleStopJob = null
         recordServiceBreadcrumb("start_command", intent?.action)
         when (intent?.action) {
             ACTION_START_GENERATION -> {
@@ -327,6 +336,7 @@ class StableDiffusionService : Service() {
         useWorkflowStateHolder: Boolean,
         useDistributedStateHolder: Boolean
     ) {
+        cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(config.mode, useWorkflowStateHolder, useDistributedStateHolder)
         modeStateHolder.updatePrompt(config.prompt)
         ensureWakeLockHeld()
@@ -396,6 +406,7 @@ class StableDiffusionService : Service() {
     }
 
     private fun startUpscale(config: SDUpscaleConfig, useDistributedStateHolder: Boolean) {
+        cancelPostRunHealthSampling()
         val modeStateHolder = getModeStateHolder(SDMode.UPSCALE, false, useDistributedStateHolder)
         ensureWakeLockHeld()
         modeSessionIds[laneFor(SDMode.UPSCALE, useDistributedStateHolder)] = GenerationDiagnosticsStore.startSession(
@@ -463,6 +474,7 @@ class StableDiffusionService : Service() {
     }
 
     private fun startWorkflow(workflowConfig: SDWorkflowConfig) {
+        cancelPostRunHealthSampling()
         val txt2imgHolder = SDModeStateHolder.workflowTxt2img
         val upscaleHolder = SDModeStateHolder.workflowUpscale
         txt2imgHolder.reset()
@@ -1052,7 +1064,7 @@ class StableDiffusionService : Service() {
         recordModeBreadcrumb(mode, "cancel_requested")
         val (job, process) = removeModeRuntime(mode, useDistributedStateHolder)
         job?.cancel(CancellationException(getString(R.string.action_cancelled)))
-        process?.destroy()
+        process?.let { terminateNativeProcess(it, "cancel ${mode.name}") }
         clearDiagnostics(mode)
 
         getModeStateHolder(mode, false, useDistributedStateHolder).updateState(SDGenerationState.Idle)
@@ -1072,7 +1084,7 @@ class StableDiffusionService : Service() {
         recordModeBreadcrumb(SDMode.UPSCALE, "workflow_cancel_requested")
         workflowJob?.cancel(CancellationException(getString(R.string.action_cancelled)))
         workflowJob = null
-        clearAllModeProcesses().forEach { it.destroy() }
+        clearAllModeProcesses().forEach { terminateNativeProcess(it, "cancel workflow") }
         clearDiagnostics(SDMode.TXT2IMG)
         clearDiagnostics(SDMode.UPSCALE)
         SDModeStateHolder.workflowTxt2img.reset()
@@ -1288,6 +1300,98 @@ class StableDiffusionService : Service() {
         if (!hasActiveWork()) {
             modeDiagnostics.clear()
             DeviceAcceleration.reportActiveBinary(AccelerationWorkload.STABLE_DIFFUSION, null)
+            schedulePostRunHealthSampling()
+            // This is a started, unbound service. Releasing the service object
+            // after each completed/cancelled batch drops its executor, process
+            // handles, diagnostics and notification state instead of retaining
+            // them in the UI process until the whole app is force-stopped.
+            idleStopJob?.cancel()
+            val idleStartId = latestStartId
+            idleStopJob = serviceScope.launch {
+                delay(IDLE_SERVICE_STOP_DELAY_MS)
+                if (!hasActiveWork()) {
+                    recordServiceBreadcrumb("idle_service_stop_requested")
+                    stopSelfResult(idleStartId)
+                }
+            }
+        }
+    }
+
+    /**
+     * Records a small resource sample at the end of a run and, when the service remains alive, a
+     * second sample after the normal post-run settling window. If Android tears the normally
+     * unbound service down during that short idle-stop grace period, [onDestroy] records the
+     * pending second sample before cancellation. This is intentionally independent from
+     * [idleStopJob]: a health sample must never keep an otherwise idle service alive.
+     */
+    private fun schedulePostRunHealthSampling() {
+        if (postRunHealthJob?.isActive == true) return
+
+        val generation = ++postRunHealthGeneration
+        recordPostRunHealthSnapshot("completion")
+        val samplingJob = serviceScope.launch {
+            try {
+                delay(POST_RUN_HEALTH_DELAY_MS)
+                if (isActive && generation == postRunHealthGeneration && !hasActiveWork()) {
+                    recordPostRunHealthSnapshot("delayed")
+                }
+            } finally {
+                if (generation == postRunHealthGeneration) {
+                    postRunHealthJob = null
+                }
+            }
+        }
+        // A concurrent start/destroy invalidates this sample. Do not retain a cancelled job in
+        // the field, and do not allow a stale coroutine to clear a newer sampling job.
+        if (generation == postRunHealthGeneration) {
+            postRunHealthJob = samplingJob
+        } else {
+            samplingJob.cancel()
+        }
+    }
+
+    private fun cancelPostRunHealthSampling() {
+        postRunHealthGeneration += 1L
+        postRunHealthJob?.cancel()
+        postRunHealthJob = null
+    }
+
+    private fun recordPostRunHealthSnapshot(sample: String) {
+        val (activeWorkCount, activeProcessCount) = activeRuntimeCounts()
+        val snapshot = SdPostRunHealthSnapshot.capture(
+            activeWorkCount = activeWorkCount,
+            activeProcessCount = activeProcessCount,
+            generationLockHeld = SdGenerationProcessLock.isLocked,
+            wakeLockHeld = wakeLock?.isHeld == true
+        )
+        recordServiceBreadcrumb(
+            event = if (sample == "completion") {
+                "post_run_health_snapshot"
+            } else {
+                "post_run_health_snapshot_delayed"
+            },
+            details = snapshot.toDetails(sample)
+        )
+    }
+
+    private fun activeRuntimeCounts(): Pair<Int, Int> = synchronized(modeLifecycleLock) {
+        val activeModeWork = modeJobs.values.count { it.isActive }
+        val activeWorkflowWork = if (workflowJob?.isActive == true) 1 else 0
+        val activeProcesses = modeProcesses.values.count { process ->
+            runCatching { process.isAlive }.getOrDefault(false)
+        }
+        (activeModeWork + activeWorkflowWork) to activeProcesses
+    }
+
+    private fun terminateNativeProcess(process: Process, reason: String) {
+        runCatching { process.outputStream.close() }
+        runCatching { process.inputStream.close() }
+        runCatching { process.errorStream.close() }
+        runCatching {
+            if (process.isAlive) process.destroy()
+            if (process.isAlive) process.destroyForcibly()
+        }.onFailure { error ->
+            DebugLog.log("[StableDiffusionService] Failed to terminate native process for $reason: ${error.message}")
         }
     }
 
@@ -1621,6 +1725,8 @@ class StableDiffusionService : Service() {
 
         stallMonitorJob?.cancel()
         stallMonitorJob = null
+        idleStopJob?.cancel()
+        idleStopJob = null
         modeDiagnostics.clear()
         failForegroundTask(message)
         releaseWakeLocksForTimeout()
@@ -1728,7 +1834,12 @@ class StableDiffusionService : Service() {
 
     override fun onDestroy() {
         recordServiceBreadcrumb("service_destroyed")
-        clearAllModeProcesses().forEach { it.destroy() }
+        // The ordinary idle stop is intentionally shorter than the two-second settling window.
+        // Preserve a useful second post-run sample at teardown instead of silently losing it.
+        if (postRunHealthJob?.isActive == true) {
+            recordPostRunHealthSnapshot("destroyed")
+        }
+        clearAllModeProcesses().forEach { terminateNativeProcess(it, "service destroy") }
         clearAllModeJobs().forEach { it.cancel() }
         modeSessionIds.clear()
         workflowJob?.cancel()
@@ -1736,6 +1847,9 @@ class StableDiffusionService : Service() {
         modeDiagnostics.clear()
         stallMonitorJob?.cancel()
         stallMonitorJob = null
+        cancelPostRunHealthSampling()
+        idleStopJob?.cancel()
+        idleStopJob = null
         serviceScope.cancel()
         dismissForegroundTask()
         if (wakeLock?.isHeld == true) {
@@ -1853,7 +1967,7 @@ class StableDiffusionService : Service() {
                 add("inspectionVersion=${it.inspectionVersion}")
                 it.headerFingerprint?.take(16)?.let { fingerprint -> add("fingerprint=$fingerprint") }
             }
-            add("paramsBackend=${config.sdParamsBackendMode}")
+            add("paramsBackend=${config.sdParamsBackendSpec}")
             add("runtimeBackend=${config.sdRuntimeBackendMode}")
             if (config.maxVramCpuGiB.isNotBlank()) {
                 add("maxVramCpuGiB=${config.maxVramCpuGiB}")
@@ -1867,7 +1981,7 @@ class StableDiffusionService : Service() {
         add("input=${File(config.inputImagePath).name}")
         add("repeats=${config.upscaleRepeats}")
         add("threads=${config.threads}")
-        add("paramsBackend=${config.sdParamsBackendMode}")
+        add("paramsBackend=${config.sdParamsBackendSpec}")
         add("runtimeBackend=${config.sdRuntimeBackendMode}")
         if (config.maxVramCpuGiB.isNotBlank()) {
             add("maxVramCpuGiB=${config.maxVramCpuGiB}")
@@ -1998,6 +2112,8 @@ class StableDiffusionService : Service() {
         private const val EXTRA_USE_WORKFLOW_STATE_HOLDER = "extra_sd_use_workflow_holder"
         private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_sd_use_distributed_holder"
         private const val WORKFLOW_OUTPUT_SUBFOLDER = "workflow"
+        private const val IDLE_SERVICE_STOP_DELAY_MS = 250L
+        private const val POST_RUN_HEALTH_DELAY_MS = 2_000L
         private const val STALL_MONITOR_INTERVAL_MS = 15_000L
         private const val DEFAULT_NATIVE_OUTPUT_WINDOW_MS = 5 * 60_000L
         private const val DIAGNOSTIC_SOURCE = "image_generation"

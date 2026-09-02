@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdLoraSpec
 import com.example.llamadroid.sd.SdParamsBackendMode
+import com.example.llamadroid.sd.resolveSdParamsBackendProfile
 import com.example.llamadroid.sd.SdRuntimeBackendMode
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdImageInputMode
@@ -163,6 +164,7 @@ fun buildSdCommandArgs(
         if (!config.distributedRuntime.enabled) {
             appendLocalSdBackendArgs(
                 args = args,
+                paramsBackendSpec = config.sdParamsBackendSpec,
                 paramsBackendMode = config.sdParamsBackendMode,
                 runtimeBackendMode = config.sdRuntimeBackendMode,
                 maxVramCpuGiB = config.maxVramCpuGiB,
@@ -450,6 +452,7 @@ fun buildSdCommandArgs(
     if (!config.distributedRuntime.enabled) {
         appendLocalSdBackendArgs(
             args = args,
+            paramsBackendSpec = config.sdParamsBackendSpec,
             paramsBackendMode = config.sdParamsBackendMode,
             runtimeBackendMode = config.sdRuntimeBackendMode,
             maxVramCpuGiB = config.maxVramCpuGiB,
@@ -510,6 +513,7 @@ fun buildSdUpscaleCommandArgs(
     if (!config.distributedRuntime.enabled) {
         appendLocalSdBackendArgs(
             args = args,
+            paramsBackendSpec = config.sdParamsBackendSpec,
             paramsBackendMode = config.sdParamsBackendMode,
             runtimeBackendMode = config.sdRuntimeBackendMode,
             maxVramCpuGiB = config.maxVramCpuGiB,
@@ -542,6 +546,7 @@ fun appendLocalSdBackendArgs(
     paramsBackendMode: String,
     runtimeBackendMode: String,
     maxVramCpuGiB: String,
+    paramsBackendSpec: String = "auto",
     flagSupported: (String) -> Boolean = { true }
 ) {
     val explicitBackend = runtimeBackendMode.takeIf { it.contains('=') }
@@ -550,7 +555,10 @@ fun appendLocalSdBackendArgs(
             args.addAll(listOf("--backend", backend))
         }
     }
-    SdParamsBackendMode.fromStoredValue(paramsBackendMode).cliValue?.let { paramsBackend ->
+    resolveSdParamsBackendProfile(
+        spec = paramsBackendSpec,
+        legacyMode = paramsBackendMode
+    ).cliValue?.let { paramsBackend ->
         if (flagSupported("--params-backend")) {
             args.addAll(listOf("--params-backend", paramsBackend))
         }

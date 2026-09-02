@@ -3436,6 +3436,23 @@ object Migrations {
         }
     }
 
+    /**
+     * Persist the local stable-diffusion.cpp parameter-module residency
+     * profile. Existing `sdParamsBackendMode` values remain the compatibility
+     * fallback, so upgrades do not change the behavior of old rows.
+     */
+    val MIGRATION_111_112 = object : Migration(111, 112) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            DebugLog.log("[DB] Running migration 111 -> 112: SD parameter residency")
+            if (!columnExists(db, "models", "sdParamsBackendSpec")) {
+                db.execSQL(
+                    "ALTER TABLE `models` ADD COLUMN `sdParamsBackendSpec` TEXT NOT NULL DEFAULT 'auto'"
+                )
+            }
+            DebugLog.log("[DB] Migration 111 -> 112 complete")
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3520,7 +3537,8 @@ object Migrations {
         MIGRATION_107_108,
         MIGRATION_108_109,
         MIGRATION_109_110,
-        MIGRATION_110_111
+        MIGRATION_110_111,
+        MIGRATION_111_112
     )
     /**
      * Check if a column exists in a table.

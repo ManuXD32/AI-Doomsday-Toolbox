@@ -10,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -77,7 +78,10 @@ fun normalizeManagedLlamaServerPortArgs(args: List<String>, port: Int): List<Str
 class LlamaServerSessionRuntime(private val context: Context) {
     private data class ActiveSession(
         val controller: ProcessController,
+        val logBatcher: LlamaServerSessionLogBatcher = LlamaServerSessionLogBatcher(),
+        val logLock: Any = Any(),
         var job: Job? = null,
+        var logFlushJob: Job? = null,
         @Volatile var stopRequested: Boolean = false
     )
 
@@ -163,9 +167,12 @@ class LlamaServerSessionRuntime(private val context: Context) {
 
             mutex.withLock {
                 check(sessionId !in removing) { "The server card is being removed." }
-                active.remove(sessionId)?.let { old ->
+                active[sessionId]?.let { old ->
                     old.stopRequested = true
                     old.controller.stop()
+                    old.logFlushJob?.cancel()
+                    flushSessionLogs(sessionId, old)
+                    active.remove(sessionId, old)
                     old.job?.cancel()
                 }
                 ownerStore.get(sessionId)?.let { owner ->
@@ -202,6 +209,16 @@ class LlamaServerSessionRuntime(private val context: Context) {
                 )
                 val runtime = ActiveSession(ProcessController())
                 active[sessionId] = runtime
+                runtime.logFlushJob = scope.launch {
+                    try {
+                        while (isActive && !runtime.stopRequested) {
+                            kotlinx.coroutines.delay(LOG_FLUSH_INTERVAL_MS)
+                            flushSessionLogs(sessionId, runtime)
+                        }
+                    } finally {
+                        flushSessionLogs(sessionId, runtime)
+                    }
+                }
                 runtime.job = scope.launch {
                     launchProcess(sessionId, runtime, profile.copy(serverPort = port))
                 }
@@ -225,7 +242,10 @@ class LlamaServerSessionRuntime(private val context: Context) {
             active[sessionId]?.also { it.stopRequested = true }
         }
         runtime?.controller?.stop()
+        runtime?.logFlushJob?.cancel()
+        runtime?.logFlushJob?.join()
         runtime?.job?.join()
+        runtime?.let { flushSessionLogs(sessionId, it) }
         if (runtime == null) {
             ownerStore.get(sessionId)?.let { owner ->
                 val ownerAlive = NativeProcessCleanup.recordedLlamaOwnerIsAliveSync(
@@ -289,9 +309,16 @@ class LlamaServerSessionRuntime(private val context: Context) {
     }
 
     fun close() {
-        scope.coroutineContext.cancelChildren()
         runCatching {
-            active.values.forEach { it.controller.stop() }
+            val sessions = active.entries.toList()
+            sessions.forEach { (sessionId, runtime) ->
+                runtime.stopRequested = true
+                runtime.controller.stop()
+                runtime.logFlushJob?.cancel()
+                flushSessionLogs(sessionId, runtime)
+            }
+            scope.coroutineContext.cancelChildren()
+            sessions.forEach { (sessionId, runtime) -> flushSessionLogs(sessionId, runtime) }
             active.clear()
         }
     }
@@ -340,7 +367,9 @@ class LlamaServerSessionRuntime(private val context: Context) {
                 },
                 onClearServerLogs = {},
                 onServerLog = { line ->
-                    if (isCurrent(sessionId, runtime)) logs.append(sessionId, line)
+                    if (isCurrent(sessionId, runtime)) {
+                        synchronized(runtime.logLock) { runtime.logBatcher.append(line) }
+                    }
                 },
                 logNativeOutputToDebug = false,
                 shouldStop = { runtime.stopRequested },
@@ -389,6 +418,9 @@ class LlamaServerSessionRuntime(private val context: Context) {
                 )
             }
         } finally {
+            runtime.logFlushJob?.cancel()
+            runtime.logFlushJob?.join()
+            flushSessionLogs(sessionId, runtime)
             mutex.withLock {
                 // A quick restart can replace this runtime before its cancelled job reaches
                 // finally. Only the still-current controller may clear ownership/state; an old
@@ -417,9 +449,21 @@ class LlamaServerSessionRuntime(private val context: Context) {
 
     private fun isCurrent(sessionId: String, runtime: ActiveSession): Boolean = active[sessionId] === runtime
 
+    private fun flushSessionLogs(sessionId: String, runtime: ActiveSession) {
+        if (!isCurrent(sessionId, runtime)) return
+        val batch = synchronized(runtime.logLock) { runtime.logBatcher.drain() }
+        if (batch.isNotEmpty()) logs.appendBatch(sessionId, batch)
+    }
+
+    fun isIdle(): Boolean = active.isEmpty()
+
     private fun publish(snapshot: LlamaServerSessionSnapshot) {
         val updated = snapshot.copy(updatedAt = System.currentTimeMillis())
         _snapshots.update { it + (updated.sessionId to updated) }
         stateStore.write(updated)
+    }
+
+    private companion object {
+        const val LOG_FLUSH_INTERVAL_MS = 100L
     }
 }

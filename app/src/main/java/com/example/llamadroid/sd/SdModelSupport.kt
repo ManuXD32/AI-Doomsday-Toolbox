@@ -323,7 +323,11 @@ fun inferSdFamily(
         ModelType.SD_CLIP_VISION,
         ModelType.SD_IP_ADAPTER -> when {
             haystack.contains("sdxl") -> SdModelFamily.CHECKPOINT to "sdxl"
-            haystack.contains("sd1") || haystack.contains("sd-1") -> SdModelFamily.CHECKPOINT to "sd1"
+            haystack.contains("sd1") || haystack.contains("sd-1") ||
+                haystack.contains("sd15") || haystack.contains("sd-1-5") ||
+                haystack.contains("sd_1_5") || haystack.contains("sd1_5") ||
+                haystack.contains("sd-v1") || haystack.contains("sd_v1") ->
+                SdModelFamily.CHECKPOINT to "sd1"
             else -> null to null
         }
         ModelType.SD_DIFFUSION -> when {

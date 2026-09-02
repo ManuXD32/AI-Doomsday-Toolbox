@@ -3030,6 +3030,8 @@
     <string name="sd_models_inspection_retry">Detect again</string>
     <string name="sd_models_inspection_updated">Detection updated for this artifact.</string>
     <string name="sd_models_inspection_failed_short">Detection failed: %1$s</string>
+    <string name="sd_models_inspection_show_details">Show inspection details</string>
+    <string name="sd_models_inspection_hide_details">Hide inspection details</string>
     <string name="sd_models_inspection_selection_title">Inspecting selected artifact</string>
     <string name="sd_models_inspection_selection_desc">Reading bounded artifact metadata before import. The model will not be loaded or executed.</string>
     <string name="sd_models_inspection_selection_unavailable">Automatic inspection is unavailable for this document. You may continue with explicit manual configuration; validation runs again before the file is trusted.</string>
@@ -3048,6 +3050,7 @@
     <string name="sd_models_component_none">none detected</string>
     <string name="sd_models_inspection_confidence">Inspection confidence: %1$s</string>
     <string name="sd_models_inspection_warnings">Inspection warnings: %1$s</string>
+    <string name="sd_models_inspection_structurally_invalid">Structural inspection found a blocker; review the warning before generating.</string>
     <string name="sd_models_unknown_value">unknown</string>
     <string name="sd_models_inspection_unavailable">Artifact inspection is unavailable; manual configuration is required.</string>
     <string name="sd_models_components_none">none detected</string>

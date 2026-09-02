@@ -531,21 +531,60 @@ class SdArtifactInspector {
         val metadataText = metadata.entries.joinToString(" ") { "${it.key} ${it.value}" }.lowercase(Locale.US)
         val filenameText = filename.lowercase(Locale.US)
         fun anyName(predicate: (String) -> Boolean): Boolean = normalizedNames.any(predicate)
+        // Adapter keys often retain the target module namespace (for example
+        // `text_encoder` or `clip`).  Do not let those names masquerade as a
+        // standalone encoder or a bundled checkpoint component.
+        fun anyBaseName(predicate: (String) -> Boolean): Boolean = normalizedNames.any {
+            !looksLikeLoraTensor(it) && predicate(it)
+        }
 
-        val containsVae = anyName(::looksLikeVaeTensor)
-        val containsTae = anyName(::looksLikeTaeTensor)
-        val containsClipL = anyName(::looksLikeClipLTensor)
-        val containsClipG = anyName(::looksLikeClipGTensor)
-        val containsT5 = anyName(::looksLikeT5Tensor) ||
-            metadataText.contains("t5xxl") || filenameText.contains("t5xxl") || filenameText.contains("t5_xxl")
+        val containsVae = anyBaseName(::looksLikeVaeTensor)
+        val containsTae = anyBaseName(::looksLikeTaeTensor)
+
+        // Some converted CLIP-G artifacts retain the generic
+        // `text_model.encoder.*` names used by CLIP-L.  Keep generic text
+        // tensors separate from explicit encoder markers so a CLIP-G
+        // filename can disambiguate that otherwise indistinguishable shape,
+        // while explicit tensor evidence still wins over filenames.
+        val explicitClipL = anyBaseName(::looksLikeClipLTensor)
+        val explicitClipG = anyBaseName(::looksLikeClipGTensor)
+        val genericClip = anyBaseName(::looksLikeGenericClipTensor)
+        val filenameSuggestsClipG = filenameText.contains("clip_g") ||
+            filenameText.contains("clip-g") || filenameText.contains("clipg") ||
+            filenameText.contains("openclip")
+        val filenameSuggestsClipL = filenameText.contains("clip_l") ||
+            filenameText.contains("clip-l") || filenameText.contains("clipl")
+        val containsClipG = explicitClipG ||
+            (!explicitClipL && filenameSuggestsClipG && normalizedNames.isNotEmpty())
+        val containsClipL = explicitClipL ||
+            (!explicitClipG && !filenameSuggestsClipG && genericClip) ||
+            (!explicitClipG && filenameSuggestsClipL && normalizedNames.isNotEmpty())
+
+        val filenameSuggestsT5 = filenameText.contains("t5xxl") ||
+            filenameText.contains("t5_xxl") || filenameText.contains("t5-xxl") ||
+            filenameText.contains("pru-t5") || filenameText.contains("t5-v1") ||
+            filenameText.contains("t5_v1") || filenameText.contains("xxl-encoder") ||
+            filenameText.contains("xxl_encoder")
+        val architectureMetadataText = metadata.entries
+            .filter { it.key.lowercase(Locale.US).contains("architecture") }
+            .joinToString(" ") { it.value.lowercase(Locale.US) }
+        val containsT5 = anyBaseName(::looksLikeT5Tensor) ||
+            architectureMetadataText.contains("t5") ||
+            filenameSuggestsT5
         val containsLora = anyName(::looksLikeLoraTensor)
-        val containsLlm = anyName(::looksLikeLlmTensor) ||
+        // T5 GGUF descriptors commonly use generic `blk.*attn/ffn` names.
+        // Strong T5 evidence must be resolved first and must not be promoted
+        // to a generic LLM merely because the quantized tensor names look
+        // llama.cpp-like.
+        val containsLlm = !containsT5 && !containsClipL && !containsClipG &&
+            (anyBaseName(::looksLikeLlmTensor) ||
             metadataText.contains("llama") || metadataText.contains("qwen")
-        val containsDiffusion = anyName(::looksLikeDiffusionTensor)
+            )
+        val containsDiffusion = anyBaseName(::looksLikeDiffusionTensor)
 
-        val sd3TensorEvidence = anyName(::looksLikeSd3Tensor)
-        val fluxTensorEvidence = anyName(::looksLikeFluxTensor)
-        val classicTensorEvidence = anyName(::looksLikeClassicCheckpointTensor)
+        val sd3TensorEvidence = anyBaseName(::looksLikeSd3Tensor)
+        val fluxTensorEvidence = anyBaseName(::looksLikeFluxTensor)
+        val classicTensorEvidence = anyBaseName(::looksLikeClassicCheckpointTensor)
 
         val familyFromStructure = when {
             sd3TensorEvidence -> SdModelFamily.SD3
@@ -572,6 +611,14 @@ class SdArtifactInspector {
             else -> null
         }
         val family = familyFromStructure ?: familyFromMetadata ?: familyFromFilename
+        val tensorRoleEvidence = anyBaseName(::looksLikeVaeTensor) ||
+            anyBaseName(::looksLikeTaeTensor) ||
+            explicitClipL || explicitClipG || genericClip ||
+            anyBaseName(::looksLikeT5Tensor) ||
+            anyBaseName(::looksLikeDiffusionTensor) ||
+            anyBaseName(::looksLikeLlmTensor) || containsLora
+        val metadataRoleEvidence = architectureMetadataText.contains("t5") ||
+            metadataText.contains("llama") || metadataText.contains("qwen")
         // A complete model may omit a VAE and still carry one or more text
         // encoders in the same artifact. Standalone diffusion artifacts are
         // expected to contain diffusion/transformer tensors only. Treat
@@ -584,12 +631,15 @@ class SdArtifactInspector {
         val role = when {
             bundledFullModelEvidence -> SdArtifactRole.FULL_MODEL
             containsDiffusion -> SdArtifactRole.STANDALONE_DIFFUSION
+            // LoRA keys may include text-encoder/CLIP namespaces.  Once
+            // diffusion and VAE payload evidence have been excluded, the
+            // adapter role is authoritative over those target-module hints.
+            containsLora && !containsDiffusion && !containsVae -> SdArtifactRole.LORA
             containsVae -> SdArtifactRole.VAE
             containsTae -> SdArtifactRole.TAE
             containsClipL && !containsClipG && !containsT5 -> SdArtifactRole.CLIP_L
             containsClipG && !containsClipL && !containsT5 -> SdArtifactRole.CLIP_G
             containsT5 && !containsClipL && !containsClipG -> SdArtifactRole.T5XXL
-            containsLora && !containsDiffusion && !containsVae -> SdArtifactRole.LORA
             containsLlm && !containsDiffusion -> SdArtifactRole.LLM
             else -> null
         }
@@ -601,8 +651,9 @@ class SdArtifactInspector {
         }
         val confidence = when {
             familyFromStructure != null && role != null -> SdInspectionConfidence.HIGH
-            familyFromStructure != null || familyFromMetadata != null || role != null -> SdInspectionConfidence.MEDIUM
-            familyFromFilename != null -> SdInspectionConfidence.LOW
+            familyFromStructure != null || familyFromMetadata != null ||
+                tensorRoleEvidence || metadataRoleEvidence -> SdInspectionConfidence.MEDIUM
+            familyFromFilename != null || role != null -> SdInspectionConfidence.LOW
             else -> SdInspectionConfidence.UNKNOWN
         }
         return Evidence(
@@ -650,23 +701,41 @@ class SdArtifactInspector {
     private fun looksLikeClipLTensor(name: String): Boolean {
         val n = name.lowercase(Locale.US)
         return n.contains("clip_l") || n.contains("clip-l") ||
-            n.contains("text_encoder") && !n.contains("text_encoder_2") && !n.contains("text_encoder_3") ||
             n.contains("conditioner.embedders.0") ||
-            n.contains("text_model.encoder") && !n.contains("t5")
+            n.contains("text_encoders.0") || n.contains("text_encoders.clip_l")
     }
 
     private fun looksLikeClipGTensor(name: String): Boolean {
         val n = name.lowercase(Locale.US)
         return n.contains("clip_g") || n.contains("clip-g") ||
             n.contains("text_encoder_2") || n.contains("conditioner.embedders.1") ||
+            n.contains("text_encoders.1") || n.contains("text_encoders.clip_g") ||
             n.contains("openclip")
+    }
+
+    /** Generic CLIP tensor names need filename/neighbor evidence to assign L vs G. */
+    private fun looksLikeGenericClipTensor(name: String): Boolean {
+        val n = name.lowercase(Locale.US)
+        if (n.contains("t5") || n.contains("clip_g") || n.contains("clip-g") ||
+            n.contains("text_encoder_2") || n.contains("text_encoder_3") ||
+            n.contains("text_encoders.1") || n.contains("text_encoders.2") ||
+            n.contains("openclip")) {
+            return false
+        }
+        return n.contains("text_model.encoder") ||
+            n.contains("text_model.embeddings") ||
+            n.contains("text_model.final_layer_norm") ||
+            (n.contains("text_encoder") && !n.contains("text_encoder_2") && !n.contains("text_encoder_3"))
     }
 
     private fun looksLikeT5Tensor(name: String): Boolean {
         val n = name.lowercase(Locale.US)
         return n.contains("t5xxl") || n.contains("t5_xxl") || n.contains("text_encoder_3") ||
+            n.contains("text_encoders.2") || n.contains("text_encoders.t5") ||
+            n.contains("relative_attention_bias") ||
             n.contains("shared.weight") && n.contains("encoder.block") ||
-            n.contains("encoder.block") && n.contains("layer.")
+            n.contains("encoder.block") && n.contains("layer.") ||
+            n.contains("transformer.encoder.block")
     }
 
     private fun looksLikeLoraTensor(name: String): Boolean {

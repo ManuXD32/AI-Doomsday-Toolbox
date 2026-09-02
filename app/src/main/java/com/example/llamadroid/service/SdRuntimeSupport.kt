@@ -13,9 +13,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 internal object SdGenerationProcessLock {
     private val mutex = Mutex()
+
+    /**
+     * Exposes only the current lock state for bounded diagnostics. The lock itself remains owned
+     * by the generation runner and is never acquired by a health sample.
+     */
+    val isLocked: Boolean
+        get() = mutex.isLocked
 
     suspend fun <T> withLock(block: suspend () -> T): T = mutex.withLock { block() }
 }
@@ -219,9 +227,30 @@ internal suspend fun probeSdBinaryCapabilities(
                     environment()["LD_LIBRARY_PATH"] = envPath
                 }
                 .start()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
-            process.waitFor()
-            output.takeIf { it.isNotBlank() }?.let(::parseSdBinaryCapabilities)
+            val output = StringBuilder()
+            val outputReader = Thread({
+                runCatching { drainSdCapabilityOutput(process, output) }
+            }, "sd-capability-probe-reader").apply {
+                isDaemon = true
+                start()
+            }
+            try {
+                val finished = process.waitFor(SD_CAPABILITY_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                if (!finished) {
+                    process.destroyForcibly()
+                    process.waitFor(SD_CAPABILITY_PROBE_FORCE_SECONDS, TimeUnit.SECONDS)
+                    null
+                } else {
+                    outputReader.join(SD_CAPABILITY_PROBE_READER_JOIN_MS)
+                    synchronized(output) { output.toString() }
+                        .takeIf { it.isNotBlank() }
+                        ?.let(::parseSdBinaryCapabilities)
+                }
+            } finally {
+                runCatching { process.outputStream.close() }
+                runCatching { process.inputStream.close() }
+                runCatching { process.errorStream.close() }
+            }
         }.getOrNull()
     }
     val capabilities = helpCapabilities.maxByOrNull {
@@ -233,6 +262,25 @@ internal suspend fun probeSdBinaryCapabilities(
         SdBinaryCapabilityCache.capabilities = capabilities
     }
 }
+
+private fun drainSdCapabilityOutput(process: Process, output: StringBuilder) {
+    val buffer = CharArray(4 * 1024)
+    process.inputStream.bufferedReader().use { reader ->
+        while (true) {
+            val read = reader.read(buffer)
+            if (read < 0) break
+            synchronized(output) {
+                val remaining = SD_CAPABILITY_PROBE_OUTPUT_CHARS - output.length
+                if (remaining > 0) output.append(buffer, 0, minOf(read, remaining))
+            }
+        }
+    }
+}
+
+private const val SD_CAPABILITY_PROBE_TIMEOUT_SECONDS = 10L
+private const val SD_CAPABILITY_PROBE_FORCE_SECONDS = 2L
+private const val SD_CAPABILITY_PROBE_READER_JOIN_MS = 2_000L
+private const val SD_CAPABILITY_PROBE_OUTPUT_CHARS = 32 * 1024
 
 internal fun inferSdRuntimeTierSuffix(binaryName: String): String = when {
     binaryName.contains("_snapdragon_vulkan") -> "_snapdragon_vulkan"

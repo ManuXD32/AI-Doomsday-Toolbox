@@ -24,7 +24,8 @@ class SdLoraCliTest {
                     SdLoraSpec("/loras/style-a.safetensors", 0.4f),
                     SdLoraSpec("/loras/style-b.safetensors", 1.25f)
                 ),
-                loraApplyMode = SdLoraApplyMode.AT_RUNTIME
+                loraApplyMode = SdLoraApplyMode.AT_RUNTIME,
+                sdParamsBackendMode = "disk"
             )
         )
         val prompt = args[args.indexOf("-p") + 1]
@@ -32,6 +33,9 @@ class SdLoraCliTest {
         assertEquals(1, args.count { it == "--lora-model-dir" })
         assertTrue(args.contains("--lora-apply-mode"))
         assertTrue(args.contains("at_runtime"))
+        val paramsBackendIndex = args.indexOf("--params-backend")
+        assertTrue(paramsBackendIndex >= 0)
+        assertEquals("disk", args[paramsBackendIndex + 1])
     }
 
     @Test

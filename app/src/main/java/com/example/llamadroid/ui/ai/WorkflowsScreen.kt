@@ -94,25 +94,58 @@ fun WorkflowsScreen(navController: NavController) {
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val pdfTranslationJobState by PDFTranslationJobService.state.collectAsState()
+    val restoredMangaUiDraft = remember { settingsRepo.mangaTranslationUiDraft() }
     
     // Selected workflow: 0 = none, 1 = transcribe+summary, 2 = txt2img+upscale, 3 = manga translation,
     // 4 = media dubbing, 5 = subtitle translation, 6 = video interpolation+upscale
     val scope = rememberCoroutineScope()
-    var selectedWorkflow by remember { mutableIntStateOf(0) }
+    var selectedWorkflow by remember {
+        mutableIntStateOf(
+            restoredMangaUiDraft?.optInt("selectedWorkflow", 0)
+                ?.takeIf { it in 0..6 }
+                ?: 0
+        )
+    }
     val pendingSharedFile by SharedFileHolder.pendingFile.collectAsState()
     LaunchedEffect(pendingSharedFile) {
         if (pendingSharedFile?.targetScreen == "interpolate_then_upscale") selectedWorkflow = 6
     }
-    var mangaCbzUris by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var mangaCbzUris by remember {
+        mutableStateOf(
+            restoredMangaUiDraft?.optJSONArray("sources")?.let { values ->
+                buildList {
+                    for (index in 0 until values.length()) {
+                        values.optString(index).takeIf { it.isNotBlank() }?.let { add(Uri.parse(it)) }
+                    }
+                }.distinct()
+            }.orEmpty()
+        )
+    }
     var mangaIsRunning by remember { mutableStateOf(false) }
     var mangaStep by remember { mutableStateOf("") }
     var mangaProgress by remember { mutableFloatStateOf(0f) }
     var mangaResults by remember { mutableStateOf<List<MangaTranslationFileResult>>(emptyList()) }
     var mangaError by remember { mutableStateOf<String?>(null) }
     var mangaErrorDetails by remember { mutableStateOf<String?>(null) }
-    var mangaExportPdf by remember { mutableStateOf(true) }
-    var mangaExportCbz by remember { mutableStateOf(true) }
+    var mangaExportPdf by remember {
+        mutableStateOf(restoredMangaUiDraft?.optBoolean("exportPdf", true) ?: true)
+    }
+    var mangaExportCbz by remember {
+        mutableStateOf(restoredMangaUiDraft?.optBoolean("exportCbz", true) ?: true)
+    }
     var mangaPreview by remember { mutableStateOf<MangaTranslationPreviewResult?>(null) }
+
+    LaunchedEffect(selectedWorkflow, mangaCbzUris, mangaExportPdf, mangaExportCbz) {
+        settingsRepo.setMangaTranslationUiDraft(
+            JSONObject().apply {
+                put("version", 1)
+                put("selectedWorkflow", selectedWorkflow)
+                put("exportPdf", mangaExportPdf)
+                put("exportCbz", mangaExportCbz)
+                put("sources", org.json.JSONArray(mangaCbzUris.map(Uri::toString)))
+            }
+        )
+    }
 
     LaunchedEffect(
         pdfTranslationJobState.isRunning,
@@ -1540,6 +1573,9 @@ private fun MangaTranslationWorkflowContent(
     var translationOptions by remember { mutableStateOf(savedConfig.translationOptions) }
     var ocrModelRef by remember { mutableStateOf(savedConfig.ocrModelRef) }
     var ocrProjectorRef by remember { mutableStateOf(savedConfig.ocrProjectorRef) }
+    var paintedWorkspace by remember { mutableStateOf<MangaPaintedOcrWorkspace?>(null) }
+    var paintedEditorPage by remember { mutableIntStateOf(-1) }
+    var paintedWorkspaceError by remember { mutableStateOf<String?>(null) }
     var showOcrExpert by remember { mutableStateOf(false) }
     var templatesExpanded by remember { mutableStateOf(false) }
     var templateName by remember { mutableStateOf("") }
@@ -1554,6 +1590,28 @@ private fun MangaTranslationWorkflowContent(
         mutableStateOf(PDFTranslationJobService.discoverResumableMangaJobs(context))
     }
 
+    LaunchedEffect(sources, behavior.ocrStrategy) {
+        if (sources.isEmpty()) {
+            paintedWorkspace = null
+            paintedEditorPage = -1
+            return@LaunchedEffect
+        }
+        // Switching OCR strategies must not discard already reviewed masks. The
+        // lightweight workspace reference remains part of the draft and the
+        // painted UI simply stays hidden until the strategy is selected again.
+        if (behavior.ocrStrategy != MangaOcrStrategy.PAINTED_REGIONS) {
+            paintedEditorPage = -1
+            return@LaunchedEffect
+        }
+        val remembered = savedConfig.paintedOcrWorkspace?.let { ref ->
+            MangaPaintedOcrWorkspaceManager.invalidateIfSourcesChanged(context, ref)
+        }
+        paintedWorkspace = remembered?.takeIf { workspace ->
+            workspace.pages.map { it.sourceUri }.distinct() == sources.map { source -> source.uri.toString() }
+        }
+        paintedWorkspaceError = null
+    }
+
     fun currentConfig(): MangaTranslationRunConfig = MangaTranslationRunConfig(
         profile = profile,
         targetLanguage = targetLanguage,
@@ -1565,7 +1623,9 @@ private fun MangaTranslationWorkflowContent(
         pageImageContextReason = null
     ).copy(
         ocrModelRef = ocrModelRef,
-        ocrProjectorRef = ocrProjectorRef
+        ocrProjectorRef = ocrProjectorRef,
+        paintedOcrWorkspace = paintedWorkspace?.currentRef,
+        paintedOcrReviewComplete = paintedWorkspace?.isReady == true
     )
     fun currentSpec(): MangaTranslationJobSpec = MangaTranslationJobSpec(
         sources = sources,
@@ -1608,12 +1668,35 @@ private fun MangaTranslationWorkflowContent(
                     ?: resolvedOcrModel?.let(MangaTranslationSupport::modelRef)
                 ocrProjectorRef = saved.ocrProjectorRef
                     ?: resolvedProjector?.let(MangaTranslationSupport::modelRef)
+                if (saved.paintedOcrWorkspace == null) {
+                    paintedWorkspace = null
+                    paintedEditorPage = -1
+                }
             }
         }
     }
     val runConfig = currentConfig()
+    LaunchedEffect(runConfig) {
+        // Persist every form edit, not only successful preview/run submissions.
+        // The config stores only the internal painted-workspace reference; mask
+        // rasters remain in the bounded workspace files.
+        settingsRepo.saveMangaTranslationRunConfig(runConfig)
+    }
     val preflight = MangaTranslationSupport.preflight(currentSpec())
     val previewIsStale = preview != null && preview.configFingerprint != runConfig.fingerprint()
+
+    if (paintedEditorPage >= 0 && paintedWorkspace != null) {
+        MangaPaintedMaskEditorDialog(
+            context = context,
+            workspace = paintedWorkspace!!,
+            pageIndex = paintedEditorPage,
+            onDismiss = { paintedEditorPage = -1 },
+            onWorkspaceChanged = { updated ->
+                paintedWorkspace = updated
+                paintedEditorPage = -1
+            }
+        )
+    }
 
     LaunchedEffect(preview?.configFingerprint) {
         if (preview != null && !previewIsStale) {
@@ -2133,6 +2216,145 @@ private fun MangaTranslationWorkflowContent(
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
+                if (behavior.ocrStrategy == MangaOcrStrategy.PAINTED_REGIONS) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                stringResource(R.string.workflow_manga_ocr_painted_desc),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            val workspace = paintedWorkspace
+                            if (workspace == null) {
+                                Text(
+                                    stringResource(R.string.workflow_manga_painted_review_required),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Button(
+                                    onClick = {
+                                        if (sources.isEmpty()) {
+                                            paintedWorkspaceError = context.getString(
+                                                R.string.workflow_manga_painted_no_sources
+                                            )
+                                        } else {
+                                            scope.launch {
+                                                val created = runCatching {
+                                                    MangaPaintedOcrWorkspaceManager.create(context, sources)
+                                                }.getOrNull()
+                                                if (created == null) {
+                                                    paintedWorkspaceError = context.getString(
+                                                        R.string.workflow_manga_painted_editor_error
+                                                    )
+                                                } else {
+                                                    paintedWorkspace = created
+                                                    paintedWorkspaceError = null
+                                                }
+                                            }
+                                        }
+                                    },
+                                    enabled = !isRunning,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(stringResource(R.string.workflow_manga_painted_prepare), maxLines = 2)
+                                }
+                            } else {
+                                Text(
+                                    stringResource(
+                                        R.string.workflow_manga_painted_review_progress,
+                                        workspace.reviewedPages,
+                                        workspace.totalPages
+                                    ),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                workspace.pages.forEach { page ->
+                                    val review = workspace.reviewFor(page.pageIndex)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                stringResource(
+                                                    R.string.workflow_manga_painted_page_source,
+                                                    page.displayName,
+                                                    page.sourcePageIndex + 1
+                                                ),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                            Text(
+                                                when (review?.state) {
+                                                    MangaPaintedPageReviewState.PAINTED -> stringResource(
+                                                        R.string.workflow_manga_painted_reviewed,
+                                                        review.regions.size
+                                                    )
+                                                    MangaPaintedPageReviewState.NO_TEXT -> stringResource(
+                                                        R.string.workflow_manga_painted_no_text
+                                                    )
+                                                    else -> stringResource(
+                                                        R.string.workflow_manga_painted_unreviewed
+                                                    )
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (review?.isReviewed == true) {
+                                                    MaterialTheme.colorScheme.onSecondaryContainer
+                                                } else {
+                                                    MaterialTheme.colorScheme.error
+                                                }
+                                            )
+                                        }
+                                        OutlinedButton(
+                                            onClick = { paintedEditorPage = page.pageIndex },
+                                            enabled = !isRunning,
+                                            modifier = Modifier.weight(0.7f)
+                                        ) {
+                                            Text(
+                                                stringResource(R.string.workflow_manga_painted_review_page),
+                                                maxLines = 2
+                                            )
+                                        }
+                                    }
+                                    when {
+                                        (review?.tinyMarksIgnored ?: 0) > 0 -> Text(
+                                            stringResource(
+                                                R.string.workflow_manga_painted_tiny_warning,
+                                                review?.tinyMarksIgnored ?: 0
+                                            ),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                        review?.warning != null -> Text(
+                                            stringResource(R.string.workflow_manga_painted_source_changed),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                }
+                                if (!workspace.isReady) {
+                                    Text(
+                                        stringResource(R.string.workflow_manga_painted_review_required),
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                            paintedWorkspaceError?.let { error ->
+                                Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
             }
 
             MangaStepCard(number = 4, title = stringResource(R.string.workflow_manga_output_title)) {
@@ -2300,7 +2522,10 @@ private fun MangaTranslationWorkflowContent(
                                         .put("version", MangaTranslationSupport.TEMPLATE_VERSION)
                                         .put("exportPdf", exportPdf)
                                         .put("exportCbz", exportCbz)
-                                        .put("runConfig", MangaTranslationSupport.runConfigToJson(currentConfig()))
+                                        // Templates are reusable settings, not content-specific
+                                        // workspaces. Keep the painted strategy, but never pin a
+                                        // page mask/workspace to a template.
+                                        .put("runConfig", MangaTranslationSupport.runConfigToTemplateJson(currentConfig()))
                                     db.workflowTemplateDao().insert(
                                         com.example.llamadroid.data.db.WorkflowTemplateEntity(
                                             name = templateName.trim(),
@@ -2717,6 +2942,7 @@ private fun mangaOcrStrategyLabel(strategy: MangaOcrStrategy): String =
         MangaOcrStrategy.ADAPTIVE -> stringResource(R.string.workflow_manga_ocr_adaptive)
         MangaOcrStrategy.FULL_PAGE -> stringResource(R.string.workflow_manga_ocr_full_page)
         MangaOcrStrategy.BUBBLE_ONLY -> stringResource(R.string.workflow_manga_ocr_bubbles)
+        MangaOcrStrategy.PAINTED_REGIONS -> stringResource(R.string.workflow_manga_ocr_painted)
     }
 
 @Composable
@@ -5864,6 +6090,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 llmVisionPath = llmVisionPath,
                 photoMakerPath = photoMakerPath,
                 ipAdapter = effectiveIpAdapter,
+                sdParamsBackendSpec = selectedGenerationModel?.sdParamsBackendSpec ?: "auto",
                 sdParamsBackendMode = selectedGenerationModel?.sdParamsBackendMode ?: "auto",
                 sdRuntimeBackendMode = selectedGenerationModel?.sdRuntimeBackendMode ?: "auto",
                 maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""
@@ -5878,6 +6105,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 upscaleModel = upscalerPath,
                 upscaleRepeats = upscaleRepeats,
                 threads = upscaleThreads,
+                sdParamsBackendSpec = selectedUpscalerModel?.sdParamsBackendSpec ?: "auto",
                 sdParamsBackendMode = selectedUpscalerModel?.sdParamsBackendMode ?: "auto",
                 sdRuntimeBackendMode = selectedUpscalerModel?.sdRuntimeBackendMode ?: "auto",
                 maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""

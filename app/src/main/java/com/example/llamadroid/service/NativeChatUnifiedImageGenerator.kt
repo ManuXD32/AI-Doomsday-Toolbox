@@ -143,6 +143,7 @@ class NativeChatSdImageGenerator(
                     vaeConvDirect = imageParams.vaeConvDirect && spec.supportsVaeConvDirect,
                     qwenImageZeroCondT = imageParams.qwenImageZeroCondT && spec.supportsQwenImageZeroCondT,
                     chromaDisableDitMask = imageParams.chromaDisableDitMask && spec.supportsChromaDisableDitMask,
+                    sdParamsBackendSpec = model.sdParamsBackendSpec,
                     sdParamsBackendMode = model.sdParamsBackendMode,
                     sdRuntimeBackendMode = model.sdRuntimeBackendMode,
                     maxVramCpuGiB = maxVramCpuGiB

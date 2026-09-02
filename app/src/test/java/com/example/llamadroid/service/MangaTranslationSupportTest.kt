@@ -289,6 +289,27 @@ class MangaTranslationSupportTest {
     }
 
     @Test
+    fun `template serialization keeps painted strategy but strips content workspace`() {
+        val painted = config().copy(
+            behavior = config().behavior.copy(ocrStrategy = MangaOcrStrategy.PAINTED_REGIONS),
+            paintedOcrWorkspace = MangaPaintedOcrWorkspaceRef(
+                workspaceId = "content-specific",
+                revision = 8L,
+                sourceFingerprint = "source"
+            ),
+            paintedOcrReviewComplete = true
+        )
+
+        val templateJson = MangaTranslationSupport.runConfigToTemplateJson(painted)
+        val restored = MangaTranslationSupport.runConfigFromJson(templateJson, painted)
+
+        assertTrue(templateJson.isNull("paintedOcrWorkspace"))
+        assertEquals(MangaOcrStrategy.PAINTED_REGIONS, restored.behavior.ocrStrategy)
+        assertEquals(null, restored.paintedOcrWorkspace)
+        assertFalse(restored.paintedOcrReviewComplete)
+    }
+
+    @Test
     fun `grounded Unlimited OCR parser maps normalized boxes and rejects page image marker`() {
         val spans = MangaTranslationSupport.parseGroundedOcrSpans(
             rawOutput = """

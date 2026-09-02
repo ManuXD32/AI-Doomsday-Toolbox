@@ -15,6 +15,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +59,21 @@ import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.launch
 
+/**
+ * A QR bitmap owns native pixel memory and must be released when its state entry leaves the
+ * composition. Keying disposal by the bitmap keeps a replaced QR alive for the current frame,
+ * then recycles it after Compose has detached the old image.
+ */
+@Composable
+private fun RecycleBitmapOnDispose(bitmap: Bitmap?) {
+    bitmap ?: return
+    DisposableEffect(bitmap) {
+        onDispose {
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+}
+
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -60,22 +81,30 @@ fun DashboardScreen(
     navController: NavController,
 ) {
     val context = LocalContext.current
-    val systemMonitor = remember { SystemMonitor(context) }
-    val viewModel = remember { DashboardViewModel(systemMonitor) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val systemMonitor = remember(context) { SystemMonitor(context) }
+    val viewModel: DashboardViewModel = viewModel(
+        factory = DashboardViewModelFactory(systemMonitor)
+    )
     val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
     val appDatabase = remember { AppDatabase.getDatabase(context) }
     val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, appDatabase) }
     
-    val stats by viewModel.stats.collectAsState()
-    val selectedModelPath by settingsRepo.selectedModelPath.collectAsState()
-    val contextSize by settingsRepo.contextSize.collectAsState()
-    val serverState by viewModel.serverState.collectAsState()
-    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases().collectAsState(initial = emptyList())
-    val knowledgeSourceCount by knowledgeBaseRepository.observeSourceCount().collectAsState(initial = 0)
-    val knowledgeChunkCount by knowledgeBaseRepository.observeChunkCount().collectAsState(initial = 0)
-    val knowledgeErrorCount by knowledgeBaseRepository.observeErrorSourceCount().collectAsState(initial = 0)
-    val knowledgePendingCount by knowledgeBaseRepository.observePendingSourceCount().collectAsState(initial = 0)
-    val embeddingModelPath by settingsRepo.selectedEmbeddingModelPath.collectAsState()
+    val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val selectedModelPath by settingsRepo.selectedModelPath.collectAsStateWithLifecycle()
+    val contextSize by settingsRepo.contextSize.collectAsStateWithLifecycle()
+    val serverState by viewModel.serverState.collectAsStateWithLifecycle()
+    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val knowledgeSourceCount by knowledgeBaseRepository.observeSourceCount()
+        .collectAsStateWithLifecycle(initialValue = 0)
+    val knowledgeChunkCount by knowledgeBaseRepository.observeChunkCount()
+        .collectAsStateWithLifecycle(initialValue = 0)
+    val knowledgeErrorCount by knowledgeBaseRepository.observeErrorSourceCount()
+        .collectAsStateWithLifecycle(initialValue = 0)
+    val knowledgePendingCount by knowledgeBaseRepository.observePendingSourceCount()
+        .collectAsStateWithLifecycle(initialValue = 0)
+    val embeddingModelPath by settingsRepo.selectedEmbeddingModelPath.collectAsStateWithLifecycle()
     
     val isRunning = serverState is ServerState.Running
     val isStarting = serverState is ServerState.Starting
@@ -214,13 +243,16 @@ fun DashboardScreen(
         }
 
         // QR Code Section (when server is running with LAN access enabled)
-        val remoteAccess by settingsRepo.remoteAccess.collectAsState()
+        val remoteAccess by settingsRepo.remoteAccess.collectAsStateWithLifecycle()
         if (isRunning && remoteAccess) {
             val interfaces = remember { getDeviceIPs(context) }
             if (interfaces.isNotEmpty()) {
                 val port = (serverState as ServerState.Running).port
                 var expanded by remember { mutableStateOf(true) }  // Show QR codes by default
                 var qrBitmaps by remember { mutableStateOf<Map<String, Bitmap?>>(emptyMap()) }
+
+                // Register every generated bitmap, including collapsed entries, for disposal.
+                qrBitmaps.values.forEach { bitmap -> RecycleBitmapOnDispose(bitmap) }
                 
                 LaunchedEffect(interfaces, port) {
                     withContext(Dispatchers.Default) {
@@ -323,7 +355,7 @@ fun DashboardScreen(
         val fileServerConnection = remember {
             object : ServiceConnection {
                 override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                    val binder = service as FileServerService.LocalBinder
+                    val binder = service as? FileServerService.LocalBinder ?: return
                     fileServerService = binder.getService()
                     fileServerBound = true
                 }
@@ -333,32 +365,71 @@ fun DashboardScreen(
                 }
             }
         }
-        
-        LaunchedEffect(Unit) {
+
+        fun bindFileServerIfNeeded() {
+            if (fileServerBound) return
             val intent = Intent(context, FileServerService::class.java)
-            context.bindService(intent, fileServerConnection, Context.BIND_AUTO_CREATE)
+            fileServerBound = runCatching {
+                // Observe an explicitly running service only. Binding must not create a
+                // dormant foreground service while the dashboard is merely being viewed.
+                context.bindService(intent, fileServerConnection, 0)
+            }.getOrDefault(false)
         }
-        
-        LaunchedEffect(fileServerService) {
-            fileServerService?.let { service ->
-                launch {
-                    service.isRunning.collect { fileServerRunning = it }
+
+        fun unbindFileServer() {
+            if (fileServerBound) {
+                runCatching { context.unbindService(fileServerConnection) }
+            }
+            fileServerBound = false
+            fileServerService = null
+            fileServerRunning = false
+            fileServerUrls = emptyList()
+            fileServerQrBitmaps = emptyMap()
+        }
+
+        DisposableEffect(context, lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> bindFileServerIfNeeded()
+                    Lifecycle.Event.ON_STOP -> unbindFileServer()
+                    else -> Unit
                 }
-                launch {
-                    service.serverUrls.collect { urls ->
-                        fileServerUrls = urls
-                        // Generate QR codes
-                        withContext(Dispatchers.Default) {
-                            val bitmaps = urls.associate { (ifName, url) ->
-                                val ip = url.substringAfter("://").substringBefore(":")
-                                ip to generateQrCode(url, 200)
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                bindFileServerIfNeeded()
+            }
+            onDispose {
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                unbindFileServer()
+            }
+        }
+
+        LaunchedEffect(fileServerService, lifecycleOwner) {
+            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                fileServerService?.let { service ->
+                    launch {
+                        service.isRunning.collect { fileServerRunning = it }
+                    }
+                    launch {
+                        service.serverUrls.collect { urls ->
+                            fileServerUrls = urls
+                            // Generate QR codes
+                            withContext(Dispatchers.Default) {
+                                val bitmaps = urls.associate { (ifName, url) ->
+                                    val ip = url.substringAfter("://").substringBefore(":")
+                                    ip to generateQrCode(url, 200)
+                                }
+                                fileServerQrBitmaps = bitmaps
                             }
-                            fileServerQrBitmaps = bitmaps
                         }
                     }
                 }
             }
         }
+
+        // Register every generated bitmap, including collapsed entries, for disposal.
+        fileServerQrBitmaps.values.forEach { bitmap -> RecycleBitmapOnDispose(bitmap) }
         
         val folderPicker = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.OpenDocumentTree()
@@ -433,7 +504,22 @@ fun DashboardScreen(
                         } else {
                             fileServerFolderUri?.let { uri ->
                                 context.startForegroundService(Intent(context, FileServerService::class.java))
-                                fileServerService?.startServer(uri, FileServerService.DEFAULT_PORT)
+                                scope.launch {
+                                    // The explicit start above is the only path allowed to
+                                    // create the service. Retry a non-auto-create bind briefly
+                                    // while Android delivers onStartCommand/onBind.
+                                    repeat(8) {
+                                        if (!lifecycleOwner.lifecycle.currentState
+                                                .isAtLeast(Lifecycle.State.STARTED)
+                                        ) return@launch
+                                        bindFileServerIfNeeded()
+                                        fileServerService?.let { service ->
+                                            service.startServer(uri, FileServerService.DEFAULT_PORT)
+                                            return@launch
+                                        }
+                                        kotlinx.coroutines.delay(250L)
+                                    }
+                                }
                             }
                         }
                     },
@@ -521,30 +607,65 @@ fun DashboardScreen(
         
         // Kiwix Server Card
         var kiwixService by remember { mutableStateOf<com.example.llamadroid.service.KiwixService?>(null) }
+        var kiwixBound by remember { mutableStateOf(false) }
         val kiwixConnection = remember {
             object : ServiceConnection {
                 override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                     kiwixService = (binder as? com.example.llamadroid.service.KiwixService.LocalBinder)?.getService()
+                    kiwixBound = true
                 }
                 override fun onServiceDisconnected(name: ComponentName?) {
                     kiwixService = null
+                    kiwixBound = false
                 }
             }
         }
-        
-        DisposableEffect(context) {
+
+        fun bindKiwixIfNeeded() {
+            if (kiwixBound) return
             val intent = Intent(context, com.example.llamadroid.service.KiwixService::class.java)
-            context.bindService(intent, kiwixConnection, Context.BIND_AUTO_CREATE)
+            kiwixBound = runCatching {
+                // Do not auto-create Kiwix just because the dashboard is visible.
+                context.bindService(intent, kiwixConnection, 0)
+            }.getOrDefault(false)
+        }
+
+        fun unbindKiwix() {
+            if (kiwixBound) {
+                runCatching { context.unbindService(kiwixConnection) }
+            }
+            kiwixBound = false
+            kiwixService = null
+        }
+
+        DisposableEffect(context, lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_START -> bindKiwixIfNeeded()
+                    Lifecycle.Event.ON_STOP -> unbindKiwix()
+                    else -> Unit
+                }
+            }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                bindKiwixIfNeeded()
+            }
             onDispose {
-                context.unbindService(kiwixConnection)
+                lifecycleOwner.lifecycle.removeObserver(observer)
+                unbindKiwix()
             }
         }
         
-        val kiwixRunning by kiwixService?.isRunning?.collectAsState() ?: remember { mutableStateOf(false) }
-        val installedZims by appDatabase.zimDao().getAllZims().collectAsState(initial = emptyList())
+        val kiwixRunning by kiwixService?.isRunning?.collectAsStateWithLifecycle()
+            ?: remember { mutableStateOf(false) }
+        val installedZims by appDatabase.zimDao().getAllZims()
+            .collectAsStateWithLifecycle(initialValue = emptyList())
         var kiwixQrExpanded by remember { mutableStateOf(false) }
         var kiwixQrBitmaps by remember { mutableStateOf<Map<String, Bitmap?>>(emptyMap()) }
         val kiwixInterfaces = remember { getDeviceIPs(context) }
+
+        // Register every generated bitmap, including collapsed entries, for disposal.
+        kiwixQrBitmaps.values.forEach { bitmap -> RecycleBitmapOnDispose(bitmap) }
         
         LaunchedEffect(kiwixRunning) {
             if (kiwixRunning) {
@@ -555,6 +676,10 @@ fun DashboardScreen(
                     }
                     kiwixQrBitmaps = bitmaps
                 }
+            } else {
+                // Drop native QR pixel buffers as soon as the service stops; the
+                // keyed disposal effects release the previous map after its last frame.
+                kiwixQrBitmaps = emptyMap()
             }
         }
         
@@ -607,8 +732,20 @@ fun DashboardScreen(
                         } else {
                             context.startForegroundService(Intent(context, com.example.llamadroid.service.KiwixService::class.java))
                             scope.launch {
-                                kotlinx.coroutines.delay(500)
-                                kiwixService?.startServer(installedZims.map { it.path })
+                                // Bind only after the explicit user start. A short retry is
+                                // needed because Android may deliver onStartCommand after the
+                                // first bind attempt.
+                                repeat(8) {
+                                    if (!lifecycleOwner.lifecycle.currentState
+                                            .isAtLeast(Lifecycle.State.STARTED)
+                                    ) return@launch
+                                    bindKiwixIfNeeded()
+                                    kiwixService?.let { service ->
+                                        service.startServer(installedZims.map { it.path })
+                                        return@launch
+                                    }
+                                    kotlinx.coroutines.delay(250L)
+                                }
                             }
                         }
                     },

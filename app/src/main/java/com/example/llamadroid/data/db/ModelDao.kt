@@ -54,4 +54,8 @@ interface ModelDao {
 
     @Query("UPDATE models SET isVision = :isVision WHERE filename = :filename")
     suspend fun updateVisionSupport(filename: String, isVision: Boolean)
+
+    /** Persist only the local SD parameter residency profile. */
+    @Query("UPDATE models SET sdParamsBackendSpec = :spec WHERE filename = :filename")
+    suspend fun updateSdParamsBackendSpec(filename: String, spec: String)
 }

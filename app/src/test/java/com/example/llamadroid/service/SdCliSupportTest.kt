@@ -433,6 +433,28 @@ class SdCliSupportTest {
     }
 
     @Test
+    fun `local per module params profile is normalized into one upstream flag`() {
+        val args = buildSdCommandArgs(
+            SDConfig(
+                mode = SDMode.TXT2IMG,
+                modelPath = "/models/sd3.safetensors",
+                modelFamily = "sd3",
+                modelLayout = SdMainLayout.STANDALONE_DIFFUSION,
+                prompt = "a low memory render",
+                outputPath = "/tmp/out.png",
+                vaePath = "/models/sd3-vae.safetensors",
+                clipLPath = "/models/clip-l.safetensors",
+                clipGPath = "/models/clip-g.safetensors",
+                t5xxlPath = "/models/t5xxl.gguf",
+                sdParamsBackendSpec = "vae=disk,te=disk,diffusion=disk"
+            ),
+            SdBinaryCapabilities.ALLOW_ALL
+        )
+
+        assertOption(args, "--params-backend", "diffusion=disk,te=disk,vae=disk")
+    }
+
+    @Test
     fun `cpu ram budget is suppressed for experimental accelerator binaries`() {
         assertEquals(
             "",

@@ -45,6 +45,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -111,6 +112,18 @@ internal fun InpaintMaskEditorDialog(
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             val editor = loaded
+            // BitmapFactory allocates native pixel buffers. Dispose them only after this
+            // loaded editor leaves composition so the active Canvas can finish its last frame.
+            DisposableEffect(editor) {
+                onDispose {
+                    editor?.source?.let { bitmap ->
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                    }
+                    editor?.overlay?.let { bitmap ->
+                        if (!bitmap.isRecycled) bitmap.recycle()
+                    }
+                }
+            }
             when {
                 editor != null -> InpaintMaskEditorContent(editor, onDismiss, onSave)
                 loadFailed -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -404,36 +417,45 @@ private fun InpaintMaskEditorContent(
 
 private fun loadInpaintEditor(sourcePath: String, initialMaskPath: String?): LoadedInpaintEditor {
     val source = BitmapFactory.decodeFile(sourcePath) ?: error("Unreadable source image")
-    val raster = initialMaskPath
-        ?.takeIf { File(it).isFile }
-        ?.let { path -> decodeMaskRaster(path, source.width, source.height) }
-        ?: InpaintMaskRaster.empty(source.width, source.height)
-    val overlay = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888).apply {
-        setPixels(raster.toOverlayArgb(), 0, source.width, 0, 0, source.width, source.height)
+    return try {
+        val raster = initialMaskPath
+            ?.takeIf { File(it).isFile }
+            ?.let { path -> decodeMaskRaster(path, source.width, source.height) }
+            ?: InpaintMaskRaster.empty(source.width, source.height)
+        val overlay = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888).apply {
+            setPixels(raster.toOverlayArgb(), 0, source.width, 0, 0, source.width, source.height)
+        }
+        LoadedInpaintEditor(source, raster, overlay)
+    } catch (error: Throwable) {
+        if (!source.isRecycled) source.recycle()
+        throw error
     }
-    return LoadedInpaintEditor(source, raster, overlay)
 }
 
 private fun decodeMaskRaster(path: String, targetWidth: Int, targetHeight: Int): InpaintMaskRaster {
     val bitmap = BitmapFactory.decodeFile(path) ?: error("Unreadable mask image")
-    require(
-        InpaintMaskRaster.compatibleAspectRatio(bitmap.width, bitmap.height, targetWidth, targetHeight)
-    ) { "Mask aspect ratio does not match the source" }
-    val argb = IntArray(bitmap.width * bitmap.height)
-    bitmap.getPixels(argb, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
-    val luma = ByteArray(argb.size) { index ->
-        val color = argb[index]
-        val alpha = color ushr 24 and 0xff
-        val red = color ushr 16 and 0xff
-        val green = color ushr 8 and 0xff
-        val blue = color and 0xff
-        val luminance = (red * 299 + green * 587 + blue * 114) / 1000
-        min(alpha, luminance).toByte()
-    }
-    return if (bitmap.width == targetWidth && bitmap.height == targetHeight) {
-        InpaintMaskRaster.fromBytes(targetWidth, targetHeight, luma)
-    } else {
-        InpaintMaskRaster.resizeNearest(bitmap.width, bitmap.height, luma, targetWidth, targetHeight)
+    return try {
+        require(
+            InpaintMaskRaster.compatibleAspectRatio(bitmap.width, bitmap.height, targetWidth, targetHeight)
+        ) { "Mask aspect ratio does not match the source" }
+        val argb = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(argb, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        val luma = ByteArray(argb.size) { index ->
+            val color = argb[index]
+            val alpha = color ushr 24 and 0xff
+            val red = color ushr 16 and 0xff
+            val green = color ushr 8 and 0xff
+            val blue = color and 0xff
+            val luminance = (red * 299 + green * 587 + blue * 114) / 1000
+            min(alpha, luminance).toByte()
+        }
+        if (bitmap.width == targetWidth && bitmap.height == targetHeight) {
+            InpaintMaskRaster.fromBytes(targetWidth, targetHeight, luma)
+        } else {
+            InpaintMaskRaster.resizeNearest(bitmap.width, bitmap.height, luma, targetWidth, targetHeight)
+        }
+    } finally {
+        if (!bitmap.isRecycled) bitmap.recycle()
     }
 }
 

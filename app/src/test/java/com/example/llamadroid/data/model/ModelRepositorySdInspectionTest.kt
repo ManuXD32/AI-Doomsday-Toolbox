@@ -150,6 +150,25 @@ class ModelRepositorySdInspectionTest {
     }
 
     @Test
+    fun inferredClipVisionProfileIsNarrowedToSd1() {
+        val inferred = inferSdFamily(
+            ModelType.SD_CLIP_VISION,
+            "h94/IP-Adapter",
+            "clip-vision_sd-1-5.safetensors"
+        )
+
+        assertEquals(
+            "checkpoint:sd1",
+            resolveSdCompatProfiles(
+                type = ModelType.SD_CLIP_VISION,
+                explicitProfiles = null,
+                family = inferred.first,
+                variant = inferred.second
+            )
+        )
+    }
+
+    @Test
     fun explicitNonLegacyIpAdapterProfilesRemainAuthoritative() {
         assertEquals(
             "checkpoint:sd1,checkpoint:sdxl,custom",
@@ -214,6 +233,13 @@ class ModelRepositorySdInspectionTest {
         )
 
         assertEquals(setOf("checkpoint:sd1"), model.effectiveSdCompatProfiles())
+    }
+
+    @Test
+    fun nativeAdetailerAndUpscalerUseTheirSpecializedValidators() {
+        assertFalse(ModelType.SD_ADETAILER.isStableDiffusionArtifact())
+        assertFalse(ModelType.SD_UPSCALER.isStableDiffusionArtifact())
+        assertTrue(ModelType.SD_CHECKPOINT.isStableDiffusionArtifact())
     }
 
     private fun inspection(

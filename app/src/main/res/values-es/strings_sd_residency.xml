@@ -1,0 +1,18 @@
+<resources>
+    <string name="sd_params_backend_title">Residencia de parámetros</string>
+    <string name="sd_params_backend_normal">Normal (automática)</string>
+    <string name="sd_params_backend_te_disk">Codificadores de texto en disco</string>
+    <string name="sd_params_backend_everything_disk">Todo en disco</string>
+    <string name="sd_params_backend_custom">Colocación de módulos personalizada</string>
+    <string name="sd_params_backend_module_auto">Automática</string>
+    <string name="sd_params_backend_module_disk">Disco</string>
+    <string name="sd_params_backend_group_help">CLIP-L, CLIP-G y T5 comparten el grupo te de upstream.</string>
+    <string name="sd_params_backend_conflict">Las preferencias de codificadores de texto en conflicto se resolvieron a Disco.</string>
+    <string name="sd_params_backend_current">Actual: %1$s</string>
+    <string name="sd_params_backend_open_rows">Editar colocación de componentes</string>
+    <string name="sd_params_backend_close_rows">Ocultar colocación de componentes</string>
+    <string name="imagegen_manage_lora">Importar o gestionar LoRAs</string>
+    <string name="imagegen_loras_cleared_incompatible">Se quitaron los LoRA incompatibles para el modelo seleccionado.</string>
+    <string name="imagegen_lora_move_up">Subir LoRA</string>
+    <string name="imagegen_lora_move_down">Bajar LoRA</string>
+</resources>

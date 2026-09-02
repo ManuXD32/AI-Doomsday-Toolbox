@@ -3019,6 +3019,50 @@ class AppDatabaseMigrationTest {
         migratedDb.close()
     }
 
+    @Test
+    fun migrate111To112_addsSdParamsBackendSpecAndPreservesLegacyPlacement() {
+        helper.createDatabase(TEST_DB, 111).apply {
+            execSQL(
+                """
+                INSERT INTO models (
+                    filename, path, sizeBytes, type, repoId, isDownloaded, isVision,
+                    mmprojPath, sdCapabilities, sdFamily, sdVariant, sdCompatProfiles,
+                    sdParamsBackendMode, sdRuntimeBackendMode, onnxCapabilities,
+                    onnxAssetKind, onnxPipelineFamily, onnxReferenceUri, onnxReferencePath,
+                    layerCount, sdDetectedFamily, sdDetectedRole, sdArtifactLayout,
+                    sdInspectionConfidence, sdInspectionVersion, sdInspectionJson
+                ) VALUES (
+                    'legacy-placement.safetensors', '/models/legacy-placement.safetensors', 42,
+                    'SD_CHECKPOINT', 'local-import', 1, 0, NULL, 'txt2img', 'checkpoint',
+                    'sd1', 'checkpoint:sd1', 'disk', 'auto', NULL, NULL, NULL, NULL, NULL,
+                    0, 'checkpoint', 'full_model', 'full_model', 'high', 1, '{}'
+                )
+                """.trimIndent()
+            )
+            close()
+        }
+
+        val migratedDb = helper.runMigrationsAndValidate(
+            TEST_DB,
+            112,
+            true,
+            Migrations.MIGRATION_111_112
+        )
+
+        migratedDb.query(
+            "SELECT path, sdParamsBackendMode, sdParamsBackendSpec, sdDetectedFamily, " +
+                "sdInspectionJson FROM models WHERE filename = 'legacy-placement.safetensors'"
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("/models/legacy-placement.safetensors", cursor.getString(0))
+            assertEquals("disk", cursor.getString(1))
+            assertEquals("auto", cursor.getString(2))
+            assertEquals("checkpoint", cursor.getString(3))
+            assertEquals("{}", cursor.getString(4))
+        }
+        migratedDb.close()
+    }
+
     /**
      * Walks the entire registered migration chain in one run.
      *
@@ -3051,6 +3095,6 @@ class AppDatabaseMigrationTest {
         private const val OLDEST_EXPORTED_VERSION = 28
 
         /** Keep in step with the `version` in [AppDatabase]'s `@Database`. */
-        private const val LATEST_VERSION = 111
+        private const val LATEST_VERSION = 112
     }
 }

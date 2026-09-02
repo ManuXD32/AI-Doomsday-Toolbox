@@ -25,6 +25,7 @@ import com.example.llamadroid.sd.SdInspectionCache
 import com.example.llamadroid.sd.needsSdArtifactInspection
 import com.example.llamadroid.sd.sdArtifactInspection
 import com.example.llamadroid.sd.withSdArtifactInspection
+import com.example.llamadroid.sd.normalizeSdParamsBackendSpec
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_BACKGROUND_REMOVAL_FILE
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_SDAI_CATALOG_BUNDLE
 import com.example.llamadroid.onnx.ONNX_ASSET_KIND_SUPERTONIC_CATALOG_BUNDLE
@@ -705,6 +706,19 @@ class ModelRepository(
         modelDao.updateVisionSupport(filename, isVision)
     }
 
+    /**
+     * Remember local SD parameter residency for a model/component. The value is
+     * normalized before persistence and never affects distributed launches.
+     */
+    suspend fun updateSdParamsBackendSpec(
+        model: ModelEntity,
+        spec: String
+    ): ModelEntity = withContext(Dispatchers.IO) {
+        val normalized = normalizeSdParamsBackendSpec(spec, model.sdParamsBackendMode)
+        modelDao.updateSdParamsBackendSpec(model.filename, normalized)
+        model.copy(sdParamsBackendSpec = normalized)
+    }
+
     fun huggingFaceToken(): String =
         context.applicationContext
             .getSharedPreferences(HF_PREFS_NAME, Context.MODE_PRIVATE)
@@ -728,6 +742,7 @@ class ModelRepository(
         sdVariant: String? = original.sdVariant,
         sdCompatProfiles: String? = original.sdCompatProfiles,
         sdParamsBackendMode: String = original.sdParamsBackendMode,
+        sdParamsBackendSpec: String = original.sdParamsBackendSpec,
         sdRuntimeBackendMode: String = original.sdRuntimeBackendMode,
         onnxCapabilities: String? = original.onnxCapabilities,
         onnxAssetKind: String? = original.onnxAssetKind,
@@ -808,6 +823,10 @@ class ModelRepository(
                     variant = resolvedVariant
                 ),
                 sdParamsBackendMode = sdParamsBackendMode,
+                sdParamsBackendSpec = normalizeSdParamsBackendSpec(
+                    sdParamsBackendSpec,
+                    sdParamsBackendMode
+                ),
                 sdRuntimeBackendMode = sdRuntimeBackendMode,
                 onnxCapabilities = onnxCapabilities,
                 onnxAssetKind = onnxAssetKind,

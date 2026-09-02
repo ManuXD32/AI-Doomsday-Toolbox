@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Foreground service boundary for keyed llama.cpp sessions. A single service process can own
@@ -18,8 +20,10 @@ import kotlinx.coroutines.launch
  */
 class LlamaServerSessionService : Service() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val commandMutex = Mutex()
     private lateinit var runtime: LlamaServerSessionRuntime
     private var notificationTaskId: Int? = null
+    @Volatile private var latestStartId: Int = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -29,6 +33,7 @@ class LlamaServerSessionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
         val sessionId = intent?.getStringExtra(EXTRA_SESSION_ID).orEmpty()
         when (intent?.action) {
             ACTION_START -> {
@@ -48,8 +53,11 @@ class LlamaServerSessionService : Service() {
                     val portOverride = intent.takeIf { it.hasExtra(EXTRA_PORT) }
                         ?.getIntExtra(EXTRA_PORT, profile.serverPort)
                     scope.launch {
-                        runtime.start(sessionId, profile, portOverride)
-                            .onFailure { DebugLog.log("LlamaServerSessionService[$sessionId]: ${it.message}") }
+                        commandMutex.withLock {
+                            runtime.start(sessionId, profile, portOverride)
+                                .onFailure { DebugLog.log("LlamaServerSessionService[$sessionId]: ${it.message}") }
+                            recycleWhenIdle(startId)
+                        }
                     }
                 }
             }
@@ -58,7 +66,12 @@ class LlamaServerSessionService : Service() {
                 if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected stop while OCR lease is active")
                 } else {
-                    scope.launch { runtime.stop(sessionId) }
+                    scope.launch {
+                        commandMutex.withLock {
+                            runtime.stop(sessionId)
+                            recycleWhenIdle(startId)
+                        }
+                    }
                 }
             }
             ACTION_CLEAR_LOGS -> if (sessionId.isNotBlank()) {
@@ -66,7 +79,9 @@ class LlamaServerSessionService : Service() {
                 if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected clear while OCR lease is active")
                 } else {
-                    scope.launch { runtime.clearLogs(sessionId) }
+                    scope.launch {
+                        commandMutex.withLock { runtime.clearLogs(sessionId) }
+                    }
                 }
             }
             ACTION_REMOVE -> if (sessionId.isNotBlank()) {
@@ -74,7 +89,12 @@ class LlamaServerSessionService : Service() {
                 if (LlamaOcrExclusiveLeaseStore.rejectsSessionCommand(applicationContext, sessionId, leaseToken)) {
                     DebugLog.log("LlamaServerSessionService[$sessionId]: rejected remove while OCR lease is active")
                 } else {
-                    scope.launch { runtime.remove(sessionId) }
+                    scope.launch {
+                        commandMutex.withLock {
+                            runtime.remove(sessionId)
+                            recycleWhenIdle(startId)
+                        }
+                    }
                 }
             }
         }
@@ -97,6 +117,20 @@ class LlamaServerSessionService : Service() {
         )
         notificationTaskId = taskId
         startForeground(taskId, notification)
+    }
+
+    /**
+     * Release the isolated runtime after its last exact session has stopped. The start-id guard
+     * prevents an older STOP/REMOVE completion from stopping a service that has already received a
+     * newer START command.
+     */
+    private fun recycleWhenIdle(commandStartId: Int) {
+        if (latestStartId != commandStartId || !runtime.isIdle()) return
+        runtime.close()
+        notificationTaskId?.let(UnifiedNotificationManager::dismissTask)
+        notificationTaskId = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelfResult(commandStartId)
     }
 
     companion object {

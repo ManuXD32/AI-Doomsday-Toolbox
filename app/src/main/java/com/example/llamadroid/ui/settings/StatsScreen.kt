@@ -41,6 +41,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -61,6 +64,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlin.math.max
 
 private data class StatsWindow(val hours: Int, val label: Int)
@@ -80,6 +85,7 @@ fun StatsScreen(navController: NavController) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val repository = remember { SystemStatsRepository(context) }
     val monitor = remember { SystemMonitor(context) }
+    val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     var collectionEnabled by remember { mutableStateOf(SystemStatsCollectionManager.isEnabled(context)) }
     var collectorFailure by remember { mutableStateOf(SystemStatsCollectionManager.lastFailure(context)) }
@@ -100,17 +106,19 @@ fun StatsScreen(navController: NavController) {
         }
     }
 
-    LaunchedEffect(selectedWindow, collectionEnabled, refreshToken) {
-        withContext(Dispatchers.IO) { monitor.warmUp() }
-        delay(1_000L)
-        while (true) {
-            val until = System.currentTimeMillis()
-            val duration = if (selectedWindow == 0) 15L * 60L * 1000L else selectedWindow.toLong() * 60L * 60L * 1000L
-            val from = until - duration
-            samples = withContext(Dispatchers.IO) { repository.getSamples(from, until) }
-            liveSnapshot = withContext(Dispatchers.IO) { monitor.sample() }
-            collectorFailure = SystemStatsCollectionManager.lastFailure(context)
-            delay(if (collectionEnabled) 60_000L else 5_000L)
+    LaunchedEffect(selectedWindow, collectionEnabled, refreshToken, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            withContext(Dispatchers.IO) { monitor.warmUp() }
+            delay(1_000L)
+            while (currentCoroutineContext().isActive) {
+                val until = System.currentTimeMillis()
+                val duration = if (selectedWindow == 0) 15L * 60L * 1000L else selectedWindow.toLong() * 60L * 60L * 1000L
+                val from = until - duration
+                samples = withContext(Dispatchers.IO) { repository.getSamples(from, until) }
+                liveSnapshot = withContext(Dispatchers.IO) { monitor.sample() }
+                collectorFailure = SystemStatsCollectionManager.lastFailure(context)
+                delay(if (collectionEnabled) 60_000L else 5_000L)
+            }
         }
     }
 

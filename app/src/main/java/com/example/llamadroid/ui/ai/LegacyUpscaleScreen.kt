@@ -251,6 +251,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
             outputPath = outputFile.absolutePath,
             upscaleRepeats = upscaleRepeats,
             threads = threadCount,
+            sdParamsBackendSpec = selectedUpscalerModel?.sdParamsBackendSpec ?: "auto",
             sdParamsBackendMode = selectedUpscalerModel?.sdParamsBackendMode ?: "auto",
             sdRuntimeBackendMode = selectedUpscalerModel?.sdRuntimeBackendMode ?: "auto",
             maxVramCpuGiB = if (sdMaxCpuRamEnabled) sdMaxCpuRamGiB else ""

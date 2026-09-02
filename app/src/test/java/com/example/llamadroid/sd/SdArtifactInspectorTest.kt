@@ -156,6 +156,74 @@ class SdArtifactInspectorTest {
     }
 
     @Test
+    fun genericClipGTensorNamesUseClipGFilenameEvidence() {
+        val file = tempFile("clip_g.safetensors")
+        writeSafeTensors(file, listOf("text_model.encoder.layers.0.self_attn.q_proj.weight"))
+
+        val inspection = SdArtifactInspector.inspect(file)
+
+        assertEquals(SdArtifactRole.CLIP_G, inspection.detectedRole)
+        assertTrue(inspection.containsClipG)
+        assertFalse(inspection.containsClipL)
+        file.delete()
+    }
+
+    @Test
+    fun t5GgufWithQuantizedBlockNamesIsNotClassifiedAsGenericLlm() {
+        val file = tempFile("pru-t5-v1_1-xxl-encoder-Q4_K_M.gguf")
+        writeGguf(file, architecture = "t5", tensorName = "blk.0.attn.q.weight")
+
+        val inspection = SdArtifactInspector.inspect(file)
+
+        assertEquals(SdArtifactRole.T5XXL, inspection.detectedRole)
+        assertTrue(inspection.containsT5xxl)
+        assertFalse(inspection.containsLlm)
+        file.delete()
+    }
+
+    @Test
+    fun sd3FullModelReportsAllInternalComponentsFromTensorPaths() {
+        val file = tempFile("sd3_medium_incl_clips_t5xxlfp8.safetensors")
+        writeSafeTensors(file, listOf(
+            "model.diffusion_model.joint_blocks.0.x_block.attn.qkv.weight",
+            "first_stage_model.encoder.down.0.block.0.conv1.weight",
+            "text_encoders.0.transformer.text_model.embeddings.token_embedding.weight",
+            "text_encoders.1.transformer.text_model.embeddings.token_embedding.weight",
+            "text_encoders.2.transformer.encoder.block.0.layer.0.SelfAttention.q.weight"
+        ))
+
+        val inspection = SdArtifactInspector.inspect(file)
+
+        assertEquals(SdModelFamily.SD3, inspection.detectedFamily)
+        assertEquals(SdArtifactRole.FULL_MODEL, inspection.detectedRole)
+        assertTrue(inspection.containsDiffusion)
+        assertTrue(inspection.containsVae)
+        assertTrue(inspection.containsClipL)
+        assertTrue(inspection.containsClipG)
+        assertTrue(inspection.containsT5xxl)
+        assertFalse(inspection.containsLlm)
+        file.delete()
+    }
+
+    @Test
+    fun textEncoderLoraIsNotMisclassifiedAsClipL() {
+        val file = tempFile("sdxl-text-encoder-lora.safetensors")
+        writeSafeTensors(file, listOf(
+            "lora_te1_text_model_encoder_layers_0_self_attn_q_proj.lora_down.weight",
+            "lora_te1_text_model_encoder_layers_0_self_attn_q_proj.lora_up.weight"
+        ))
+
+        val inspection = SdArtifactInspector.inspect(file)
+
+        assertEquals(SdArtifactRole.LORA, inspection.detectedRole)
+        assertEquals(SdMainLayout.COMPONENT, inspection.artifactLayout)
+        assertFalse(inspection.containsClipL)
+        assertFalse(inspection.containsDiffusion)
+        assertFalse(inspection.containsLlm)
+        file.delete()
+    }
+
+    @Test
     fun excessiveSafeTensorsHeader_isRejectedBeforeAllocation() {
         val file = tempFile("excessive.safetensors")
         file.writeBytes(

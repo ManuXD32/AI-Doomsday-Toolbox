@@ -78,4 +78,19 @@ class InpaintMaskRasterTest {
         assertTrue(InpaintMaskRaster.compatibleAspectRatio(512, 256, 1024, 512))
         assertFalse(InpaintMaskRaster.compatibleAspectRatio(512, 512, 1024, 512))
     }
+
+    @Test
+    fun `rectangle and ellipse tools rasterize and remain partly erasable`() {
+        val mask = InpaintMaskRaster.empty(40, 40)
+        mask.paintRectangle(4f, 5f, 18f, 20f, erase = false)
+        mask.paintEllipse(20f, 8f, 38f, 30f, erase = false)
+
+        assertEquals(255, mask.valueAt(8, 10))
+        assertEquals(255, mask.valueAt(29, 19))
+        assertEquals(0, mask.valueAt(20, 8))
+
+        mask.paintCircle(8f, 10f, 3f, softness = 0f, erase = true)
+        assertEquals(0, mask.valueAt(8, 10))
+        assertEquals(255, mask.valueAt(15, 10))
+    }
 }

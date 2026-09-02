@@ -21,13 +21,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ZimEntity
 import com.example.llamadroid.service.KiwixService
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
-import kotlinx.coroutines.launch
 
 /**
  * WebView-based viewer for Kiwix content served by kiwix-serve.
@@ -38,35 +42,71 @@ import kotlinx.coroutines.launch
 @Composable
 fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val db = remember { AppDatabase.getDatabase(context) }
     
     // Service connection
     var kiwixService by remember { mutableStateOf<KiwixService?>(null) }
+    var serviceBound by remember { mutableStateOf(false) }
     val serviceConnection = remember {
         object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                 kiwixService = (binder as? KiwixService.LocalBinder)?.getService()
+                serviceBound = true
             }
             override fun onServiceDisconnected(name: ComponentName?) {
                 kiwixService = null
+                serviceBound = false
             }
         }
     }
-    
-    // Bind to service
-    DisposableEffect(context) {
+
+    fun bindServiceIfNeeded() {
+        if (serviceBound) return
         val intent = Intent(context, KiwixService::class.java)
-        context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        serviceBound = runCatching {
+            // The viewer owns the explicit server startup below, so AUTO_CREATE
+            // remains intentional here; unlike dashboard observation this route
+            // is an active Kiwix consumer. Binding is still visible-lifecycle gated.
+            context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        }.getOrDefault(false)
+    }
+
+    fun unbindService() {
+        if (serviceBound) {
+            runCatching { context.unbindService(serviceConnection) }
+        }
+        serviceBound = false
+        kiwixService = null
+    }
+
+    // Bind only while the viewer is visible. A failed bind is tolerated; the
+    // state collectors fall back to an inactive viewer until the next start.
+    DisposableEffect(context, lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> bindServiceIfNeeded()
+                Lifecycle.Event.ON_STOP -> unbindService()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+            bindServiceIfNeeded()
+        }
         onDispose {
-            context.unbindService(serviceConnection)
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            unbindService()
         }
     }
     
     // State
-    val isRunning by kiwixService?.isRunning?.collectAsState() ?: remember { mutableStateOf(false) }
-    val serverUrl by kiwixService?.serverUrl?.collectAsState() ?: remember { mutableStateOf<String?>(null) }
-    val installedZims by db.zimDao().getAllZims().collectAsState(initial = emptyList())
+    val isRunning by kiwixService?.isRunning?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf(false) }
+    val serverUrl by kiwixService?.serverUrl?.collectAsStateWithLifecycle()
+        ?: remember { mutableStateOf<String?>(null) }
+    val installedZims by db.zimDao().getAllZims()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     
     var selectedZim by remember { mutableStateOf<ZimEntity?>(null) }
     var showZimPicker by remember { mutableStateOf(false) }
@@ -89,16 +129,18 @@ fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
     }
     
     // Start server with ALL installed ZIMs using library mode
-    LaunchedEffect(installedZims, kiwixService) {
-        if (installedZims.isNotEmpty() && kiwixService != null && !isRunning) {
-            // Start the service
-            val intent = Intent(context, KiwixService::class.java)
-            context.startForegroundService(intent)
-            
-            // Wait a bit for service to start then start server with ALL ZIMs
-            kotlinx.coroutines.delay(500)
-            val allZimPaths = installedZims.map { it.path }
-            kiwixService?.startServer(allZimPaths)
+    LaunchedEffect(installedZims, kiwixService, lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            if (installedZims.isNotEmpty() && kiwixService != null && !isRunning) {
+                // Start the service only while the viewer is visible.
+                val intent = Intent(context, KiwixService::class.java)
+                context.startForegroundService(intent)
+
+                // Wait a bit for service to start then start server with ALL ZIMs
+                kotlinx.coroutines.delay(500)
+                val allZimPaths = installedZims.map { it.path }
+                kiwixService?.startServer(allZimPaths)
+            }
         }
     }
     

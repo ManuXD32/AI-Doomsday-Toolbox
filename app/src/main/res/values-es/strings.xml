@@ -3142,6 +3142,8 @@
     <string name="sd_models_inspection_retry">Detectar de nuevo</string>
     <string name="sd_models_inspection_updated">Detección actualizada para este artefacto.</string>
     <string name="sd_models_inspection_failed_short">Falló la detección: %1$s</string>
+    <string name="sd_models_inspection_show_details">Mostrar detalles de inspección</string>
+    <string name="sd_models_inspection_hide_details">Ocultar detalles de inspección</string>
     <string name="sd_models_inspection_selection_title">Inspeccionando el artefacto seleccionado</string>
     <string name="sd_models_inspection_selection_desc">Leyendo metadatos acotados antes de importar. El modelo no se cargará ni ejecutará.</string>
     <string name="sd_models_inspection_selection_unavailable">La inspección automática no está disponible para este documento. Puedes continuar con una configuración manual explícita; la validación se repetirá antes de confiar en el archivo.</string>
@@ -3160,6 +3162,7 @@
     <string name="sd_models_component_none">ninguno detectado</string>
     <string name="sd_models_inspection_confidence">Confianza de inspección: %1$s</string>
     <string name="sd_models_inspection_warnings">Avisos de inspección: %1$s</string>
+    <string name="sd_models_inspection_structurally_invalid">La inspección estructural encontró un bloqueo; revisa el aviso antes de generar.</string>
     <string name="sd_models_unknown_value">desconocido</string>
     <string name="sd_models_inspection_unavailable">La inspección del artefacto no está disponible; se requiere configuración manual.</string>
     <string name="sd_models_components_none">no se detectaron</string>
