@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,13 +53,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_ACTIVE
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_CANCELLED
+import com.example.llamadroid.data.db.DOWNLOAD_TASK_STATUS_COMPLETED
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.model.BundleProgressEntry
+import com.example.llamadroid.data.model.BundleProgressSnapshot
 import com.example.llamadroid.data.model.CuratedBundleFile
 import com.example.llamadroid.data.model.CuratedModelBundle
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.buildDownloadTaskId
+import com.example.llamadroid.data.model.calculateBundleProgressSnapshot
+import com.example.llamadroid.data.model.partFile
 import com.example.llamadroid.data.model.sanitizeCuratedBundlePrefix
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.util.FormatUtils
@@ -81,6 +89,14 @@ fun CuratedModelBundleSection(
     val repository = remember { ModelRepository(context, db.modelDao()) }
     val installedModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
     val progressMap by DownloadProgressHolder.progress.collectAsState()
+    val persistedTasks by db.downloadTaskDao().observeAll().collectAsState(initial = emptyList())
+    val bundleProgressHistory = remember { mutableMapOf<String, BundleProgressSnapshot>() }
+    val taskByProgressKey = remember(persistedTasks) {
+        persistedTasks
+            .asSequence()
+            .flatMap { task -> sequenceOf(task.id to task, task.progressKey to task) }
+            .toMap()
+    }
     var pendingBundle by remember { mutableStateOf<CuratedModelBundle?>(null) }
 
     Column(
@@ -100,27 +116,64 @@ fun CuratedModelBundleSection(
             val prefix = sanitizeCuratedBundlePrefix(bundle.defaultPrefix)
             val expectedNames = bundle.files.map { it.installedFilename(prefix) }
             val installedFiles = installedModels.filter { it.filename in expectedNames }
+            val installedNames = installedFiles.map { it.filename }.toSet()
             val missingFiles = bundle.files.filterIndexed { index, _ ->
-                installedFiles.none { it.filename == expectedNames[index] }
+                expectedNames[index] !in installedNames
             }
-            val activeTasks = bundle.files.mapIndexed { index, file ->
+            val expectedTaskIds = bundle.files.mapIndexed { index, file ->
                 expectedNames[index] to buildDownloadTaskId(file.repoId, expectedNames[index], file.type)
-            }.filter { (_, taskId) ->
-                val value = progressMap[taskId]
-                value == DownloadProgressHolder.INDETERMINATE || value != null && value in 0f..0.999f
             }
-            val determinateProgress = activeTasks.mapNotNull { (_, taskId) -> progressMap[taskId] }
-                .filter { it >= 0f }
-            val aggregateProgress = determinateProgress.takeIf { it.isNotEmpty() }
-                ?.average()
-                ?.toFloat()
+            val progressEntries = bundle.files.mapIndexed { index, file ->
+                val (expectedName, taskId) = expectedTaskIds[index]
+                val task = taskByProgressKey[taskId]
+                val liveValue = progressMap[taskId]
+                BundleProgressEntry(
+                    key = taskId,
+                    declaredBytes = file.sizeBytes,
+                    installed = expectedName in installedNames,
+                    completed = task?.status == DOWNLOAD_TASK_STATUS_COMPLETED || liveValue == 1f,
+                    cancelled = task?.status == DOWNLOAD_TASK_STATUS_CANCELLED ||
+                        liveValue != null && liveValue < 0f && liveValue != DownloadProgressHolder.INDETERMINATE,
+                    active = task?.status == DOWNLOAD_TASK_STATUS_ACTIVE ||
+                        liveValue == DownloadProgressHolder.INDETERMINATE || liveValue != null && liveValue in 0f..0.999f,
+                    persistedTaskBytes = task?.bytesDownloaded,
+                    partBytes = task?.partFile()?.length(),
+                    liveFraction = liveValue
+                )
+            }
+            val previousSnapshot = bundleProgressHistory[bundle.id]
+            val hasCurrentActive = progressEntries.any {
+                it.active && !it.cancelled && !it.installed && !it.completed
+            }
+            val resetAfterCancellation = !hasCurrentActive &&
+                previousSnapshot?.hasActiveDownloads == true &&
+                missingFiles.isNotEmpty()
+            val progressSnapshot = calculateBundleProgressSnapshot(
+                entries = progressEntries,
+                // Monotonicity belongs to an active download session. Once the bundle is idle,
+                // recompute from durable state so deleting an installed file cannot leave a stale
+                // 100% snapshot behind.
+                previousSnapshot = previousSnapshot.takeIf { hasCurrentActive },
+                resetToPersisted = resetAfterCancellation
+            )
+            // Only advance the monotonic history after this composition is successfully applied.
+            // This avoids mutating retained calculation state from an abandoned composition.
+            SideEffect {
+                bundleProgressHistory[bundle.id] = progressSnapshot
+            }
+            val activeKeys = progressEntries
+                .filter { it.active && !it.cancelled && !it.installed && !it.completed }
+                .map { it.key }
+                .toSet()
+            val activeTasks = expectedTaskIds
+                .filter { (_, taskId) -> taskId in activeKeys }
 
             CuratedModelBundleCard(
                 bundle = bundle,
                 installedCount = installedFiles.size,
-                missingBytes = missingFiles.sumOf { it.sizeBytes },
-                isDownloading = activeTasks.isNotEmpty(),
-                aggregateProgress = aggregateProgress,
+                missingBytes = progressSnapshot.remainingBytes,
+                isDownloading = progressSnapshot.hasActiveDownloads,
+                aggregateProgress = progressSnapshot.progress,
                 canUse = missingFiles.isEmpty() && onUseBundle != null,
                 onReview = { pendingBundle = bundle },
                 onCancel = {
@@ -297,7 +350,9 @@ private fun CuratedModelBundleCard(
             )
             if (!isDownloading) {
                 LinearProgressIndicator(
-                    progress = { installedCount.toFloat() / bundle.files.size.toFloat() },
+                    progress = {
+                        aggregateProgress ?: installedCount.toFloat() / bundle.files.size.toFloat()
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
             }

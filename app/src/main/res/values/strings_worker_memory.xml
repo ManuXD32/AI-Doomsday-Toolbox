@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="dist_worker_memory_budget_summary">Reserved: %1$d MB · Maximum contribution: %2$d MB</string>
+    <string name="dist_worker_memory_unavailable">Not enough memory to start a worker. At least %1$d MB must be available for its contribution.</string>
+    <string name="dist_worker_memory_total">Total memory</string>
+    <string name="dist_worker_memory_available">Available memory</string>
+    <string name="dist_worker_memory_reserved">OS reservation</string>
+    <string name="dist_worker_memory_contribution">Worker contribution</string>
+    <string name="dist_worker_memory_value">%1$d MB</string>
+</resources>

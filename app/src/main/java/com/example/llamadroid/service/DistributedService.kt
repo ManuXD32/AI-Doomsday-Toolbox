@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.app.ActivityManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -88,6 +89,9 @@ class DistributedService : Service() {
         const val EXTRA_RAM_MB = "ram_mb"
         const val EXTRA_THREADS = "threads"
         const val EXTRA_CACHE = "cache"
+        private const val WORKER_MEMORY_PREFS = "distributed_worker_profile"
+        private const val WORKER_MEMORY_KEY = "ram_mb"
+        private const val DEFAULT_WORKER_RAM_MB = 4096
         
         // State exposed to UI
         private val _mode = MutableStateFlow(DistributedMode.NONE)
@@ -102,8 +106,18 @@ class DistributedService : Service() {
         private val _workerPort = MutableStateFlow(RPC_DEFAULT_PORT)
         val workerPort: StateFlow<Int> = _workerPort.asStateFlow()
         
-        private val _workerRamMB = MutableStateFlow(4096)
+        private val _workerRamMB = MutableStateFlow(loadSavedWorkerRamMiB())
         val workerRamMB: StateFlow<Int> = _workerRamMB.asStateFlow()
+
+        private val _workerMemoryBudget = MutableStateFlow(
+            WorkerMemoryBudget.calculate(
+                totalMiB = 0L,
+                availableMiB = 0L,
+                requestedMiB = _workerRamMB.value.toLong()
+            )
+        )
+        /** Latest sanitized worker-memory snapshot, including the actual applied contribution. */
+        val workerMemoryBudget: StateFlow<WorkerMemoryBudget> = _workerMemoryBudget.asStateFlow()
         
         private val _masterRamMB = MutableStateFlow(4096)
         val masterRamMB: StateFlow<Int> = _masterRamMB.asStateFlow()
@@ -983,17 +997,89 @@ class DistributedService : Service() {
             _masterRamMB.value = ramMB
         }
         
-        // Set worker RAM allocation
-        fun setWorkerRam(ramMB: Int) {
-            _workerRamMB.value = ramMB
+        /**
+         * Returns a current device snapshot for the requested worker contribution.
+         *
+         * This method is intentionally additive so existing callers can keep using the legacy
+         * worker setter/launcher signatures while the Worker screen can pass the same snapshot
+         * through its controls.
+         */
+        fun calculateWorkerMemoryBudget(
+            context: Context,
+            requestedMiB: Long = _workerRamMB.value.toLong()
+        ): WorkerMemoryBudget {
+            val memoryManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (memoryManager == null) {
+                return WorkerMemoryBudget.calculate(0L, 0L, requestedMiB)
+            }
+            val memoryInfo = ActivityManager.MemoryInfo()
+            memoryManager.getMemoryInfo(memoryInfo)
+            return WorkerMemoryBudget.fromBytes(
+                totalBytes = memoryInfo.totalMem,
+                availableBytes = memoryInfo.availMem,
+                requestedMiB = requestedMiB
+            )
         }
+
+        /** Set worker RAM allocation using the latest known snapshot when no Context is available. */
+        fun setWorkerRam(ramMB: Int) {
+            if (_isRunning.value || _mode.value == DistributedMode.WORKER) return
+            val budget = runCatching { LlamaApplication.instance }
+                .getOrNull()
+                ?.let { calculateWorkerMemoryBudget(it, ramMB.toLong()) }
+                ?: _workerMemoryBudget.value.withRequested(ramMB.toLong())
+            publishWorkerMemoryBudget(budget)
+        }
+
+        /**
+         * Sanitizes and saves a stopped worker contribution against the supplied device snapshot.
+         * Changes are ignored while the worker is active so an applied process budget cannot be
+         * changed by a later UI recomposition.
+         */
+        fun setWorkerRam(context: Context, ramMB: Int): WorkerMemoryBudget {
+            if (_isRunning.value || _mode.value == DistributedMode.WORKER) {
+                return _workerMemoryBudget.value
+            }
+            val budget = calculateWorkerMemoryBudget(context, ramMB.toLong())
+            publishWorkerMemoryBudget(budget)
+            return budget
+        }
+
+        private fun publishWorkerMemoryBudget(budget: WorkerMemoryBudget) {
+            val contributionMiB = budget.contributionMiB.coerceIn(0L, Int.MAX_VALUE.toLong())
+            _workerMemoryBudget.value = budget.copy(contributionMiB = contributionMiB)
+            _workerRamMB.value = contributionMiB.toInt()
+            if (budget.totalMiB > 0L) {
+                workerPrefs()?.edit()?.putInt(WORKER_MEMORY_KEY, contributionMiB.toInt())?.apply()
+            }
+        }
+
+        private fun workerPrefs() = runCatching {
+            LlamaApplication.instance.getSharedPreferences(WORKER_MEMORY_PREFS, Context.MODE_PRIVATE)
+        }.getOrNull()
+
+        private fun loadSavedWorkerRamMiB(): Int =
+            workerPrefs()?.getInt(WORKER_MEMORY_KEY, DEFAULT_WORKER_RAM_MB)?.coerceAtLeast(0)
+                ?: DEFAULT_WORKER_RAM_MB
         
         // Static helper methods to start/stop via intents
-        fun startWorker(context: Context, port: Int = RPC_DEFAULT_PORT, ramMB: Int = 4096, threads: Int = 4, enableCache: Boolean = false) {
+        fun startWorker(context: Context, port: Int = RPC_DEFAULT_PORT, ramMB: Int = _workerRamMB.value, threads: Int = 4, enableCache: Boolean = false) {
+            if (_isRunning.value || _mode.value == DistributedMode.WORKER) return
+            val budget = calculateWorkerMemoryBudget(context, ramMB.toLong())
+            publishWorkerMemoryBudget(budget)
+            if (!budget.canLaunch) {
+                addRpcLog(
+                    context.getString(
+                        com.example.llamadroid.R.string.dist_worker_memory_unavailable,
+                        WorkerMemoryBudget.MINIMUM_VIABLE_MIB
+                    )
+                )
+                return
+            }
             val intent = Intent(context, DistributedService::class.java).apply {
                 action = ACTION_START_WORKER
                 putExtra(EXTRA_PORT, port)
-                putExtra(EXTRA_RAM_MB, ramMB)
+                putExtra(EXTRA_RAM_MB, budget.contributionMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
                 putExtra(EXTRA_THREADS, threads)
                 putExtra(EXTRA_CACHE, enableCache)
             }
@@ -1158,7 +1244,7 @@ class DistributedService : Service() {
         when (action) {
             ACTION_START_WORKER -> {
                 val port = intent.getIntExtra(EXTRA_PORT, RPC_DEFAULT_PORT)
-                val ramMB = intent.getIntExtra(EXTRA_RAM_MB, 4096)
+                val ramMB = intent.getIntExtra(EXTRA_RAM_MB, _workerRamMB.value)
                 val threads = intent.getIntExtra(EXTRA_THREADS, 4)
                 val enableCache = intent.getBooleanExtra(EXTRA_CACHE, false)
                 startWorkerMode(port, ramMB, threads, enableCache)
@@ -1192,10 +1278,41 @@ class DistributedService : Service() {
      * Start worker mode - run rpc-server binary
      */
     private fun startWorkerMode(port: Int, ramMB: Int, threads: Int = 4, enableCache: Boolean = false) {
+        // The watchdog restarts a crashed process while keeping WORKER mode set, so the
+        // process-running flag is the launch guard here. Public setters still reject changes
+        // whenever WORKER mode is active.
         if (_isRunning.value) {
             DebugLog.log("[$TAG] Worker already running")
             return
         }
+
+        // Revalidate at the service boundary because available memory can change after the UI
+        // snapshot was taken. The applied contribution is the value published to the UI and used
+        // by the watchdog for any restart, while an active worker is never changed in place.
+        val launchBudget = calculateWorkerMemoryBudget(applicationContext, ramMB.toLong())
+        publishWorkerMemoryBudget(launchBudget)
+        if (!launchBudget.canLaunch) {
+            addRpcLog(
+                getString(
+                    com.example.llamadroid.R.string.dist_worker_memory_unavailable,
+                    WorkerMemoryBudget.MINIMUM_VIABLE_MIB
+                )
+            )
+            DebugLog.log(
+                "[$TAG] Worker launch rejected: contribution=${launchBudget.contributionMiB}MiB " +
+                    "maximum=${launchBudget.maximumMiB}MiB"
+            )
+            // A watchdog restart can arrive after available memory has dropped. Tear down the
+            // stale worker state so the service does not remain stuck in WORKER mode without a
+            // process; a normal stopped launch has nothing to tear down here.
+            if (_mode.value == DistributedMode.WORKER) {
+                stopWorkerMode()
+            }
+            return
+        }
+        val appliedRamMB = launchBudget.contributionMiB
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
         
         // Register service via NSD
         val deviceName = try {
@@ -1234,7 +1351,7 @@ class DistributedService : Service() {
             try {
                 _mode.value = DistributedMode.WORKER
                 _workerPort.value = port
-                _workerRamMB.value = ramMB
+                _workerRamMB.value = appliedRamMB
                 
                 // Acquire WakeLock to keep CPU running while serving as RPC worker
                 WakeLockManager.acquire(applicationContext, "DistributedService")
@@ -1298,7 +1415,7 @@ class DistributedService : Service() {
                 addRpcLog("Command: ${command.joinToString(" ")}")
                 
                 // Start Watchdog
-                launchProcessWatchdog(port, ramMB, threads, enableCache)
+                launchProcessWatchdog(port, appliedRamMB, threads, enableCache)
                 
                 // Read output/detect connections
                 val reader = BufferedReader(InputStreamReader(rpcProcess!!.inputStream))
