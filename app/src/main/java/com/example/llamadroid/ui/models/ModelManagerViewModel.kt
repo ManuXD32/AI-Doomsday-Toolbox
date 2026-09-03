@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import com.example.llamadroid.util.DebugLog
+import java.io.File
 
 class ModelManagerViewModel(
     private val repository: ModelRepository
@@ -216,34 +217,63 @@ class ModelManagerViewModel(
     ) {
         viewModelScope.launch {
             try {
-                val file = java.io.File(path)
-                val sizeBytes = if (file.exists()) file.length() else 0L
-                
-                // Determine effective type based on badges
-                val effectiveType = if (modelType == ModelType.LLM && hasEmbedding) {
-                    ModelType.EMBEDDING
-                } else {
-                    modelType
-                }
-                
-                val modelEntity = ModelEntity(
-                    repoId = "local-import",
-                    filename = filename,
+                val modelEntity = buildLocalModelEntity(
                     path = path,
-                    sizeBytes = sizeBytes,
-                    type = effectiveType,
-                    isVision = effectiveType == ModelType.LLM && hasVision,
+                    filename = filename,
+                    modelType = modelType,
+                    hasVision = hasVision,
+                    hasEmbedding = hasEmbedding,
                     sdCapabilities = sdCapabilities,
                     layerCount = layerCount
                 )
                 
                 repository.insertModel(modelEntity)
-                DebugLog.log("Imported local model: $filename as ${effectiveType.name} (vision=$hasVision, layers=$layerCount)")
+                DebugLog.log("Imported local model: $filename as ${modelEntity.type.name} (vision=$hasVision, layers=$layerCount)")
             } catch (e: Exception) {
                 DebugLog.log("Failed to import model: ${e.message}")
             }
         }
     }
+}
+
+/**
+ * Builds the database row for a file copied into the model manager's local-import location.
+ *
+ * This is kept separate from the coroutine-backed import entry point so the persisted contract
+ * can be tested without constructing a repository or ViewModel. Other model managers intentionally
+ * keep their own import semantics and do not use this helper.
+ */
+internal fun buildLocalModelEntity(
+    path: String,
+    filename: String,
+    modelType: ModelType,
+    hasVision: Boolean = false,
+    hasEmbedding: Boolean = false,
+    sdCapabilities: String? = null,
+    layerCount: Int = 0
+): ModelEntity {
+    val file = File(path)
+    val sizeBytes = if (file.exists()) file.length() else 0L
+
+    // Determine effective type based on badges.
+    val effectiveType = if (modelType == ModelType.LLM && hasEmbedding) {
+        ModelType.EMBEDDING
+    } else {
+        modelType
+    }
+
+    return ModelEntity(
+        repoId = "local-import",
+        filename = filename,
+        path = path,
+        sizeBytes = sizeBytes,
+        type = effectiveType,
+        // A model manager import has already copied the payload into its final path.
+        isDownloaded = true,
+        isVision = effectiveType == ModelType.LLM && hasVision,
+        sdCapabilities = sdCapabilities,
+        layerCount = layerCount
+    )
 }
 
 /**

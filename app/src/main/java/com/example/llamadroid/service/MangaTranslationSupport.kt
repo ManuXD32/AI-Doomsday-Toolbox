@@ -608,18 +608,19 @@ object MangaTranslationSupport {
         return DocumentPreflightResult(blockers)
     }
 
+    private fun ModelEntity.hasInstalledFile(): Boolean =
+        path.isNotBlank() && (isDownloaded || File(path).isFile)
+
     fun installedOcrModels(models: List<ModelEntity>): List<ModelEntity> =
         models.filter { model ->
-            model.isDownloaded &&
-                model.path.isNotBlank() &&
+            model.hasInstalledFile() &&
                 model.filename.endsWith(".gguf", ignoreCase = true) &&
                 (model.type == ModelType.VISION || model.isVision)
         }.sortedBy { it.filename.lowercase(Locale.US) }
 
     fun installedProjectors(models: List<ModelEntity>): List<ModelEntity> =
         models.filter { model ->
-            model.isDownloaded &&
-                model.path.isNotBlank() &&
+            model.hasInstalledFile() &&
                 model.filename.endsWith(".gguf", ignoreCase = true) &&
                 model.type in setOf(ModelType.VISION_PROJECTOR, ModelType.MMPROJ)
         }.sortedBy { it.filename.lowercase(Locale.US) }
