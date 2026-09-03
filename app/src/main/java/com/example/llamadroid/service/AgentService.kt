@@ -1649,7 +1649,12 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
                     appendLine(context.getString(R.string.agent_bgr_result_source, toProjectRelativePath(safeInputPath)))
                     appendLine(context.getString(R.string.model_filename_label, model.filename))
                     appendLine(context.getString(R.string.agent_bgr_result_backend, backend.name))
-                    appendLine(context.getString(R.string.agent_bgr_result_resize_before, settingsRepo.agentBackgroundRemovalResizeBeforeProcessing.value))
+                    appendLine(
+                        context.getString(
+                            R.string.agent_bgr_result_resize_before,
+                            settingsRepo.agentBackgroundRemovalResizeBeforeProcessing.value.toString()
+                        )
+                    )
                     appendLine(context.getString(R.string.agent_bgr_result_resize_max_edge, settingsRepo.agentBackgroundRemovalResizeMaxEdge.value))
                     maskWorkspacePath?.let { appendLine(context.getString(R.string.agent_bgr_result_mask, it)) }
                 }.trimEnd()

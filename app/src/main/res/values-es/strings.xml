@@ -4125,8 +4125,8 @@
     <string name="tool_kokoro_desc">Kokoro TTS - Motor de Texto-a-Voz offline de alta calidad.</string>
     <string name="tool_piper_desc">Piper TTS - TTS neuronal local, eficiente y de sonido natural.</string>
     <string name="action_delete">Eliminar</string>
-    <string name="dashboard_active_downloads">Descargas activas</string>
-    <string name="dashboard_connect_from">Conecta desde %s</string>
+    <string name="dashboard_active_downloads">%d descargas activas</string>
+    <string name="dashboard_connect_from">Conectar desde:</string>
     <string name="dashboard_distributed_title">IA Distribuida</string>
     <string name="dashboard_kiwix_library">Biblioteca Kiwix</string>
     <string name="dashboard_local_only">Solo local</string>
@@ -6605,7 +6605,7 @@
     <string name="adventure_gate_info_potions">Las pociones de PV y maná se compran con monedas normales en la tienda del Nexo. Usar una en combate gasta el turno, y cada combate permite exactamente cuatro pociones. En casa recuperan solo PV o maná de la Puerta.</string>
     <string name="adventure_gate_info_equipment">Armas, escudos y anillos usan monedas normales. Tu mascota puede llevar uno de cada, y una sola reliquia de jefe. El equipo sube stats, potencia elementos, mejora curas o pociones, refleja daño, devuelve maná o activa efectos especiales.</string>
     <string name="adventure_gate_info_shields">El escudo equipado marca las debilidades y resistencias de tu mascota. Los ataques enemigos hacen 1.5x si golpean una debilidad del escudo y 0.6x si golpean una resistencia.</string>
-    <string name="adventure_gate_info_drops">Los jefes de las fases 7 y 15 pueden soltar equipo reliquia único. Cada victoria tira un 20% si aún no tienes esa reliquia, y repetir el jefe vuelve a tirar. Solo puedes equipar una reliquia a la vez.</string>
+    <string name="adventure_gate_info_drops" formatted="false">Los jefes de las fases 7 y 15 pueden soltar equipo reliquia único. Cada victoria tira un 20% si aún no tienes esa reliquia, y repetir el jefe vuelve a tirar. Solo puedes equipar una reliquia a la vez.</string>
     <string name="adventure_gate_info_skills">Cada nivel da 1 punto de habilidad. Las habilidades iniciales son gratis. Las nuevas cuestan 1 PH en niveles 1-10, 2 PH en 11-24, 3 PH en 25-39 y 4 PH en 40+.</string>
     <string name="adventure_gate_info_statuses">Veneno y quemadura hacen daño con el tiempo. Congelación y parálisis pueden hacer perder un turno. Los iconos aparecen en las cartas de monstruo.</string>
     <string name="adventure_gate_info_types">Los iconos de tipo muestran el elemento de ataques, magia y monstruos. Una debilidad recibe 1.5x de daño, una resistencia recibe 0.6x, y los jefes reducen golpes que no sean débiles. Mantén pulsado un monstruo para ver sus debilidades y resistencias exactas.</string>
@@ -8578,6 +8578,45 @@
     <string name="agent_invocation_status_cancelled">Cancelado</string>
     <string name="agent_invocation_status_interrupted">Interrumpido</string>
     <string name="agent_invocation_messages_empty">Este agente todavía no ha producido mensajes visibles.</string>
+
+    <!-- Roles de ejecución del agente y ajustes de herramientas separados -->
+    <string name="agent_tool_settings_title">Ajustes de herramientas</string>
+    <string name="agent_tool_settings_desc">Configura las herramientas del agente, las aprobaciones, los proveedores de investigación, la generación de imágenes y la eliminación del fondo por separado de los ajustes del modelo del agente.</string>
+    <string name="agent_codebase_scout_name">Explorador de código</string>
+    <string name="agent_codebase_scout_desc">Descubrimiento de solo lectura del repositorio para archivos, símbolos, arquitectura, restricciones y riesgos.</string>
+    <string name="agent_researcher_name">Investigador</string>
+    <string name="agent_researcher_desc">Investigación externa, de Kiwix y de bases de conocimiento seleccionadas en modo de solo lectura para la planificación.</string>
+    <string name="agent_planner_name">Planificador</string>
+    <string name="agent_planner_desc">Convierte los hallazgos verificados del proyecto y los requisitos del usuario en un plan de implementación estructurado.</string>
+    <string name="agent_server_effective_context">Contexto del servidor: %1$s</string>
+    <string name="agent_plan_read_only_delegation_approval">Requerir aprobación para delegaciones de solo lectura del modo Plan</string>
+    <string name="agent_plan_read_only_delegation_approval_desc">Cuando está desactivado, Explorador de código, Investigador, Planificador y los agentes personalizados verificados de solo lectura pueden iniciarse automáticamente en el modo Plan. La aprobación de delegaciones del modo Construir no cambia.</string>
+    <string name="agent_request_plan_delegation">¿Permitir delegación de solo lectura del modo Plan a %1$s?</string>
+    <string name="agent_tool_search_label">Buscar herramientas</string>
+    <string name="agent_critical_tool_desc">Herramienta crítica para el protocolo. ADT la mantiene activada porque desactivarla podría dejar bloqueado a un agente o corromper el estado del flujo de trabajo.</string>
+    <string name="agent_tool_category_workflow">Flujo de trabajo y delegación</string>
+    <string name="agent_tool_category_inspection">Archivos e inspección</string>
+    <string name="agent_tool_category_mutation">Modificación de archivos</string>
+    <string name="agent_tool_category_execution">Comandos y ejecución</string>
+    <string name="agent_tool_category_memory">Memoria del proyecto</string>
+    <string name="agent_tool_category_research">Investigación y conocimiento</string>
+    <string name="agent_tool_category_media">Herramientas multimedia y visuales</string>
+    <string name="agent_tool_category_advanced">Herramientas avanzadas</string>
+    <string name="agent_workflow_readiness_title">Preparación del flujo de trabajo</string>
+    <string name="agent_workflow_plan_label">Flujo de trabajo del plan</string>
+    <string name="agent_workflow_build_label">Flujo de construcción</string>
+    <string name="agent_workflow_quality_label">Revisión y verificación</string>
+    <string name="agent_workflow_ready">Listo</string>
+    <string name="agent_workflow_plan_limited">Limitado: activa Explorador de código y Planificador para completar el descubrimiento y la planificación.</string>
+    <string name="agent_workflow_build_limited">No disponible: el Programador está desactivado.</string>
+    <string name="agent_workflow_quality_limited">Limitado: el Revisor o el Ejecutor está desactivado.</string>
+    <string name="agent_workflow_research_backend_note">Investigador es configurable, pero los proveedores en línea y Kiwix están desactivados. Las bases de conocimiento seleccionadas todavía pueden estar disponibles.</string>
+    <string name="agent_progress_agent_succeeded">%1$s se completó correctamente</string>
+    <string name="agent_progress_agent_failed">%1$s falló</string>
+    <string name="agent_progress_agent_blocked">%1$s informó de un bloqueo</string>
+    <string name="agent_progress_agent_cancelled">%1$s se canceló</string>
+    <string name="agent_progress_agent_interrupted">%1$s se interrumpió</string>
+
     <!-- Ajustes recordados y VAD de Whisper -->
     <string name="whisper_last_used_defaults_desc">El último modelo, idioma y formato elegidos se reutilizan automáticamente.</string>
     <string name="whisper_vad_title">Omisión inteligente de silencios</string>

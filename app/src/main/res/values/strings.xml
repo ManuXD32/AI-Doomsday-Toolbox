@@ -6131,7 +6131,7 @@
     <string name="adventure_gate_hp_value">HP %1$d/%2$d</string>
     <string name="adventure_gate_hub_body">Choose a realm. Clear phase 15 to open the next portal.</string>
     <string name="adventure_gate_hub_title">Gate Nexum</string>
-    <string name="adventure_gate_info_drops">Bosses on phases 7 and 15 can drop unique relic gear. Each victory rolls a 20% chance if you do not own that relic yet, and replays can roll again. Only one relic can be equipped at a time.</string>
+    <string name="adventure_gate_info_drops" formatted="false">Bosses on phases 7 and 15 can drop unique relic gear. Each victory rolls a 20% chance if you do not own that relic yet, and replays can roll again. Only one relic can be equipped at a time.</string>
     <string name="adventure_gate_info_equipment">Weapons, shields, and rings use normal coins. Your pet can equip one of each, plus one boss relic. Gear can raise stats, boost elements, improve healing or potions, reflect damage, refund mana, or trigger special effects.</string>
     <string name="adventure_gate_info_potions">HP and mana potions are bought with normal coins in the Nexum Shop. Using one in battle consumes your turn, and each battle allows exactly four potions. Using them at home restores Adventure Gate HP or mana only.</string>
     <string name="adventure_gate_info_recovery">Adventure HP and mana persist. Sleep restores 7 HP and 4 mana per minute, relaxing restores 5 HP and 3 mana per minute, and awake non-battle time restores 3 HP and 2 mana per minute. Battles never refill HP or mana.</string>
