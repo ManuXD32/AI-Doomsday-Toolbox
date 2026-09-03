@@ -144,7 +144,9 @@ fun LegacyUpscaleScreen(navController: NavController) {
     }
 
     LaunchedEffect(Unit) {
-        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
+        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.LEGACY_IMAGE_UPSCALER
+        )
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             GenerationDiagnosticsStore.recordBreadcrumb(
                 source = LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE,

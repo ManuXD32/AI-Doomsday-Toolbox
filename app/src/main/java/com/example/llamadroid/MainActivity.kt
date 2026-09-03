@@ -32,6 +32,8 @@ import com.example.llamadroid.service.DatasetForegroundService
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
 import com.example.llamadroid.util.UpscalerAssetPackSupport
 import com.example.llamadroid.util.getParcelableExtraCompat
+import com.example.llamadroid.ui.navigation.ExternalRouteResolver
+import com.example.llamadroid.ui.navigation.ExternalRouteResolution
 
 /**
  * Shared file data from intent
@@ -49,7 +51,9 @@ class MainActivity : ComponentActivity() {
     
     // Share intent data
     private val sharedFileData = mutableStateOf<SharedFileData?>(null)
-    private val pendingNavigationRoute = mutableStateOf<String?>(null)
+    private val pendingNavigationRoute = mutableStateOf<ExternalRouteResolution>(
+        ExternalRouteResolution.NoRoute
+    )
     private val isDeployingBinaries = mutableStateOf(true)
     private val deploymentStatusId = mutableStateOf(R.string.deployment_adjusting)
     
@@ -214,7 +218,9 @@ class MainActivity : ComponentActivity() {
                         sharedFileData = sharedFileData.value,
                         onSharedFileHandled = { sharedFileData.value = null },
                         pendingNavigationRoute = pendingNavigationRoute.value,
-                        onNavigationHandled = { pendingNavigationRoute.value = null }
+                        onNavigationHandled = {
+                            pendingNavigationRoute.value = ExternalRouteResolution.NoRoute
+                        }
                     )
                 }
             }
@@ -254,8 +260,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun extractNavigationRoute(intent: Intent?): String? {
-        return intent?.getStringExtra(EXTRA_OPEN_ROUTE)
+    private fun extractNavigationRoute(intent: Intent?): ExternalRouteResolution {
+        // External launchers (widgets, notifications and old shortcuts) can outlive the
+        // destination they were created for. Resolve at the Activity boundary so malformed or
+        // stale values never reach NavController.navigate().
+        if (intent?.hasExtra(EXTRA_OPEN_ROUTE) != true) {
+            return ExternalRouteResolution.NoRoute
+        }
+        val rawRoute = runCatching { intent.getStringExtra(EXTRA_OPEN_ROUTE) }
+            .getOrElse { return ExternalRouteResolution.Rejected }
+        return ExternalRouteResolver.resolve(rawRoute)
     }
 
     @Suppress("DEPRECATION")

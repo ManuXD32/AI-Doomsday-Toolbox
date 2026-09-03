@@ -133,7 +133,9 @@ fun VideoUpscalerScreen(navController: NavController) {
     var pendingSharedVideoPath by remember { mutableStateOf<String?>(null) }
     
     LaunchedEffect(Unit) {
-        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
+        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.VIDEO_UPSCALER
+        )
         if (pendingFile != null && pendingFile.mimeType.startsWith("video/")) {
             try {
                 val inputStream = context.contentResolver.openInputStream(pendingFile.uri)

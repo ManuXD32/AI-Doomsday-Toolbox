@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -47,12 +48,18 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.service.PDFService
 import com.example.llamadroid.service.PDFSummaryService
 import com.example.llamadroid.service.PdfSummaryStateHolder
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
 import com.example.llamadroid.ui.components.SummarySettingsChipCard
+import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.util.DocumentUriDisplayName
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,6 +105,35 @@ fun PDFSummaryScreen(navController: NavController) {
 
     val selectedPdf = selectedPdfString?.let(Uri::parse)
 
+    // Consume PDFs selected through the Activity share chooser. The target guard prevents a
+    // pending document intended for another destination from being stolen by this screen.
+    LaunchedEffect(Unit) {
+        val pendingFile = SharedFileHolder.consumeFor(SharedFileTarget.PDF_SUMMARY)
+        if (pendingFile?.mimeType == "application/pdf") {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    SharedFileHolder.importToCache(
+                        context = context,
+                        pendingFile = pendingFile,
+                        fallbackDisplayName = context.getString(R.string.file_type_pdf),
+                        filePrefix = "shared_pdf_summary"
+                    )
+                }
+            }.onSuccess { imported ->
+                PdfSummaryStateHolder.reset()
+                PdfSummaryStateHolder.setSelectedPdfUri(imported.uri.toString())
+                PdfSummaryStateHolder.setSelectedPdfName(imported.displayName)
+                PDFSummaryService.clearResult()
+                PDFSummaryService.clearPartialChunkSummaries()
+            }.onFailure { error ->
+                android.util.Log.w("PDFSummaryScreen", "Shared PDF import failed", error)
+                PdfSummaryStateHolder.setError(
+                    context.getString(R.string.pdf_shared_file_import_failed)
+                )
+            }
+        }
+    }
+
     val pdfPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -109,7 +145,13 @@ fun PDFSummaryScreen(navController: NavController) {
             if (isSummarizing) return@let
             PdfSummaryStateHolder.reset()
             PdfSummaryStateHolder.setSelectedPdfUri(it.toString())
-            PdfSummaryStateHolder.setSelectedPdfName(it.lastPathSegment ?: context.getString(R.string.file_type_pdf))
+            PdfSummaryStateHolder.setSelectedPdfName(
+                DocumentUriDisplayName.resolve(
+                    context,
+                    it,
+                    context.getString(R.string.file_type_pdf)
+                )
+            )
             PDFSummaryService.clearResult()
             PDFSummaryService.clearPartialChunkSummaries()
         }
@@ -154,7 +196,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     ) {
                         Icon(Icons.Default.Refresh, stringResource(R.string.pdf_refresh_backend_info))
                     }
-                    IconButton(onClick = { navController.navigate("settings_pdf") }) {
+                    IconButton(onClick = { navController.navigate(Screen.PDFSettings.route) }) {
                         Icon(Icons.Default.Settings, stringResource(R.string.nav_settings))
                     }
                 }
@@ -209,6 +251,25 @@ fun PDFSummaryScreen(navController: NavController) {
                         modifier = Modifier.padding(16.dp),
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
+                }
+            }
+
+            // Import failures happen before a usable PDF URI exists, so keep the error visible
+            // above the picker instead of hiding it inside the selected-document branch.
+            if (selectedPdf == null) {
+                errorMessage?.let {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.8f)
+                        )
+                    ) {
+                        Text(
+                            text = it,
+                            modifier = Modifier.padding(16.dp),
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
                 }
             }
 

@@ -47,9 +47,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.navigation.ExternalRouteResolution
+import com.example.llamadroid.ui.navigation.ImageGenUpscaleCompatibilityRedirect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
 import kotlinx.coroutines.CoroutineScope
@@ -99,6 +102,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.SharedFileData
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.game.TamaGameEngine
@@ -126,12 +131,19 @@ import com.example.llamadroid.ui.components.AssetDownloadDialog
 import com.example.llamadroid.util.AssetPackManagerUtil
 import kotlinx.coroutines.launch
 
+private data class SharedFileDestination(
+    val label: String,
+    val route: String,
+    val target: SharedFileTarget,
+    val sourceTag: String = target.legacyId
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaApp(
     sharedFileData: SharedFileData? = null,
     onSharedFileHandled: () -> Unit = {},
-    pendingNavigationRoute: String? = null,
+    pendingNavigationRoute: ExternalRouteResolution = ExternalRouteResolution.NoRoute,
     onNavigationHandled: () -> Unit = {}
 ) {
     val navController = rememberNavController()
@@ -140,6 +152,8 @@ fun LlamaApp(
     
     // Check for first run
     val context = LocalContext.current
+    val feedbackScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     val settingsRepo = remember { SettingsRepository(context) }
     val hasCompletedWelcome by settingsRepo.hasCompletedWelcome.collectAsState()
     var showWelcome by remember { mutableStateOf(!hasCompletedWelcome) }
@@ -194,7 +208,7 @@ fun LlamaApp(
     
     // Share intent chooser dialog
     var showShareChooser by remember { mutableStateOf(false) }
-    var shareOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var shareOptions by remember { mutableStateOf<List<SharedFileDestination>>(emptyList()) }
     var pendingShareData by remember { mutableStateOf<SharedFileData?>(null) }
     
     // Handle shared file
@@ -206,34 +220,84 @@ fun LlamaApp(
                 // Audio -> User chooses Whisper or Workflow
                 mimeType.startsWith("audio/") -> {
                     shareOptions = listOf(
-                        context.getString(R.string.share_transcribe) to Screen.AudioTranscription.route,
-                        context.getString(R.string.share_workflow) to Screen.Workflows.route
+                        SharedFileDestination(
+                            context.getString(R.string.share_transcribe),
+                            Screen.AudioTranscription.route,
+                            SharedFileTarget.AUDIO_TRANSCRIPTION
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_workflow),
+                            Screen.Workflows.route,
+                            SharedFileTarget.WORKFLOWS
+                        )
                     )
                     showShareChooser = true
                 }
                 // Video -> User chooses Whisper, Video Upscaler, or Workflow
                 mimeType.startsWith("video/") -> {
                     shareOptions = listOf(
-                        context.getString(R.string.share_interpolation) to Screen.VideoInterpolation.route,
-                        context.getString(R.string.share_upscaler) to Screen.VideoUpscaler.route,
-                        context.getString(R.string.share_transcribe) to Screen.AudioTranscription.route,
-                        context.getString(R.string.share_workflow) to Screen.Workflows.route
+                        SharedFileDestination(
+                            context.getString(R.string.share_interpolation),
+                            Screen.VideoInterpolation.route,
+                            SharedFileTarget.VIDEO_INTERPOLATION
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_upscaler),
+                            Screen.VideoUpscaler.route,
+                            SharedFileTarget.VIDEO_UPSCALER
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_transcribe),
+                            Screen.AudioTranscription.route,
+                            SharedFileTarget.AUDIO_TRANSCRIPTION
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_workflow),
+                            Screen.Workflows.route,
+                            SharedFileTarget.WORKFLOWS
+                        )
                     )
                     showShareChooser = true
                 }
                 // Image -> User chooses SD img2img or upscale
                 mimeType.startsWith("image/") -> {
                     shareOptions = listOf(
-                        context.getString(R.string.share_img2img) to "imagegen_img2img",
-                        context.getString(R.string.share_img2vid) to "videogen_img2vid",
-                        context.getString(R.string.share_upscale_sd) to "imagegen_upscale"
+                        SharedFileDestination(
+                            context.getString(R.string.share_img2img),
+                            Screen.ImageGen.createRoute(startMode = 1),
+                            SharedFileTarget.IMAGE_GENERATION,
+                            sourceTag = SharedFileHolder.Target.IMAGE_GEN_IMG2IMG
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_img2vid),
+                            Screen.VideoGen.route,
+                            SharedFileTarget.VIDEO_GENERATION,
+                            sourceTag = SharedFileHolder.Target.VIDEO_GEN_IMG2VID
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_upscale_sd),
+                            Screen.ImageGen.createRoute(startMode = 2),
+                            SharedFileTarget.IMAGE_GENERATION,
+                            sourceTag = SharedFileHolder.Target.IMAGE_GEN_UPSCALE
+                        )
                     )
                     showShareChooser = true
                 }
-                // PDF -> PDF Toolbox (future)
+                // PDF -> choose the document tool instead of silently consuming the share.
                 mimeType == "application/pdf" -> {
-                    // TODO: Navigate to PDF Toolbox when implemented
-                    onSharedFileHandled()
+                    shareOptions = listOf(
+                        SharedFileDestination(
+                            context.getString(R.string.share_pdf_toolbox),
+                            Screen.PDFToolbox.route,
+                            SharedFileTarget.PDF_TOOLBOX
+                        ),
+                        SharedFileDestination(
+                            context.getString(R.string.share_pdf_summary),
+                            Screen.PDFSummary.route,
+                            SharedFileTarget.PDF_SUMMARY
+                        )
+                    )
+                    showShareChooser = true
                 }
             }
         }
@@ -245,32 +309,40 @@ fun LlamaApp(
             onDismissRequest = { 
                 showShareChooser = false
                 pendingShareData = null
+                SharedFileHolder.clear()
                 onSharedFileHandled()
             },
             title = { Text(stringResource(R.string.action_open_with)) },
             text = {
                 Column {
-                    shareOptions.forEach { (label, targetId) ->
+                    shareOptions.forEach { destination ->
                         TextButton(
                             onClick = {
                                 showShareChooser = false
                                 pendingShareData?.let { data: SharedFileData ->
-                                    // Determine actual navigation route
-                                    val route = when (targetId) {
-                                        "imagegen_img2img" -> "${Screen.ImageGen.route}?startMode=1"
-                                        "imagegen_upscale" -> Screen.ImageGenUpscale.route
-                                        "videogen_img2vid" -> Screen.VideoGen.route
-                                        else -> targetId
+                                    SharedFileHolder.setPendingFile(
+                                        uri = data.uri,
+                                        mimeType = data.mimeType,
+                                        target = destination.target,
+                                        sourceTag = destination.sourceTag
+                                    )
+                                    try {
+                                        navController.navigate(destination.route)
+                                    } catch (_: IllegalArgumentException) {
+                                        SharedFileHolder.clear()
+                                        feedbackScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                context.getString(R.string.navigation_destination_unavailable)
+                                            )
+                                        }
                                     }
-                                    com.example.llamadroid.data.SharedFileHolder.setPendingFile(data.uri, data.mimeType, targetId)
-                                    navController.navigate(route)
                                 }
                                 pendingShareData = null
                                 onSharedFileHandled()
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(label, modifier = Modifier.fillMaxWidth())
+                            Text(destination.label, modifier = Modifier.fillMaxWidth())
                         }
                     }
                 }
@@ -280,6 +352,7 @@ fun LlamaApp(
                 TextButton(onClick = { 
                     showShareChooser = false
                     pendingShareData = null
+                    SharedFileHolder.clear()
                     onSharedFileHandled()
                 }) {
                     Text(stringResource(R.string.action_cancel))
@@ -289,17 +362,36 @@ fun LlamaApp(
     }
 
     LaunchedEffect(pendingNavigationRoute) {
-        pendingNavigationRoute?.let { route ->
-            if (route.isNotBlank() && currentRoute != route) {
-                navController.navigate(route) {
-                    popUpTo(navController.graph.startDestinationId) {
-                        saveState = true
-                    }
-                    launchSingleTop = true
-                    restoreState = true
+        when (val resolution = pendingNavigationRoute) {
+            ExternalRouteResolution.NoRoute -> Unit
+            ExternalRouteResolution.Rejected -> {
+                feedbackScope.launch {
+                    snackbarHostState.showSnackbar(
+                        context.getString(R.string.navigation_destination_unavailable)
+                    )
                 }
+                onNavigationHandled()
             }
-            onNavigationHandled()
+            is ExternalRouteResolution.Navigate -> {
+                if (currentRoute != resolution.route) {
+                    try {
+                        navController.navigate(resolution.route) {
+                            popUpTo(navController.graph.startDestinationId) {
+                                saveState = true
+                            }
+                            launchSingleTop = true
+                            restoreState = true
+                        }
+                    } catch (_: IllegalArgumentException) {
+                        feedbackScope.launch {
+                            snackbarHostState.showSnackbar(
+                                context.getString(R.string.navigation_destination_unavailable)
+                            )
+                        }
+                    }
+                }
+                onNavigationHandled()
+            }
         }
     }
     
@@ -324,6 +416,7 @@ fun LlamaApp(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -445,7 +538,7 @@ fun LlamaApp(
             // Keep the historical route for shortcuts and saved navigation state, but render the
             // same curated workspace and task selector as every other image operation.
             composable(Screen.ImageGenUpscale.route) {
-                ImageGenScreen(navController, initialMode = com.example.llamadroid.ui.ai.IMAGE_GEN_MODE_UPSCALE)
+                ImageGenUpscaleCompatibilityRedirect(navController)
             }
             composable(Screen.OnnxImageGen.route) { OnnxImageGenScreen(navController) }
             composable(Screen.OnnxBackgroundRemoval.route) { OnnxBackgroundRemovalScreen(navController) }
@@ -486,9 +579,9 @@ fun LlamaApp(
             composable("settings_prompts") { SystemPromptsSettingsScreen(navController) }
             composable("settings_logs") { LogsScreen(navController) }
             // PDF screens
-            composable("pdf_toolbox") { PDFToolboxScreen(navController) }
-            composable("pdf_summary") { PDFSummaryScreen(navController) }
-            composable("settings_pdf") { PDFSettingsScreen(navController) }
+            composable(Screen.PDFToolbox.route) { PDFToolboxScreen(navController) }
+            composable(Screen.PDFSummary.route) { PDFSummaryScreen(navController) }
+            composable(Screen.PDFSettings.route) { PDFSettingsScreen(navController) }
             composable("video_sumup") { VideoSumupScreen(navController) }
             composable("about") { AboutScreen(navController) }
             // Kiwix screens

@@ -447,12 +447,22 @@
     <string name="whisper_status_cancelled">Transcripción cancelada</string>
     <string name="whisper_record_saved">Grabación guardada</string>
     <string name="whisper_video_loaded_note">Video cargado. La extracción ocurrirá al transcribir.</string>
-    <string name="whisper_error_shared_file">Fallo al cargar archivo compartido: %s</string>
+    <string name="whisper_copy_success">Transcripción copiada al portapapeles.</string>
+    <string name="whisper_share_result">Compartir transcripción</string>
+    <string name="whisper_permission_retry">Reintentar</string>
+    <string name="whisper_permission_rationale_title">Se necesita permiso del micrófono</string>
+    <string name="whisper_permission_rationale_message">La grabación usa el micrófono para crear un archivo de audio para la transcripción. Permite el acceso al micrófono para grabar.</string>
+    <string name="whisper_permission_settings_title">El permiso del micrófono está bloqueado</string>
+    <string name="whisper_permission_settings_message">El acceso al micrófono se denegó permanentemente. Abre los ajustes de la aplicación y activa el permiso del micrófono para grabar.</string>
+    <string name="whisper_open_settings">Abrir ajustes de la aplicación</string>
+    <string name="whisper_error_shared_file">No se pudo leer el archivo multimedia compartido. Vuelve a compartirlo mientras el origen siga disponible.</string>
+    <string name="whisper_error_media_load">No se pudo leer el archivo multimedia seleccionado.</string>
     <string name="whisper_error_extraction">Fallo al extraer audio (código: %d)</string>
     <string name="whisper_error_binary_not_found">No se encontró el binario de Whisper</string>
     <string name="whisper_error_audio_conversion_failed">La conversión de audio falló</string>
     <string name="whisper_error_ffmpeg_not_found">No se encontró el binario de ffmpeg</string>
     <string name="whisper_error_ffmpeg_exit_code">ffmpeg salió con el código %1$d</string>
+    <string name="whisper_error_ffmpeg_detail">Error de FFmpeg: %1$s</string>
     <string name="whisper_error_audio_conversion_detail">La conversión de audio falló: %1$s</string>
     <string name="whisper_error_failed_with_exit_code">Whisper falló con el código de salida %1$d</string>
     <string name="whisper_error_permission">Permiso de grabación denegado</string>
@@ -534,6 +544,7 @@
     
     <!-- PDF Tools -->
     <string name="pdf_toolbox_title">Herramientas PDF</string>
+    <string name="pdf_shared_file_ready">PDF compartido listo</string>
     <string name="pdf_tools_header">📄 Herramientas PDF</string>
     <string name="pdf_merge">Unir PDFs</string>
     <string name="pdf_merge_desc">Combina varios archivos PDF en uno solo</string>
@@ -565,6 +576,8 @@
     <string name="pdf_split_help">Extrae páginas específicas de un PDF</string>
     <string name="pdf_select">Seleccionar PDF</string>
     <string name="pdf_selected_file">PDF seleccionado</string>
+    <string name="pdf_shared_file_import_failed">No se pudo importar el PDF compartido. Comprueba que el origen siga disponible y vuelve a compartirlo.</string>
+    <string name="navigation_destination_unavailable">Ese destino ya no está disponible.</string>
     <string name="pdf_pages_to_extract">Páginas a extraer</string>
     <string name="pdf_pages_range_hint">ej. 1-3, 5, 7-10</string>
     <string name="pdf_split_range_help">Introduce números o rangos de páginas separados por comas</string>
@@ -4917,6 +4930,8 @@
     <string name="share_interpolation">🎞️ Interpolación de video</string>
     <string name="share_img2img">🎨 SD img2img</string>
     <string name="share_img2vid">🎥 Generación de video</string>
+    <string name="share_pdf_toolbox">📄 Herramientas PDF</string>
+    <string name="share_pdf_summary">📝 Resumen PDF</string>
     <string name="ai_video_gen">Generación de Video</string>
     <string name="ai_video_gen_desc">Crea clips locales txt2vid e img2vid</string>
     <string name="sd_models_badge_txt2img">txt2img</string>

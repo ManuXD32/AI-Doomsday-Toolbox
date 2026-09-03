@@ -74,6 +74,7 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.service.DownloadableMediaAsset
 import com.example.llamadroid.service.MediaAssetDownloader
 import com.example.llamadroid.service.MediaModelDownloadPhase
@@ -270,7 +271,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
     }
 
     LaunchedEffect(Unit) {
-        val pending = SharedFileHolder.consumePendingFile()
+        val pending = SharedFileHolder.consumeFor(SharedFileTarget.VIDEO_INTERPOLATION)
         if (pending != null && pending.mimeType.startsWith("video/")) {
             val path = copyUriToCache(pending.uri, "interpolation_shared_input.mp4")
             if (path == null) {

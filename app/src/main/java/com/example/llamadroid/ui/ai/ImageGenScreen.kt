@@ -737,7 +737,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
     // Check for shared file (from share intent)
     LaunchedEffect(Unit) {
-        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
+        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.IMAGE_GENERATION
+        )
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             try {
                 val targetMode = resolveInitialImageGenMode(pendingFile.targetScreen)
@@ -3598,7 +3600,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         if (mainTab == 0) {
             LazyColumn(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 16.dp)

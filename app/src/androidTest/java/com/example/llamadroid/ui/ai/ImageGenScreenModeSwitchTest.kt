@@ -9,6 +9,7 @@ import androidx.compose.ui.test.performClick
 import androidx.navigation.compose.rememberNavController
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import org.junit.After
 import org.junit.Before
 import org.junit.Rule
@@ -60,7 +61,7 @@ class ImageGenScreenModeSwitchTest {
         SharedFileHolder.setPendingFile(
             uri = Uri.parse("content://example/test.png"),
             mimeType = "image/png",
-            targetScreen = "imagegen_upscale"
+            target = SharedFileTarget.LEGACY_IMAGE_UPSCALER
         )
 
         composeRule.setContent {

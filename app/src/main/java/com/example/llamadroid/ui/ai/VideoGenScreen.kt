@@ -105,6 +105,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
@@ -319,7 +320,7 @@ fun VideoGenScreen(navController: NavController) {
 
     LaunchedEffect(Unit) {
         reloadGallery()
-        val pendingFile = SharedFileHolder.consumePendingFile()
+        val pendingFile = SharedFileHolder.consumeFor(SharedFileTarget.VIDEO_GENERATION)
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
             selectedMode = 1
             mainTab = 0
@@ -1255,17 +1256,30 @@ fun VideoGenScreen(navController: NavController) {
             onDismiss = { selectedGalleryVideo = null },
             onShare = { shareVideo(metadata) },
             onInterpolate = {
-                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", Screen.VideoInterpolation.route)
+                SharedFileHolder.setPendingFile(
+                    Uri.fromFile(File(metadata.mp4Path)),
+                    "video/mp4",
+                    SharedFileTarget.VIDEO_INTERPOLATION
+                )
                 selectedGalleryVideo = null
                 navController.navigate(Screen.VideoInterpolation.route)
             },
             onUpscale = {
-                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", Screen.VideoUpscaler.route)
+                SharedFileHolder.setPendingFile(
+                    Uri.fromFile(File(metadata.mp4Path)),
+                    "video/mp4",
+                    SharedFileTarget.VIDEO_UPSCALER
+                )
                 selectedGalleryVideo = null
                 navController.navigate(Screen.VideoUpscaler.route)
             },
             onInterpolateAndUpscale = {
-                SharedFileHolder.setPendingFile(Uri.fromFile(File(metadata.mp4Path)), "video/mp4", "interpolate_then_upscale")
+                SharedFileHolder.setPendingFile(
+                    Uri.fromFile(File(metadata.mp4Path)),
+                    "video/mp4",
+                    SharedFileTarget.VIDEO_INTERPOLATION,
+                    sourceTag = "interpolate_then_upscale"
+                )
                 selectedGalleryVideo = null
                 navController.navigate(Screen.Workflows.route)
             },

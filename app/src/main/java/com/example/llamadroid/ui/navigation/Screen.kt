@@ -9,7 +9,12 @@ sealed class Screen(val route: String) {
     object Logs : Screen("logs")
     // AI screens
     object AIHub : Screen("ai_hub")              // Landing page for AI features
-    object ImageGen : Screen("image_gen")        // Stable Diffusion image generation
+    object ImageGen : Screen("image_gen") {      // Stable Diffusion image generation
+        fun createRoute(startMode: Int = 0): String {
+            require(startMode in 0..4) { "Image Generation mode must be between 0 and 4" }
+            return "$route?startMode=$startMode"
+        }
+    }
     object ImageGenUpscale : Screen("image_gen_upscale") // Compatibility route into the unified Enlarge task
     object OnnxImageGen : Screen("onnx_image_gen") // ONNX Runtime image generation
     object OnnxBackgroundRemoval : Screen("onnx_background_removal") // ONNX Runtime background removal
@@ -40,6 +45,10 @@ sealed class Screen(val route: String) {
     object OnnxModels : Screen("onnx_models")    // ONNX model management
     object WhisperModels : Screen("whisper_models") // Whisper model management
     object LiteRtModels : Screen("litert_models") // LiteRT model management
+    // PDF screens
+    object PDFToolbox : Screen("pdf_toolbox")
+    object PDFSummary : Screen("pdf_summary")
+    object PDFSettings : Screen("settings_pdf")
     // Kiwix screens
     object KiwixHub : Screen("kiwix_hub")        // Landing page for Kiwix
     object ZimManager : Screen("zim_manager")    // ZIM file management

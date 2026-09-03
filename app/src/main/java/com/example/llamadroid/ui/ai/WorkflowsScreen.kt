@@ -107,7 +107,7 @@ fun WorkflowsScreen(navController: NavController) {
         )
     }
     val pendingSharedFile by SharedFileHolder.pendingFile.collectAsState()
-    LaunchedEffect(pendingSharedFile) {
+    LaunchedEffect(pendingSharedFile?.id) {
         if (pendingSharedFile?.targetScreen == "interpolate_then_upscale") selectedWorkflow = 6
     }
     var mangaCbzUris by remember {
@@ -547,8 +547,10 @@ fun WorkflowsScreen(navController: NavController) {
     
     // ===== Consume shared audio/video files =====
     LaunchedEffect(Unit) {
-        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumePendingFile()
-        if (pendingFile != null && pendingFile.targetScreen == "workflows") {
+        val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.WORKFLOWS
+        )
+        if (pendingFile != null) {
             val mimeType = pendingFile.mimeType
             if (mimeType.startsWith("audio/") || mimeType.startsWith("video/")) {
                 // Copy to cache for native access

@@ -40,14 +40,19 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.PdfOcrProvider
 import com.example.llamadroid.data.PdfTranslationOptionsSnapshot
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.SharedFileHolder
+import com.example.llamadroid.data.SharedFileTarget
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.service.*
 import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.util.DocumentUriDisplayName
 import com.example.llamadroid.util.FormatUtils
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * PDF Toolbox Screen - Merge, Split, Extract tools
@@ -70,6 +75,7 @@ fun PDFToolboxScreen(navController: NavController) {
     var ocrResult by rememberSaveable { mutableStateOf("") }
     var ocrProgressMessage by rememberSaveable { mutableStateOf("") }
     var ocrProgressDetails by rememberSaveable { mutableStateOf("") }
+    var sharedPdfImportError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(
         pdfTranslationJobState.successMessage,
@@ -104,6 +110,33 @@ fun PDFToolboxScreen(navController: NavController) {
     // Convert strings back to Uris
     val selectedPdfs = selectedPdfStrings.map { android.net.Uri.parse(it) }
     val selectedImages = selectedImageStrings.map { android.net.Uri.parse(it) }
+
+    // Consume a PDF selected through Android's ACTION_SEND chooser. The holder is intentionally
+    // consumed only by the destination that owns the share target, so other media flows cannot
+    // accidentally steal a pending file.
+    LaunchedEffect(Unit) {
+        val pendingFile = SharedFileHolder.consumeFor(SharedFileTarget.PDF_TOOLBOX)
+        if (pendingFile?.mimeType == "application/pdf") {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    SharedFileHolder.importToCache(
+                        context = context,
+                        pendingFile = pendingFile,
+                        fallbackDisplayName = context.getString(R.string.pdf_selected_file),
+                        filePrefix = "shared_pdf_toolbox"
+                    )
+                }
+            }.onSuccess { imported ->
+                selectedPdfStrings = listOf(imported.uri.toString())
+                sharedPdfImportError = null
+            }.onFailure { error ->
+                android.util.Log.w("PDFToolboxScreen", "Shared PDF import failed", error)
+                selectedPdfStrings = emptyList()
+                sharedPdfImportError = context.getString(R.string.pdf_shared_file_import_failed)
+            }
+        }
+    }
+
     val visibleOcrProgressMessage = if (
         pdfTranslationJobState.isRunning &&
         pdfTranslationJobState.kind != PdfTranslationJobKind.MANGA_BATCH &&
@@ -218,6 +251,53 @@ fun PDFToolboxScreen(navController: NavController) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }
+
+                sharedPdfImportError?.let { message ->
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            )
+                        ) {
+                            Text(
+                                message,
+                                modifier = Modifier.padding(12.dp),
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+
+                if (selectedPdfs.isNotEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    stringResource(R.string.pdf_shared_file_ready),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                selectedPdfs.forEach { uri ->
+                                    Text(
+                                        DocumentUriDisplayName.resolve(
+                                            context,
+                                            uri,
+                                            context.getString(R.string.pdf_selected_file)
+                                        ),
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 
                 item {
                     PDFToolCard(
@@ -267,7 +347,7 @@ fun PDFToolboxScreen(navController: NavController) {
                             Color(0xFFFF9800).copy(alpha = 0.15f),
                             Color(0xFFF57C00).copy(alpha = 0.3f)
                         ),
-                        onClick = { navController.navigate("pdf_summary") }
+                        onClick = { navController.navigate(Screen.PDFSummary.route) }
                     )
                 }
                 
@@ -428,7 +508,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                             Text("📄", style = MaterialTheme.typography.titleMedium)
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                "${index + 1}. ${uri.lastPathSegment ?: stringResource(R.string.pdf_selected_file)}",
+                                                "${index + 1}. ${DocumentUriDisplayName.resolve(context, uri, stringResource(R.string.pdf_selected_file))}",
                                                 modifier = Modifier.weight(1f),
                                                 maxLines = 1
                                             )
@@ -514,7 +594,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                     Text("📄", style = MaterialTheme.typography.headlineSmall)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
-                                        selectedPdfs.first().lastPathSegment ?: stringResource(R.string.pdf_selected_file),
+                                        DocumentUriDisplayName.resolve(
+                                            context,
+                                            selectedPdfs.first(),
+                                            stringResource(R.string.pdf_selected_file)
+                                        ),
                                         modifier = Modifier.weight(1f)
                                     )
                                     IconButton(onClick = { selectedPdfStrings = emptyList() }) {
@@ -611,7 +695,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                     Text("📄", style = MaterialTheme.typography.headlineSmall)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
-                                        selectedPdfs.first().lastPathSegment ?: stringResource(R.string.pdf_selected_file),
+                                        DocumentUriDisplayName.resolve(
+                                            context,
+                                            selectedPdfs.first(),
+                                            stringResource(R.string.pdf_selected_file)
+                                        ),
                                         modifier = Modifier.weight(1f)
                                     )
                                     IconButton(onClick = { selectedPdfStrings = emptyList() }) {
@@ -635,7 +723,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                                         com.example.llamadroid.data.db.NoteEntity(
                                                             title = context.getString(
                                                                 R.string.pdf_extract_note_title,
-                                                                selectedPdfs.first().lastPathSegment ?: context.getString(R.string.pdf_extract_default_source_name)
+                                                                DocumentUriDisplayName.resolve(
+                                                                    context,
+                                                                    selectedPdfs.first(),
+                                                                    context.getString(R.string.pdf_extract_default_source_name)
+                                                                )
                                                             ),
                                                             content = text,
                                                             type = com.example.llamadroid.data.db.NoteType.PDF_SUMMARY,
@@ -680,8 +772,12 @@ fun PDFToolboxScreen(navController: NavController) {
                         val hasOcrPdf = selectedOcrPdf != null
                         val hasOcrImage = selectedOcrImage != null
                         val sourceLabel = when {
-                            hasOcrPdf -> selectedOcrPdf?.lastPathSegment ?: stringResource(R.string.pdf_selected_file)
-                            hasOcrImage -> selectedOcrImage?.lastPathSegment ?: stringResource(R.string.pdf_selected_image)
+                            hasOcrPdf -> selectedOcrPdf?.let {
+                                DocumentUriDisplayName.resolve(context, it, stringResource(R.string.pdf_selected_file))
+                            } ?: stringResource(R.string.pdf_selected_file)
+                            hasOcrImage -> selectedOcrImage?.let {
+                                DocumentUriDisplayName.resolve(context, it, stringResource(R.string.pdf_selected_image))
+                            } ?: stringResource(R.string.pdf_selected_image)
                             else -> ""
                         }
 
@@ -1021,7 +1117,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                         Text("📄", style = MaterialTheme.typography.titleMedium)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            "${index + 1}. ${uri.lastPathSegment ?: stringResource(R.string.pdf_selected_file)}",
+                                            "${index + 1}. ${DocumentUriDisplayName.resolve(context, uri, stringResource(R.string.pdf_selected_file))}",
                                             modifier = Modifier.weight(1f),
                                             maxLines = 1
                                         )
@@ -1115,7 +1211,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                             Text("🖼️", style = MaterialTheme.typography.titleMedium)
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
-                                                "${index + 1}. ${uri.lastPathSegment ?: stringResource(R.string.pdf_selected_image)}",
+                                                "${index + 1}. ${DocumentUriDisplayName.resolve(context, uri, stringResource(R.string.pdf_selected_image))}",
                                                 modifier = Modifier.weight(1f),
                                                 maxLines = 1
                                             )
@@ -1203,7 +1299,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                     Text("📄", style = MaterialTheme.typography.titleLarge)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
-                                        selectedPdfs.first().lastPathSegment ?: stringResource(R.string.pdf_selected_file),
+                                        DocumentUriDisplayName.resolve(
+                                            context,
+                                            selectedPdfs.first(),
+                                            stringResource(R.string.pdf_selected_file)
+                                        ),
                                         modifier = Modifier.weight(1f)
                                     )
                                     IconButton(onClick = { selectedPdfStrings = emptyList() }) {
@@ -1331,7 +1431,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                     Text("📄", style = MaterialTheme.typography.titleLarge)
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
-                                        selectedPdfs.first().lastPathSegment ?: stringResource(R.string.pdf_selected_file),
+                                        DocumentUriDisplayName.resolve(
+                                            context,
+                                            selectedPdfs.first(),
+                                            stringResource(R.string.pdf_selected_file)
+                                        ),
                                         modifier = Modifier.weight(1f)
                                     )
                                     IconButton(onClick = { selectedPdfStrings = emptyList() }) {
@@ -1486,7 +1590,11 @@ private fun GuidedPdfOcrTool(
                     } else {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                source.lastPathSegment ?: stringResource(R.string.pdf_selected_file),
+                                DocumentUriDisplayName.resolve(
+                                    context,
+                                    source,
+                                    stringResource(R.string.pdf_selected_file)
+                                ),
                                 modifier = Modifier.weight(1f),
                                 maxLines = 1,
                                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -1705,7 +1813,11 @@ private fun GuidedPdfOcrTool(
                             PdfOcrResultAction.TRANSLATE_SCANNED_PDF -> {
                                 val sourceSpec = MangaTranslationSource(
                                     uri = selectedSource,
-                                    displayName = selectedSource.lastPathSegment ?: "document.pdf",
+                                    displayName = DocumentUriDisplayName.resolve(
+                                        context,
+                                        selectedSource,
+                                        context.getString(R.string.pdf_selected_file)
+                                    ),
                                     mimeType = "application/pdf"
                                 )
                                 PDFTranslationJobService.startOcrPdfTranslation(
@@ -1770,7 +1882,11 @@ private fun GuidedPdfOcrTool(
                                             com.example.llamadroid.data.db.NoteEntity(
                                                 title = context.getString(
                                                     R.string.pdf_ocr_note_title,
-                                                    selectedSource.lastPathSegment ?: context.getString(R.string.pdf_ocr_default_source_name)
+                                                    DocumentUriDisplayName.resolve(
+                                                        context,
+                                                        selectedSource,
+                                                        context.getString(R.string.pdf_ocr_default_source_name)
+                                                    )
                                                 ),
                                                 content = text,
                                                 type = com.example.llamadroid.data.db.NoteType.PDF_SUMMARY,
@@ -1837,7 +1953,11 @@ private fun GuidedSearchablePdfTranslationTool(
                     selectedPdfs.forEachIndexed { index, uri ->
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                uri.lastPathSegment ?: stringResource(R.string.pdf_selected_file),
+                                DocumentUriDisplayName.resolve(
+                                    context,
+                                    uri,
+                                    stringResource(R.string.pdf_selected_file)
+                                ),
                                 modifier = Modifier.weight(1f),
                                 maxLines = 1
                             )
@@ -1912,7 +2032,11 @@ private fun GuidedSearchablePdfTranslationTool(
                                 sources = selectedPdfs.map { uri ->
                                     MangaTranslationSource(
                                         uri = uri,
-                                        displayName = uri.lastPathSegment ?: "document.pdf",
+                                        displayName = DocumentUriDisplayName.resolve(
+                                            context,
+                                            uri,
+                                            context.getString(R.string.pdf_selected_file)
+                                        ),
                                         mimeType = "application/pdf"
                                     )
                                 },

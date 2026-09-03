@@ -434,12 +434,22 @@
     <string name="whisper_status_cancelled">Transcription cancelled</string>
     <string name="whisper_record_saved">Recording saved</string>
     <string name="whisper_video_loaded_note">Video file loaded. Audio extraction will happen on transcribe.</string>
-    <string name="whisper_error_shared_file">Failed to load shared file: %s</string>
+    <string name="whisper_copy_success">Transcription copied to clipboard.</string>
+    <string name="whisper_share_result">Share transcription</string>
+    <string name="whisper_permission_retry">Retry</string>
+    <string name="whisper_permission_rationale_title">Microphone permission needed</string>
+    <string name="whisper_permission_rationale_message">Recording uses the microphone to create an audio file for transcription. Allow microphone access to record.</string>
+    <string name="whisper_permission_settings_title">Microphone permission is blocked</string>
+    <string name="whisper_permission_settings_message">Microphone access was denied permanently. Open app settings and enable Microphone permission to record.</string>
+    <string name="whisper_open_settings">Open app settings</string>
+    <string name="whisper_error_shared_file">Could not read the shared media. Share it again while the source is still available.</string>
+    <string name="whisper_error_media_load">Could not read the selected media file.</string>
     <string name="whisper_error_extraction">Failed to extract audio (exit code: %d)</string>
     <string name="whisper_error_binary_not_found">Whisper binary not found</string>
     <string name="whisper_error_audio_conversion_failed">Audio conversion failed</string>
     <string name="whisper_error_ffmpeg_not_found">ffmpeg binary not found</string>
     <string name="whisper_error_ffmpeg_exit_code">ffmpeg exit code %1$d</string>
+    <string name="whisper_error_ffmpeg_detail">FFmpeg error: %1$s</string>
     <string name="whisper_error_audio_conversion_detail">Audio conversion failed: %1$s</string>
     <string name="whisper_error_failed_with_exit_code">Whisper failed with exit code %1$d</string>
     <string name="whisper_error_permission">Recording permission denied</string>
@@ -512,6 +522,7 @@
     
     <!-- PDF Tools -->
     <string name="pdf_toolbox_title">PDF Toolbox</string>
+    <string name="pdf_shared_file_ready">Shared PDF ready</string>
     <string name="pdf_tools_header">📄 PDF Tools</string>
     <string name="pdf_merge">Merge PDFs</string>
     <string name="pdf_merge_desc">Combine multiple PDF files into one</string>
@@ -543,6 +554,8 @@
     <string name="pdf_split_help">Extract specific pages from a PDF</string>
     <string name="pdf_select">Select PDF</string>
     <string name="pdf_selected_file">Selected PDF</string>
+    <string name="pdf_shared_file_import_failed">Could not import the shared PDF. Check that the source is still available and share it again.</string>
+    <string name="navigation_destination_unavailable">That destination is no longer available.</string>
     <string name="pdf_pages_to_extract">Pages to extract</string>
     <string name="pdf_pages_range_hint">e.g. 1-3, 5, 7-10</string>
     <string name="pdf_split_range_help">Enter page numbers or ranges separated by commas</string>
@@ -4727,6 +4740,8 @@
     <string name="share_interpolation">🎞️ Video Interpolation</string>
     <string name="share_img2img">🎨 SD img2img</string>
     <string name="share_img2vid">🎥 Video Generation</string>
+    <string name="share_pdf_toolbox">📄 PDF Toolbox</string>
+    <string name="share_pdf_summary">📝 PDF Summary</string>
     <string name="ai_video_gen">Video Generation</string>
     <string name="ai_video_gen_desc">Create local txt2vid and img2vid clips</string>
     <string name="sd_models_badge_txt2img">txt2img</string>
