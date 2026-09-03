@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!--
+      Lint scans dependency bytecode once for the base app and again through each dynamic feature.
+      These two archives contain server-side/delegating trust-manager implementations which are
+      not the app's HTTP client. Keep TrustAllX509TrustManager enabled for every app-owned source.
+    -->
+    <issue id="TrustAllX509TrustManager">
+        <ignore regexp=".*bcpkix-jdk15to18.*\.jar" />
+        <ignore regexp=".*hadoop-client-runtime.*\.jar" />
+    </issue>
+</lint>

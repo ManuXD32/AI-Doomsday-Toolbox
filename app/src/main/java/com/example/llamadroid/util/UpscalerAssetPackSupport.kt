@@ -241,7 +241,9 @@ object UpscalerAssetPackSupport {
     }
 
     private fun appVersionCode(context: Context): Long {
-        return context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+        return AppVersionCodeCompat.read(
+            context.packageManager.getPackageInfo(context.packageName, 0)
+        )
     }
 
     private fun findAvailableSourceDirectory(context: Context): File? {

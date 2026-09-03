@@ -19,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.coroutineScope
+import com.example.llamadroid.util.AppVersionCodeCompat
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -272,9 +273,8 @@ class MainActivity : ComponentActivity() {
         return ExternalRouteResolver.resolve(rawRoute)
     }
 
-    @Suppress("DEPRECATION")
     private fun appVersionCode(): Long {
-        return packageManager.getPackageInfo(packageName, 0).longVersionCode
+        return AppVersionCodeCompat.read(packageManager.getPackageInfo(packageName, 0))
     }
 
 }

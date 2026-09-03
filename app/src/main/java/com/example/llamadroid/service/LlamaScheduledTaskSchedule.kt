@@ -4,7 +4,6 @@ import com.example.llamadroid.data.model.LlamaScheduledTaskEntity
 import com.example.llamadroid.data.model.LlamaScheduledTaskScheduleType
 import java.time.DayOfWeek
 import java.time.Instant
-import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.YearMonth
@@ -50,7 +49,7 @@ object LlamaScheduledTaskSchedule {
 
     private fun nextDaily(afterMillis: Long, zone: ZoneId, time: LocalTime): Long {
         val after = LocalDateTime.ofInstant(Instant.ofEpochMilli(afterMillis), zone)
-        val today = LocalDate.ofInstant(Instant.ofEpochMilli(afterMillis), zone)
+        val today = Instant.ofEpochMilli(afterMillis).atZone(zone).toLocalDate()
         val candidate = LocalDateTime.of(today, time)
         val next = if (candidate.isAfter(after)) candidate else candidate.plusDays(1)
         return next.atZone(zone).toInstant().toEpochMilli()
@@ -59,7 +58,7 @@ object LlamaScheduledTaskSchedule {
     private fun nextWeekly(afterMillis: Long, zone: ZoneId, weekdaysMask: Int, time: LocalTime): Long? {
         if (weekdaysMask == 0) return null
         val after = LocalDateTime.ofInstant(Instant.ofEpochMilli(afterMillis), zone)
-        val today = LocalDate.ofInstant(Instant.ofEpochMilli(afterMillis), zone)
+        val today = Instant.ofEpochMilli(afterMillis).atZone(zone).toLocalDate()
         for (offset in 0..7) {
             val date = today.plusDays(offset.toLong())
             if (!hasWeekday(weekdaysMask, date.dayOfWeek)) continue

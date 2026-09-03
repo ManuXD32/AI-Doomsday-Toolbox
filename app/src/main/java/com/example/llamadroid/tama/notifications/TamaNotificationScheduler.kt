@@ -1,7 +1,6 @@
 package com.example.llamadroid.tama.notifications
 
 import android.app.AlarmManager
-import android.app.ForegroundServiceStartNotAllowedException
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -12,6 +11,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.TamaDeepDreamService
 import com.example.llamadroid.service.UnifiedNotificationManager
+import com.example.llamadroid.service.isForegroundServiceStartNotAllowed
 import com.example.llamadroid.tama.data.FarmLivestockType
 import com.example.llamadroid.tama.data.FarmTile
 import com.example.llamadroid.tama.data.GrowthStage
@@ -191,9 +191,10 @@ object TamaNotificationScheduler {
                 details = "signature=${waitingRun.signature}"
             )
         }.onFailure { error ->
-            val event = when (error) {
-                is ForegroundServiceStartNotAllowedException -> "pending_retry_start_denied"
-                else -> "pending_retry_start_failed"
+            val event = if (isForegroundServiceStartNotAllowed(error)) {
+                "pending_retry_start_denied"
+            } else {
+                "pending_retry_start_failed"
             }
             recordDeepDreamSchedulerBreadcrumb(
                 event = event,

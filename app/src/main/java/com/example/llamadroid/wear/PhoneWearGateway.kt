@@ -44,6 +44,7 @@ import com.example.llamadroid.service.NativeChatToolConfig
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.service.OrganizerAlarmScheduler
 import com.example.llamadroid.service.ServerState
+import com.example.llamadroid.service.isForegroundServiceStartNotAllowed
 import com.example.llamadroid.tama.data.ActivityType
 import com.example.llamadroid.tama.data.EventType
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
@@ -2337,7 +2338,7 @@ class LlamaServerController(
     }
 
     private fun maybePostConfirmationNotification(requestId: String, error: Throwable): String? {
-        val blocked = if (Build.VERSION.SDK_INT >= 31) error is android.app.ForegroundServiceStartNotAllowedException else false
+        val blocked = isForegroundServiceStartNotAllowed(error)
         if (!blocked && error !is IllegalStateException) return null
         // Only ids registered here may later start the server; see
         // PhoneWearGateway.confirmServerStart.

@@ -83,8 +83,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import androidx.compose.ui.graphics.Color
@@ -3807,18 +3805,9 @@ private fun LayerVisualizationCard(
 }
 
 
-// === Shared HTTP client helper to eliminate SSL boilerplate ===
+// === Shared HTTP client helper with platform TLS validation ===
 private fun createRemoteHttpClient(timeoutSec: Long = 5): okhttp3.OkHttpClient {
-    val trustAllCerts = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-        override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-        override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>, authType: String) {}
-        override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-    })
-    val sslCtx = javax.net.ssl.SSLContext.getInstance("SSL")
-    sslCtx.init(null, trustAllCerts, java.security.SecureRandom())
     return okhttp3.OkHttpClient.Builder()
-        .sslSocketFactory(sslCtx.socketFactory, trustAllCerts[0] as javax.net.ssl.X509TrustManager)
-        .hostnameVerifier { _, _ -> true }
         .connectTimeout(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
         .build()

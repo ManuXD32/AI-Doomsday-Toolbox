@@ -1,6 +1,5 @@
 package com.example.llamadroid.service
 
-import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -323,14 +322,10 @@ class TamaDeepDreamService : Service() {
             startForeground(taskId, notification)
             recordBreadcrumb("foreground_started", petId = petId, details = "taskId=$taskId")
             true
-        } catch (error: ForegroundServiceStartNotAllowedException) {
-            recordBreadcrumb("foreground_start_denied", petId = petId, details = error.message)
-            UnifiedNotificationManager.failTask(taskId, error.message ?: getString(R.string.error_generic))
-            keepTaskNotificationOnExit = true
-            notificationTaskId = null
-            false
         } catch (error: RuntimeException) {
-            val event = if (error.javaClass.name.contains("RemoteServiceException")) {
+            val event = if (isForegroundServiceStartNotAllowed(error)) {
+                "foreground_start_denied"
+            } else if (error.javaClass.name.contains("RemoteServiceException")) {
                 "foreground_start_failed_remote"
             } else {
                 "foreground_start_failed"

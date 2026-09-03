@@ -1,6 +1,5 @@
 package com.example.llamadroid.tama.notifications
 
-import android.app.ForegroundServiceStartNotAllowedException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,6 +8,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.TamaDeepDreamService
 import com.example.llamadroid.service.UnifiedNotificationManager
+import com.example.llamadroid.service.isForegroundServiceStartNotAllowed
 import com.example.llamadroid.tama.data.EventType
 import com.example.llamadroid.tama.data.FarmLivestockType
 import com.example.llamadroid.tama.data.Mood
@@ -343,9 +343,10 @@ class TamaNotificationReceiver : BroadcastReceiver() {
         if (shouldNotify) {
             UnifiedNotificationManager.showTamaDeepDreamRetryOnOpenNotification(petId, petName)
         }
-        val event = when (error) {
-            is ForegroundServiceStartNotAllowedException -> "receiver_foreground_start_denied"
-            else -> "receiver_foreground_start_failed"
+        val event = if (isForegroundServiceStartNotAllowed(error)) {
+            "receiver_foreground_start_denied"
+        } else {
+            "receiver_foreground_start_failed"
         }
         runCatching {
             GenerationDiagnosticsStore.recordBreadcrumb(
