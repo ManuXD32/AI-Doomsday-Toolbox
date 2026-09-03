@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -93,6 +94,7 @@ import com.example.llamadroid.ui.components.DraftLongTextField
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.SdSchedulerPicker
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -3368,12 +3370,12 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     }
 
     @Composable
-    fun GalleryPane() {
+    fun GalleryPane(modifier: Modifier = Modifier) {
         LaunchedEffect(Unit) {
             recordPaneRendered("gallery")
         }
         Column(
-            modifier = Modifier
+            modifier = modifier
                 .fillMaxSize()
                 .padding(horizontal = 16.dp)
         ) {
@@ -3384,40 +3386,62 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 stringResource(R.string.imagegen_mode_upscale),
                 "⚙️"
             )
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth()
+            val galleryFilterRowState = rememberLazyListState()
+            LaunchedEffect(galleryFilter) {
+                galleryFilterRowState.animateScrollToItem(galleryFilter.coerceIn(filterLabels.indices))
+            }
+            LazyRow(
+                state = galleryFilterRowState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(end = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                filterLabels.forEachIndexed { index, label ->
-                    SegmentedButton(
+                items(filterLabels.size) { index ->
+                    FilterChip(
                         selected = galleryFilter == index,
                         onClick = { galleryFilter = index },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = filterLabels.size
-                        )
-                    ) {
-                        Text(label, style = MaterialTheme.typography.labelSmall)
-                    }
+                        label = {
+                            Text(
+                                filterLabels[index],
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier.fillMaxWidth()
+            val sourceLabels = listOf(
+                stringResource(R.string.ai_servers_gallery_source_all),
+                stringResource(R.string.ai_servers_gallery_source_app),
+                stringResource(R.string.ai_servers_gallery_source_server)
+            )
+            val gallerySourceRowState = rememberLazyListState()
+            LaunchedEffect(gallerySourceFilter) {
+                gallerySourceRowState.animateScrollToItem(gallerySourceFilter.coerceIn(sourceLabels.indices))
+            }
+            LazyRow(
+                state = gallerySourceRowState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(end = 20.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                listOf(
-                    stringResource(R.string.ai_servers_gallery_source_all),
-                    stringResource(R.string.ai_servers_gallery_source_app),
-                    stringResource(R.string.ai_servers_gallery_source_server)
-                ).forEachIndexed { index, label ->
-                    SegmentedButton(
+                items(sourceLabels.size) { index ->
+                    FilterChip(
                         selected = gallerySourceFilter == index,
                         onClick = { gallerySourceFilter = index },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = 3)
-                    ) {
-                        Text(label, style = MaterialTheme.typography.labelSmall)
-                    }
+                        label = {
+                            Text(
+                                sourceLabels[index],
+                                style = MaterialTheme.typography.labelSmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    )
                 }
             }
 
@@ -3584,15 +3608,24 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
 
         // Main Tab Selector: Generate vs Gallery
         val mainTabs = listOf("🎨 " + stringResource(R.string.imagegen_tab_generate), "📂 " + stringResource(R.string.imagegen_tab_gallery))
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier.padding(horizontal = 16.dp),
+            edgePadding = 12.dp,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary
         ) {
             mainTabs.forEachIndexed { index, title ->
                 Tab(
                     selected = mainTab == index,
                     onClick = { mainTab = index },
-                    text = { Text(title) }
+                    text = {
+                        Text(
+                            title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 )
             }
         }
@@ -3641,7 +3674,18 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
                         IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
                     )
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val modeRowState = rememberLazyListState()
+                    LaunchedEffect(selectedMode) {
+                        modes.indexOfFirst { it.first == selectedMode }
+                            .takeIf { it >= 0 }
+                            ?.let { modeRowState.animateScrollToItem(it) }
+                    }
+                    LazyRow(
+                        state = modeRowState,
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(end = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         items(modes, key = { it.first }) { (modeIndex, modeLabel) ->
                             val modeEnabled = when (modeIndex) {
                                 IMAGE_GEN_MODE_TXT2IMG -> supportsTxt2Img
@@ -3655,7 +3699,13 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     switchGenerationMode(modeIndex)
                                 },
                                 enabled = modeEnabled,
-                                label = { Text(modeLabel, maxLines = 1) }
+                                label = {
+                                    Text(
+                                        modeLabel,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             )
                         }
                     }
@@ -3664,7 +3714,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }
         } else {
             key("gallery") {
-                GalleryPane()
+                GalleryPane(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                )
             }
         }
     }

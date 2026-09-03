@@ -34,14 +34,13 @@ import com.example.llamadroid.ui.ai.VideoGenScreen
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -128,6 +127,8 @@ import com.example.llamadroid.tama.data.farmDroneIdForFuelUpgradeId
 import com.example.llamadroid.tama.ui.TamaChatScreen
 import com.example.llamadroid.service.OllamaService
 import com.example.llamadroid.ui.components.AssetDownloadDialog
+import com.example.llamadroid.ui.components.AdaptiveAppNavigation
+import com.example.llamadroid.ui.components.AppNavigationDestination
 import com.example.llamadroid.util.AssetPackManagerUtil
 import kotlinx.coroutines.launch
 
@@ -395,14 +396,128 @@ fun LlamaApp(
         }
     }
     
-    // Bottom navigation items
-    val items = listOf(
-        Screen.Dashboard,
-        Screen.AIHub,
-        Screen.NotesManager,
-        Screen.Tama,  // Virtual pet tab
-        Screen.ModelManager,
-        Screen.Settings
+    // Bottom navigation destinations. Keep route ownership here so the shared navigation
+    // component can remain independent of this app's very large Screen catalog.
+    val modelRoutes = remember {
+        setOf(
+            Screen.ModelManager.route,
+            Screen.ModelHub.route,
+            Screen.LLMModels.route,
+            Screen.SDModels.route,
+            Screen.OnnxModels.route,
+            Screen.WhisperModels.route,
+            Screen.LiteRtModels.route,
+            "model_share"
+        )
+    }
+    val tamaRoutes = remember {
+        setOf(
+            Screen.Tama.route,
+            Screen.TamaChat.route,
+            Screen.TamaGallery.route,
+            Screen.Arcade.route,
+            Screen.Farm.route,
+            Screen.Barn.route,
+            Screen.Coop.route,
+            Screen.Store.route,
+            Screen.Dungeon.route,
+            Screen.Adventure.route.substringBefore("/{"),
+            Screen.AdventureGate.route,
+            Screen.NightArena.route
+        )
+    }
+
+    fun isModelRoute(route: String?): Boolean = route != null && (
+        route in modelRoutes || route.startsWith("${Screen.ModelHub.route}/")
+    )
+    fun isSettingsRoute(route: String?): Boolean = route != null && (
+        route == Screen.Settings.route ||
+            route.startsWith("settings_") ||
+            route == "about"
+    )
+    fun isTamaRoute(route: String?): Boolean = route != null && (
+        route in tamaRoutes ||
+            route.startsWith("${Screen.Tama.route}/") ||
+            route.startsWith("${Screen.Adventure.route.substringBefore("/{")}/")
+    )
+
+    fun navigateFromAppNavigation(screen: Screen) {
+        // Hub screens intentionally open their hub and do not restore a nested child state.
+        val isHubScreen = screen == Screen.AIHub || screen == Screen.ModelManager
+        val targetRoute = if (screen == Screen.ModelManager) {
+            Screen.ModelHub.route
+        } else {
+            screen.route
+        }
+        navController.navigate(targetRoute) {
+            popUpTo(navController.graph.startDestinationId) {
+                saveState = true
+            }
+            launchSingleTop = true
+            restoreState = !isHubScreen
+        }
+    }
+
+    val directNavigationDestinations = listOf(
+        AppNavigationDestination(
+            route = Screen.Dashboard.route,
+            label = stringResource(R.string.responsive_nav_home),
+            icon = androidx.compose.material.icons.Icons.Default.Home,
+            contentDescription = stringResource(R.string.responsive_nav_home_accessibility),
+            onClick = { navigateFromAppNavigation(Screen.Dashboard) }
+        ),
+        AppNavigationDestination(
+            route = Screen.AIHub.route,
+            label = stringResource(R.string.responsive_nav_ai),
+            icon = androidx.compose.material.icons.Icons.Default.PlayArrow,
+            contentDescription = stringResource(R.string.responsive_nav_ai_accessibility),
+            isSelected = { route -> route == Screen.AIHub.route || ToolCatalog.matchesRoute(route) },
+            onClick = { navigateFromAppNavigation(Screen.AIHub) }
+        ),
+        AppNavigationDestination(
+            route = Screen.NotesManager.route,
+            label = stringResource(R.string.responsive_nav_notes),
+            icon = androidx.compose.material.icons.Icons.Default.Edit,
+            contentDescription = stringResource(R.string.responsive_nav_notes_accessibility),
+            onClick = { navigateFromAppNavigation(Screen.NotesManager) }
+        ),
+        AppNavigationDestination(
+            route = Screen.Tama.route,
+            label = stringResource(R.string.responsive_nav_pet),
+            icon = androidx.compose.material.icons.Icons.Default.Favorite,
+            contentDescription = stringResource(R.string.responsive_nav_pet_accessibility),
+            isSelected = ::isTamaRoute,
+            onClick = { navigateFromAppNavigation(Screen.Tama) }
+        ),
+        AppNavigationDestination(
+            route = Screen.ModelManager.route,
+            label = stringResource(R.string.responsive_nav_models),
+            icon = androidx.compose.material.icons.Icons.Default.Star,
+            contentDescription = stringResource(R.string.responsive_nav_models_accessibility),
+            isSelected = ::isModelRoute,
+            onClick = { navigateFromAppNavigation(Screen.ModelManager) }
+        ),
+        AppNavigationDestination(
+            route = Screen.Settings.route,
+            label = stringResource(R.string.responsive_nav_settings),
+            icon = androidx.compose.material.icons.Icons.Default.Settings,
+            contentDescription = stringResource(R.string.responsive_nav_settings_accessibility),
+            isSelected = ::isSettingsRoute,
+            onClick = { navigateFromAppNavigation(Screen.Settings) }
+        )
+    )
+    val compactNavigationDestinations = listOf(
+        directNavigationDestinations[0],
+        directNavigationDestinations[1],
+        directNavigationDestinations[2].copy(
+            label = stringResource(R.string.responsive_nav_plan),
+            contentDescription = stringResource(R.string.responsive_nav_plan_accessibility)
+        ),
+        directNavigationDestinations[3]
+    )
+    val overflowNavigationDestinations = listOf(
+        directNavigationDestinations[4],
+        directNavigationDestinations[5]
     )
     
     // Show welcome screen on first run
@@ -418,82 +533,12 @@ fun LlamaApp(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                tonalElevation = 0.dp
-            ) {
-                items.forEach { screen ->
-                    // For AI Hub, highlight any route owned by the centralized tool catalog.
-                    val isAIRoute = screen == Screen.AIHub && ToolCatalog.matchesRoute(currentRoute)
-                    
-                    // For Model Hub, also highlight when on LLMModels or SDModels screens
-                    val isModelRoute = screen == Screen.ModelManager && 
-                        currentRoute in listOf(
-                            Screen.ModelManager.route, Screen.ModelHub.route,
-                            Screen.LLMModels.route, Screen.SDModels.route,
-                            Screen.OnnxModels.route, Screen.WhisperModels.route,
-                            Screen.LiteRtModels.route
-                        )
-                    
-                    NavigationBarItem(
-                        icon = { 
-                            when(screen) {
-                                Screen.Dashboard -> Icon(Icons.Default.Home, null)
-                                Screen.AIHub -> Icon(Icons.Default.PlayArrow, null)
-                                Screen.NotesManager -> Icon(Icons.Default.Edit, null)
-                                Screen.Tama -> Icon(Icons.Default.Favorite, null)  // Heart for pet
-                                Screen.ModelManager -> Icon(Icons.Default.Star, null)
-                                Screen.Settings -> Icon(Icons.Default.Settings, null)
-                                Screen.Logs -> Icon(Icons.Default.Info, null)
-                                else -> Icon(Icons.Default.Home, null)
-                            }
-                        },
-                        label = { 
-                            Text(
-                                when(screen) {
-                                    Screen.Dashboard -> stringResource(R.string.nav_home)
-                                    Screen.AIHub -> stringResource(R.string.nav_ai)
-                                    Screen.NotesManager -> stringResource(R.string.nav_notes)
-                                    Screen.Tama -> stringResource(R.string.nav_tama)
-                                    Screen.ModelManager -> stringResource(R.string.nav_models)
-                                    Screen.Settings -> stringResource(R.string.nav_settings)
-                                    Screen.Logs -> stringResource(R.string.nav_logs)
-                                    else -> ""
-                                }
-                            )
-                        },
-                        selected = currentRoute == screen.route || isAIRoute || isModelRoute,
-                        onClick = {
-                            // For hub screens, don't restore state - always go to hub
-                            // This lets users switch between sub-screens
-                            val isHubScreen = screen == Screen.AIHub || screen == Screen.ModelManager
-                            val shouldRestoreState = !isHubScreen
-                            
-                            // ModelManager tab now goes to ModelHub
-                            val targetRoute = if (screen == Screen.ModelManager) {
-                                Screen.ModelHub.route
-                            } else {
-                                screen.route
-                            }
-                            
-                            navController.navigate(targetRoute) {
-                                popUpTo(navController.graph.startDestinationId) {
-                                    saveState = true
-                                }
-                                launchSingleTop = true
-                                restoreState = shouldRestoreState
-                            }
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = MaterialTheme.colorScheme.primary,
-                            selectedTextColor = MaterialTheme.colorScheme.primary,
-                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                            indicatorColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    )
-                }
-            }
+            AdaptiveAppNavigation(
+                currentRoute = currentRoute,
+                destinations = directNavigationDestinations,
+                compactDestinations = compactNavigationDestinations,
+                overflowDestinations = overflowNavigationDestinations
+            )
         }
     ) { innerPadding ->
         NavHost(

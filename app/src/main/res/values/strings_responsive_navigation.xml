@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Shared responsive navigation labels and full accessibility names. -->
+    <string name="responsive_nav_home">Home</string>
+    <string name="responsive_nav_ai">AI</string>
+    <string name="responsive_nav_notes">Organizer</string>
+    <string name="responsive_nav_plan">Plan</string>
+    <string name="responsive_nav_pet">P.E.T.</string>
+    <string name="responsive_nav_more">More</string>
+    <string name="responsive_nav_models">Models</string>
+    <string name="responsive_nav_settings">Settings</string>
+
+    <string name="responsive_nav_home_accessibility">Open Home</string>
+    <string name="responsive_nav_ai_accessibility">Open AI tools</string>
+    <string name="responsive_nav_notes_accessibility">Open Organizer</string>
+    <string name="responsive_nav_plan_accessibility">Open Plan</string>
+    <string name="responsive_nav_pet_accessibility">Open P.E.T.</string>
+    <string name="responsive_nav_more_accessibility">Open more destinations</string>
+    <string name="responsive_nav_models_accessibility">Open Models</string>
+    <string name="responsive_nav_settings_accessibility">Open Settings</string>
+
+    <string name="responsive_nav_more_title">More destinations</string>
+    <string name="responsive_nav_more_subtitle">Models and settings</string>
+    <string name="responsive_nav_more_close">Close more destinations</string>
+</resources>

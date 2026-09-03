@@ -42,9 +42,9 @@ fun ModelHubScreen(navController: NavController) {
                 .verticalScroll(scrollState)
         ) {
             AppPageHeader(
-                eyebrow = "MODELS",
+                eyebrow = stringResource(R.string.models_hub_eyebrow),
                 title = stringResource(R.string.models_hub),
-                subtitle = stringResource(R.string.settings_subtitle)
+                subtitle = stringResource(R.string.models_hub_subtitle)
             )
 
             AppHeroCard(

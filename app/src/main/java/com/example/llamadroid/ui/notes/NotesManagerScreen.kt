@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.notes
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.text.format.DateFormat
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
@@ -18,7 +19,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items as lazyRowItems
 import androidx.compose.foundation.lazy.items as lazyListItems
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -58,6 +62,7 @@ import com.example.llamadroid.ui.ai.llama.MarkdownText
 import com.example.llamadroid.ui.ai.llama.NoteExportPayload
 import com.example.llamadroid.ui.ai.llama.NotesExportPayload
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.markdownToPreview
 import com.example.llamadroid.service.formatNativeTodoItems
 import com.example.llamadroid.service.OrganizerAlarmScheduler
@@ -121,6 +126,9 @@ fun NotesManagerScreen(navController: NavController) {
     val organizerAlarms by db.organizerDao().getAllAlarms().collectAsState(initial = emptyList())
     val organizerSettings by db.organizerDao().getLlmSettings().collectAsState(initial = null)
     val effectiveOrganizerSettings = organizerSettings ?: OrganizerLlmSettingsEntity()
+    val organizerDisplayLocale = Locale.getDefault()
+    val organizerDisplayZone = ZoneId.systemDefault()
+    val organizerUses24HourClock = DateFormat.is24HourFormat(context)
 
     // Filter notes based on search and type filter
     val filteredNotes = remember(allNotes, searchQuery, selectedFilter) {
@@ -331,7 +339,11 @@ fun NotesManagerScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
-            TabRow(selectedTabIndex = selectedOrganizerTab) {
+            AppScrollableTabRow(
+                selectedTabIndex = selectedOrganizerTab,
+                edgePadding = 12.dp,
+                containerColor = Color.Transparent
+            ) {
                 listOf(
                     R.string.organizer_tab_notes,
                     R.string.organizer_tab_calendar,
@@ -343,13 +355,38 @@ fun NotesManagerScreen(navController: NavController) {
                             selectedOrganizerTab = index
                             selectedNoteIds = emptySet()
                         },
-                        text = { Text(stringResource(labelRes), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(labelRes),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                val count = when (index) {
+                                    0 -> allNotes.size
+                                    1 -> organizerEvents.size
+                                    else -> organizerAlarms.size
+                                }
+                                if (count > 0) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Badge { Text(count.toString()) }
+                                }
+                            }
+                        }
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // The tab content sits below a static header/tab block. Constrain that content to
+            // the remaining viewport so each list keeps its own vertical scroll surface.
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+            Column(modifier = Modifier.fillMaxSize()) {
             if (selectedOrganizerTab == 0) {
             // Search bar
             OutlinedTextField(
@@ -370,48 +407,48 @@ fun NotesManagerScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Filter chips - horizontal scroll for more filters
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+            // Keep the filter chips intrinsic-width and scrollable. The selected filter is
+            // brought into view when a narrow phone cannot show the complete row at once.
+            val filterOptions = listOf(
+                null to stringResource(R.string.notes_all),
+                NoteType.TRANSCRIPTION to "🎤",
+                NoteType.PDF_SUMMARY to "📄",
+                NoteType.VIDEO_SUMMARY to "🎬",
+                NoteType.WORKFLOW to "⚙️",
+                NoteType.TODO_LIST to "☑️",
+                NoteType.MANUAL to "📝"
+            )
+            val filterRowState = rememberLazyListState()
+            val selectedFilterIndex = filterOptions.indexOfFirst { it.first == selectedFilter }
+            LaunchedEffect(selectedFilter) {
+                if (selectedFilterIndex >= 0) {
+                    filterRowState.animateScrollToItem(selectedFilterIndex)
+                }
+            }
+            LazyRow(
+                state = filterRowState,
+                modifier = Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(end = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
-                    selected = selectedFilter == null,
-                    onClick = { selectedFilter = null },
-                    label = { Text(stringResource(R.string.notes_all)) }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.TRANSCRIPTION,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.TRANSCRIPTION) null else NoteType.TRANSCRIPTION },
-                    label = { Text("🎤") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.PDF_SUMMARY,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.PDF_SUMMARY) null else NoteType.PDF_SUMMARY },
-                    label = { Text("📄") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.VIDEO_SUMMARY,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.VIDEO_SUMMARY) null else NoteType.VIDEO_SUMMARY },
-                    label = { Text("🎬") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.WORKFLOW,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.WORKFLOW) null else NoteType.WORKFLOW },
-                    label = { Text("⚙️") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.TODO_LIST,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.TODO_LIST) null else NoteType.TODO_LIST },
-                    label = { Text("☑️") }
-                )
-                FilterChip(
-                    selected = selectedFilter == NoteType.MANUAL,
-                    onClick = { selectedFilter = if (selectedFilter == NoteType.MANUAL) null else NoteType.MANUAL },
-                    label = { Text("📝") }
-                )
+                lazyRowItems(filterOptions) { (type, label) ->
+                    val count = if (type == null) allNotes.size else allNotes.count { it.type == type }
+                    FilterChip(
+                        selected = selectedFilter == type,
+                        onClick = {
+                            selectedFilter = if (selectedFilter == type && type != null) null else type
+                        },
+                        label = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (count > 0) {
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Badge { Text(count.toString()) }
+                                }
+                            }
+                        }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -419,7 +456,9 @@ fun NotesManagerScreen(navController: NavController) {
             // Notes list
             if (filteredNotes.isEmpty()) {
                 Box(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -445,7 +484,9 @@ fun NotesManagerScreen(navController: NavController) {
             } else {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -491,6 +532,9 @@ fun NotesManagerScreen(navController: NavController) {
                     events = organizerEvents,
                     alarms = organizerAlarms,
                     settings = effectiveOrganizerSettings,
+                    displayLocale = organizerDisplayLocale,
+                    displayZone = organizerDisplayZone,
+                    uses24HourClock = organizerUses24HourClock,
                     selectedDate = selectedCalendarDate,
                     visibleMonth = visibleCalendarMonth,
                     onSelectedDateChange = { selectedCalendarDate = it },
@@ -521,6 +565,9 @@ fun NotesManagerScreen(navController: NavController) {
                     alarms = organizerAlarms,
                     events = organizerEvents,
                     settings = effectiveOrganizerSettings,
+                    displayLocale = organizerDisplayLocale,
+                    displayZone = organizerDisplayZone,
+                    uses24HourClock = organizerUses24HourClock,
                     onSettingsChange = { settings ->
                         scope.launch { db.organizerDao().upsertLlmSettings(settings) }
                     },
@@ -556,6 +603,8 @@ fun NotesManagerScreen(navController: NavController) {
                         }
                     }
                 )
+            }
+            }
             }
         }
     }
@@ -886,6 +935,9 @@ private fun OrganizerCalendarTab(
     events: List<OrganizerEventEntity>,
     alarms: List<OrganizerAlarmEntity>,
     settings: OrganizerLlmSettingsEntity,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     selectedDate: LocalDate,
     visibleMonth: YearMonth,
     onSelectedDateChange: (LocalDate) -> Unit,
@@ -895,9 +947,8 @@ private fun OrganizerCalendarTab(
     onEditEvent: (OrganizerEventEntity) -> Unit,
     onDeleteEvent: (OrganizerEventEntity) -> Unit
 ) {
-    val zone = remember { ZoneId.systemDefault() }
-    val selectedEvents = remember(events, selectedDate, zone) {
-        events.filter { it.occursOn(selectedDate, zone) }
+    val selectedEvents = remember(events, selectedDate, displayZone) {
+        events.filter { it.occursOn(selectedDate, displayZone) }
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -925,7 +976,7 @@ private fun OrganizerCalendarTab(
                             Icon(Icons.Default.KeyboardArrowLeft, stringResource(R.string.organizer_calendar_previous_month))
                         }
                         Text(
-                            visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())),
+                            visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", displayLocale)),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -952,7 +1003,7 @@ private fun OrganizerCalendarTab(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             week.forEach { date ->
-                                val hasEvents = date != null && events.any { it.occursOn(date, zone) }
+                                val hasEvents = date != null && events.any { it.occursOn(date, displayZone) }
                                 val isSelected = date == selectedDate
                                 Surface(
                                     modifier = Modifier
@@ -1007,7 +1058,7 @@ private fun OrganizerCalendarTab(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    selectedDate.format(DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault())),
+                    selectedDate.format(DateTimeFormatter.ofPattern("EEE, MMM d", displayLocale)),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -1029,6 +1080,9 @@ private fun OrganizerCalendarTab(
                 OrganizerEventCard(
                     event = event,
                     alarms = alarms.filter { it.eventId == event.id },
+                    displayLocale = displayLocale,
+                    displayZone = displayZone,
+                    uses24HourClock = uses24HourClock,
                     onEdit = { onEditEvent(event) },
                     onDelete = { onDeleteEvent(event) }
                 )
@@ -1042,6 +1096,9 @@ private fun OrganizerAlarmsTab(
     alarms: List<OrganizerAlarmEntity>,
     events: List<OrganizerEventEntity>,
     settings: OrganizerLlmSettingsEntity,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     onSettingsChange: (OrganizerLlmSettingsEntity) -> Unit,
     onCreateAlarm: () -> Unit,
     onEditAlarm: (OrganizerAlarmEntity) -> Unit,
@@ -1088,6 +1145,9 @@ private fun OrganizerAlarmsTab(
                 OrganizerAlarmCard(
                     alarm = alarm,
                     linkedEvent = events.firstOrNull { it.id == alarm.eventId },
+                    displayLocale = displayLocale,
+                    displayZone = displayZone,
+                    uses24HourClock = uses24HourClock,
                     onEdit = { onEditAlarm(alarm) },
                     onToggle = { enabled -> onToggleAlarm(alarm, enabled) },
                     onDelete = { onDeleteAlarm(alarm) }
@@ -1169,6 +1229,9 @@ private fun OrganizerSwitchRow(
 private fun OrganizerEventCard(
     event: OrganizerEventEntity,
     alarms: List<OrganizerAlarmEntity>,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -1177,30 +1240,40 @@ private fun OrganizerEventCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Text(
+                event.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                if (event.allDay) stringResource(R.string.organizer_all_day)
+                else organizerEventTimeLabel(event, displayLocale, displayZone, uses24HourClock),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                horizontalArrangement = Arrangement.End
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(event.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                    Text(
-                        if (event.allDay) stringResource(R.string.organizer_all_day) else organizerEventTimeLabel(event),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
                 }
-                Row {
-                    IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
-                    }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
-                    }
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
                 }
             }
             event.location.takeIf { it.isNotBlank() }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
             event.description.takeIf { it.isNotBlank() }?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -1220,44 +1293,65 @@ private fun OrganizerEventCard(
 private fun OrganizerAlarmCard(
     alarm: OrganizerAlarmEntity,
     linkedEvent: OrganizerEventEntity?,
+    displayLocale: Locale,
+    displayZone: ZoneId,
+    uses24HourClock: Boolean,
     onEdit: () -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit
 ) {
     Card(shape = RoundedCornerShape(10.dp)) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Switch(checked = alarm.enabled, onCheckedChange = onToggle)
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(alarm.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    organizerAlarmTimeLabel(alarm),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                linkedEvent?.let {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Switch(checked = alarm.enabled, onCheckedChange = onToggle)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        stringResource(R.string.organizer_alarm_linked_event, it.title),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
+                        alarm.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        organizerAlarmTimeLabel(alarm, displayLocale, displayZone, uses24HourClock),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                alarm.message.takeIf { it.isNotBlank() }?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            linkedEvent?.let {
+                Text(
+                    stringResource(R.string.organizer_alarm_linked_event, it.title),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            alarm.message.takeIf { it.isNotBlank() }?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
                 }
-            }
-            IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Edit, stringResource(R.string.action_edit), modifier = Modifier.size(18.dp))
-            }
-            IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(18.dp))
+                }
             }
         }
     }
@@ -2774,19 +2868,25 @@ private fun organizerWeekdayLabels(): List<String> {
     return (0..6).map { monday.plusDays(it.toLong()).format(formatter) }
 }
 
-private fun organizerEventTimeLabel(event: OrganizerEventEntity): String {
-    val start = formatOrganizerUiDateTime(event.startAtMillis)
-    val end = event.endAtMillis?.let(::formatOrganizerUiDateTime)
+private fun organizerEventTimeLabel(
+    event: OrganizerEventEntity,
+    locale: Locale,
+    zone: ZoneId,
+    uses24HourClock: Boolean
+): String {
+    val start = formatOrganizerDateTimeForDisplay(event.startAtMillis, locale, zone, uses24HourClock)
+    val end = event.endAtMillis?.let {
+        formatOrganizerDateTimeForDisplay(it, locale, zone, uses24HourClock)
+    }
     return if (end == null) start else "$start - $end"
 }
 
-private fun organizerAlarmTimeLabel(alarm: OrganizerAlarmEntity): String =
-    formatOrganizerUiDateTime(alarm.triggerAtMillis)
-
-private fun formatOrganizerUiDateTime(millis: Long): String =
-    Instant.ofEpochMilli(millis)
-        .atZone(ZoneId.systemDefault())
-        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm", Locale.US))
+private fun organizerAlarmTimeLabel(
+    alarm: OrganizerAlarmEntity,
+    locale: Locale,
+    zone: ZoneId,
+    uses24HourClock: Boolean
+): String = formatOrganizerDateTimeForDisplay(alarm.triggerAtMillis, locale, zone, uses24HourClock)
 
 private fun organizerUiDateTimeText(date: LocalDate, time: LocalTime): String =
     LocalDateTime.of(date, time.withSecond(0).withNano(0))

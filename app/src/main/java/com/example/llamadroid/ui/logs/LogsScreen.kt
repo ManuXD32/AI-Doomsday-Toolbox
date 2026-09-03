@@ -37,6 +37,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
@@ -84,26 +85,30 @@ fun LogsScreen(navController: NavController) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 AppPageHeader(
-                    eyebrow = "DEBUG",
+                    eyebrow = stringResource(R.string.responsive_logs_eyebrow),
                     title = stringResource(R.string.logs_title),
                     subtitle = stringResource(R.string.settings_debug_desc)
                 )
             }
         
         // Tab Row
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = selectedTab.ordinal,
             modifier = Modifier.padding(horizontal = 20.dp),
+            edgePadding = 0.dp,
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            indicator = { _ -> }
+            contentColor = MaterialTheme.colorScheme.onSurface
         ) {
             Tab(
                 selected = selectedTab == LogTab.APP,
                 onClick = { selectedTab = LogTab.APP },
                 text = { 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("📱 " + stringResource(R.string.logs_tab_app))
+                        Text(
+                            "📱 " + stringResource(R.string.logs_tab_app),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                         if (appLogs.isNotEmpty()) {
                             Spacer(Modifier.width(4.dp))
                             Badge { Text("${appLogs.size}") }
@@ -116,7 +121,11 @@ fun LogsScreen(navController: NavController) {
                 onClick = { selectedTab = LogTab.GENERATION_DIAGNOSTICS },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🧪 " + stringResource(R.string.logs_tab_generation_diag))
+                        Text(
+                            "🧪 " + stringResource(R.string.logs_tab_generation_diag),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                         if (generationDiagnosticsAvailable) {
                             Spacer(Modifier.width(4.dp))
                             Badge(
@@ -134,7 +143,11 @@ fun LogsScreen(navController: NavController) {
                 onClick = { selectedTab = LogTab.RPC },
                 text = { 
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🌐 " + stringResource(R.string.logs_tab_rpc))
+                        Text(
+                            "🌐 " + stringResource(R.string.logs_tab_rpc),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
                         if (rpcLogs.isNotEmpty()) {
                             Spacer(Modifier.width(4.dp))
                             Badge(
@@ -602,6 +615,7 @@ private fun RpcLogsContent(
                 }
                 
                 LazyColumn(
+                    modifier = Modifier.weight(1f),
                     state = listState,
                     contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp),

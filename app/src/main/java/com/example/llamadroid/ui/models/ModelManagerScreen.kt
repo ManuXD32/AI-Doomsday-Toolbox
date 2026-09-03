@@ -53,6 +53,7 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -119,6 +120,7 @@ fun ModelManagerScreen(navController: NavController) {
     )
     
     val progressMap by viewModel.downloadProgress.collectAsStateWithLifecycle()
+    val installedModelCount by viewModel.installedModels.collectAsStateWithLifecycle()
     val managerDownloadTypeNames = remember {
         listOf(
             ModelType.LLM,
@@ -154,8 +156,9 @@ fun ModelManagerScreen(navController: NavController) {
                     subtitle = stringResource(R.string.ai_hub_subtitle)
                 )
                 AppSectionCard {
-                    TabRow(
+                    AppScrollableTabRow(
                         selectedTabIndex = selectedTab,
+                        edgePadding = 12.dp,
                         containerColor = Color.Transparent,
                         contentColor = MaterialTheme.colorScheme.primary
                     ) {
@@ -167,7 +170,9 @@ fun ModelManagerScreen(navController: NavController) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
                                             title,
-                                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal
+                                            fontWeight = if (selectedTab == index) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                         if (index == 1 && activeDownloads > 0) {
                                             Spacer(modifier = Modifier.width(4.dp))
@@ -177,6 +182,15 @@ fun ModelManagerScreen(navController: NavController) {
                                                 Text("$activeDownloads")
                                             }
                                         }
+                                        if (index == 0 && installedModelCount.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            ) {
+                                                Text(installedModelCount.size.toString())
+                                            }
+                                        }
                                     }
                                 }
                             )
@@ -184,10 +198,16 @@ fun ModelManagerScreen(navController: NavController) {
                     }
                 }
             }
-            when (selectedTab) {
-                0 -> InstalledTab(viewModel)
-                1 -> DownloadingTab(viewModel)
-                2 -> DiscoverTab(viewModel)
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
+                when (selectedTab) {
+                    0 -> InstalledTab(viewModel)
+                    1 -> DownloadingTab(viewModel)
+                    2 -> DiscoverTab(viewModel)
+                }
             }
         }
     }
@@ -1281,12 +1301,15 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                 Text(
                                     repoId.substringAfterLast("/"),
                                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                                    maxLines = 1
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     repoId.substringBeforeLast("/", ""),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Text(
@@ -1296,12 +1319,20 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                     "${(progress * 100).toInt()}%"
                                 },
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            // Cancel button
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            // Keep the compact action below the model identifier so a
+                            // long repository name never squeezes the cancel affordance.
                             IconButton(
-                                onClick = { 
+                                onClick = {
                                     val filename = DownloadProgressHolder.getFilename(repoId)
                                     if (filename != null) {
                                         DownloadService.cancelDownload(context, filename, repoId)
@@ -1316,9 +1347,9 @@ fun DownloadingTab(viewModel: ModelManagerViewModel) {
                                 )
                             }
                         }
-                        
+
                         Spacer(modifier = Modifier.height(12.dp))
-                        
+
                         if (isIndeterminate) {
                             LinearProgressIndicator(
                                 modifier = Modifier
@@ -1497,7 +1528,8 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                     style = MaterialTheme.typography.bodySmall
                                 )
                                 Text(
-                                    visionFiles.firstOrNull()?.filename ?: "mmproj file",
+                                    visionFiles.firstOrNull()?.filename
+                                        ?: stringResource(R.string.responsive_models_mmproj_file),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1725,15 +1757,25 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     hfModel.id.substringAfterLast("/"),
-                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
                                     hfModel.id.substringBeforeLast("/", ""),
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-                            if (!isDownloading) {
+                        }
+
+                        if (!isDownloading) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
                                 FilledTonalIconButton(
                                     onClick = { viewModel.selectRepoForDownload(hfModel.id) }
                                 ) {
@@ -1813,7 +1855,9 @@ fun DiscoverTab(viewModel: ModelManagerViewModel) {
                                 stringResource(R.string.whisper_downloading_progress, (progress!! * 100).toInt()),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.padding(top = 4.dp)
+                                modifier = Modifier.padding(top = 4.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -1841,15 +1885,16 @@ fun ModelCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(
                     Icons.Default.Star,
@@ -1857,19 +1902,22 @@ fun ModelCard(
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(40.dp)
                 )
-                // Nothing here truncates. Model filenames, repo ids and metadata are
-                // the information the user came to this screen for, and the card sits
-                // in a LazyColumn so it is free to grow taller.
+                // Keep identifiers readable while bounding unusually long repository
+                // names so the action row remains reachable on narrow phones.
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (subtitle.isNotBlank()) {
                         Text(
                             subtitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     // On its own line rather than appended after the repo id: when the
@@ -1878,18 +1926,26 @@ fun ModelCard(
                     Text(
                         sizeText,
                         style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     details.forEach { detail ->
                         Text(
                             detail,
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
-            Row {
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
                 onRename?.let {
                     IconButton(onClick = it) {
                         Icon(Icons.Default.Edit, stringResource(R.string.models_rename_title), tint = MaterialTheme.colorScheme.secondary)

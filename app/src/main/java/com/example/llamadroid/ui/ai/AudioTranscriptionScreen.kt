@@ -44,6 +44,9 @@ import com.example.llamadroid.service.*
 import com.example.llamadroid.ui.navigation.Screen
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.ResponsiveAction
+import com.example.llamadroid.ui.components.ResponsiveActionGroup
+import com.example.llamadroid.ui.components.ResponsiveActionStyle
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -474,28 +477,28 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     Text(stringResource(R.string.whisper_source_label), style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { mediaFilePicker.launch(arrayOf("audio/*", "video/*")) },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.List, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(stringResource(R.string.whisper_media_btn))
-                        }
-                        
-                        OutlinedButton(
-                            onClick = { requestRecordPermission() },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(stringResource(R.string.whisper_record_btn))
-                        }
-                    }
+                    val mediaLabel = stringResource(R.string.whisper_media_btn)
+                    val recordLabel = stringResource(R.string.whisper_record_btn)
+                    ResponsiveActionGroup(
+                        actions = listOf(
+                            ResponsiveAction(
+                                label = mediaLabel,
+                                onClick = { mediaFilePicker.launch(arrayOf("audio/*", "video/*")) },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                icon = Icons.Default.List,
+                                contentDescription = mediaLabel,
+                                style = ResponsiveActionStyle.Secondary
+                            ),
+                            ResponsiveAction(
+                                label = recordLabel,
+                                onClick = { requestRecordPermission() },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                icon = Icons.Default.Add,
+                                contentDescription = recordLabel,
+                                style = ResponsiveActionStyle.Secondary
+                            )
+                        )
+                    )
                     
                     // Show extraction progress for video files
                     if (isExtractingAudio) {
@@ -589,8 +592,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     // Output formats
                     Text(stringResource(R.string.whisper_output_formats), style = MaterialTheme.typography.labelLarge)
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
+                    ResponsiveActionGroup(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         FilterChip(
@@ -790,18 +792,17 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                stringResource(R.string.whisper_result_label),
-                                modifier = Modifier.weight(1f),
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                            Row {
-                                IconButton(
+                        Text(
+                            stringResource(R.string.whisper_result_label),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val copyLabel = stringResource(R.string.action_copy)
+                        val shareLabel = stringResource(R.string.action_share)
+                        ResponsiveActionGroup(
+                            actions = listOf(
+                                ResponsiveAction(
+                                    label = copyLabel,
                                     onClick = {
                                         val clipboard = context.getSystemService(
                                             Context.CLIPBOARD_SERVICE
@@ -817,14 +818,14 @@ fun AudioTranscriptionScreen(navController: NavController) {
                                             context.getString(R.string.whisper_copy_success),
                                             Toast.LENGTH_SHORT
                                         ).show()
-                                    }
-                                ) {
-                                    Icon(
-                                        Icons.Default.ContentCopy,
-                                        contentDescription = stringResource(R.string.action_copy)
-                                    )
-                                }
-                                IconButton(
+                                    },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                    icon = Icons.Default.ContentCopy,
+                                    contentDescription = copyLabel,
+                                    style = ResponsiveActionStyle.Secondary
+                                ),
+                                ResponsiveAction(
+                                    label = shareLabel,
                                     onClick = {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -836,15 +837,14 @@ fun AudioTranscriptionScreen(navController: NavController) {
                                                 context.getString(R.string.whisper_share_result)
                                             )
                                         )
-                                    }
-                                ) {
-                                    Icon(
-                                        Icons.Default.Share,
-                                        contentDescription = stringResource(R.string.action_share)
-                                    )
-                                }
-                            }
-                        }
+                                    },
+                                    modifier = Modifier.heightIn(min = 48.dp),
+                                    icon = Icons.Default.Share,
+                                    contentDescription = shareLabel,
+                                    style = ResponsiveActionStyle.Secondary
+                                )
+                            )
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(it, style = MaterialTheme.typography.bodyMedium)
                     }

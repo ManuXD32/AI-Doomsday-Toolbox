@@ -13,7 +13,9 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -22,7 +24,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Save
@@ -42,12 +43,10 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -90,6 +89,7 @@ import com.example.llamadroid.service.LiveTranslatorSamplePhase
 import com.example.llamadroid.service.LiveTranslatorService
 import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.RemoteSummaryMetadata
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.util.AIConstants
 import kotlinx.coroutines.launch
@@ -112,46 +112,6 @@ private fun resolveSupertonicVoices(bundleRoot: File): List<String> {
         .filter { it.isFile && it.extension.equals("json", ignoreCase = true) }
         .map { it.nameWithoutExtension }
         .sortedWith(compareBy<String> { if (it.equals("M1", ignoreCase = true)) 0 else 1 }.thenBy { it })
-}
-
-@Composable
-@OptIn(ExperimentalMaterial3Api::class)
-private fun AppScreenScaffold(
-    title: String,
-    subtitle: String? = null,
-    onBack: (() -> Unit)? = null,
-    content: @Composable () -> Unit
-) {
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(text = title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        subtitle?.takeIf { it.isNotBlank() }?.let {
-                            Text(
-                                text = it,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = null
-                            )
-                        }
-                    }
-                }
-            )
-        }
-    ) { content() }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -375,7 +335,9 @@ fun LiveTranslatorScreen(navController: NavController) {
         onBack = { navController.popBackStack() }
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxSize()
+                .imePadding(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -660,25 +622,35 @@ private fun LiveTranslatorTemplateCard(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true
         )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        // Keep each template action full-width. FlowRow's intrinsic button
+        // widths made the long Spanish update label collapse at large text
+        // scales, even though the surrounding card was scrollable.
+        Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Button(onClick = onSaveNew) {
+            Button(onClick = onSaveNew, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
                 Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.live_translator_template_save_new), maxLines = 1)
+                Text(stringResource(R.string.live_translator_template_save_new), maxLines = 2)
             }
-            OutlinedButton(onClick = onUpdateSelected, enabled = selectedTemplateId > 0L) {
+            OutlinedButton(
+                onClick = onUpdateSelected,
+                enabled = selectedTemplateId > 0L,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            ) {
                 Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.live_translator_template_update_selected), maxLines = 1)
+                Text(stringResource(R.string.live_translator_template_update_selected), maxLines = 2)
             }
-            OutlinedButton(onClick = onDelete, enabled = selectedTemplateId > 0L) {
+            OutlinedButton(
+                onClick = onDelete,
+                enabled = selectedTemplateId > 0L,
+                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            ) {
                 Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.action_delete), maxLines = 1)
+                Text(stringResource(R.string.action_delete), maxLines = 2)
             }
         }
     }

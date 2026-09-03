@@ -59,10 +59,12 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -75,11 +77,13 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -2556,7 +2560,16 @@ private fun MasterContributionCard(
                 title = stringResource(R.string.sd_dist_master_contribute),
                 subtitle = stringResource(R.string.sd_dist_master_contribute_desc),
                 checked = enabled,
-                onCheckedChange = onEnabledChange
+                onCheckedChange = onEnabledChange,
+                // This card intentionally keeps the Render Farm's dark console
+                // palette. The generic row defaults to the app's light-surface
+                // colors, which made this otherwise actionable control nearly
+                // disappear on the light theme.
+                titleColor = Color.White,
+                subtitleColor = Color.White.copy(alpha = 0.84f),
+                checkboxCheckedColor = RenderFarmPalette.lime,
+                checkboxUncheckedColor = Color.White.copy(alpha = 0.90f),
+                checkboxCheckmarkColor = RenderFarmPalette.graphite
             )
             if (enabled) {
                 OutlinedTextField(
@@ -2564,26 +2577,30 @@ private fun MasterContributionCard(
                     onValueChange = onDisplayNameChange,
                     label = { Text(stringResource(R.string.sd_dist_master_display_name)) },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    singleLine = true,
+                    colors = distributedOutlinedTextFieldColors(onDark = true)
                 )
                 BackendDevicePicker(
                     label = stringResource(R.string.sd_dist_backend_device_optional),
                     selected = backendDevice,
                     onSelected = onBackendDeviceChange,
-                    includeRemoteChoices = false
+                    includeRemoteChoices = false,
+                    onDark = true
                 )
                 NumberSliderField(
                     label = stringResource(R.string.sd_dist_ram_to_share),
                     valueDraft = ramDraft,
                     onValueDraftChange = onRamDraftChange,
                     range = 512f..65536f,
-                    suffix = stringResource(R.string.sd_dist_mb_suffix)
+                    suffix = stringResource(R.string.sd_dist_mb_suffix),
+                    onDark = true
                 )
                 NumberSliderField(
                     label = stringResource(R.string.sd_dist_threads_to_share),
                     valueDraft = threadsDraft,
                     onValueDraftChange = onThreadsDraftChange,
-                    range = 1f..32f
+                    range = 1f..32f,
+                    onDark = true
                 )
                 Text(stringResource(R.string.sd_dist_master_allowed_modules), style = MaterialTheme.typography.labelLarge, color = Color.White)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2595,6 +2612,12 @@ private fun MasterContributionCard(
                                 onAllowedModulesChange(next.ifEmpty { setOf(SdDistributedModules.DIFFUSION) })
                             },
                             label = { Text(moduleLabel(module), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            colors = AssistChipDefaults.assistChipColors(
+                                labelColor = Color.White,
+                                leadingIconContentColor = RenderFarmPalette.lime,
+                                disabledLabelColor = Color.White.copy(alpha = 0.72f),
+                                disabledLeadingIconContentColor = Color.White.copy(alpha = 0.72f)
+                            ),
                             leadingIcon = if (selected) {
                                 { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
                             } else {
@@ -2608,12 +2631,13 @@ private fun MasterContributionCard(
                     diffusionShareDraft,
                     { onDiffusionShareDraftChange(it.filter(Char::isDigit).take(2)) },
                     R.string.sd_dist_master_diffusion_share_hint,
-                    KeyboardType.Number
+                    KeyboardType.Number,
+                    onDark = true
                 )
                 Text(
                     stringResource(R.string.sd_dist_master_diffusion_share_desc),
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.72f)
+                    color = Color.White.copy(alpha = 0.84f)
                 )
             }
         }
@@ -3495,7 +3519,8 @@ private fun BackendDevicePicker(
     label: String,
     selected: String,
     onSelected: (String) -> Unit,
-    includeRemoteChoices: Boolean
+    includeRemoteChoices: Boolean,
+    onDark: Boolean = false
 ) {
     val options = buildList {
         add("")
@@ -3511,7 +3536,8 @@ private fun BackendDevicePicker(
         selected = selected,
         options = options,
         offLabel = stringResource(R.string.sd_dist_picker_auto),
-        onSelected = onSelected
+        onSelected = onSelected,
+        onDark = onDark
     )
 }
 
@@ -3559,7 +3585,8 @@ private fun SimpleStringPicker(
     selected: String,
     options: List<String>,
     offLabel: String,
-    onSelected: (String) -> Unit
+    onSelected: (String) -> Unit,
+    onDark: Boolean = false
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayValue = selected.ifBlank { offLabel }
@@ -3571,7 +3598,8 @@ private fun SimpleStringPicker(
             modifier = Modifier.fillMaxWidth().menuAnchor(),
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            singleLine = true
+            singleLine = true,
+            colors = distributedOutlinedTextFieldColors(onDark)
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.distinct().forEach { option ->
@@ -3743,25 +3771,43 @@ private fun NumberSliderField(
     valueDraft: String,
     onValueDraftChange: (String) -> Unit,
     range: ClosedFloatingPointRange<Float>,
-    suffix: String = ""
+    suffix: String = "",
+    onDark: Boolean = false
 ) {
     val numeric = valueDraft.toFloatOrNull()?.coerceIn(range.start, range.endInclusive) ?: range.start
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            Text(
+                label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge,
+                color = if (onDark) Color.White else MaterialTheme.colorScheme.onSurface
+            )
             OutlinedTextField(
                 value = valueDraft,
                 onValueChange = { onValueDraftChange(it.filter(Char::isDigit).take(6)) },
                 suffix = { if (suffix.isNotBlank()) Text(suffix) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.width(150.dp),
-                singleLine = true
+                singleLine = true,
+                colors = distributedOutlinedTextFieldColors(onDark)
             )
         }
         Slider(
             value = numeric,
             onValueChange = { onValueDraftChange(it.toInt().toString()) },
-            valueRange = range
+            valueRange = range,
+            colors = if (onDark) {
+                SliderDefaults.colors(
+                    thumbColor = RenderFarmPalette.lime,
+                    activeTrackColor = RenderFarmPalette.lime,
+                    inactiveTrackColor = Color.White.copy(alpha = 0.42f),
+                    activeTickColor = RenderFarmPalette.graphite,
+                    inactiveTickColor = Color.White.copy(alpha = 0.72f)
+                )
+            } else {
+                SliderDefaults.colors()
+            }
         )
     }
 }
@@ -3940,12 +3986,46 @@ private fun CodeBlock(text: String) {
 }
 
 @Composable
-private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+private fun ToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    titleColor: Color? = null,
+    subtitleColor: Color? = null,
+    checkboxCheckedColor: Color? = null,
+    checkboxUncheckedColor: Color? = null,
+    checkboxCheckmarkColor: Color? = null,
+    enabled: Boolean = true,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    val resolvedTitleColor = titleColor ?: MaterialTheme.colorScheme.onSurface
+    val resolvedSubtitleColor = subtitleColor ?: MaterialTheme.colorScheme.onSurfaceVariant
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Checkbox(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled,
+            colors = CheckboxDefaults.colors(
+                checkedColor = checkboxCheckedColor ?: MaterialTheme.colorScheme.primary,
+                uncheckedColor = checkboxUncheckedColor ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                checkmarkColor = checkboxCheckmarkColor ?: MaterialTheme.colorScheme.onPrimary
+            )
+        )
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                title,
+                fontWeight = FontWeight.SemiBold,
+                color = resolvedTitleColor,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = resolvedSubtitleColor,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -3956,7 +4036,8 @@ private fun LabeledTextField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholderRes: Int,
-    keyboardType: KeyboardType = KeyboardType.Text
+    keyboardType: KeyboardType = KeyboardType.Text,
+    onDark: Boolean = false
 ) {
     OutlinedTextField(
         value = value,
@@ -3965,9 +4046,38 @@ private fun LabeledTextField(
         placeholder = { Text(stringResource(placeholderRes)) },
         keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         modifier = Modifier.fillMaxWidth(),
-        minLines = 1
+        minLines = 1,
+        colors = distributedOutlinedTextFieldColors(onDark)
     )
 }
+
+@Composable
+private fun distributedOutlinedTextFieldColors(onDark: Boolean) =
+    if (onDark) {
+        OutlinedTextFieldDefaults.colors(
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            disabledTextColor = Color.White.copy(alpha = 0.72f),
+            cursorColor = RenderFarmPalette.lime,
+            focusedBorderColor = RenderFarmPalette.lime,
+            unfocusedBorderColor = Color.White.copy(alpha = 0.72f),
+            disabledBorderColor = Color.White.copy(alpha = 0.50f),
+            focusedLabelColor = RenderFarmPalette.lime,
+            unfocusedLabelColor = Color.White.copy(alpha = 0.84f),
+            disabledLabelColor = Color.White.copy(alpha = 0.72f),
+            focusedTrailingIconColor = RenderFarmPalette.lime,
+            unfocusedTrailingIconColor = Color.White.copy(alpha = 0.84f),
+            disabledTrailingIconColor = Color.White.copy(alpha = 0.60f),
+            focusedPlaceholderColor = Color.White.copy(alpha = 0.72f),
+            unfocusedPlaceholderColor = Color.White.copy(alpha = 0.72f),
+            disabledPlaceholderColor = Color.White.copy(alpha = 0.60f),
+            focusedSuffixColor = Color.White.copy(alpha = 0.84f),
+            unfocusedSuffixColor = Color.White.copy(alpha = 0.84f),
+            disabledSuffixColor = Color.White.copy(alpha = 0.60f)
+        )
+    } else {
+        OutlinedTextFieldDefaults.colors()
+    }
 
 @Composable
 private fun TwoColumnFields(first: @Composable () -> Unit, second: @Composable () -> Unit) {

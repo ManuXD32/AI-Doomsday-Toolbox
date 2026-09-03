@@ -96,6 +96,7 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
@@ -220,8 +221,9 @@ fun LiteRtModelsScreen(navController: NavController) {
                     subtitle = stringResource(R.string.litert_models_subtitle)
                 )
                 AppSectionCard {
-                    TabRow(
+                    AppScrollableTabRow(
                         selectedTabIndex = selectedTab,
+                        edgePadding = 12.dp,
                         containerColor = Color.Transparent,
                         contentColor = MaterialTheme.colorScheme.primary
                     ) {
@@ -243,6 +245,15 @@ fun LiteRtModelsScreen(navController: NavController) {
                                                 Text(activeDownloads.toString())
                                             }
                                         }
+                                        if (index == 0 && models.isNotEmpty()) {
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                            ) {
+                                                Text(models.size.toString())
+                                            }
+                                        }
                                     }
                                 }
                             )
@@ -251,7 +262,11 @@ fun LiteRtModelsScreen(navController: NavController) {
                 }
             }
 
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+            ) {
                 when (selectedTab) {
                     0 -> LiteRtInstalledTab(
                         models = models,
@@ -990,15 +1005,14 @@ private fun LiteRtCatalogCard(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .padding(16.dp)
                 .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1008,18 +1022,21 @@ private fun LiteRtCatalogCard(
                     tint = accentColor,
                     modifier = Modifier.size(40.dp)
                 )
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
                     Text(
                         entry.title,
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         entry.repoId,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     entry.preferredFileName?.let { fileName ->
@@ -1117,17 +1134,24 @@ private fun LiteRtCatalogCard(
                                 stringResource(R.string.whisper_downloading_progress, (value * 100).toInt())
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = accentColor
+                            color = accentColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
             }
-            IconButton(onClick = onDownload, enabled = !isDownloading && compatibility.canDownload) {
-                Icon(
-                    Icons.Default.Download,
-                    contentDescription = stringResource(R.string.action_download),
-                    tint = accentColor
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                IconButton(onClick = onDownload, enabled = !isDownloading && compatibility.canDownload) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = stringResource(R.string.action_download),
+                        tint = accentColor
+                    )
+                }
             }
         }
     }
@@ -1202,16 +1226,20 @@ private fun LiteRtDownloadProgressCard(
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     filename ?: repoId,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
                 IconButton(onClick = onCancel) {
                     Icon(
                         Icons.Default.Close,
@@ -1250,7 +1278,9 @@ private fun LiteRtDownloadProgressCard(
                     stringResource(R.string.whisper_downloading_progress, (progress * 100).toInt())
                 },
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -1329,13 +1359,22 @@ private fun ModelStyleCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         title,
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        listOfNotNull(subtitle, sizeText, contextText).joinToString(" • "),
+                        subtitle,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 4,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        listOfNotNull(sizeText, contextText).joinToString(" • "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     doctorResults.firstOrNull()?.let { result ->

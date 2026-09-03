@@ -283,7 +283,12 @@ fun KnowledgeBaseScreen(navController: NavController) {
 
             LazyColumn(
                 state = knowledgeLogListState,
-                modifier = Modifier.fillMaxSize(),
+                // The header is part of the same Column. Give the list the
+                // remaining viewport so it cannot paint over the header or
+                // leave its last card behind the app's bottom navigation.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)
             ) {
@@ -670,7 +675,7 @@ private fun KnowledgeEmbeddingServerCard(
             containerColor = if (isRunning) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+                MaterialTheme.colorScheme.surface
             }
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
@@ -704,18 +709,24 @@ private fun KnowledgeEmbeddingServerCard(
                 }
             }
 
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
-                ),
-                shape = RoundedCornerShape(12.dp)
+            HorizontalDivider(
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)
             ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
+                Text(
+                    stringResource(R.string.responsive_kb_embedding_server_details),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(
                         stringResource(R.string.kb_embedding_server_endpoint, endpointHost, status.port),
                         style = MaterialTheme.typography.bodyMedium,
@@ -734,19 +745,23 @@ private fun KnowledgeEmbeddingServerCard(
                         stringResource(R.string.kb_embedding_server_model_detail, modelLabel),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         stringResource(R.string.kb_embedding_server_runtime_detail, chunkSize, embeddingBatchSize),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                     if (isLocal) {
                         Text(
                             stringResource(R.string.kb_embedding_threads_value, embeddingThreads),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -760,14 +775,22 @@ private fun KnowledgeEmbeddingServerCard(
                 )
             }
 
-            Row(
+            if (isLocal && !embeddingConfigReady && !isRunning && !isStarting) {
+                Text(
+                    stringResource(R.string.responsive_kb_embedding_server_prerequisite),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Button(
                     onClick = if (isRunning || isStarting) onStopServer else onStartServer,
                     enabled = isLocal && (embeddingConfigReady || isRunning || isStarting),
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = if (isRunning || isStarting) {
                         ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -783,16 +806,15 @@ private fun KnowledgeEmbeddingServerCard(
                     Text(
                         if (isRunning || isStarting) stringResource(R.string.kb_stop_embedding_server)
                         else stringResource(R.string.kb_test_embedding),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        maxLines = 2
                     )
                 }
                 OutlinedButton(
                     onClick = onOpenLogs,
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text(stringResource(R.string.kb_open_logs), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.kb_open_logs), maxLines = 2)
                 }
             }
         }
