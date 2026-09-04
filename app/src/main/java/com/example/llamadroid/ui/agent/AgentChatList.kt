@@ -733,6 +733,7 @@ fun ChatMessageBubble(
 ) {
     val context = LocalContext.current
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val clipboardLabelMessage = stringResource(R.string.clipboard_label_message)
     val isUser = message.role == "user"
     val isTool = message.role == "tool"
     val isSystem = message.role == "system"
@@ -1113,7 +1114,7 @@ fun ChatMessageBubble(
                     Icons.Default.ContentCopy,
                     stringResource(R.string.action_copy),
                     modifier = Modifier.size(14.dp).clickable {
-                        val clip = ClipData.newPlainText(context.getString(R.string.clipboard_label_message), message.content)
+                        val clip = ClipData.newPlainText(clipboardLabelMessage, message.content)
                         clipboardManager.setPrimaryClip(clip)
                     },
                     tint = MaterialTheme.colorScheme.outline

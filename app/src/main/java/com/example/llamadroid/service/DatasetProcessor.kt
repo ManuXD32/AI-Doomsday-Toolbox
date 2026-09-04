@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
@@ -22,9 +23,10 @@ import com.example.llamadroid.R
  * Uses companion object for static state so processing survives navigation.
  */
 class DatasetProcessor(
-    private val context: Context,
+    context: Context,
     private val dao: DatasetDao
 ) {
+    private val context = context.applicationContext
     private val db = AppDatabase.getDatabase(context)
     
     // Progress state
@@ -80,6 +82,8 @@ class DatasetProcessor(
         private var processingJob: kotlinx.coroutines.Job? = null
         private val processingScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         
+        // Queue processing is process-scoped and DatasetProcessor stores applicationContext only.
+        @SuppressLint("StaticFieldLeak")
         private var processorInstance: DatasetProcessor? = null
         private var runtimeHooks: RuntimeHooks? = null
         

@@ -5,12 +5,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.assertTextEquals
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.text.AnnotatedString
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.example.llamadroid.data.db.LIVE_TRANSLATOR_ENGINE_OLLAMA
 import org.junit.Rule
@@ -26,16 +30,16 @@ class LiveTranslatorBackendCardTest {
     @Test
     fun editingUrlKeepsExactTypedValueInsteadOfRebuildingHostPort() {
         composeRule.setContent {
-            var backendEngine by mutableStateOf(LIVE_TRANSLATOR_ENGINE_OLLAMA)
-            var llamaServerUrl by mutableStateOf("http://localhost:8080")
-            var llamaSwapUrl by mutableStateOf("http://localhost:9292")
-            var llamaModelName by mutableStateOf("")
-            var ollamaUrl by mutableStateOf("http://localhost:11434")
-            var ollamaModelName by mutableStateOf("")
-            var contextSize by mutableStateOf("4096")
-            var maxTokens by mutableStateOf("512")
-            var temperature by mutableFloatStateOf(0.2f)
-            var timeoutSeconds by mutableStateOf("120")
+            var backendEngine by remember { mutableStateOf(LIVE_TRANSLATOR_ENGINE_OLLAMA) }
+            var llamaServerUrl by remember { mutableStateOf("http://localhost:8080") }
+            var llamaSwapUrl by remember { mutableStateOf("http://localhost:9292") }
+            var llamaModelName by remember { mutableStateOf("") }
+            var ollamaUrl by remember { mutableStateOf("http://localhost:11434") }
+            var ollamaModelName by remember { mutableStateOf("") }
+            var contextSize by remember { mutableStateOf("4096") }
+            var maxTokens by remember { mutableStateOf("512") }
+            var temperature by remember { mutableFloatStateOf(0.2f) }
+            var timeoutSeconds by remember { mutableStateOf("120") }
 
             MaterialTheme {
                 LiveTranslatorBackendCard(
@@ -78,6 +82,11 @@ class LiveTranslatorBackendCardTest {
 
         composeRule
             .onNodeWithTag("remote_summary_url_field")
-            .assertTextEquals("https://demo.local/custom/path")
+            .assert(
+                SemanticsMatcher.expectValue(
+                    SemanticsProperties.EditableText,
+                    AnnotatedString("https://demo.local/custom/path")
+                )
+            )
     }
 }

@@ -26,6 +26,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,6 +44,7 @@ fun WelcomeScreen(
     onComplete: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     
     var currentStep by remember { mutableIntStateOf(0) }
@@ -122,9 +124,7 @@ fun WelcomeScreen(
                     1 -> BatteryStep(
                         isOptimized = isIgnoringBattery,
                         onRequestPermission = {
-                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                data = Uri.parse("package:${context.packageName}")
-                            }
+                            val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                             context.startActivity(intent)
                             // Re-check after delay
                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -136,16 +136,16 @@ fun WelcomeScreen(
                         selectedFolder = outputFolderUri?.let { uri ->
                             try {
                                 androidx.documentfile.provider.DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
-                                    ?: context.getString(R.string.welcome_status_selected)
-                            } catch (e: Exception) { context.getString(R.string.welcome_status_selected) }
+                                    ?: resources.getString(R.string.welcome_status_selected)
+                            } catch (e: Exception) { resources.getString(R.string.welcome_status_selected) }
                         },
                         onSelectFolder = { folderPicker.launch(null) }
                     )
                     3 -> PhantomProcessStep(
                         onCopyCommands = { commands ->
                             val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.welcome_phantom_copy_label), commands))
-                            Toast.makeText(context, context.getString(R.string.welcome_toast_commands_copied), Toast.LENGTH_SHORT).show()
+                            clipboard.setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.welcome_phantom_copy_label), commands))
+                            Toast.makeText(context, resources.getString(R.string.welcome_toast_commands_copied), Toast.LENGTH_SHORT).show()
                         }
                     )
                 }

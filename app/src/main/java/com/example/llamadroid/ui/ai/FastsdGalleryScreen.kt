@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +64,7 @@ data class FastsdImage(
 @Composable
 fun FastsdGalleryScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val sshService = remember { SSHService(context) }
     
@@ -81,7 +83,7 @@ fun FastsdGalleryScreen(navController: NavController) {
     // Load images on mount
     LaunchedEffect(Unit) {
         if (!SSHService.isConnected.value) {
-            errorMessage = context.getString(R.string.fastsd_ssh_error)
+            errorMessage = resources.getString(R.string.fastsd_ssh_error)
             isLoading = false
             return@LaunchedEffect
         }
@@ -145,10 +147,10 @@ fun FastsdGalleryScreen(navController: NavController) {
                     }
                 }
             }.onFailure { e ->
-                errorMessage = context.getString(R.string.fastsd_load_error, e.message ?: "")
+                errorMessage = resources.getString(R.string.fastsd_load_error, e.message ?: "")
             }
         } catch (e: Exception) {
-            errorMessage = context.getString(R.string.fastsd_generic_error, e.message ?: "")
+            errorMessage = resources.getString(R.string.fastsd_generic_error, e.message ?: "")
         }
         isLoading = false
     }
@@ -166,11 +168,11 @@ fun FastsdGalleryScreen(navController: NavController) {
                     
                     // Update UI
                     images = images.filter { it.filename !in selectedImages }
-                    Toast.makeText(context, context.getString(R.string.fastsd_deleted_count, filesToDelete.size), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.fastsd_deleted_count, filesToDelete.size), Toast.LENGTH_SHORT).show()
                     selectedImages = emptySet()
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, context.getString(R.string.fastsd_delete_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.fastsd_delete_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -181,9 +183,9 @@ fun FastsdGalleryScreen(navController: NavController) {
             try {
                 sshService.executeCommand("rm -f '${image.path}'")
                 images = images.filter { it.filename != image.filename }
-                Toast.makeText(context, context.getString(R.string.fastsd_deleted_single, image.filename), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.fastsd_deleted_single, image.filename), Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
-                Toast.makeText(context, context.getString(R.string.fastsd_delete_failed_single, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.fastsd_delete_failed_single, e.message ?: ""), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -194,7 +196,7 @@ fun FastsdGalleryScreen(navController: NavController) {
     fun shareImage(image: FastsdImage) {
         if (isSharing) return
         isSharing = true
-        Toast.makeText(context, context.getString(R.string.fastsd_downloading), Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, resources.getString(R.string.fastsd_downloading), Toast.LENGTH_SHORT).show()
         
         scope.launch {
             try {
@@ -223,25 +225,25 @@ fun FastsdGalleryScreen(navController: NavController) {
                                 putExtra(Intent.EXTRA_STREAM, uri)
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             }
-                            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.action_share)))
+                            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.action_share)))
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(context, context.getString(R.string.fastsd_decode_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.fastsd_decode_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
                             }
                         }
                     } else {
                         withContext(Dispatchers.Main) {
-                            Toast.makeText(context, context.getString(R.string.fastsd_empty_data), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, resources.getString(R.string.fastsd_empty_data), Toast.LENGTH_SHORT).show()
                         }
                     }
                 }.onFailure { e ->
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(context, context.getString(R.string.fastsd_download_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.fastsd_download_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, context.getString(R.string.fastsd_share_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.fastsd_share_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             } finally {
                 isSharing = false
@@ -731,6 +733,6 @@ private fun formatFileSize(bytes: Long): String {
     return when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-        else -> String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+        else -> String.format(java.util.Locale.getDefault(), "%.1f MB", bytes / (1024.0 * 1024.0))
     }
 }

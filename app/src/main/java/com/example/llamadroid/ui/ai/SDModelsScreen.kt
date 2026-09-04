@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -156,6 +157,7 @@ private class SdAdetailerImportException : Exception()
 @Composable
 fun SDModelsScreen(navController: NavController) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
@@ -254,17 +256,17 @@ fun SDModelsScreen(navController: NavController) {
             ),
             
             SDSearchSuggestion(
-                context.getString(R.string.sd_models_ip_adapter_search_sd15),
+                resources.getString(R.string.sd_models_ip_adapter_search_sd15),
                 "h94/IP-Adapter",
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
             SDSearchSuggestion(
-                context.getString(R.string.sd_models_ip_adapter_search_sdxl),
+                resources.getString(R.string.sd_models_ip_adapter_search_sdxl),
                 "h94/IP-Adapter SDXL",
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
             SDSearchSuggestion(
-                context.getString(R.string.sd_models_clip_vision_search),
+                resources.getString(R.string.sd_models_clip_vision_search),
                 "CLIP-Vision safetensors",
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
@@ -761,6 +763,7 @@ private fun InstalledSDModelsTab(
     onOpenOnnxModels: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
 
     // The installed rows are emitted from separate Room flows, so keep one
@@ -920,7 +923,7 @@ private fun InstalledSDModelsTab(
                         val sourceFile = File(model.path)
                         if (!sourceFile.exists()) {
                             withContext(Dispatchers.Main) {
-                                android.widget.Toast.makeText(context, context.getString(R.string.sd_models_error_source_not_found), android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, resources.getString(R.string.sd_models_error_source_not_found), android.widget.Toast.LENGTH_SHORT).show()
                             }
                             return@launch
                         }
@@ -935,12 +938,12 @@ private fun InstalledSDModelsTab(
                                 }
                             }
                             withContext(Dispatchers.Main) {
-                                android.widget.Toast.makeText(context, context.getString(R.string.sd_models_export_success, model.filename), android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, resources.getString(R.string.sd_models_export_success, model.filename), android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (e: Exception) {
                         withContext(Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.sd_models_export_failed, e.message), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.sd_models_export_failed, e.message), android.widget.Toast.LENGTH_SHORT).show()
                         }
                     } finally {
                         pendingExportModel = null
@@ -1041,7 +1044,7 @@ private fun InstalledSDModelsTab(
                             if (pendingFilename.endsWith(".onnx", ignoreCase = true) || pendingFilename.endsWith(".ort", ignoreCase = true)) {
                                 android.widget.Toast.makeText(
                                     context,
-                                    context.getString(R.string.sd_models_unsupported_import),
+                                    resources.getString(R.string.sd_models_unsupported_import),
                                     android.widget.Toast.LENGTH_LONG
                                 ).show()
                                 onOpenOnnxModels()
@@ -1328,12 +1331,12 @@ private fun InstalledSDModelsTab(
                             result.onFailure { error ->
                                 val message = when (error) {
                                     is SdArtifactValidationException ->
-                                        context.getString(R.string.sd_models_import_validation_failed)
+                                        resources.getString(R.string.sd_models_import_validation_failed)
                                     is SdAdetailerImportException ->
-                                        context.getString(R.string.imagegen_adetailer_error_incompatible_detector)
-                                    else -> context.getString(
+                                        resources.getString(R.string.imagegen_adetailer_error_incompatible_detector)
+                                    else -> resources.getString(
                                         R.string.sd_models_import_failed,
-                                        error.message ?: context.getString(R.string.error_generic)
+                                        error.message ?: resources.getString(R.string.error_generic)
                                     )
                                 }
                                 importError = message
@@ -2072,7 +2075,7 @@ private fun InstalledSDModelsTab(
                                 result.onSuccess { updated ->
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.sd_models_update_success, updated.filename),
+                                        resources.getString(R.string.sd_models_update_success, updated.filename),
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
 
@@ -2088,9 +2091,9 @@ private fun InstalledSDModelsTab(
                                 }.onFailure { error ->
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(
+                                        resources.getString(
                                             R.string.sd_models_update_failed,
-                                            error.message ?: context.getString(R.string.error_generic)
+                                            error.message ?: resources.getString(R.string.error_generic)
                                         ),
                                         android.widget.Toast.LENGTH_LONG
                                     ).show()

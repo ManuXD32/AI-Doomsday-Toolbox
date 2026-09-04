@@ -34,13 +34,13 @@ class ResourceParityTest {
             .toList()
         val formatMismatches = (english.keys intersect spanish.keys).asSequence()
             .filter {
-                canonicalPlaceholders(english.getValue(it).placeholders) !=
-                    canonicalPlaceholders(spanish.getValue(it).placeholders)
+                canonicalFormatSignatures(english.getValue(it)) !=
+                    canonicalFormatSignatures(spanish.getValue(it))
             }
             .sorted()
             .map { name ->
-                "$name: ${canonicalPlaceholders(english.getValue(name).placeholders)} != " +
-                    canonicalPlaceholders(spanish.getValue(name).placeholders)
+                "$name: ${canonicalFormatSignatures(english.getValue(name))} != " +
+                    canonicalFormatSignatures(spanish.getValue(name))
             }
             .toList()
 
@@ -142,6 +142,21 @@ private fun canonicalPlaceholders(placeholders: List<Placeholder>): List<Placeho
         )
         .map { it.value }
 
+private fun canonicalFormatSignatures(entry: ResourceEntry): List<List<Placeholder>> {
+    val signatures = entry.formatSignatures.map(::canonicalPlaceholders)
+    if (entry.kind != "plurals") return signatures
+
+    // CLDR plural categories differ by locale (Spanish currently requires a `many` entry while
+    // English does not). Compare the distinct format contracts instead of category counts.
+    return signatures
+        .distinct()
+        .sortedBy { signature ->
+            signature.joinToString(separator = "|") { placeholder ->
+                "${placeholder.index ?: "_"}:${placeholder.type}"
+            }
+        }
+}
+
 private data class Placeholder(
     val index: Int?,
     val type: Char
@@ -150,6 +165,7 @@ private data class Placeholder(
 private data class ResourceEntry(
     val kind: String,
     val placeholders: List<Placeholder>,
+    val formatSignatures: List<List<Placeholder>>,
     val source: String
 )
 
@@ -182,15 +198,21 @@ private object ResourceCatalog {
                 val name = element.getAttribute("name").trim()
                 if (name.isEmpty()) continue
 
+                val formatSignatures = when {
+                    !element.isFormatted() -> listOf(emptyList())
+                    kind == "string" -> listOf(placeholders(element.textContent ?: ""))
+                    else -> (0 until element.childNodes.length)
+                        .mapNotNull { childIndex -> element.childNodes.item(childIndex) as? Element }
+                        .filter { child -> (child.localName ?: child.tagName) == "item" }
+                        .map { child -> placeholders(child.textContent ?: "") }
+                }
+
                 val previous = entries.put(
                     name,
                     ResourceEntry(
                         kind = kind,
-                        placeholders = if (element.isFormatted()) {
-                            placeholders(element.textContent ?: "")
-                        } else {
-                            emptyList()
-                        },
+                        placeholders = formatSignatures.flatten(),
+                        formatSignatures = formatSignatures,
                         source = file.relativeTo(directory).path
                     )
                 )

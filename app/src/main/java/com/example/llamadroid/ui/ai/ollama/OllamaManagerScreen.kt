@@ -782,8 +782,8 @@ fun formatBytes(bytes: Long): String {
     val mb = kb / 1024.0
     val gb = mb / 1024.0
     return when {
-        gb >= 1.0 -> String.format("%.2f GB", gb)
-        mb >= 1.0 -> String.format("%.2f MB", mb)
-        else -> String.format("%.2f KB", kb)
+        gb >= 1.0 -> String.format(java.util.Locale.getDefault(), "%.2f GB", gb)
+        mb >= 1.0 -> String.format(java.util.Locale.getDefault(), "%.2f MB", mb)
+        else -> String.format(java.util.Locale.getDefault(), "%.2f KB", kb)
     }
 }

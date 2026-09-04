@@ -47,7 +47,7 @@ object Downloader {
         val partFile = File(destFile.parentFile, "${destFile.name}.part")
         
         try {
-            wakeLock?.acquire()
+            wakeLock?.acquire(DOWNLOAD_WAKE_LOCK_TIMEOUT_MS)
             DebugLog.log("Downloader: Starting download of $url")
 
             var attempt = 0
@@ -166,7 +166,7 @@ object Downloader {
         }
         
         try {
-            wakeLock?.acquire()
+            wakeLock?.acquire(DOWNLOAD_WAKE_LOCK_TIMEOUT_MS)
             DebugLog.log("Downloader: Starting SAF download of $url")
             
             val request = Request.Builder().url(url).build()
@@ -248,4 +248,5 @@ object Downloader {
     }
 
     private const val MAX_DOWNLOAD_ATTEMPTS = 4
+    private const val DOWNLOAD_WAKE_LOCK_TIMEOUT_MS = 24 * 60 * 60 * 1_000L
 }

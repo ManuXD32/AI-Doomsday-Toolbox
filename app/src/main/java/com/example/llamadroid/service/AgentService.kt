@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.os.Build
@@ -273,7 +274,8 @@ private data class WorkspaceTerminalSession(
  * - list_directory: List files/folders
  * - search_code: Search with ripgrep
  */
-class AgentService(private val context: Context, private val isRuntimeOwner: Boolean = false) {
+class AgentService(context: Context, private val isRuntimeOwner: Boolean = false) {
+    private val context = context.applicationContext
     private val runtimePersistenceMutex = Mutex()
     private val runtimePersistenceScheduleLock = Any()
     private var scheduledVisiblePersistenceJob: Job? = null
@@ -318,7 +320,7 @@ class AgentService(private val context: Context, private val isRuntimeOwner: Boo
 
     private fun formatNumberedContent(content: String): String {
         return content.lines().mapIndexed { idx, line ->
-            String.format("%6d  %s", idx + 1, line)
+            String.format(java.util.Locale.US, "%6d  %s", idx + 1, line)
         }.joinToString("\n")
     }
 
@@ -5479,6 +5481,8 @@ TODO status. Return via finish_task with JSON:
         private var lastConnectionPort: Int = AI_AGENT_SSH_PORT
         private var lastConnectionUser: String = AI_AGENT_USER
         private var lastConnectionPassword: String = "agent"
+        // RuntimeRefs is process-scoped and stores only applicationContext-backed services.
+        @SuppressLint("StaticFieldLeak")
         private var lastRuntimeRefs: AgentRuntimeRefs? = null
         private val eventTimelineDeque = java.util.ArrayDeque<AgentEvent>(200)
         private val _eventTimeline = MutableStateFlow<List<AgentEvent>>(emptyList())
@@ -12576,8 +12580,8 @@ TODO status. Return via finish_task with JSON:
                     )
                     pendingHardCompaction = false
                     pendingHardCompactionConversationId = null
-            pendingHardCompactionKey = null
-            pendingHardCompactionPreTokens = null
+                    pendingHardCompactionKey = null
+                    pendingHardCompactionPreTokens = null
                     recordAgentEvent(
                         kind = "hard_compaction",
                         summary = "Rewrote retained context state",
@@ -12597,8 +12601,8 @@ TODO status. Return via finish_task with JSON:
                 } else {
                     pendingHardCompaction = false
                     pendingHardCompactionConversationId = null
-            pendingHardCompactionKey = null
-            pendingHardCompactionPreTokens = null
+                    pendingHardCompactionKey = null
+                    pendingHardCompactionPreTokens = null
                     addDebugLog(
                         "⚠️ Hard compaction timed out after " +
                             "${HARD_COMPACTION_TIMEOUT_MS / 60000L} minutes"
@@ -15543,7 +15547,7 @@ sys.exit(proc.returncode)
             if (stagedContent != null) {
                 // Add line numbers to staged content too
                 val numberedContent = stagedContent.lines().mapIndexed { idx, line ->
-                    String.format("%6d  %s", idx + 1, line)
+                    String.format(java.util.Locale.US, "%6d  %s", idx + 1, line)
                 }.joinToString("\n")
                 return@withContext Result.success("[STAGED]\n$numberedContent")
             }
@@ -15706,7 +15710,7 @@ sys.exit(proc.returncode)
             }
             append(
                 lines.subList(requestedStart - 1, endLine)
-                    .mapIndexed { index, line -> String.format("%6d  %s", requestedStart + index, line) }
+                    .mapIndexed { index, line -> String.format(java.util.Locale.US, "%6d  %s", requestedStart + index, line) }
                     .joinToString("\n")
             )
         }.trimEnd()
@@ -17134,7 +17138,7 @@ sys.exit(proc.returncode)
                 val content = file.readLines(Charsets.UTF_8)
                     .mapIndexed { index, line -> index + 1 to line }
                     .filter { (lineNumber, _) -> lineNumber in start..end }
-                    .joinToString("\n") { (lineNumber, line) -> String.format("%6d  %s", lineNumber, line) }
+                    .joinToString("\n") { (lineNumber, line) -> String.format(java.util.Locale.US, "%6d  %s", lineNumber, line) }
                 val displayPath = localDisplayPath(file)
                 recordSessionFileEvidence(displayPath, "$displayPath:$start-$end")
                 return@withContext if (content.isBlank()) {

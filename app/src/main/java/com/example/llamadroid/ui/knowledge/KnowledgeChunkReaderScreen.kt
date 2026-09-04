@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -176,6 +177,7 @@ private fun ChunkCard(
     chunk: KnowledgeChunkWindowItem
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var expanded by remember(chunk.chunkId, chunk.isTarget) { mutableStateOf(chunk.isTarget) }
     val citation = remember(sourceTitle, chunk.chunkIndex, chunk.chunkId) {
         KnowledgeBaseRepository.chunkCitationMarkdown(sourceTitle, chunk.chunkIndex, chunk.chunkId)
@@ -219,11 +221,11 @@ private fun ChunkCard(
                         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         clipboard.setPrimaryClip(
                             ClipData.newPlainText(
-                                context.getString(R.string.kb_chunk_reader_clip_label),
+                                resources.getString(R.string.kb_chunk_reader_clip_label),
                                 "${citation}\n\n${chunk.text.trim()}"
                             )
                         )
-                        Toast.makeText(context, context.getString(R.string.kb_chunk_reader_copied), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.kb_chunk_reader_copied), Toast.LENGTH_SHORT).show()
                     }
                 ) {
                     Icon(

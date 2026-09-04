@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -90,6 +91,7 @@ fun TamaChatScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val resources = LocalResources.current
     val pet by gameEngine.pet.collectAsState()
     val messages by agentService.messages.collectAsState()
     val isLoading by agentService.isLoading.collectAsState()
@@ -171,7 +173,7 @@ fun TamaChatScreen(
             voiceRecorder = recorder
             voiceRecording = true
         } catch (e: Exception) {
-            voiceError = context.getString(R.string.whisper_error_start_recording, e.message ?: context.getString(R.string.error_generic))
+            voiceError = resources.getString(R.string.whisper_error_start_recording, e.message ?: resources.getString(R.string.error_generic))
             voiceRecording = false
             voiceRecorder?.release()
             voiceRecorder = null
@@ -248,7 +250,7 @@ fun TamaChatScreen(
             startVoiceRecording()
             voiceError = null
         } else {
-            voiceError = context.getString(R.string.whisper_error_permission)
+            voiceError = resources.getString(R.string.whisper_error_permission)
         }
     }
 
@@ -265,7 +267,7 @@ fun TamaChatScreen(
         val text = inputText.trim()
 
         if (!imageInputEnabled && attachedImagePath != null) {
-            voiceError = context.getString(R.string.tama_chat_image_input_disabled_error)
+            voiceError = resources.getString(R.string.tama_chat_image_input_disabled_error)
             return
         }
         if (text.isBlank() && imagePath == null && audioPath == null) {
@@ -1216,6 +1218,7 @@ fun TamaChatSettingsDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val appContext = context.applicationContext
     val scope = rememberCoroutineScope()
     val backend by settingsRepo.tamaBackend.collectAsState()
@@ -1564,15 +1567,15 @@ fun TamaChatSettingsDialog(
                                         onSuccess = { metadata ->
                                             if (SettingsRepository.isLlamaSwapBackend(metadata.backend)) {
                                                 availableLlamaSwapModels = metadata.availableModels
-                                                context.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
+                                                resources.getString(R.string.pdf_metadata_llama_swap_loaded, metadata.availableModels.size)
                                             } else {
-                                                context.getString(R.string.tama_chat_backend_info_loaded)
+                                                resources.getString(R.string.tama_chat_backend_info_loaded)
                                             }
                                         },
                                         onFailure = {
-                                            context.getString(
+                                            resources.getString(
                                                 R.string.tama_chat_backend_info_failed,
-                                                it.message ?: context.getString(R.string.error_generic)
+                                                it.message ?: resources.getString(R.string.error_generic)
                                             )
                                         }
                                     )

@@ -58,6 +58,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -122,6 +123,7 @@ fun TamaGalleryScreen(
     pet: TamaPet
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val artworks by gameEngine.observeArtworks(pet.id).collectAsState(initial = emptyList())
     val galleryEntries = remember(artworks) { buildGalleryEntries(artworks) }
@@ -132,7 +134,7 @@ fun TamaGalleryScreen(
     fun shareArtwork(artwork: TamaArtworkEntity) {
         val imageFile = artwork.filePath?.let(::File)
         if (imageFile == null || !imageFile.exists()) {
-            Toast.makeText(context, context.getString(R.string.tama_gallery_share_missing), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, resources.getString(R.string.tama_gallery_share_missing), Toast.LENGTH_SHORT).show()
             return
         }
         runCatching {
@@ -146,11 +148,11 @@ fun TamaGalleryScreen(
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.action_share)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.action_share)))
         }.onFailure { error ->
             Toast.makeText(
                 context,
-                context.getString(R.string.tama_gallery_share_failed, error.message ?: ""),
+                resources.getString(R.string.tama_gallery_share_failed, error.message ?: ""),
                 Toast.LENGTH_SHORT
             ).show()
         }
@@ -213,7 +215,7 @@ fun TamaGalleryScreen(
                                 onDelete = {
                                     pendingDelete = TamaGalleryDeleteTarget(
                                         title = dreamAlbumStoryText(entry.story)?.takeIf(String::isNotBlank)
-                                            ?: context.getString(R.string.tama_gallery_kind_daily_dream),
+                                            ?: resources.getString(R.string.tama_gallery_kind_daily_dream),
                                         artworks = entry.artworks
                                     )
                                 },

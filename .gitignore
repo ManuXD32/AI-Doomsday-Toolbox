@@ -3,7 +3,7 @@ ARCHITECTURE.md
 .adt_patch_backups
 .adt_backups
 qa-artifacts
-
+app/lint-baseline.xml
 # Built application files
 *.apk
 *.ap_

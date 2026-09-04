@@ -27,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
@@ -56,6 +57,7 @@ import java.util.Collections
 @Composable
 fun TermuxScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val sshService = remember { SSHService(context) }
     val settingsRepository = remember { SettingsRepository(context) }
     val scope = rememberCoroutineScope()
@@ -235,8 +237,8 @@ fun TermuxScreen(navController: NavController) {
     }
     fun copyToClipboard(text: String) {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.clipboard_label_command), text))
-        Toast.makeText(context, context.getString(R.string.termux_copy_toast), Toast.LENGTH_SHORT).show()
+        clipboard.setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.clipboard_label_command), text))
+        Toast.makeText(context, resources.getString(R.string.termux_copy_toast), Toast.LENGTH_SHORT).show()
     }
 
     fun requestExecute(
@@ -318,7 +320,7 @@ fun TermuxScreen(navController: NavController) {
                         val toolLabel = TermuxTools.getTool(toolId)?.name ?: toolId
                         SSHService.appendToolOutput(
                             toolId,
-                            "\n[${context.getString(R.string.termux_stop_verification_failed, toolLabel)}]\n"
+                            "\n[${resources.getString(R.string.termux_stop_verification_failed, toolLabel)}]\n"
                         )
                     }
                 } else {

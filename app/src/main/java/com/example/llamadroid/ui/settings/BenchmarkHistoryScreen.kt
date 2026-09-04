@@ -881,7 +881,7 @@ private fun BenchmarkCompareMetric.label(): String {
 }
 
 private fun formatBenchmarkNumber(value: Float): String {
-    return String.format("%.1f", value)
+    return String.format(java.util.Locale.getDefault(), "%.1f", value)
 }
 
 private fun formatBenchmarkSignedNumber(value: Float): String {

@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -136,6 +137,7 @@ internal fun BenchmarkChartsCard(
     onClearSelection: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var chartType by remember { mutableStateOf(BenchmarkChartType.GenerationByThreads) }
     var pendingCsv by remember { mutableStateOf<String?>(null) }
@@ -287,10 +289,10 @@ internal fun BenchmarkChartsCard(
                         if (pngBytes == null) {
                             Toast.makeText(
                                 context,
-                                context.getString(
+                                resources.getString(
                                     R.string.benchmark_export_failed,
                                     "PNG",
-                                    context.getString(R.string.benchmark_chart_no_data)
+                                    resources.getString(R.string.benchmark_chart_no_data)
                                 ),
                                 Toast.LENGTH_LONG
                             ).show()

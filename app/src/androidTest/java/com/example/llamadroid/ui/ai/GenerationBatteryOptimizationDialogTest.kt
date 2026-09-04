@@ -68,4 +68,38 @@ class GenerationBatteryOptimizationDialogTest {
             assertTrue(dismissClicked)
         }
     }
+
+    @Test
+    fun allActionsRemainReachableInShortLandscapeViewport() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val labels = listOf(
+            context.getString(R.string.responsive_battery_dialog_settings_compact),
+            context.getString(R.string.responsive_battery_dialog_oem_fix_compact),
+            context.getString(R.string.responsive_battery_dialog_continue_compact),
+            context.getString(R.string.action_cancel)
+        )
+
+        composeRule.setContent {
+            val baseDensity = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(baseDensity.density, fontScale = 2f)
+            ) {
+                MaterialTheme {
+                    Box(Modifier.size(width = 600.dp, height = 320.dp)) {
+                        BatteryOptimizationDialogContent(
+                            onOpenBatterySettings = {},
+                            onOpenDeviceSpecificFix = {},
+                            onContinueAnyway = {},
+                            onDismiss = {}
+                        )
+                    }
+                }
+            }
+        }
+
+        labels.forEach { label ->
+            composeRule.onNodeWithText(label)
+                .assertIsDisplayed()
+        }
+    }
 }

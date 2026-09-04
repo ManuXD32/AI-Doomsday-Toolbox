@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -57,6 +58,7 @@ import java.io.File
 @Composable
 fun VideoSumupScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
 
@@ -122,7 +124,7 @@ fun VideoSumupScreen(navController: NavController) {
             if (isRunning) return@let
             VideoSummaryStateHolder.reset()
             VideoSummaryStateHolder.setSelectedSourceUri(it.toString())
-            VideoSummaryStateHolder.setSelectedSourceName(it.lastPathSegment ?: context.getString(R.string.video_sumup_video_placeholder))
+            VideoSummaryStateHolder.setSelectedSourceName(it.lastPathSegment ?: resources.getString(R.string.video_sumup_video_placeholder))
         }
     }
 
@@ -412,7 +414,7 @@ fun VideoSumupScreen(navController: NavController) {
                                 VideoSumupService.startSummarization(
                                     context = context,
                                     videoPath = videoPath,
-                                    videoFileName = selectedVideoName ?: context.getString(R.string.video_sumup_video_placeholder),
+                                    videoFileName = selectedVideoName ?: resources.getString(R.string.video_sumup_video_placeholder),
                                     whisperModelPath = selectedWhisperPath!!,
                                     language = whisperLanguage,
                                     threads = whisperThreads,
@@ -458,7 +460,7 @@ fun VideoSumupScreen(navController: NavController) {
                 SummaryMarkdownCard(
                     title = stringResource(R.string.pdf_partial_results_title),
                     markdown = partialSummaries.mapIndexed { index, part ->
-                        "### ${context.getString(R.string.summary_partial_item_label, index + 1)}\n$part"
+                        "### ${resources.getString(R.string.summary_partial_item_label, index + 1)}\n$part"
                     }.joinToString("\n\n")
                 )
             }

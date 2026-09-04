@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -54,6 +55,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun GeneralSettingsScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val nativeModuleManager = remember { NativeFeatureModuleManager(context) }
@@ -89,11 +91,11 @@ fun GeneralSettingsScreen(navController: NavController) {
             }
             result.onSuccess { selection ->
                 settingsRepo.setQuadtrixWorkspace(selection.uri, selection.directPath)
-                Toast.makeText(context, context.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
+                Toast.makeText(context, resources.getString(R.string.quadtrix_workspace_ready), Toast.LENGTH_LONG).show()
             }.onFailure { error ->
                 Toast.makeText(
                     context,
-                    context.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: context.getString(R.string.error_generic)),
+                    resources.getString(R.string.quadtrix_workspace_setup_failed, error.message ?: resources.getString(R.string.error_generic)),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -110,16 +112,16 @@ fun GeneralSettingsScreen(navController: NavController) {
                     customBinaryPackages = customBinaryManager.listPackages()
                     Toast.makeText(
                         context,
-                        context.getString(R.string.binary_catalog_custom_imported, imported.name),
+                        resources.getString(R.string.binary_catalog_custom_imported, imported.name),
                         Toast.LENGTH_LONG
                     ).show()
                 }
                 .onFailure { error ->
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.binary_catalog_custom_import_failed,
-                            error.message ?: context.getString(R.string.error_generic)
+                            error.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -648,9 +650,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         if (!isIgnoringBatteryOptimizations) {
                             Button(
                                 onClick = {
-                                    val intent = Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                                        data = android.net.Uri.parse("package:$packageName")
-                                    }
+                                    val intent = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                                     context.startActivity(intent)
                                     // Re-check after a delay (user might grant immediately)
                                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -746,9 +746,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                             val result = DatabaseBackupManager.createBackup(context, it)
                             isBackingUp = false
                             result.onSuccess {
-                                Toast.makeText(context, context.getString(R.string.backup_success), Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, resources.getString(R.string.backup_success), Toast.LENGTH_LONG).show()
                             }.onFailure { e ->
-                                Toast.makeText(context, context.getString(R.string.backup_error, e.message), Toast.LENGTH_LONG).show()
+                                Toast.makeText(context, resources.getString(R.string.backup_error, e.message), Toast.LENGTH_LONG).show()
                             }
                         }
                     }
@@ -775,7 +775,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             result.onSuccess { stats ->
                                 Toast.makeText(
                                     context,
-                                    context.getString(
+                                    resources.getString(
                                         R.string.llama_backup_export_success,
                                         stats.chats,
                                         stats.notes,
@@ -788,9 +788,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }.onFailure { error ->
                                 Toast.makeText(
                                     context,
-                                    context.getString(
+                                    resources.getString(
                                         R.string.llama_backup_export_failed,
-                                        error.message ?: context.getString(R.string.error_generic)
+                                        error.message ?: resources.getString(R.string.error_generic)
                                     ),
                                     Toast.LENGTH_LONG
                                 ).show()
@@ -825,7 +825,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         val result = DatabaseBackupManager.restoreBackup(context, uri)
                                         isRestoring = false
                                         result.onSuccess {
-                                            Toast.makeText(context, context.getString(R.string.backup_restore_success), Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, resources.getString(R.string.backup_restore_success), Toast.LENGTH_LONG).show()
                                             // Restart the app so Room picks up the new DB files
                                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                                                 val pm = context.packageManager
@@ -835,7 +835,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                                 Runtime.getRuntime().exit(0)
                                             }, 1500)
                                         }.onFailure { e ->
-                                            Toast.makeText(context, context.getString(R.string.backup_restore_error, e.message), Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, resources.getString(R.string.backup_restore_error, e.message), Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 },
@@ -873,7 +873,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         result.onSuccess { stats ->
                                             Toast.makeText(
                                                 context,
-                                                context.getString(
+                                                resources.getString(
                                                     R.string.llama_backup_import_success,
                                                     stats.chats,
                                                     stats.notes,
@@ -886,9 +886,9 @@ fun GeneralSettingsScreen(navController: NavController) {
                                         }.onFailure { error ->
                                             Toast.makeText(
                                                 context,
-                                                context.getString(
+                                                resources.getString(
                                                     R.string.llama_backup_import_failed,
-                                                    error.message ?: context.getString(R.string.error_generic)
+                                                    error.message ?: resources.getString(R.string.error_generic)
                                                 ),
                                                 Toast.LENGTH_LONG
                                             ).show()

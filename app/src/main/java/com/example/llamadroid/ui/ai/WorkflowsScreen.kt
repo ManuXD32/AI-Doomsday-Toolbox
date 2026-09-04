@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -89,6 +90,7 @@ import org.json.JSONObject
 @Composable
 fun WorkflowsScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { SettingsRepository(context) }
     val batteryGateState = rememberBatteryOptimizationGateState()
@@ -167,7 +169,7 @@ fun WorkflowsScreen(navController: NavController) {
             mangaIsRunning = pdfTranslationJobState.isRunning
             if (pdfTranslationJobState.isRunning) {
                 mangaStep = pdfTranslationJobState.currentFileName?.let { name ->
-                    context.getString(
+                    resources.getString(
                         R.string.workflow_manga_progress_file_stage,
                         pdfTranslationJobState.currentFileIndex,
                         pdfTranslationJobState.totalFiles,
@@ -180,18 +182,18 @@ fun WorkflowsScreen(navController: NavController) {
                 mangaErrorDetails = null
             } else if (pdfTranslationJobState.cancelled) {
                 mangaResults = pdfTranslationJobState.mangaResults
-                mangaStep = context.getString(R.string.action_cancelled)
+                mangaStep = resources.getString(R.string.action_cancelled)
                 mangaError = null
                 mangaErrorDetails = null
             } else if (pdfTranslationJobState.mangaResults.isNotEmpty()) {
                 mangaResults = pdfTranslationJobState.mangaResults
-                mangaStep = context.getString(R.string.workflow_complete)
+                mangaStep = resources.getString(R.string.workflow_complete)
                 mangaProgress = 1f
                 mangaError = null
                 mangaErrorDetails = null
             } else if (pdfTranslationJobState.mangaPreview != null) {
                 mangaPreview = pdfTranslationJobState.mangaPreview
-                mangaStep = context.getString(R.string.workflow_manga_preview_ready)
+                mangaStep = resources.getString(R.string.workflow_manga_preview_ready)
                 mangaProgress = 1f
                 mangaError = null
                 mangaErrorDetails = null
@@ -308,16 +310,16 @@ fun WorkflowsScreen(navController: NavController) {
         if (txt2imgIsRunning) {
             when {
                 workflowTxt2imgState is SDGenerationState.Generating -> {
-                    txt2imgStep = context.getString(R.string.workflow_step_generating)
+                    txt2imgStep = resources.getString(R.string.workflow_step_generating)
                     txt2imgProgress = workflowTxt2imgProgress * 0.5f  // 0-50% for txt2img
                 }
                 workflowUpscaleState is SDGenerationState.Generating -> {
-                    txt2imgStep = context.getString(R.string.workflow_step_upscaling)
+                    txt2imgStep = resources.getString(R.string.workflow_step_upscaling)
                     txt2imgProgress = 0.5f + workflowUpscaleProgress * 0.5f  // 50-100% for upscale
                 }
                 workflowUpscaleState is SDGenerationState.Complete -> {
                     txt2imgIsRunning = false
-                    txt2imgStep = context.getString(R.string.workflow_complete)
+                    txt2imgStep = resources.getString(R.string.workflow_complete)
                     txt2imgProgress = 1f
                     txt2imgResultPath = (workflowUpscaleState as SDGenerationState.Complete).outputPath
                     txt2imgError = null
@@ -477,7 +479,7 @@ fun WorkflowsScreen(navController: NavController) {
         if (granted) {
             WorkflowStateHolder.setShowRecordingDialog(true)
         } else {
-            WorkflowStateHolder.setError(context.getString(R.string.workflow_error_perm_denied))
+            WorkflowStateHolder.setError(resources.getString(R.string.workflow_error_perm_denied))
         }
     }
 
@@ -578,15 +580,15 @@ fun WorkflowsScreen(navController: NavController) {
     LaunchedEffect(videoSumupState) {
         when (videoSumupState) {
             is VideoSumupState.ExtractingAudio -> {
-                WorkflowStateHolder.setStep(context.getString(R.string.workflow_step_extracting))
+                WorkflowStateHolder.setStep(resources.getString(R.string.workflow_step_extracting))
                 WorkflowStateHolder.setProgress(0.1f)
             }
             is VideoSumupState.Transcribing -> {
-                WorkflowStateHolder.setStep(context.getString(R.string.workflow_step_transcribing))
+                WorkflowStateHolder.setStep(resources.getString(R.string.workflow_step_transcribing))
                 WorkflowStateHolder.setProgress(0.4f)
             }
             is VideoSumupState.Summarizing -> {
-                WorkflowStateHolder.setStep(context.getString(R.string.workflow_step_summarizing))
+                WorkflowStateHolder.setStep(resources.getString(R.string.workflow_step_summarizing))
                 WorkflowStateHolder.setProgress(0.7f)
             }
             is VideoSumupState.Idle -> {
@@ -911,12 +913,12 @@ fun WorkflowsScreen(navController: NavController) {
                             if (audioPath != null && whisperModelPath != null && backendReady) {
                                 WorkflowStateHolder.setIsRunning(true)
                                 WorkflowStateHolder.setError(null)
-                                WorkflowStateHolder.setStep(context.getString(R.string.workflow_step_starting))
+                                WorkflowStateHolder.setStep(resources.getString(R.string.workflow_step_starting))
                                 WorkflowStateHolder.setProgress(0f)
                                 VideoSumupService.startSummarization(
                                     context = context,
                                     videoPath = audioPath!!,
-                                    videoFileName = audioUri?.lastPathSegment ?: context.getString(R.string.workflow_audio_video_placeholder),
+                                    videoFileName = audioUri?.lastPathSegment ?: resources.getString(R.string.workflow_audio_video_placeholder),
                                     whisperModelPath = whisperModelPath!!,
                                     language = whisperLanguage,
                                     threads = whisperThreads,
@@ -1065,7 +1067,7 @@ fun WorkflowsScreen(navController: NavController) {
                             mangaError = null
                             mangaErrorDetails = null
                             if (!PDFTranslationJobService.startMangaPreview(context, spec)) {
-                                mangaError = context.getString(R.string.pdf_translation_already_running)
+                                mangaError = resources.getString(R.string.pdf_translation_already_running)
                             }
                         },
                         onRun = { spec ->
@@ -1073,12 +1075,12 @@ fun WorkflowsScreen(navController: NavController) {
                             mangaError = null
                             mangaErrorDetails = null
                             mangaResults = emptyList()
-                            mangaStep = context.getString(R.string.workflow_step_starting)
+                            mangaStep = resources.getString(R.string.workflow_step_starting)
                             mangaProgress = 0f
                             if (!PDFTranslationJobService.startMangaTranslation(context, spec)) {
                                 mangaIsRunning = false
                                 mangaError = pdfTranslationJobState.errorMessage
-                                    ?: context.getString(R.string.pdf_translation_already_running)
+                                    ?: resources.getString(R.string.pdf_translation_already_running)
                                 mangaStep = ""
                             }
                         }
@@ -1182,7 +1184,7 @@ fun WorkflowsScreen(navController: NavController) {
                                 val specs = sourceItems.map { item ->
                                     MediaTranslationJobSpec(
                                         sourcePath = item.path,
-                                        sourceName = item.name.ifBlank { context.getString(R.string.workflow_audio_video_placeholder) },
+                                        sourceName = item.name.ifBlank { resources.getString(R.string.workflow_audio_video_placeholder) },
                                         sourceMimeType = item.mimeType,
                                         whisperModelPath = whisperModelPath!!,
                                         whisperLanguage = whisperLanguage,
@@ -1350,7 +1352,7 @@ fun WorkflowsScreen(navController: NavController) {
                                 val specs = videoItems.map { item ->
                                     SubtitleTranslationJobSpec(
                                         videoPath = item.path,
-                                        videoName = item.name.ifBlank { context.getString(R.string.workflow_subtitle_translate_video_placeholder) },
+                                        videoName = item.name.ifBlank { resources.getString(R.string.workflow_subtitle_translate_video_placeholder) },
                                         sourceSubtitlePath = subtitleTranslationSrtPath,
                                         sourceSubtitleName = subtitleTranslationSrtName.ifBlank { null },
                                         whisperModelPath = whisperModelPath,
@@ -1447,7 +1449,7 @@ fun WorkflowsScreen(navController: NavController) {
                     val minutes = recordingSeconds / 60
                     val seconds = recordingSeconds % 60
                     Text(
-                        String.format("%02d:%02d", minutes, seconds),
+                        String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds),
                         style = MaterialTheme.typography.headlineLarge,
                         fontWeight = FontWeight.Bold,
                         color = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
@@ -1468,7 +1470,7 @@ fun WorkflowsScreen(navController: NavController) {
                         // Save recording to Recordings folder
                         try {
                             val recordingsDir = File(context.filesDir, "sd_output/Recordings").apply { mkdirs() }
-                            val timestamp = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.getDefault()).format(Date())
+                            val timestamp = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.US).format(Date())
                             val savedFile = File(recordingsDir, "recording_$timestamp.m4a")
                             recordingFile.copyTo(savedFile, overwrite = true)
                             WorkflowStateHolder.setSavedRecordingPath(savedFile.absolutePath)
@@ -1555,6 +1557,7 @@ private fun MangaTranslationWorkflowContent(
     onRun: (MangaTranslationJobSpec) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val savedConfig = remember { settingsRepo.mangaTranslationRunConfigSnapshot() }
     val outputFolder by settingsRepo.outputFolderUri.collectAsState()
@@ -2256,7 +2259,7 @@ private fun MangaTranslationWorkflowContent(
                                 Button(
                                     onClick = {
                                         if (sources.isEmpty()) {
-                                            paintedWorkspaceError = context.getString(
+                                            paintedWorkspaceError = resources.getString(
                                                 R.string.workflow_manga_painted_no_sources
                                             )
                                         } else {
@@ -2265,7 +2268,7 @@ private fun MangaTranslationWorkflowContent(
                                                     MangaPaintedOcrWorkspaceManager.create(context, sources)
                                                 }.getOrNull()
                                                 if (created == null) {
-                                                    paintedWorkspaceError = context.getString(
+                                                    paintedWorkspaceError = resources.getString(
                                                         R.string.workflow_manga_painted_editor_error
                                                     )
                                                 } else {
@@ -2984,6 +2987,7 @@ private fun mangaOcrProviderSummary(options: com.example.llamadroid.data.PdfTran
 @Composable
 private fun MangaPreviewImage(title: String, uri: Uri) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val bitmap by produceState<android.graphics.Bitmap?>(initialValue = null, uri) {
         value = withContext(Dispatchers.IO) {
             if (uri.scheme == "file") {
@@ -3059,6 +3063,7 @@ private fun MangaQualityReportSummary(report: MangaTranslationQualityReport) {
 @Composable
 private fun MangaResultActions(result: MangaTranslationFileResult) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val outputs = buildList {
         result.pdfUri?.let { add(it to "application/pdf") }
         result.cbzUri?.let { add(it to "application/vnd.comicbook+zip") }
@@ -3090,7 +3095,7 @@ private fun MangaResultActions(result: MangaTranslationFileResult) {
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     }
                     context.startActivity(
-                        Intent.createChooser(share, context.getString(R.string.action_share))
+                        Intent.createChooser(share, resources.getString(R.string.action_share))
                     )
                 },
                 modifier = Modifier.weight(1f)
@@ -3217,6 +3222,7 @@ private fun WorkflowOutputGalleryCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var refreshTick by remember { mutableIntStateOf(0) }
     var selectedSet by remember { mutableStateOf<WorkflowOutputGallerySet?>(null) }
     var pendingDeleteSet by remember { mutableStateOf<WorkflowOutputGallerySet?>(null) }
@@ -3510,7 +3516,7 @@ private fun WorkflowOutputGalleryCard(
             confirmButton = {
                 TextButton(onClick = {
                     if (item.file.delete()) {
-                        Toast.makeText(context, context.getString(R.string.workflow_output_gallery_deleted), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.workflow_output_gallery_deleted), Toast.LENGTH_SHORT).show()
                     }
                     pendingDeleteFile = null
                     refreshGallery()
@@ -3535,7 +3541,7 @@ private fun WorkflowOutputGalleryCard(
             confirmButton = {
                 TextButton(onClick = {
                     setsToDelete.forEach { it.directory.deleteRecursively() }
-                    Toast.makeText(context, context.getString(R.string.workflow_output_gallery_deleted_sets, setsToDelete.size), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.workflow_output_gallery_deleted_sets, setsToDelete.size), Toast.LENGTH_SHORT).show()
                     pendingDeleteSet = null
                     refreshGallery()
                 }) {
@@ -3574,7 +3580,7 @@ private fun WorkflowOutputGalleryCard(
                         }
                         Toast.makeText(
                             context,
-                            context.getString(
+                            resources.getString(
                                 R.string.workflow_imported_inputs_cleared,
                                 result.deletedCount,
                                 FormatUtils.Display.formatBytes(context, result.freedBytes)
@@ -3614,7 +3620,7 @@ private fun WorkflowOutputGalleryCard(
                     refreshTick++
                     Toast.makeText(
                         context,
-                        context.getString(R.string.workflow_output_gallery_discard_resume_done),
+                        resources.getString(R.string.workflow_output_gallery_discard_resume_done),
                         Toast.LENGTH_SHORT
                     ).show()
                 }) {
@@ -4111,6 +4117,7 @@ private fun SubtitleTranslationWorkflowContent(
     onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
     val templates by db.workflowTemplateDao()
@@ -4129,7 +4136,7 @@ private fun SubtitleTranslationWorkflowContent(
         } catch (_: Exception) {
         }
         try {
-            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_subtitle_translate_video_placeholder)
+            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: resources.getString(R.string.workflow_subtitle_translate_video_placeholder)
             val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
             val tempFile = File(inputDir, "workflow_subtitle_video_${System.currentTimeMillis()}.mp4")
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -4140,7 +4147,7 @@ private fun SubtitleTranslationWorkflowContent(
             MediaTranslationWorkflowStateHolder.update {
                 it.copy(
                     workflowKind = MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE,
-                    errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic))
+                    errorMessage = resources.getString(R.string.workflow_error_load_audio, error.message ?: resources.getString(R.string.error_generic))
                 )
             }
         }
@@ -4152,7 +4159,7 @@ private fun SubtitleTranslationWorkflowContent(
             } catch (_: Exception) {
             }
             runCatching {
-                val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_subtitle_translate_video_placeholder)
+                val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: resources.getString(R.string.workflow_subtitle_translate_video_placeholder)
                 val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
                 val tempFile = File(inputDir, "workflow_subtitle_video_${System.currentTimeMillis()}_${displayName.hashCode()}.mp4")
                 context.contentResolver.openInputStream(uri)?.use { input ->
@@ -4170,7 +4177,7 @@ private fun SubtitleTranslationWorkflowContent(
         } catch (_: Exception) {
         }
         try {
-            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_subtitle_translate_srt_placeholder)
+            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: resources.getString(R.string.workflow_subtitle_translate_srt_placeholder)
             val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
             val tempFile = File(inputDir, "workflow_source_subtitles_${System.currentTimeMillis()}.srt")
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -4181,7 +4188,7 @@ private fun SubtitleTranslationWorkflowContent(
             MediaTranslationWorkflowStateHolder.update {
                 it.copy(
                     workflowKind = MEDIA_TRANSLATION_WORKFLOW_KIND_SUBTITLE,
-                    errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic))
+                    errorMessage = resources.getString(R.string.workflow_error_load_audio, error.message ?: resources.getString(R.string.error_generic))
                 )
             }
         }
@@ -4560,6 +4567,7 @@ private fun SubtitleTranslationSourceCard(
     onClearSubtitle: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(stringResource(R.string.workflow_subtitle_translate_source_section), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
@@ -4821,6 +4829,7 @@ private fun MediaDubbingTranslationWorkflowContent(
     onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
     val ttsModels by db.modelDao().getModelsByType(ModelType.ONNX_TTS).collectAsState(initial = emptyList())
@@ -4868,7 +4877,7 @@ private fun MediaDubbingTranslationWorkflowContent(
                 mimeType?.contains("flac") == true -> "flac"
                 else -> "media"
             }
-            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_audio_video_placeholder)
+            val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: resources.getString(R.string.workflow_audio_video_placeholder)
             val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
             val tempFile = File(inputDir, "workflow_media_translate_${System.currentTimeMillis()}.$extension")
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -4879,7 +4888,7 @@ private fun MediaDubbingTranslationWorkflowContent(
             MediaTranslationWorkflowStateHolder.update {
                 it.copy(
                     workflowKind = MEDIA_TRANSLATION_WORKFLOW_KIND_MEDIA,
-                    errorMessage = context.getString(R.string.workflow_error_load_audio, error.message ?: context.getString(R.string.error_generic))
+                errorMessage = resources.getString(R.string.workflow_error_load_audio, error.message ?: resources.getString(R.string.error_generic))
                 )
             }
         }
@@ -4893,7 +4902,7 @@ private fun MediaDubbingTranslationWorkflowContent(
             runCatching {
                 val mimeType = context.contentResolver.getType(uri)
                 val extension = mediaWorkflowExtensionForMime(mimeType)
-                val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: context.getString(R.string.workflow_audio_video_placeholder)
+                val displayName = uri.lastPathSegment?.substringAfterLast('/') ?: resources.getString(R.string.workflow_audio_video_placeholder)
                 val inputDir = File(context.filesDir, "workflow_media_inputs").apply { mkdirs() }
                 val tempFile = File(inputDir, "workflow_media_translate_${System.currentTimeMillis()}_${displayName.hashCode()}.$extension")
                 context.contentResolver.openInputStream(uri)?.use { input ->
@@ -5391,6 +5400,7 @@ private fun MediaTranslationBackendCard(
     onMetadataLoaded: (RemoteSummaryMetadata) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val liteRtModelId by settingsRepo.workflowSummaryLiteRtModelId.collectAsState()
     val liteRtBackend by settingsRepo.workflowSummaryLiteRtBackend.collectAsState()
     val liteRtMtpEnabled by settingsRepo.workflowSummaryLiteRtMtpEnabled.collectAsState()
@@ -5915,6 +5925,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
     onCancel: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
@@ -6032,7 +6043,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
     val runWorkflow: () -> Unit = workflow@{
         if (missingRequiredComponents.isNotEmpty()) {
             onErrorChange(
-                context.getString(
+                resources.getString(
                     R.string.imagegen_error_missing_required_components,
                     missingRequiredComponents.joinToString(", ") { workflowComponentRoleLabel(context, it) }
                 )
@@ -6066,7 +6077,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
         if (modelPath != null && upscalerPath != null && prompt.isNotBlank()) {
             onRunningChange(true)
             onErrorChange(null)
-            onStepChange(context.getString(R.string.workflow_step_generating))
+            onStepChange(resources.getString(R.string.workflow_step_generating))
             onProgressChange(0f)
             
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -6946,6 +6957,7 @@ private fun TranscribeSummaryWorkflowContent(
     onRecord: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     
     val whisperModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
@@ -6975,7 +6987,7 @@ private fun TranscribeSummaryWorkflowContent(
                 onAudioPathChange(tempFile.absolutePath)
                 android.util.Log.d("WorkflowsScreen", "File picked: ${uri.lastPathSegment}, saved to: ${tempFile.absolutePath}")
             } catch (e: Exception) {
-                onError(context.getString(R.string.workflow_error_load_audio, e.message ?: context.getString(R.string.error_generic)))
+                onError(resources.getString(R.string.workflow_error_load_audio, e.message ?: resources.getString(R.string.error_generic)))
             }
         }
     }
@@ -7459,7 +7471,7 @@ private fun TranscribeSummaryWorkflowContent(
             com.example.llamadroid.ui.components.SummaryMarkdownCard(
                 title = stringResource(R.string.pdf_partial_results_title),
                 markdown = partialSummaries.mapIndexed { index, part ->
-                    "### ${context.getString(R.string.summary_partial_item_label, index + 1)}\n$part"
+                    "### ${resources.getString(R.string.summary_partial_item_label, index + 1)}\n$part"
                 }.joinToString("\n\n")
             )
         }

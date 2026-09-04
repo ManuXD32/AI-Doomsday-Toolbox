@@ -1571,6 +1571,7 @@
     <string name="llama_folder_delete_desc">Eliminar carpeta %1$s</string>
     <plurals name="llama_folder_chat_count">
         <item quantity="one">%d chat</item>
+        <item quantity="many">%d chats</item>
         <item quantity="other">%d chats</item>
     </plurals>
     <string name="llama_prompt_profile_label">Perfil de prompt</string>
@@ -6538,6 +6539,8 @@
     <string name="widget_chat_reply_button">Responder</string>
     <string name="widget_chat_reply_title">Responder al chat</string>
     <string name="widget_chat_reply_hint">Mensaje</string>
+    <string name="widget_navigation_previous_symbol">‹</string>
+    <string name="widget_navigation_next_symbol">›</string>
     <string name="widget_chat_reply_sent">Mensaje enviado</string>
     <string name="adventure_gate_skill_points_short">PH</string>
     <string name="adventure_gate_skill_shop_price">%1$s - %2$d PH</string>

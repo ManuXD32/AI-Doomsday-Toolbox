@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +93,7 @@ import java.util.*
 @Composable
 fun NotesManagerScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val clipboardManager = LocalClipboardManager.current
@@ -169,18 +171,18 @@ fun NotesManagerScreen(navController: NavController) {
                     val json = gson.toJson(payload)
                     context.contentResolver.openOutputStream(uri)?.use { output ->
                         output.write(json.toByteArray(Charsets.UTF_8))
-                    } ?: error(context.getString(R.string.notes_export_failed_open_output))
+                    } ?: error(resources.getString(R.string.notes_export_failed_open_output))
                     Toast.makeText(
                         context,
-                        context.getString(R.string.notes_export_success, notesToExport.size),
+                        resources.getString(R.string.notes_export_success, notesToExport.size),
                         Toast.LENGTH_SHORT
                     ).show()
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.notes_export_failed,
-                            e.message ?: context.getString(R.string.error_generic)
+                            e.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -203,26 +205,26 @@ fun NotesManagerScreen(navController: NavController) {
                     val importedNotes = parseNotesImportPayload(
                         json = json,
                         gson = gson,
-                        chatSourceLabel = context.getString(R.string.notes_import_source_native_chat),
-                        defaultNoteTitle = context.getString(R.string.notes_import_default_single_title),
-                        unknownFormatMessage = context.getString(R.string.notes_import_error_unknown_format),
-                        systemLabel = context.getString(R.string.llama_note_transcript_system),
-                        imageLabel = context.getString(R.string.llama_note_transcript_image),
-                        audioLabel = context.getString(R.string.llama_note_transcript_audio)
+                        chatSourceLabel = resources.getString(R.string.notes_import_source_native_chat),
+                        defaultNoteTitle = resources.getString(R.string.notes_import_default_single_title),
+                        unknownFormatMessage = resources.getString(R.string.notes_import_error_unknown_format),
+                        systemLabel = resources.getString(R.string.llama_note_transcript_system),
+                        imageLabel = resources.getString(R.string.llama_note_transcript_image),
+                        audioLabel = resources.getString(R.string.llama_note_transcript_audio)
                     )
                     importedNotes.forEach { db.noteDao().insert(it) }
                     NoteDisplayWidgetProvider.refreshAll(context.applicationContext)
                     Toast.makeText(
                         context,
-                        context.getString(R.string.notes_import_success, importedNotes.size),
+                        resources.getString(R.string.notes_import_success, importedNotes.size),
                         Toast.LENGTH_SHORT
                     ).show()
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.notes_import_failed,
-                            e.message ?: context.getString(R.string.error_generic)
+                            e.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -722,23 +724,23 @@ fun NotesManagerScreen(navController: NavController) {
                     runCatching {
                         val start = parseOrganizerUiDateTime(
                             startText,
-                            context.getString(R.string.organizer_error_datetime_required),
-                            context.getString(R.string.organizer_error_datetime_format)
+                            resources.getString(R.string.organizer_error_datetime_required),
+                            resources.getString(R.string.organizer_error_datetime_format)
                         )
                         val end = endText.trim().takeIf { it.isNotBlank() }?.let {
                             parseOrganizerUiDateTime(
                                 it,
-                                context.getString(R.string.organizer_error_datetime_required),
-                                context.getString(R.string.organizer_error_datetime_format)
+                                resources.getString(R.string.organizer_error_datetime_required),
+                                resources.getString(R.string.organizer_error_datetime_format)
                             )
                         }
                         require(end == null || !end.toInstant().isBefore(start.toInstant())) {
-                            context.getString(R.string.organizer_event_error_end_before_start)
+                            resources.getString(R.string.organizer_event_error_end_before_start)
                         }
                         val now = System.currentTimeMillis()
-                        val color = parseOrganizerUiColor(colorText, context.getString(R.string.organizer_error_color_format))
+                        val color = parseOrganizerUiColor(colorText, resources.getString(R.string.organizer_error_color_format))
                         val savedEventId = if (eventToEdit != null) {
-                            val existing = eventToEdit ?: error(context.getString(R.string.error_generic))
+                            val existing = eventToEdit ?: error(resources.getString(R.string.error_generic))
                             db.organizerDao().updateEvent(
                                 existing.copy(
                                     title = title.trim(),
@@ -772,8 +774,8 @@ fun NotesManagerScreen(navController: NavController) {
                         alarmText.trim().takeIf { it.isNotBlank() }?.let { rawAlarm ->
                             val alarmAt = parseOrganizerUiDateTime(
                                 rawAlarm,
-                                context.getString(R.string.organizer_error_datetime_required),
-                                context.getString(R.string.organizer_error_datetime_format)
+                                resources.getString(R.string.organizer_error_datetime_required),
+                                resources.getString(R.string.organizer_error_datetime_format)
                             )
                             val alarm = OrganizerAlarmEntity(
                                 eventId = savedEventId,
@@ -792,7 +794,7 @@ fun NotesManagerScreen(navController: NavController) {
                         showEventDialog = false
                         eventToEdit = null
                     }.onFailure { error ->
-                        Toast.makeText(context, error.message ?: context.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, error.message ?: resources.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -811,12 +813,12 @@ fun NotesManagerScreen(navController: NavController) {
                     runCatching {
                         val trigger = parseOrganizerUiDateTime(
                             triggerText,
-                            context.getString(R.string.organizer_error_datetime_required),
-                            context.getString(R.string.organizer_error_datetime_format)
+                            resources.getString(R.string.organizer_error_datetime_required),
+                            resources.getString(R.string.organizer_error_datetime_format)
                         )
                         val now = System.currentTimeMillis()
                         val savedAlarm = if (alarmToEdit != null) {
-                            val existing = alarmToEdit ?: error(context.getString(R.string.error_generic))
+                            val existing = alarmToEdit ?: error(resources.getString(R.string.error_generic))
                             existing.copy(
                                 title = title.trim(),
                                 message = message.trim(),
@@ -851,7 +853,7 @@ fun NotesManagerScreen(navController: NavController) {
                         showAlarmDialog = false
                         alarmToEdit = null
                     }.onFailure { error ->
-                        Toast.makeText(context, error.message ?: context.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, error.message ?: resources.getString(R.string.error_generic), Toast.LENGTH_LONG).show()
                     }
                 }
             }

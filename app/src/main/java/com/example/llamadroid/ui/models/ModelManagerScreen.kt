@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -216,6 +217,7 @@ fun ModelManagerScreen(navController: NavController) {
 @Composable
 fun InstalledTab(viewModel: ModelManagerViewModel) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val models by viewModel.installedModels.collectAsStateWithLifecycle()
@@ -272,7 +274,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                         val sourceFile = File(model.path)
                         if (!sourceFile.exists()) {
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                android.widget.Toast.makeText(context, context.getString(R.string.models_export_error_not_found), android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, resources.getString(R.string.models_export_error_not_found), android.widget.Toast.LENGTH_SHORT).show()
                             }
                             return@launch
                         }
@@ -287,12 +289,12 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                 }
                             }
                             kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                android.widget.Toast.makeText(context, context.getString(R.string.models_export_success, model.filename), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.models_export_success, model.filename), android.widget.Toast.LENGTH_SHORT).show()
                             }
                         }
                     } catch (e: Exception) {
                         kotlinx.coroutines.withContext(Dispatchers.Main) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.models_export_failed, e.message), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.models_export_failed, e.message), android.widget.Toast.LENGTH_SHORT).show()
                         }
                     } finally {
                         pendingExportModel = null
@@ -692,11 +694,11 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                         val renamed = cleanNewName != model.filename
                                         val finalPath = if (renamed) {
                                             if (!oldFile.exists()) {
-                                                throw IllegalStateException(context.getString(R.string.models_rename_failed))
+                                                throw IllegalStateException(resources.getString(R.string.models_rename_failed))
                                             }
                                             val newFile = java.io.File(oldFile.parent, cleanNewName)
                                             if (!oldFile.renameTo(newFile)) {
-                                                throw IllegalStateException(context.getString(R.string.models_rename_failed))
+                                                throw IllegalStateException(resources.getString(R.string.models_rename_failed))
                                             }
                                             newFile.absolutePath
                                         } else {
@@ -730,7 +732,7 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                             withContext(Dispatchers.Main) {
                                                 android.widget.Toast.makeText(
                                                     context,
-                                                    context.getString(R.string.models_kb_embedding_cleared),
+                                                    resources.getString(R.string.models_kb_embedding_cleared),
                                                     android.widget.Toast.LENGTH_SHORT
                                                 ).show()
                                             }
@@ -739,13 +741,13 @@ fun InstalledTab(viewModel: ModelManagerViewModel) {
                                         withContext(Dispatchers.Main) {
                                             android.widget.Toast.makeText(
                                                 context,
-                                                context.getString(R.string.models_edit_success, cleanNewName),
+                                                resources.getString(R.string.models_edit_success, cleanNewName),
                                                 android.widget.Toast.LENGTH_SHORT
                                             ).show()
                                         }
                                     } catch (e: Exception) {
                                         withContext(Dispatchers.Main) {
-                                            android.widget.Toast.makeText(context, context.getString(R.string.models_error_toast, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
+                                            android.widget.Toast.makeText(context, resources.getString(R.string.models_error_toast, e.message ?: ""), android.widget.Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }

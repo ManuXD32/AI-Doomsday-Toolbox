@@ -118,6 +118,8 @@ import org.json.JSONObject
 @Composable
 fun LlamaSchedulerScreen(navController: NavController) {
     val context = LocalContext.current
+    val runNowStartedText = stringResource(R.string.llama_scheduler_run_now_started)
+    val stopRequestedText = stringResource(R.string.llama_scheduler_stop_requested)
     val database = remember { AppDatabase.getDatabase(context.applicationContext) }
     val taskDao = remember { database.llamaScheduledTaskDao() }
     val serverDao = remember { database.llamaServerDao() }
@@ -226,11 +228,11 @@ fun LlamaSchedulerScreen(navController: NavController) {
                     },
                     onRunNow = { task ->
                         LlamaScheduledTaskService.enqueue(context, task.id, System.currentTimeMillis(), force = true)
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_run_now_started), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, runNowStartedText, Toast.LENGTH_SHORT).show()
                     },
                     onStop = { task ->
                         LlamaScheduledTaskService.cancelRunning(context, taskId = task.id)
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_stop_requested), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, stopRequestedText, Toast.LENGTH_SHORT).show()
                     }
                 )
             } else {
@@ -254,7 +256,7 @@ fun LlamaSchedulerScreen(navController: NavController) {
                     },
                     onStopLog = { log ->
                         LlamaScheduledTaskService.cancelRunning(context, taskId = log.taskId, logId = log.id)
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_stop_requested), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, stopRequestedText, Toast.LENGTH_SHORT).show()
                     },
                     onDeleteSelected = {
                         val ids = selectedLogIds.toList()
@@ -628,6 +630,7 @@ private fun LlamaScheduledTaskEditorDialog(
     onSave: (LlamaScheduledTaskEntity) -> Unit
 ) {
     val context = LocalContext.current
+    val requiredFieldsErrorText = stringResource(R.string.llama_scheduler_error_required_fields)
     val database = remember { AppDatabase.getDatabase(context.applicationContext) }
     val promptProfiles by remember(database) {
         database.llamaChatPromptProfileDao().getAllProfiles()
@@ -1158,7 +1161,7 @@ private fun LlamaScheduledTaskEditorDialog(
                     val cleanName = name.trim()
                     val cleanPrompt = taskPrompt.trim()
                     if (cleanName.isBlank() || cleanPrompt.isBlank()) {
-                        Toast.makeText(context, context.getString(R.string.llama_scheduler_error_required_fields), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, requiredFieldsErrorText, Toast.LENGTH_SHORT).show()
                         return@TextButton
                     }
                     onSave(
@@ -1207,32 +1210,33 @@ private fun SchedulerPromptPickerField(
     savedSystemPrompts: List<SystemPromptEntity>,
     onSelected: (String) -> Unit
 ) {
-    val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
-    val choices = remember(customProfiles, savedSystemPrompts, context) {
-        val builtIns = LlamaBuiltInPromptProfiles.all.map { profile ->
-            SchedulerPromptChoice(
-                name = context.getString(profile.nameRes),
-                source = context.getString(R.string.llama_scheduler_prompt_source_default),
-                content = context.getString(profile.contentRes)
-            )
-        }
-        val nativeProfiles = customProfiles.map { profile ->
-            SchedulerPromptChoice(
-                name = profile.name,
-                source = context.getString(R.string.llama_scheduler_prompt_source_profile),
-                content = profile.content
-            )
-        }
-        val systemPrompts = savedSystemPrompts.map { prompt ->
-            SchedulerPromptChoice(
-                name = prompt.name,
-                source = context.getString(R.string.llama_scheduler_prompt_source_system),
-                content = prompt.content
-            )
-        }
-        builtIns + nativeProfiles + systemPrompts
+    val defaultSourceText = stringResource(R.string.llama_scheduler_prompt_source_default)
+    val profileSourceText = stringResource(R.string.llama_scheduler_prompt_source_profile)
+    val systemSourceText = stringResource(R.string.llama_scheduler_prompt_source_system)
+    val builtIns = mutableListOf<SchedulerPromptChoice>()
+    for (profile in LlamaBuiltInPromptProfiles.all) {
+        builtIns += SchedulerPromptChoice(
+            name = stringResource(profile.nameRes),
+            source = defaultSourceText,
+            content = stringResource(profile.contentRes)
+        )
     }
+    val nativeProfiles = customProfiles.map { profile ->
+        SchedulerPromptChoice(
+            name = profile.name,
+            source = profileSourceText,
+            content = profile.content
+        )
+    }
+    val systemPrompts = savedSystemPrompts.map { prompt ->
+        SchedulerPromptChoice(
+            name = prompt.name,
+            source = systemSourceText,
+            content = prompt.content
+        )
+    }
+    val choices = builtIns + nativeProfiles + systemPrompts
 
     Box {
         OutlinedButton(

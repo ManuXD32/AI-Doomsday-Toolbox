@@ -950,7 +950,7 @@ fun DashboardScreen(
                 ) {
                     Column {
                         Text(
-                            stringResource(R.string.dashboard_ram_unit, String.format("%.1f", stats.totalRamGb - stats.freeRamGb)),
+                            stringResource(R.string.dashboard_ram_unit, String.format(java.util.Locale.getDefault(), "%.1f", stats.totalRamGb - stats.freeRamGb)),
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.error
                         )
@@ -962,7 +962,7 @@ fun DashboardScreen(
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            stringResource(R.string.dashboard_ram_unit, String.format("%.1f", stats.freeRamGb)),
+                            stringResource(R.string.dashboard_ram_unit, String.format(java.util.Locale.getDefault(), "%.1f", stats.freeRamGb)),
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -974,7 +974,7 @@ fun DashboardScreen(
                     }
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            stringResource(R.string.dashboard_ram_unit, String.format("%.1f", stats.totalRamGb)),
+                            stringResource(R.string.dashboard_ram_unit, String.format(java.util.Locale.getDefault(), "%.1f", stats.totalRamGb)),
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(

@@ -1,5 +1,6 @@
 package com.example.llamadroid.wear
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -69,6 +70,8 @@ object WearCompanionBridgeManager {
     private lateinit var tamaDatabase: TamaDatabase
     private lateinit var repository: LlamaRepository
     private lateinit var settingsRepo: SettingsRepository
+    // The bridge is process-scoped and TamaAgentService stores applicationContext only.
+    @SuppressLint("StaticFieldLeak")
     private lateinit var tamaAgentService: TamaAgentService
     @Volatile private var started = false
 

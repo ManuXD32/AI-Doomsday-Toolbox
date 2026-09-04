@@ -301,7 +301,7 @@
     }
   ],
   "project_head": "ab91db45b8ac6fe6096c2625e93a2caaf3c09dcf",
-  "run_dir": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance",
+  "run_dir": "android_native_build/runs/20260812T123058Z-performance",
   "schema": 1,
   "source_lock": {
     "android": {
@@ -353,19 +353,19 @@
       "android_patch_sha256": null,
       "head": "c9c8ccfab584f9f7610057c4633dbd3df7e012cc",
       "modified_paths": [],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/OpenCL-Headers"
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/OpenCL-Headers"
     },
     "SPIRV-Headers": {
       "android_patch_sha256": null,
       "head": "4015a331f5ffd6fc5c6fa7b03e08fb4a692491d7",
       "modified_paths": [],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/SPIRV-Headers"
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/SPIRV-Headers"
     },
     "Vulkan-Headers": {
       "android_patch_sha256": null,
       "head": "11d6898377797e07dbd543aaaa367e4465074597",
       "modified_paths": [],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/Vulkan-Headers"
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/Vulkan-Headers"
     },
     "llama.cpp": {
       "android_patch_sha256": "07b96b92e06630b5ad705b43d9cb6e259478e1ea77b12a4696062d75d9a4d355",
@@ -373,26 +373,26 @@
       "modified_paths": [
         "vendor/sheredom/subprocess.h"
       ],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/llama.cpp"
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/llama.cpp"
     },
     "llama.cpp-sd-rpc": {
       "android_patch_sha256": null,
       "head": "ded1561b4228495daa58342ffc111ff172ec86ac",
       "modified_paths": [],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/llama.cpp-sd-rpc",
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/llama.cpp-sd-rpc",
       "sync_hash": "ded1561b4228495daa58342ffc111ff172ec86ac"
     },
     "stable-diffusion.cpp": {
       "android_patch_sha256": null,
       "head": "ea7f0c87cfe4c673263b4c201c596c7f1cbe2528",
       "modified_paths": [],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/stable-diffusion.cpp"
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/stable-diffusion.cpp"
     },
     "whisper.cpp": {
       "android_patch_sha256": null,
       "head": "306c88f4d1286aec1bf96e544632897886af5501",
       "modified_paths": [],
-      "path": "/home/manu/.gemini/antigravity/scratch/android_native_build/runs/20260812T123058Z-performance/sources/whisper.cpp"
+      "path": "android_native_build/runs/20260812T123058Z-performance/sources/whisper.cpp"
     }
   },
   "suite": "performance"

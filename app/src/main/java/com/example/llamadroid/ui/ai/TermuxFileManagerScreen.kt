@@ -27,6 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import com.example.llamadroid.R
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +93,7 @@ enum class SortOption(val labelResId: Int) {
 @Composable
 fun TermuxFileManagerScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val sshService = remember { SSHService(context) }
     
@@ -148,7 +150,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                 isDownloading = false
                 selectedFiles = emptySet()
                 isSelectionMode = false
-                Toast.makeText(context, context.getString(R.string.file_download_success), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.file_download_success), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -185,15 +187,15 @@ fun TermuxFileManagerScreen(navController: NavController) {
                 files = emptyList()
                 Toast.makeText(
                     context,
-                    context.getString(R.string.file_upload_success_count, uploadedNames.size),
+                    resources.getString(R.string.file_upload_success_count, uploadedNames.size),
                     Toast.LENGTH_SHORT
                 ).show()
             }.onFailure { throwable ->
                 Toast.makeText(
                     context,
-                    context.getString(
+                    resources.getString(
                         R.string.file_upload_failed,
-                        throwable.message ?: context.getString(R.string.error_unknown)
+                        throwable.message ?: resources.getString(R.string.error_unknown)
                     ),
                     Toast.LENGTH_LONG
                 ).show()
@@ -265,7 +267,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                                 FileEntry(
                                     name = name,
                                     isDirectory = false, // Will be corrected
-                                    size = context.getString(R.string.file_calculating_size),
+                                    size = resources.getString(R.string.file_calculating_size),
                                     sizeBytes = 0,
                                     permissions = "",
                                     modifiedTime = ""
@@ -350,7 +352,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                 files = parseLsOutputEnhanced(output)
             }
             
-            Toast.makeText(context, context.getString(R.string.file_download_success) + ": $filename", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, resources.getString(R.string.file_download_success) + ": $filename", Toast.LENGTH_SHORT).show()
         }
     }
     
@@ -369,7 +371,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
             }
             
             fileToDelete = null
-            Toast.makeText(context, context.getString(R.string.file_deleted_success, file.name), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, resources.getString(R.string.file_deleted_success, file.name), Toast.LENGTH_SHORT).show()
         }
     }
     
@@ -1071,9 +1073,9 @@ fun parseLsOutputEnhanced(output: String): List<FileEntry> {
  */
 fun formatSizeEnhanced(bytes: Long): String {
     return when {
-        bytes >= 1_000_000_000 -> String.format("%.1f GB", bytes / 1_000_000_000.0)
-        bytes >= 1_000_000 -> String.format("%.1f MB", bytes / 1_000_000.0)
-        bytes >= 1_000 -> String.format("%.1f KB", bytes / 1_000.0)
+        bytes >= 1_000_000_000 -> String.format(java.util.Locale.getDefault(), "%.1f GB", bytes / 1_000_000_000.0)
+        bytes >= 1_000_000 -> String.format(java.util.Locale.getDefault(), "%.1f MB", bytes / 1_000_000.0)
+        bytes >= 1_000 -> String.format(java.util.Locale.getDefault(), "%.1f KB", bytes / 1_000.0)
         else -> "$bytes B"
     }
 }

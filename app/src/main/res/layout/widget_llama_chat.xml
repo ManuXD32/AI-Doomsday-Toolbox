@@ -65,7 +65,7 @@
             android:layout_height="32dp"
             android:background="@drawable/widget_chat_user_bubble"
             android:gravity="center"
-            android:text=">"
+            android:text="@string/widget_navigation_next_symbol"
             android:textColor="#F5F7FF"
             android:textSize="18sp"
             android:textStyle="bold" />

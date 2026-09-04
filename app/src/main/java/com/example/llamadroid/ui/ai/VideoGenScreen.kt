@@ -94,6 +94,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -147,6 +148,7 @@ import java.util.Locale
 @Composable
 fun VideoGenScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val batteryGateState = rememberBatteryOptimizationGateState()
     val settingsRepo = remember { SettingsRepository(context) }
@@ -308,7 +310,7 @@ fun VideoGenScreen(navController: NavController) {
                 selectedImagePath = tempFile.absolutePath
             }
         } catch (e: Exception) {
-            errorMessage = context.getString(R.string.video_gen_error_shared_image, e.message ?: "")
+            errorMessage = resources.getString(R.string.video_gen_error_shared_image, e.message ?: "")
         }
     }
 
@@ -365,61 +367,61 @@ fun VideoGenScreen(navController: NavController) {
 
         val loraError = runCatching { validateSdLoras(videoLoras + videoHighNoiseLoras) }.exceptionOrNull()
         if (loraError != null) {
-            errorMessage = loraError.message ?: context.getString(R.string.sd_workflow_gate_missing)
+            errorMessage = loraError.message ?: resources.getString(R.string.sd_workflow_gate_missing)
             return@generation
         }
 
         when {
             selectedVideoModelPath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_model_required)
+                errorMessage = resources.getString(R.string.video_gen_error_model_required)
                 return
             }
             prompt.isBlank() -> {
-                errorMessage = context.getString(R.string.video_gen_error_prompt_required)
+                errorMessage = resources.getString(R.string.video_gen_error_prompt_required)
                 return
             }
             mode == VideoGenerationMode.IMG2VID && selectedImagePath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_input_image_required)
+                errorMessage = resources.getString(R.string.video_gen_error_input_image_required)
                 return
             }
             useVae && selectedVaePath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_vae_required)
+                errorMessage = resources.getString(R.string.video_gen_error_vae_required)
                 return
             }
             useT5xxl && selectedT5xxlPath == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_t5xxl_required)
+                errorMessage = resources.getString(R.string.video_gen_error_t5xxl_required)
                 return
             }
             frames == null || frames <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_frames_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_frames_label))
                 return
             }
             fps == null || fps <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_fps_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_fps_label))
                 return
             }
             width == null || width <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_width_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_width_label))
                 return
             }
             height == null || height <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_height_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_height_label))
                 return
             }
             steps == null || steps <= 0 -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_steps_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_steps_label))
                 return
             }
             cfgScale == null || cfgScale <= 0f -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_cfg_scale_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_cfg_scale_label))
                 return
             }
             threads == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_threads_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_threads_label))
                 return
             }
             flowShiftEnabled && flowShift == null -> {
-                errorMessage = context.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_flow_shift_label))
+                errorMessage = resources.getString(R.string.video_gen_error_invalid_number, stringResourceSafe(context, R.string.video_gen_flow_shift_label))
                 return
             }
         }
@@ -493,7 +495,7 @@ fun VideoGenScreen(navController: NavController) {
         try {
             val file = File(metadata.mp4Path)
             if (!file.exists()) {
-                Toast.makeText(context, context.getString(R.string.video_gen_share_failed_missing), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.video_gen_share_failed_missing), Toast.LENGTH_SHORT).show()
                 return
             }
             val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
@@ -502,11 +504,11 @@ fun VideoGenScreen(navController: NavController) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.video_gen_share_chooser)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.video_gen_share_chooser)))
         } catch (e: Exception) {
             Toast.makeText(
                 context,
-                context.getString(R.string.video_gen_share_failed, e.message ?: ""),
+                resources.getString(R.string.video_gen_share_failed, e.message ?: ""),
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -516,15 +518,15 @@ fun VideoGenScreen(navController: NavController) {
         try {
             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText(
-                context.getString(R.string.video_gen_copy_info),
+                resources.getString(R.string.video_gen_copy_info),
                 buildVideoGenerationInfoText(context, metadata)
             )
             clipboard.setPrimaryClip(clip)
-            Toast.makeText(context, context.getString(R.string.video_gen_copy_info_success), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, resources.getString(R.string.video_gen_copy_info_success), Toast.LENGTH_SHORT).show()
         } catch (e: Exception) {
             Toast.makeText(
                 context,
-                context.getString(R.string.video_gen_copy_info_failed, e.message ?: ""),
+                resources.getString(R.string.video_gen_copy_info_failed, e.message ?: ""),
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -543,7 +545,7 @@ fun VideoGenScreen(navController: NavController) {
                 reloadGallery()
                 VideoGenerationStateHolder.txt2vid.removeVideo(metadata)
                 VideoGenerationStateHolder.img2vid.removeVideo(metadata)
-                Toast.makeText(context, context.getString(R.string.video_gen_delete_success), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.video_gen_delete_success), Toast.LENGTH_SHORT).show()
             }
         }
     }

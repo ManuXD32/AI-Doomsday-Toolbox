@@ -16,6 +16,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -249,6 +250,7 @@ private fun DraftFloatTextField(
 @Composable
 fun LLMSettingsScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     val binaryRepo = remember { BinaryRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
@@ -885,7 +887,10 @@ fun LLMSettingsScreen(navController: NavController) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(stringResource(R.string.llm_temperature), fontWeight = FontWeight.Medium)
-                            Text(String.format("%.1f", temp), color = MaterialTheme.colorScheme.primary)
+                            Text(
+                                String.format(java.util.Locale.getDefault(), "%.1f", temp),
+                                color = MaterialTheme.colorScheme.primary
+                            )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
                         Slider(
@@ -1857,7 +1862,7 @@ fun LLMSettingsScreen(navController: NavController) {
                             requiresDraftSelection &&
                             effectiveDraftModelPath.isNullOrBlank()
                         ) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.dist_speculative_missing_required_draft), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.dist_speculative_missing_required_draft), android.widget.Toast.LENGTH_SHORT).show()
                         } else if (saveCommandName.isNotBlank() && selectedModelPath != null) {
                             val existing = savedCommands.firstOrNull {
                                 it.name.equals(saveCommandName.trim(), ignoreCase = true)
@@ -1879,13 +1884,13 @@ fun LLMSettingsScreen(navController: NavController) {
                                 } else {
                                     R.string.saved_command_overwritten
                                 }
-                                android.widget.Toast.makeText(context, context.getString(feedback), android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, resources.getString(feedback), android.widget.Toast.LENGTH_SHORT).show()
                                 showSaveCommandDialog = false
                                 saveCommandName = ""
                                 selectedSaveCommandId = null
                             }
                         } else if (selectedModelPath == null) {
-                            android.widget.Toast.makeText(context, context.getString(R.string.llm_select_model), android.widget.Toast.LENGTH_SHORT).show()
+                            android.widget.Toast.makeText(context, resources.getString(R.string.llm_select_model), android.widget.Toast.LENGTH_SHORT).show()
                         }
                     },
                     enabled = saveCommandName.isNotBlank()
@@ -1914,7 +1919,7 @@ fun LLMSettingsScreen(navController: NavController) {
                         id = selectedSaveCommandId ?: 0L
                     )
                     scope.launch { db.savedCommandDao().insertCommand(cmd) }
-                    android.widget.Toast.makeText(context, context.getString(R.string.saved_command_overwritten), android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_overwritten), android.widget.Toast.LENGTH_SHORT).show()
                     showOverwriteSavedCommandDialog = false
                     showSaveCommandDialog = false
                     saveCommandName = ""
@@ -1974,7 +1979,7 @@ fun LLMSettingsScreen(navController: NavController) {
                                             
                                             settingsRepo.setLoadedCommandId(cmd.id)
                                             
-                                            android.widget.Toast.makeText(context, context.getString(R.string.dist_command_loaded), android.widget.Toast.LENGTH_SHORT).show()
+                                            android.widget.Toast.makeText(context, resources.getString(R.string.dist_command_loaded), android.widget.Toast.LENGTH_SHORT).show()
                                             showLoadCommandDialog = false
                                         }.padding(8.dp)
                                     ) {
@@ -2061,7 +2066,7 @@ fun LLMSettingsScreen(navController: NavController) {
                             )
                         )
                     }
-                    android.widget.Toast.makeText(context, context.getString(R.string.saved_command_overwritten), android.widget.Toast.LENGTH_SHORT).show()
+                    android.widget.Toast.makeText(context, resources.getString(R.string.saved_command_overwritten), android.widget.Toast.LENGTH_SHORT).show()
                     showCommandPreview = null
                 }, enabled = editName.isNotBlank()) {
                     Text(stringResource(R.string.dist_save_command))

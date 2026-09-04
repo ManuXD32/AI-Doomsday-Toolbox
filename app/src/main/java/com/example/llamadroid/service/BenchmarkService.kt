@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.content.Context
 import com.example.llamadroid.R
 import com.example.llamadroid.data.binary.BinaryRepository
@@ -35,7 +36,8 @@ import kotlin.coroutines.coroutineContext
  * Table format (8 columns):
  * | model | size | params | backend | threads | mmap | test | t/s |
  */
-class BenchmarkService(private val context: Context) {
+class BenchmarkService(context: Context) {
+    private val context = context.applicationContext
     
     companion object {
         // Global state for running status (persists across navigation)
@@ -63,6 +65,8 @@ class BenchmarkService(private val context: Context) {
         private var benchmarkJob: kotlinx.coroutines.Job? = null
         
         // Singleton instance for the current benchmark
+        // The singleton survives navigation and BenchmarkService stores applicationContext only.
+        @SuppressLint("StaticFieldLeak")
         private var instance: BenchmarkService? = null
         
         fun cancel() {

@@ -5,7 +5,9 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.example.llamadroid.R
 import com.example.llamadroid.service.MangaTranslationProfile
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -19,6 +21,9 @@ class MangaTranslationProfileCardTest {
 
     @Test
     fun balancedProfileCardShowsQualityAndInvokesSelection() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val profileLabel = context.getString(R.string.workflow_manga_profile_balanced)
+        val speedLabel = context.getString(R.string.workflow_manga_speed_medium)
         var selected = false
         composeRule.setContent {
             MaterialTheme {
@@ -31,8 +36,8 @@ class MangaTranslationProfileCardTest {
             }
         }
 
-        composeRule.onNodeWithText("Balanced").assertIsDisplayed().performClick()
-        composeRule.onNodeWithText("Good quality · medium").assertIsDisplayed()
+        composeRule.onNodeWithText(profileLabel).assertIsDisplayed().performClick()
+        composeRule.onNodeWithText(speedLabel).assertIsDisplayed()
         composeRule.runOnIdle { assertTrue(selected) }
     }
 }

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,6 +48,7 @@ import com.example.llamadroid.service.SubtitleBurnState
 @Composable
 fun SubtitleBurnScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     
     // Service binding
@@ -95,11 +97,11 @@ fun SubtitleBurnScreen(navController: NavController) {
     LaunchedEffect(serviceState) {
         when (val state = serviceState) {
             is SubtitleBurnState.Complete -> {
-                Toast.makeText(context, context.getString(R.string.subtitle_saved_path, state.outputPath), Toast.LENGTH_LONG).show()
+                Toast.makeText(context, resources.getString(R.string.subtitle_saved_path, state.outputPath), Toast.LENGTH_LONG).show()
                 SubtitleBurnService.resetState()
             }
             is SubtitleBurnState.Error -> {
-                Toast.makeText(context, context.getString(R.string.subtitle_error_message, state.message), Toast.LENGTH_LONG).show()
+                Toast.makeText(context, resources.getString(R.string.subtitle_error_message, state.message), Toast.LENGTH_LONG).show()
                 SubtitleBurnService.resetState()
             }
             else -> {}
@@ -375,4 +377,3 @@ private fun AlignmentButton(value: Int, icon: String, isSelected: Boolean, onCli
         }
     }
 }
-

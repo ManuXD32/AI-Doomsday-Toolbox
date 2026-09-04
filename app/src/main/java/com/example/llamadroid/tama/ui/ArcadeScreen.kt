@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -153,6 +154,7 @@ fun ArcadeScreen(
     var memoryRewardClaimed by remember { mutableStateOf(false) }
     var tickToken by rememberSaveable { mutableStateOf(0L) }
     val context = LocalContext.current
+    val resources = LocalResources.current
 
     LaunchedEffect(arcadeMode, tickToken) {
         if (arcadeMode != ArcadeMode.CATCH) return@LaunchedEffect
@@ -188,11 +190,11 @@ fun ArcadeScreen(
         coroutineScope.launch {
             gameEngine.awardMoney(
                 reward.toLong(),
-                context.getString(R.string.tama_event_arcade_reward, reward, context.getString(R.string.tama_arcade_game_title))
+                resources.getString(R.string.tama_event_arcade_reward, reward, resources.getString(R.string.tama_arcade_game_title))
             )
             gameEngine.awardHappiness(
                 summary.happiness.toFloat(),
-                context.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, context.getString(R.string.tama_arcade_game_title))
+                resources.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, resources.getString(R.string.tama_arcade_game_title))
             )
         }
     }
@@ -205,11 +207,11 @@ fun ArcadeScreen(
         coroutineScope.launch {
             gameEngine.awardMoney(
                 summary.coins.toLong(),
-                context.getString(R.string.tama_event_arcade_reward, summary.coins, context.getString(R.string.tama_arcade_memory_game_title))
+                resources.getString(R.string.tama_event_arcade_reward, summary.coins, resources.getString(R.string.tama_arcade_memory_game_title))
             )
             gameEngine.awardHappiness(
                 summary.happiness.toFloat(),
-                context.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, context.getString(R.string.tama_arcade_memory_game_title))
+                resources.getString(R.string.tama_event_arcade_happiness_reward, summary.happiness, resources.getString(R.string.tama_arcade_memory_game_title))
             )
         }
     }

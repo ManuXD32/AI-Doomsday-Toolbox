@@ -83,6 +83,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -138,6 +139,7 @@ import java.util.Locale
 @Composable
 fun OnnxImageGenScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -234,8 +236,8 @@ fun OnnxImageGenScreen(navController: NavController) {
     val isBusy = generationState is OnnxImageGenerationState.Preparing ||
         generationState is OnnxImageGenerationState.Generating
     val backendLabel = when (backend) {
-        OnnxRuntimeBackend.CPU -> context.getString(R.string.onnx_image_gen_backend_cpu)
-        OnnxRuntimeBackend.NNAPI -> context.getString(R.string.onnx_image_gen_backend_nnapi)
+        OnnxRuntimeBackend.CPU -> resources.getString(R.string.onnx_image_gen_backend_cpu)
+        OnnxRuntimeBackend.NNAPI -> resources.getString(R.string.onnx_image_gen_backend_nnapi)
     }
     val normalizedCanvas = remember(selectedMode, widthText, heightText) {
         if (selectedMode == OnnxImageGenMode.IMG2IMG) {
@@ -286,9 +288,9 @@ fun OnnxImageGenScreen(navController: NavController) {
             }.onFailure { error ->
                 Toast.makeText(
                     context,
-                    context.getString(
+                    resources.getString(
                         R.string.onnx_image_gen_init_image_import_failed,
-                        error.message ?: context.getString(R.string.error_generic)
+                        error.message ?: resources.getString(R.string.error_generic)
                     ),
                     Toast.LENGTH_LONG
                 ).show()
@@ -324,27 +326,27 @@ fun OnnxImageGenScreen(navController: NavController) {
         }
         when {
             !isImg2Img && (width == null || width < 64) -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_width)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_width)
                 return null
             }
             !isImg2Img && (height == null || height < 64) -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_height)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_height)
                 return null
             }
             steps == null || steps !in 1..150 -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_steps)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_steps)
                 return null
             }
             cfgScale == null || cfgScale <= 0f || cfgScale > 30f -> {
-                formError = context.getString(R.string.onnx_image_gen_error_invalid_cfg)
+                formError = resources.getString(R.string.onnx_image_gen_error_invalid_cfg)
                 return null
             }
             selectedMode == OnnxImageGenMode.IMG2IMG && !selectedModelSupportsImg2Img -> {
-                formError = context.getString(R.string.onnx_image_gen_error_model_no_img2img)
+                formError = resources.getString(R.string.onnx_image_gen_error_model_no_img2img)
                 return null
             }
             selectedMode == OnnxImageGenMode.IMG2IMG && initImagePath.isNullOrBlank() -> {
-                formError = context.getString(R.string.onnx_image_gen_error_missing_init_image)
+                formError = resources.getString(R.string.onnx_image_gen_error_missing_init_image)
                 return null
             }
         }
@@ -394,10 +396,10 @@ fun OnnxImageGenScreen(navController: NavController) {
         if (isBusy) return
         val config = parseAndValidateConfig() ?: return
         if (config.prompt.isBlank()) {
-            formError = context.getString(R.string.onnx_image_gen_error_empty_prompt)
+            formError = resources.getString(R.string.onnx_image_gen_error_empty_prompt)
             return
         }
-        holder.updateState(OnnxImageGenerationState.Preparing(context.getString(R.string.onnx_image_gen_status_preparing)))
+        holder.updateState(OnnxImageGenerationState.Preparing(resources.getString(R.string.onnx_image_gen_status_preparing)))
         startupGuard.run("onnx_image_generation_start") {
             context.startForegroundService(OnnxImageGenerationService.createStartIntent(context, config))
         }
@@ -419,11 +421,11 @@ fun OnnxImageGenScreen(navController: NavController) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.imagegen_share_chooser)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.imagegen_share_chooser)))
         }.onFailure { error ->
             Toast.makeText(
                 context,
-                context.getString(R.string.onnx_image_gen_share_failed, error.message ?: context.getString(R.string.error_generic)),
+                resources.getString(R.string.onnx_image_gen_share_failed, error.message ?: resources.getString(R.string.error_generic)),
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -443,7 +445,7 @@ fun OnnxImageGenScreen(navController: NavController) {
             }
             Toast.makeText(
                 context,
-                context.getString(
+                resources.getString(
                     if (deleted) R.string.imagegen_delete_confirm else R.string.imagegen_delete_fail
                 ),
                 Toast.LENGTH_SHORT

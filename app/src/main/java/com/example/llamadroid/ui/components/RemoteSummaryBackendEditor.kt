@@ -43,14 +43,18 @@ import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.service.RemoteSummaryMetadata
+import java.util.Locale
 import kotlinx.coroutines.launch
+
+private fun formatRemoteSummaryString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
 
 private const val LITERT_BACKEND_AUTO = "auto"
 private const val LITERT_BACKEND_CPU = "cpu"
 private const val LITERT_BACKEND_GPU = "gpu"
 
 private fun normalizeLiteRtBackend(value: String?): String {
-    val normalized = value?.trim()?.lowercase().orEmpty()
+    val normalized = value?.trim()?.lowercase(Locale.US).orEmpty()
     return when (normalized) {
         LITERT_BACKEND_CPU, "cpu-only" -> LITERT_BACKEND_CPU
         LITERT_BACKEND_GPU, "gpu-only", "opencl", "vulkan" -> LITERT_BACKEND_GPU
@@ -100,6 +104,13 @@ fun RemoteSummaryBackendEditor(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val pdfServerValueUnavailableText = stringResource(R.string.pdf_server_value_unavailable)
+    val pdfMetadataLiteRtLoadedFormat = stringResource(R.string.pdf_metadata_litert_loaded)
+    val pdfMetadataOllamaLoadedFormat = stringResource(R.string.pdf_metadata_ollama_loaded)
+    val pdfMetadataLlamaSwapLoadedFormat = stringResource(R.string.pdf_metadata_llama_swap_loaded)
+    val pdfMetadataLlamaLoadedFormat = stringResource(R.string.pdf_metadata_llama_loaded)
+    val pdfMetadataRefreshFailedFormat = stringResource(R.string.pdf_metadata_refresh_failed)
+    val errorGenericText = stringResource(R.string.error_generic)
     val scope = rememberCoroutineScope()
     val liteRtModels by remember(context) {
         AppDatabase.getDatabase(context).liteRtModelDao().observeAll()
@@ -158,34 +169,34 @@ fun RemoteSummaryBackendEditor(
     fun applyMetadata(metadata: RemoteSummaryMetadata) {
         when (SettingsRepository.normalizeOllamaOrLlamaBackend(metadata.backend)) {
             SettingsRepository.PDF_BACKEND_LITERT -> {
-                metadataMessage = context.getString(
-                    R.string.pdf_metadata_litert_loaded,
-                    metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable),
-                    metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                metadataMessage = formatRemoteSummaryString(
+                    pdfMetadataLiteRtLoadedFormat,
+                    metadata.serverModelLabel ?: pdfServerValueUnavailableText,
+                    metadata.serverContextLabel ?: pdfServerValueUnavailableText
                 )
             }
 
             SettingsRepository.PDF_BACKEND_OLLAMA -> {
                 availableRemoteModels = mergeSelectedModel(metadata.availableModels)
-                metadataMessage = context.getString(
-                    R.string.pdf_metadata_ollama_loaded,
+                metadataMessage = formatRemoteSummaryString(
+                    pdfMetadataOllamaLoadedFormat,
                     metadata.availableModels.size
                 )
             }
 
             SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> {
                 availableRemoteModels = mergeSelectedModel(metadata.availableModels)
-                metadataMessage = context.getString(
-                    R.string.pdf_metadata_llama_swap_loaded,
+                metadataMessage = formatRemoteSummaryString(
+                    pdfMetadataLlamaSwapLoadedFormat,
                     metadata.availableModels.size
                 )
             }
 
             else -> {
-                metadataMessage = context.getString(
-                    R.string.pdf_metadata_llama_loaded,
-                    metadata.serverModelLabel ?: context.getString(R.string.pdf_server_value_unavailable),
-                    metadata.serverContextLabel ?: context.getString(R.string.pdf_server_value_unavailable)
+                metadataMessage = formatRemoteSummaryString(
+                    pdfMetadataLlamaLoadedFormat,
+                    metadata.serverModelLabel ?: pdfServerValueUnavailableText,
+                    metadata.serverContextLabel ?: pdfServerValueUnavailableText
                 )
             }
         }
@@ -200,9 +211,9 @@ fun RemoteSummaryBackendEditor(
             fetchMetadata()
                 .onSuccess(::applyMetadata)
                 .onFailure {
-                    metadataMessage = context.getString(
-                        R.string.pdf_metadata_refresh_failed,
-                        it.message ?: context.getString(R.string.error_generic)
+                    metadataMessage = formatRemoteSummaryString(
+                        pdfMetadataRefreshFailedFormat,
+                        it.message ?: errorGenericText
                     )
                 }
             isRefreshingMetadata = false

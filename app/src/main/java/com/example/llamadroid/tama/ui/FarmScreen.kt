@@ -23,6 +23,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import com.example.llamadroid.R
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -87,6 +89,7 @@ fun FarmScreen(
     var inspectedCropTile by remember { mutableStateOf<FarmTile?>(null) }
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
+    val resources = LocalResources.current
     val wellUpgrade = upgrades.find { u -> u.type == "well" }
     val composterUpgrade = upgrades.find { u -> u.type == "composter" }
     val farmlandUpgrade = upgrades.find { u -> u.type == FARMLAND_UPGRADE_ID }
@@ -241,7 +244,7 @@ fun FarmScreen(
                             scope.launch {
                                 if (gameEngine.spendMoney(FARM_WELL_COST.toLong())) {
                                     farmRepository.buyUpgrade(pet.id, "well", FARM_WELL_COST)
-                                    gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_well_upgrade))
+                                    gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_well_upgrade))
                                 }
                             }
                         }
@@ -255,7 +258,7 @@ fun FarmScreen(
                             scope.launch {
                                 if (gameEngine.spendMoney(800)) {
                                     farmRepository.buyUpgrade(pet.id, "composter", 800)
-                                    gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_composter_upgrade))
+                                    gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_composter_upgrade))
                                 }
                             }
                         }
@@ -337,7 +340,7 @@ fun FarmScreen(
                     )
                     scope.launch { 
                         farmRepository.saveTile(pet.id, updatedTile)
-                        gameEngine.logEvent(pet.id, EventType.PLANTED, context.getString(R.string.tama_event_planted, inventoryItemDisplayName(context, seed)))
+                        gameEngine.logEvent(pet.id, EventType.PLANTED, resources.getString(R.string.tama_event_planted, inventoryItemDisplayName(context, seed)))
                         // Remove 1 seed from inventory
                         gameEngine.consumeItem(seed, 1)
                     }
@@ -364,12 +367,12 @@ fun FarmScreen(
                             gameEngine.grantItem(
                                 InventoryItem(
                                     id = "water",
-                                    name = context.getString(R.string.tama_item_water),
+                                    name = resources.getString(R.string.tama_item_water),
                                     type = ItemType.MATERIAL
                                 ),
                                 collected
                             )
-                            gameEngine.logEvent(pet.id, EventType.OTHER, context.getString(R.string.tama_event_collected_well_water, collected))
+                            gameEngine.logEvent(pet.id, EventType.OTHER, resources.getString(R.string.tama_event_collected_well_water, collected))
                         }
                     }
                 },
@@ -382,7 +385,7 @@ fun FarmScreen(
                             gameEngine.logEvent(
                                 pet.id,
                                 EventType.OTHER,
-                                context.getString(R.string.tama_event_well_capacity_upgrade, currentLevel + 1)
+                                resources.getString(R.string.tama_event_well_capacity_upgrade, currentLevel + 1)
                             )
                         }
                     }
@@ -396,7 +399,7 @@ fun FarmScreen(
                             gameEngine.logEvent(
                                 pet.id,
                                 EventType.OTHER,
-                                context.getString(
+                                resources.getString(
                                     R.string.tama_event_well_speed_upgrade,
                                     wellIntervalHoursForSpeedLevel(speedLevel + 1)
                                 )
@@ -429,7 +432,7 @@ fun FarmScreen(
                                     gameEngine.grantItem(
                                         InventoryItem(
                                             id = "fertilizer",
-                                            name = context.getString(R.string.tama_item_fertilizer),
+                                            name = resources.getString(R.string.tama_item_fertilizer),
                                             type = ItemType.MATERIAL
                                         ),
                                         collected
@@ -437,7 +440,7 @@ fun FarmScreen(
                                     gameEngine.logEvent(
                                         pet.id,
                                         EventType.OTHER,
-                                        context.getString(R.string.tama_event_collected_fertilizer, collected)
+                                        resources.getString(R.string.tama_event_collected_fertilizer, collected)
                                     )
                                 }
                             }
@@ -454,7 +457,7 @@ fun FarmScreen(
                             gameEngine.logEvent(
                                 pet.id,
                                 EventType.OTHER,
-                                context.getString(R.string.tama_event_composter_capacity_upgrade, currentLevel + 1)
+                                resources.getString(R.string.tama_event_composter_capacity_upgrade, currentLevel + 1)
                             )
                         }
                     }
@@ -561,7 +564,7 @@ fun FarmScreen(
                                 gameEngine.logEvent(
                                     pet.id,
                                     EventType.OTHER,
-                                    context.getString(
+                                    resources.getString(
                                         R.string.tama_event_started_composting_crop,
                                         inventoryItemDisplayName(context, item)
                                     )
@@ -1152,6 +1155,7 @@ private fun PlantingDroneDialog(
     onTransferToolDurability: (String, Int, (PlantingDroneState, Int) -> PlantingDroneState) -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val fuelItem = inventory.firstOrNull { it.id == FARM_FUEL_BUCKET_ID && it.quantity > 0 }
     val waterItem = inventory.firstOrNull { it.id == "water" && it.quantity > 0 }
     val fertilizerItem = inventory.firstOrNull { it.id == "fertilizer" && it.quantity > 0 }
@@ -1215,7 +1219,7 @@ private fun PlantingDroneDialog(
                 enabled = hoeTransfer > 0,
                 onClick = {
                     onTransferToolDurability("hoe", hoeTransfer) { latest, transferred ->
-                        latest.copy(hoe = addDroneToolDurability(latest.hoe, "hoe", context.getString(R.string.tama_inventory_hoe), transferred))
+                        latest.copy(hoe = addDroneToolDurability(latest.hoe, "hoe", resources.getString(R.string.tama_inventory_hoe), transferred))
                     }
                     true
                 }
@@ -1225,7 +1229,7 @@ private fun PlantingDroneDialog(
                 enabled = wateringCanTransfer > 0,
                 onClick = {
                     onTransferToolDurability("watering_can", wateringCanTransfer) { latest, transferred ->
-                        latest.copy(wateringCan = addDroneToolDurability(latest.wateringCan, "watering_can", context.getString(R.string.tama_inventory_watering_can), transferred))
+                        latest.copy(wateringCan = addDroneToolDurability(latest.wateringCan, "watering_can", resources.getString(R.string.tama_inventory_watering_can), transferred))
                     }
                     true
                 }
@@ -1711,9 +1715,11 @@ private fun ComposterTileCard(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val processingItemName = slot.inputItemId?.let { FarmTradeItemCatalog.displayName(it, locale) }
-        ?: context.getString(R.string.tama_item_rotten_crop)
+        ?: resources.getString(R.string.tama_item_rotten_crop)
     val processingAsset = FarmTradeItemCatalog.compostableAssetPath(slot.inputItemId ?: "rotten_crop")
         ?.let { "file:///android_asset/$it" }
         ?: "file:///android_asset/farm/Others/rotten_crop.png"
@@ -1889,7 +1895,7 @@ fun calculateRemaining(crop: PlantedCrop): String {
     
     val hours = remaining / 3600000
     val minutes = (remaining % 3600000) / 60000
-    return String.format("%02dh %02dm", hours, minutes)
+    return String.format(java.util.Locale.getDefault(), "%02dh %02dm", hours, minutes)
 }
 
 private fun overallWellStatusText(
@@ -2081,5 +2087,5 @@ private fun formatDurationToHoursMinutes(durationMs: Long): String {
     val remaining = durationMs.coerceAtLeast(0L)
     val hours = remaining / 3_600_000L
     val minutes = (remaining % 3_600_000L) / 60_000L
-    return String.format("%02dh %02dm", hours, minutes)
+    return String.format(java.util.Locale.getDefault(), "%02dh %02dm", hours, minutes)
 }

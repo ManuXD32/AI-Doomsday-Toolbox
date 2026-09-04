@@ -9,4 +9,16 @@
         <ignore regexp=".*bcpkix-jdk15to18.*\.jar" />
         <ignore regexp=".*hadoop-client-runtime.*\.jar" />
     </issue>
+
+    <!--
+      LAN inference, remote-control, and user-configured local servers intentionally support
+      plain HTTP and user-installed CAs. Keep both exceptions pinned to this one declarative
+      network configuration; app-owned clients still use normal certificate and hostname checks.
+    -->
+    <issue id="AcceptsUserCertificates">
+        <ignore path="src/main/res/xml/network_security_config.xml" />
+    </issue>
+    <issue id="InsecureBaseConfiguration">
+        <ignore path="src/main/res/xml/network_security_config.xml" />
+    </issue>
 </lint>

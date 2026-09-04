@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -56,6 +57,7 @@ fun LogsScreen(navController: NavController) {
     val latestExitSnapshot by GenerationDiagnosticsStore.latestExitSnapshot.collectAsState()
     val dateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
     val context = LocalContext.current
+    val resources = LocalResources.current
     val appListState = rememberLazyListState()
     val rpcListState = rememberLazyListState()
     val generationDiagnosticsAvailable = latestExitSnapshot != null || generationBreadcrumbs.isNotEmpty()
@@ -188,8 +190,8 @@ fun LogsScreen(navController: NavController) {
             FilledTonalButton(
                 onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.logs_clip_label), logText))
-                    Toast.makeText(context, context.getString(R.string.logs_copied), Toast.LENGTH_SHORT).show()
+                    clipboard.setPrimaryClip(ClipData.newPlainText(resources.getString(R.string.logs_clip_label), logText))
+                    Toast.makeText(context, resources.getString(R.string.logs_copied), Toast.LENGTH_SHORT).show()
                 },
                 enabled = canCopyOrClear,
                 modifier = Modifier.fillMaxWidth(),

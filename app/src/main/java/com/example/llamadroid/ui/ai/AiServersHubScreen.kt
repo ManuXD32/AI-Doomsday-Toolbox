@@ -74,6 +74,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
@@ -112,6 +113,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AiServersHubScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
     val clipboard = LocalClipboardManager.current
@@ -160,7 +162,7 @@ fun AiServersHubScreen(navController: NavController) {
 
     fun copy(text: String) {
         clipboard.setText(AnnotatedString(text))
-        statusMessage = context.getString(R.string.ai_servers_copied)
+        statusMessage = resources.getString(R.string.ai_servers_copied)
     }
 
     fun saveConfig(config: AiServerConfigEntity, startAfterSave: Boolean = false) {
@@ -170,7 +172,7 @@ fun AiServersHubScreen(navController: NavController) {
             !AiServerNetwork.isValidServerPort(port) ||
             AiServerNetwork.portConflict(configs, config.serverType, port)
         if (portError) {
-            statusMessage = context.getString(R.string.ai_servers_invalid_port)
+            statusMessage = resources.getString(R.string.ai_servers_invalid_port)
             return
         }
         val safePort = port ?: return
@@ -180,9 +182,9 @@ fun AiServersHubScreen(navController: NavController) {
             if (startAfterSave) {
                 val result = boundService?.startServer(updated)
                 statusMessage = result?.exceptionOrNull()?.message
-                    ?: context.getString(R.string.ai_servers_server_started)
+                    ?: resources.getString(R.string.ai_servers_server_started)
             } else {
-                statusMessage = context.getString(R.string.ai_servers_saved)
+                statusMessage = resources.getString(R.string.ai_servers_saved)
             }
         }
     }
@@ -203,7 +205,7 @@ fun AiServersHubScreen(navController: NavController) {
             TextButton(
                 onClick = {
                     AiServerType.entries.forEach { boundService?.stopServer(it.id) }
-                    statusMessage = context.getString(R.string.ai_servers_all_stopped)
+                    statusMessage = resources.getString(R.string.ai_servers_all_stopped)
                 }
             ) {
                 Text(stringResource(R.string.ai_servers_stop_all))
@@ -313,7 +315,7 @@ fun AiServersHubScreen(navController: NavController) {
                         onStart = { saveConfig(config, startAfterSave = true) },
                         onStop = {
                             boundService?.stopServer(config.serverType)
-                            statusMessage = context.getString(R.string.ai_servers_server_stopped)
+                            statusMessage = resources.getString(R.string.ai_servers_server_stopped)
                         },
                         onCopy = ::copy,
                         onToggleLogs = {
@@ -349,7 +351,7 @@ fun AiServersHubScreen(navController: NavController) {
                         }
                     )
                     withContext(Dispatchers.Main) {
-                        statusMessage = context.getString(R.string.ai_servers_user_added)
+                        statusMessage = resources.getString(R.string.ai_servers_user_added)
                     }
                 }
             }
@@ -374,7 +376,7 @@ fun AiServersHubScreen(navController: NavController) {
                         )
                     )
                     withContext(Dispatchers.Main) {
-                        statusMessage = context.getString(R.string.ai_servers_password_updated)
+                        statusMessage = resources.getString(R.string.ai_servers_password_updated)
                     }
                 }
             }

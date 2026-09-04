@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +66,7 @@ fun WhisperVadModelsSection(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val config by settingsRepo.whisperVadConfig.collectAsState()
     val progressMap by DownloadProgressHolder.progress.collectAsState()
@@ -132,15 +134,15 @@ fun WhisperVadModelsSection(
                     refresh += 1
                     Toast.makeText(
                         context,
-                        context.getString(R.string.whisper_vad_import_success, file.name),
+                        resources.getString(R.string.whisper_vad_import_success, file.name),
                         Toast.LENGTH_SHORT
                     ).show()
                 }.onFailure { error ->
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.whisper_vad_import_failed,
-                            error.message ?: context.getString(R.string.error_generic)
+                            error.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -166,15 +168,15 @@ fun WhisperVadModelsSection(
                 }.onSuccess {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.models_export_success, file.name),
+                        resources.getString(R.string.models_export_success, file.name),
                         Toast.LENGTH_SHORT
                     ).show()
                 }.onFailure { error ->
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.models_export_failed,
-                            error.message ?: context.getString(R.string.error_generic)
+                            error.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
@@ -196,7 +198,7 @@ fun WhisperVadModelsSection(
                         target.delete()
                         Toast.makeText(
                             context,
-                            context.getString(
+                            resources.getString(
                                 R.string.whisper_vad_download_failed,
                                 spec.displayName
                             ),
@@ -209,7 +211,7 @@ fun WhisperVadModelsSection(
                 -1f -> {
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.whisper_vad_download_failed,
                             spec.displayName
                         ),

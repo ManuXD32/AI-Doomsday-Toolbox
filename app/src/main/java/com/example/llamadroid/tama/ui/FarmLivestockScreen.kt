@@ -50,6 +50,8 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -120,6 +122,8 @@ private fun FarmLivestockScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
     var feedModeEnabled by rememberSaveable(type.id) { mutableStateOf(false) }
     var now by remember(type.id) { mutableLongStateOf(System.currentTimeMillis()) }
@@ -262,7 +266,7 @@ private fun FarmLivestockScreen(
                                     scope.launch {
                                         val collected = farmRepository.collectLivestockOutput(pet.id, type)
                                         if (collected > 0) {
-                                            val productName = context.getString(
+                                            val productName = resources.getString(
                                                 if (type == FarmLivestockType.BARN) R.string.tama_item_milk_bottle else R.string.tama_item_egg
                                             )
                                             gameEngine.grantItem(
@@ -276,7 +280,7 @@ private fun FarmLivestockScreen(
                                             gameEngine.logEvent(
                                                 pet.id,
                                                 com.example.llamadroid.tama.data.EventType.OTHER,
-                                                context.getString(
+                                                resources.getString(
                                                     if (type == FarmLivestockType.BARN) R.string.tama_event_collected_milk else R.string.tama_event_collected_eggs,
                                                     collected
                                                 )
@@ -374,7 +378,7 @@ private fun FarmLivestockScreen(
                                     if (!isHungry) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.tama_farm_livestock_not_hungry),
+                                            resources.getString(R.string.tama_farm_livestock_not_hungry),
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         return@launch
@@ -382,14 +386,14 @@ private fun FarmLivestockScreen(
                                     if (wheatCount <= 0) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.tama_farm_livestock_no_wheat),
+                                            resources.getString(R.string.tama_farm_livestock_no_wheat),
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         return@launch
                                     }
                                     val wheatName = FarmTradeItemCatalog.displayName(
                                         LIVESTOCK_FEED_ITEM_ID,
-                                        context.resources.configuration.locales[0] ?: Locale.getDefault()
+                                        configuration.locales[0] ?: Locale.getDefault()
                                     )
                                     val consumed = gameEngine.consumeItem(
                                         InventoryItem(
@@ -402,7 +406,7 @@ private fun FarmLivestockScreen(
                                     if (!consumed) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.tama_farm_livestock_no_wheat),
+                                            resources.getString(R.string.tama_farm_livestock_no_wheat),
                                             Toast.LENGTH_SHORT
                                         ).show()
                                         return@launch
@@ -426,13 +430,13 @@ private fun FarmLivestockScreen(
                                     gameEngine.logEvent(
                                         pet.id,
                                         com.example.llamadroid.tama.data.EventType.OTHER,
-                                        context.getString(
+                                        resources.getString(
                                             if (type == FarmLivestockType.BARN) R.string.tama_event_fed_cow else R.string.tama_event_fed_chicken
                                         )
                                     )
                                     Toast.makeText(
                                         context,
-                                        context.getString(
+                                        resources.getString(
                                             if (type == FarmLivestockType.BARN) R.string.tama_farm_livestock_fed_cow else R.string.tama_farm_livestock_fed_chicken
                                         ),
                                         Toast.LENGTH_SHORT
@@ -569,5 +573,5 @@ private fun livestockSlotStatus(type: FarmLivestockType, slot: FarmLivestockSlot
     val totalSeconds = remainingMs / 1000L
     val hours = totalSeconds / 3600L
     val minutes = (totalSeconds % 3600L) / 60L
-    return String.format("%02dh %02dm", hours, minutes)
+    return String.format(Locale.getDefault(), "%02dh %02dm", hours, minutes)
 }

@@ -76,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -113,6 +114,7 @@ import java.util.Locale
 @Composable
 fun KnowledgeBaseScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
     val repository = remember { KnowledgeBaseRepository(context, database) }
@@ -169,7 +171,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
     val logDateFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
 
     fun showError(error: Throwable) {
-        Toast.makeText(context, error.message ?: context.getString(R.string.kb_action_failed), Toast.LENGTH_LONG).show()
+        Toast.makeText(context, error.message ?: resources.getString(R.string.kb_action_failed), Toast.LENGTH_LONG).show()
     }
 
     fun launchBusy(label: String, block: suspend () -> Unit) {
@@ -198,7 +200,8 @@ fun KnowledgeBaseScreen(navController: NavController) {
 
     LaunchedEffect(showDiagnostics, knowledgeLogs.size) {
         if (showDiagnostics && knowledgeLogs.isNotEmpty()) {
-            knowledgeLogListState.animateScrollToItem(1)
+            // Header and diagnostics controls occupy the first two stable list items.
+            knowledgeLogListState.animateScrollToItem(2)
         }
     }
 
@@ -220,7 +223,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         repository.queueFile(baseId, uri, resolveDisplayName(context, uri))
                     }.onFailure { error ->
                         KnowledgeBaseDiagnostics.log(
-                            context.getString(
+                            resources.getString(
                                 R.string.kb_log_queue_file_failed,
                                 uri.lastPathSegment ?: uri.toString(),
                                 error.message ?: error::class.java.simpleName
@@ -234,7 +237,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                 if (queuedSourceIds.isNotEmpty()) {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.kb_import_files_queued, queuedSourceIds.size),
+                        resources.getString(R.string.kb_import_files_queued, queuedSourceIds.size),
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -250,54 +253,59 @@ fun KnowledgeBaseScreen(navController: NavController) {
 
     AppPageBackground {
         AppContentColumn(modifier = Modifier.fillMaxSize(), bottomPadding = 0.dp) {
-            AppPageHeader(
-                eyebrow = stringResource(R.string.kb_dashboard_eyebrow),
-                title = if (showDiagnostics) {
-                    stringResource(R.string.kb_logs_title)
-                } else {
-                    selectedBase?.name ?: stringResource(R.string.kb_title)
-                },
-                subtitle = if (showDiagnostics) {
-                    stringResource(R.string.kb_logs_subtitle)
-                } else if (selectedBase == null) {
-                    stringResource(R.string.kb_folder_subtitle)
-                } else {
-                    stringResource(R.string.kb_folder_detail_subtitle)
-                },
-                trailing = {
-                    IconButton(
-                        onClick = {
-                            if (showDiagnostics) {
-                                showDiagnostics = false
-                            } else if (selectedBase != null) {
-                                selectedBaseId = null
-                            } else {
-                                navController.popBackStack()
-                            }
-                        }
-                    ) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
-                    }
-                }
-            )
-
             LazyColumn(
                 state = knowledgeLogListState,
-                // The header is part of the same Column. Give the list the
-                // remaining viewport so it cannot paint over the header or
-                // leave its last card behind the app's bottom navigation.
+                // Keep the header in the same scroll owner as the cards. At large text sizes a
+                // static header can otherwise consume the full viewport and measure this list at
+                // zero height, making the embedding prerequisite and actions unreachable.
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)
             ) {
+                item(key = "knowledge_page_header") {
+                    AppPageHeader(
+                        eyebrow = stringResource(R.string.kb_dashboard_eyebrow),
+                        title = if (showDiagnostics) {
+                            stringResource(R.string.kb_logs_title)
+                        } else {
+                            selectedBase?.name ?: stringResource(R.string.kb_title)
+                        },
+                        subtitle = if (showDiagnostics) {
+                            stringResource(R.string.kb_logs_subtitle)
+                        } else if (selectedBase == null) {
+                            stringResource(R.string.kb_folder_subtitle)
+                        } else {
+                            stringResource(R.string.kb_folder_detail_subtitle)
+                        },
+                        trailing = {
+                            IconButton(
+                                onClick = {
+                                    if (showDiagnostics) {
+                                        showDiagnostics = false
+                                    } else if (selectedBase != null) {
+                                        selectedBaseId = null
+                                    } else {
+                                        navController.popBackStack()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.ArrowBack,
+                                    contentDescription = stringResource(R.string.action_back)
+                                )
+                            }
+                        }
+                    )
+                }
+
                 if (showDiagnostics) {
                     item {
                         KnowledgeDiagnosticsControlCard(
                             status = embeddingServerStatus,
                             onStopServer = {
-                                launchBusy(context.getString(R.string.kb_stopping_embedding_server)) {
+                                launchBusy(resources.getString(R.string.kb_stopping_embedding_server)) {
                                     repository.stopManagedEmbeddingServer("user")
                                 }
                             },
@@ -306,11 +314,11 @@ fun KnowledgeBaseScreen(navController: NavController) {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                 clipboard.setPrimaryClip(
                                     ClipData.newPlainText(
-                                        context.getString(R.string.kb_logs_clip_label),
+                                        resources.getString(R.string.kb_logs_clip_label),
                                         buildKnowledgeLogExport(knowledgeLogs, logDateFormat)
                                     )
                                 )
-                                Toast.makeText(context, context.getString(R.string.kb_logs_copied), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.kb_logs_copied), Toast.LENGTH_SHORT).show()
                             },
                             hasLogs = knowledgeLogs.isNotEmpty()
                         )
@@ -346,17 +354,17 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         embeddingBatchSize = embeddingBatchSize,
                         embeddingThreads = embeddingThreads,
                         onStartServer = {
-                            launchBusy(context.getString(R.string.kb_testing_embedding)) {
+                            launchBusy(resources.getString(R.string.kb_testing_embedding)) {
                                 val port = repository.startManagedEmbeddingServer()
                                 Toast.makeText(
                                     context,
-                                    context.getString(R.string.kb_embedding_server_started, port),
+                                    resources.getString(R.string.kb_embedding_server_started, port),
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }
                         },
                         onStopServer = {
-                            launchBusy(context.getString(R.string.kb_stopping_embedding_server)) {
+                            launchBusy(resources.getString(R.string.kb_stopping_embedding_server)) {
                                 repository.stopManagedEmbeddingServer("user")
                             }
                         },
@@ -426,7 +434,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             onCreate = {
                                 val name = newBaseName.trim()
                                 if (name.isNotBlank()) {
-                                    launchBusy(context.getString(R.string.kb_creating_base)) {
+                                    launchBusy(resources.getString(R.string.kb_creating_base)) {
                                         selectedBaseId = repository.createKnowledgeBase(
                                             name = name,
                                             contentSummary = newBaseSummary
@@ -473,7 +481,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         KnowledgeBaseContentSummaryCard(
                             base = selectedBase,
                             onSave = { summary ->
-                                launchBusy(context.getString(R.string.kb_content_summary_saving)) {
+                                launchBusy(resources.getString(R.string.kb_content_summary_saving)) {
                                     repository.updateKnowledgeBaseContentSummary(selectedBase.id, summary)
                                 }
                             }
@@ -496,14 +504,14 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             sources = sources,
                             currentEmbeddingConfigHash = embeddingConfig.hash,
                             onEnabledChange = { source, enabled ->
-                                launchBusy(context.getString(R.string.kb_updating_source)) {
+                                launchBusy(resources.getString(R.string.kb_updating_source)) {
                                     repository.setSourceEnabled(source.id, enabled)
                                 }
                             },
                             onResume = { KnowledgeBaseIndexingService.enqueueResumeSource(context, it.id) },
                             onReindex = { KnowledgeBaseIndexingService.enqueueReindexSource(context, it.id) },
                             onDelete = {
-                                launchBusy(context.getString(R.string.kb_deleting_source)) {
+                                launchBusy(resources.getString(R.string.kb_deleting_source)) {
                                     repository.deleteSource(it.id)
                                 }
                             }
@@ -517,12 +525,12 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             canSearch = embeddingConfig.isConfigured && sources.any { it.embeddedChunkCount > 0 },
                             onQueryChange = { query = it },
                             onSearch = {
-                                launchBusy(context.getString(R.string.kb_searching)) {
+                                launchBusy(resources.getString(R.string.kb_searching)) {
                                     searchResult = repository.search(query, listOf(selectedBase.id))
                                         .joinToString("\n\n") { result ->
                                             "[${result.sourceTitle} #${result.chunkId}] ${result.text.take(500)}"
                                         }
-                                        .ifBlank { context.getString(R.string.kb_search_empty) }
+                                        .ifBlank { resources.getString(R.string.kb_search_empty) }
                                 }
                             }
                         )
@@ -547,7 +555,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
             onConfirm = {
                 basePendingDelete = null
                 val deleteId = baseToDelete.id
-                launchBusy(context.getString(R.string.kb_deleting_base)) {
+                launchBusy(resources.getString(R.string.kb_deleting_base)) {
                     repository.deleteKnowledgeBase(deleteId)
                     if (selectedBaseId == deleteId) {
                         selectedBaseId = null
@@ -583,7 +591,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                     enabled = importUrl.isNotBlank(),
                     onClick = {
                         KnowledgeBaseIndexingService.enqueueWeb(context, baseForUrlImport.id, importUrl.trim())
-                        Toast.makeText(context, context.getString(R.string.kb_add_url_queued), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.kb_add_url_queued), Toast.LENGTH_SHORT).show()
                         importUrl = ""
                         showUrlImport = false
                     }
@@ -632,7 +640,7 @@ private fun KnowledgeBaseDeleteConfirmDialog(
 }
 
 @Composable
-private fun KnowledgeEmbeddingServerCard(
+internal fun KnowledgeEmbeddingServerCard(
     status: KnowledgeEmbeddingServerStatus,
     backend: String,
     modelLabel: String,

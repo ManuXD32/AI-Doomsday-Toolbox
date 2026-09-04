@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -39,6 +40,7 @@ import com.example.llamadroid.util.UpscalerAssetPackSupport
 @Composable
 fun VideoUpscalerScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     
@@ -147,7 +149,7 @@ fun VideoUpscalerScreen(navController: NavController) {
                 selectedVideoPath = tempFile.absolutePath
                 pendingSharedVideoPath = tempFile.absolutePath // Mark for video info retrieval
             } catch (e: Exception) {
-                errorMessage = context.getString(R.string.upscaler_error_shared_video, e.message)
+                errorMessage = resources.getString(R.string.upscaler_error_shared_video, e.message)
             }
         }
     }
@@ -192,7 +194,7 @@ fun VideoUpscalerScreen(navController: NavController) {
             scope.launch {
                 upscalerService?.getVideoInfo(tempFile.absolutePath)?.fold(
                     onSuccess = { info -> videoInfo = info },
-                    onFailure = { errorMessage = context.getString(R.string.upscaler_error_video_info) }
+                    onFailure = { errorMessage = resources.getString(R.string.upscaler_error_video_info) }
                 )
             }
         }
@@ -232,33 +234,33 @@ fun VideoUpscalerScreen(navController: NavController) {
         if (upscalerState !is VideoUpscalerState.Completed || exportedResultPath == path) return@LaunchedEffect
         val fileName = File(path).name
         if (outputFolder.isNullOrEmpty()) {
-            errorMessage = context.getString(R.string.upscaler_error_no_folder, fileName)
+            errorMessage = resources.getString(R.string.upscaler_error_no_folder, fileName)
             exportedResultPath = path
             return@LaunchedEffect
         }
         runCatching {
             val sourceFile = File(path)
-            require(sourceFile.exists()) { context.getString(R.string.upscaler_error_not_found) }
+            require(sourceFile.exists()) { resources.getString(R.string.upscaler_error_not_found) }
             val treeUri = android.net.Uri.parse(outputFolder)
             val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, treeUri)
-                ?: error(context.getString(R.string.upscaler_error_save_folder))
+                ?: error(resources.getString(R.string.upscaler_error_save_folder))
             val videosDoc = rootDoc.findFile("videos") ?: rootDoc.createDirectory("videos")
-                ?: error(context.getString(R.string.upscaler_error_save_folder))
+                ?: error(resources.getString(R.string.upscaler_error_save_folder))
             val newFile = videosDoc.createFile("video/mp4", fileName)
-                ?: error(context.getString(R.string.upscaler_error_save_folder))
+                ?: error(resources.getString(R.string.upscaler_error_save_folder))
             context.contentResolver.openOutputStream(newFile.uri)?.use { output ->
                 sourceFile.inputStream().use { input -> input.copyTo(output) }
-            } ?: error(context.getString(R.string.upscaler_error_save_folder))
+            } ?: error(resources.getString(R.string.upscaler_error_save_folder))
             "videos/$fileName"
         }.fold(
             onSuccess = { savedPath ->
                 exportedResultPath = path
                 errorMessage = null
-                Toast.makeText(context, context.getString(R.string.upscaler_success_toast, savedPath), Toast.LENGTH_LONG).show()
+                Toast.makeText(context, resources.getString(R.string.upscaler_success_toast, savedPath), Toast.LENGTH_LONG).show()
             },
             onFailure = {
                 exportedResultPath = path
-                errorMessage = context.getString(R.string.upscaler_error_save_generic, it.message)
+                errorMessage = resources.getString(R.string.upscaler_error_save_generic, it.message)
             }
         )
     }
@@ -487,11 +489,11 @@ fun VideoUpscalerScreen(navController: NavController) {
             Button(
                 onClick = {
                     if (selectedVideoPath == null) {
-                        errorMessage = context.getString(R.string.upscaler_error_no_video)
+                        errorMessage = resources.getString(R.string.upscaler_error_no_video)
                         return@Button
                     }
                     if (selectedModel == null) {
-                        errorMessage = context.getString(R.string.upscaler_error_no_model)
+                        errorMessage = resources.getString(R.string.upscaler_error_no_model)
                         return@Button
                     }
                     

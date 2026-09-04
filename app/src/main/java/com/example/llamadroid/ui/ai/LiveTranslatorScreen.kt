@@ -62,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,6 +119,7 @@ private fun resolveSupertonicVoices(bundleRoot: File): List<String> {
 @Composable
 fun LiveTranslatorScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
@@ -255,9 +257,9 @@ fun LiveTranslatorScreen(navController: NavController) {
 
             LiveTranslatorTemplateEntity(
                 id = id,
-                name = templateName.trim().ifBlank { context.getString(R.string.live_translator_default_template) },
-                speaker1Language = speaker1Language.trim().ifBlank { context.getString(R.string.live_translator_language_english) },
-                speaker2Language = speaker2Language.trim().ifBlank { context.getString(R.string.live_translator_language_spanish) },
+                name = templateName.trim().ifBlank { resources.getString(R.string.live_translator_default_template) },
+                speaker1Language = speaker1Language.trim().ifBlank { resources.getString(R.string.live_translator_language_english) },
+                speaker2Language = speaker2Language.trim().ifBlank { resources.getString(R.string.live_translator_language_spanish) },
                 whisperModelPath = whisperModelPath,
                 whisperThreads = whisperThreads.coerceIn(1, 16),
                 ttsModelPath = ttsModelPath,
@@ -779,6 +781,7 @@ internal fun LiveTranslatorBackendCard(
     liveTranslatorActive: Boolean = false
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val startupGuard = rememberAiJobStartupGuard()
     val selectedLiteRtModel = liteRtModels.firstOrNull { it.id == liteRtModelId }
@@ -957,7 +960,7 @@ internal fun LiveTranslatorBackendCard(
                                         )
                                     }.onFailure { error ->
                                         liteRtLoaded = false
-                                        liteRtLoadError = context.getString(
+                                        liteRtLoadError = resources.getString(
                                             R.string.live_translator_litert_load_error,
                                             error.message ?: error.javaClass.simpleName
                                         )
@@ -1020,7 +1023,7 @@ internal fun LiveTranslatorBackendCard(
                 llamaSwapModel = llamaModelName.ifBlank { null },
                 onLlamaSwapModelSelected = onLlamaModelNameChange,
                 llamaServerModelLabel = llamaModelName.ifBlank { null },
-                llamaServerContextLabel = contextSize.takeIf { it.isNotBlank() }?.let { context.getString(R.string.live_translator_context_tokens, it) },
+                llamaServerContextLabel = contextSize.takeIf { it.isNotBlank() }?.let { resources.getString(R.string.live_translator_context_tokens, it) },
                 llamaServerContextTokens = parsedContext,
                 requestedContextForWarning = parsedContext,
                 allowBlankUrlRefresh = true,
@@ -1037,7 +1040,7 @@ internal fun LiveTranslatorBackendCard(
                             thinkingEnabled = false,
                             llamaServerModelLabel = llamaModelName.ifBlank { null },
                             llamaServerContextTokens = parsedContext,
-                            llamaServerContextLabel = context.getString(R.string.live_translator_context_tokens, parsedContext.toString()),
+                            llamaServerContextLabel = resources.getString(R.string.live_translator_context_tokens, parsedContext.toString()),
                             chunkContext = parsedContext,
                             chunkMaxTokens = parsedMaxTokens,
                             mergeContext = parsedContext,

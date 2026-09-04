@@ -100,6 +100,7 @@ import com.example.llamadroid.ui.ai.TermuxFileManagerScreen
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.SharedFileHolder
 import com.example.llamadroid.data.SharedFileTarget
@@ -153,6 +154,7 @@ fun LlamaApp(
     
     // Check for first run
     val context = LocalContext.current
+    val resources = LocalResources.current
     val feedbackScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -222,12 +224,12 @@ fun LlamaApp(
                 mimeType.startsWith("audio/") -> {
                     shareOptions = listOf(
                         SharedFileDestination(
-                            context.getString(R.string.share_transcribe),
+                            resources.getString(R.string.share_transcribe),
                             Screen.AudioTranscription.route,
                             SharedFileTarget.AUDIO_TRANSCRIPTION
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_workflow),
+                            resources.getString(R.string.share_workflow),
                             Screen.Workflows.route,
                             SharedFileTarget.WORKFLOWS
                         )
@@ -238,22 +240,22 @@ fun LlamaApp(
                 mimeType.startsWith("video/") -> {
                     shareOptions = listOf(
                         SharedFileDestination(
-                            context.getString(R.string.share_interpolation),
+                            resources.getString(R.string.share_interpolation),
                             Screen.VideoInterpolation.route,
                             SharedFileTarget.VIDEO_INTERPOLATION
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_upscaler),
+                            resources.getString(R.string.share_upscaler),
                             Screen.VideoUpscaler.route,
                             SharedFileTarget.VIDEO_UPSCALER
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_transcribe),
+                            resources.getString(R.string.share_transcribe),
                             Screen.AudioTranscription.route,
                             SharedFileTarget.AUDIO_TRANSCRIPTION
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_workflow),
+                            resources.getString(R.string.share_workflow),
                             Screen.Workflows.route,
                             SharedFileTarget.WORKFLOWS
                         )
@@ -264,19 +266,19 @@ fun LlamaApp(
                 mimeType.startsWith("image/") -> {
                     shareOptions = listOf(
                         SharedFileDestination(
-                            context.getString(R.string.share_img2img),
+                            resources.getString(R.string.share_img2img),
                             Screen.ImageGen.createRoute(startMode = 1),
                             SharedFileTarget.IMAGE_GENERATION,
                             sourceTag = SharedFileHolder.Target.IMAGE_GEN_IMG2IMG
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_img2vid),
+                            resources.getString(R.string.share_img2vid),
                             Screen.VideoGen.route,
                             SharedFileTarget.VIDEO_GENERATION,
                             sourceTag = SharedFileHolder.Target.VIDEO_GEN_IMG2VID
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_upscale_sd),
+                            resources.getString(R.string.share_upscale_sd),
                             Screen.ImageGen.createRoute(startMode = 2),
                             SharedFileTarget.IMAGE_GENERATION,
                             sourceTag = SharedFileHolder.Target.IMAGE_GEN_UPSCALE
@@ -288,12 +290,12 @@ fun LlamaApp(
                 mimeType == "application/pdf" -> {
                     shareOptions = listOf(
                         SharedFileDestination(
-                            context.getString(R.string.share_pdf_toolbox),
+                            resources.getString(R.string.share_pdf_toolbox),
                             Screen.PDFToolbox.route,
                             SharedFileTarget.PDF_TOOLBOX
                         ),
                         SharedFileDestination(
-                            context.getString(R.string.share_pdf_summary),
+                            resources.getString(R.string.share_pdf_summary),
                             Screen.PDFSummary.route,
                             SharedFileTarget.PDF_SUMMARY
                         )
@@ -333,7 +335,7 @@ fun LlamaApp(
                                         SharedFileHolder.clear()
                                         feedbackScope.launch {
                                             snackbarHostState.showSnackbar(
-                                                context.getString(R.string.navigation_destination_unavailable)
+                                                resources.getString(R.string.navigation_destination_unavailable)
                                             )
                                         }
                                     }
@@ -362,18 +364,21 @@ fun LlamaApp(
         )
     }
 
-    LaunchedEffect(pendingNavigationRoute) {
+    LaunchedEffect(pendingNavigationRoute, currentRoute) {
         when (val resolution = pendingNavigationRoute) {
             ExternalRouteResolution.NoRoute -> Unit
             ExternalRouteResolution.Rejected -> {
                 feedbackScope.launch {
                     snackbarHostState.showSnackbar(
-                        context.getString(R.string.navigation_destination_unavailable)
+                        resources.getString(R.string.navigation_destination_unavailable)
                     )
                 }
                 onNavigationHandled()
             }
             is ExternalRouteResolution.Navigate -> {
+                // The external intent is available before NavHost has installed its graph on a
+                // cold launch. Wait for the first back-stack entry instead of reading graph early.
+                if (currentRoute == null) return@LaunchedEffect
                 if (currentRoute != resolution.route) {
                     try {
                         navController.navigate(resolution.route) {
@@ -386,7 +391,7 @@ fun LlamaApp(
                     } catch (_: IllegalArgumentException) {
                         feedbackScope.launch {
                             snackbarHostState.showSnackbar(
-                                context.getString(R.string.navigation_destination_unavailable)
+                                resources.getString(R.string.navigation_destination_unavailable)
                             )
                         }
                     }
@@ -829,17 +834,17 @@ fun LlamaApp(
                             val isFarmland = type == FARMLAND_UPGRADE_ID
                             val droneFuelTarget = farmDroneIdForFuelUpgradeId(type)
                             val displayName = when (type) {
-                                FARMLAND_UPGRADE_ID -> context.getString(R.string.tama_farm_upgrade_farmland)
-                                "well" -> context.getString(R.string.tama_farm_upgrade_well)
-                                "composter" -> context.getString(R.string.tama_farm_upgrade_composter)
-                                FARM_PLANTING_DRONE_FUEL_UPGRADE_ID -> context.getString(R.string.tama_farm_drone_fuel_upgrade_name, context.getString(R.string.tama_farm_planting_drone))
-                                FARM_HARVESTING_DRONE_FUEL_UPGRADE_ID -> context.getString(R.string.tama_farm_drone_fuel_upgrade_name, context.getString(R.string.tama_farm_harvesting_drone))
+                                FARMLAND_UPGRADE_ID -> resources.getString(R.string.tama_farm_upgrade_farmland)
+                                "well" -> resources.getString(R.string.tama_farm_upgrade_well)
+                                "composter" -> resources.getString(R.string.tama_farm_upgrade_composter)
+                                FARM_PLANTING_DRONE_FUEL_UPGRADE_ID -> resources.getString(R.string.tama_farm_drone_fuel_upgrade_name, resources.getString(R.string.tama_farm_planting_drone))
+                                FARM_HARVESTING_DRONE_FUEL_UPGRADE_ID -> resources.getString(R.string.tama_farm_drone_fuel_upgrade_name, resources.getString(R.string.tama_farm_harvesting_drone))
                                 else -> type.replaceFirstChar { it.uppercase() }
                             }
                             if (droneFuelTarget != null) {
                                 val droneUpgrade = farmRepository.getUpgrade(activePet.id, droneFuelTarget)
                                 if (droneUpgrade?.isPurchased != true) {
-                                    TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                    TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_upgrade_already_owned))
                                 } else {
                                     val now = System.currentTimeMillis()
                                     val cost = if (droneFuelTarget == FARM_PLANTING_DRONE_ID) {
@@ -850,9 +855,9 @@ fun LlamaApp(
                                         farmDroneFuelUpgradeCostForLevel(state.fuelUpgradeLevel)
                                     }
                                     if (cost == null) {
-                                        TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_upgrade_maxed))
+                                        TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_upgrade_maxed))
                                     } else if (!tamaGameEngine.spendMoney(cost.toLong())) {
-                                        TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                        TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_action_not_enough_money))
                                     } else {
                                         if (droneFuelTarget == FARM_PLANTING_DRONE_ID) {
                                             val state = farmRepository.decodePlantingDroneState(droneUpgrade, now)
@@ -867,12 +872,12 @@ fun LlamaApp(
                                                 state.copy(fuelUpgradeLevel = state.fuelUpgradeLevel + 1, lastUpdatedAt = now)
                                             )
                                         }
-                                        tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, displayName))
-                                        TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, displayName))
+                                        tamaGameEngine.logEvent(activePet.id, EventType.OTHER, resources.getString(R.string.event_purchased_upgrade, displayName))
+                                        TamaGameEngine.ActionResult(true, resources.getString(R.string.tama_action_bought_item, 1, displayName))
                                     }
                                 }
                             } else if (!isFarmland && existingUpgrade?.isPurchased == true) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_upgrade_already_owned))
                             } else if (tamaGameEngine.spendMoney(price.toLong())) {
                                 val upgraded = if (isFarmland) {
                                     farmRepository.upgradeFarmland(activePet.id)
@@ -881,24 +886,24 @@ fun LlamaApp(
                                     true
                                 }
                                 if (upgraded) {
-                                    tamaGameEngine.logEvent(activePet.id, EventType.OTHER, context.getString(R.string.event_purchased_upgrade, displayName))
-                                    TamaGameEngine.ActionResult(true, context.getString(R.string.tama_action_bought_item, 1, displayName))
+                                    tamaGameEngine.logEvent(activePet.id, EventType.OTHER, resources.getString(R.string.event_purchased_upgrade, displayName))
+                                    TamaGameEngine.ActionResult(true, resources.getString(R.string.tama_action_bought_item, 1, displayName))
                                 } else {
                                     tamaGameEngine.awardMoney(price.toLong())
-                                    TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_upgrade_maxed))
+                                    TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_upgrade_maxed))
                                 }
                             } else {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_action_not_enough_money))
                             }
                         },
                         onBuyDrone = { type, price ->
-                            val displayName = context.getString(
+                            val displayName = resources.getString(
                                 if (type == FARM_PLANTING_DRONE_ID) R.string.tama_farm_planting_drone else R.string.tama_farm_harvesting_drone
                             )
                             val existingUpgrade = farmRepository.getUpgrade(activePet.id, type)
                             val alreadyInInventory = activePet.inventory.any { it.id == type }
                             if (existingUpgrade?.isPurchased == true || alreadyInInventory) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_upgrade_already_owned))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_upgrade_already_owned))
                             } else {
                                 val result = tamaGameEngine.buyItem(
                                     InventoryItem(
@@ -914,7 +919,7 @@ fun LlamaApp(
                                     tamaGameEngine.logEvent(
                                         activePet.id,
                                         EventType.OTHER,
-                                        context.getString(R.string.event_purchased_upgrade, displayName)
+                                        resources.getString(R.string.event_purchased_upgrade, displayName)
                                     )
                                 }
                                 result
@@ -926,25 +931,25 @@ fun LlamaApp(
                                 type
                             ).count { it.occupied }
                             if (occupied >= type.maxAnimals) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_livestock_limit_reached))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_livestock_limit_reached))
                             } else if (!tamaGameEngine.spendMoney(type.buyPrice.toLong())) {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_action_not_enough_money))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_action_not_enough_money))
                             } else if (farmRepository.buyLivestockAnimal(activePet.id, type)) {
                                 tamaGameEngine.logEvent(
                                     activePet.id,
                                     EventType.OTHER,
-                                    context.getString(
+                                    resources.getString(
                                         if (type == FarmLivestockType.BARN) R.string.tama_event_bought_cow else R.string.tama_event_bought_chicken
                                     )
                                 )
                                 TamaGameEngine.ActionResult(
                                     true,
-                                    context.getString(
+                                    resources.getString(
                                         if (type == FarmLivestockType.BARN) R.string.tama_farm_livestock_bought_cow else R.string.tama_farm_livestock_bought_chicken
                                     )
                                 )
                             } else {
-                                TamaGameEngine.ActionResult(false, context.getString(R.string.tama_farm_livestock_limit_reached))
+                                TamaGameEngine.ActionResult(false, resources.getString(R.string.tama_farm_livestock_limit_reached))
                             }
                         },
                         onBack = { navController.popBackStack() }

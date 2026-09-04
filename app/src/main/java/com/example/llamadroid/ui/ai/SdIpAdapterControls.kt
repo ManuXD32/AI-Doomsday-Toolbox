@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -85,6 +86,7 @@ fun SdIpAdapterCard(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var expanded by rememberSaveable { mutableStateOf(false) }
     var importingImage by remember { mutableStateOf(false) }
@@ -118,9 +120,9 @@ fun SdIpAdapterCard(
                 }.onSuccess { file ->
                     onReferenceImagePathChange(file.absolutePath)
                 }.onFailure { error ->
-                    importError = context.getString(
+                    importError = resources.getString(
                         R.string.imagegen_ip_adapter_reference_import_failed,
-                        error.message ?: context.getString(R.string.error_generic)
+                        error.message ?: resources.getString(R.string.error_generic)
                     )
                 }
                 importingImage = false

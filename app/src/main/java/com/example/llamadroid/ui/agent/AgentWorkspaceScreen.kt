@@ -1,5 +1,9 @@
 package com.example.llamadroid.ui.agent
 
+import android.annotation.SuppressLint
+import android.net.Uri
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
 import android.widget.Toast
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -65,6 +69,47 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import java.io.File
+import java.util.Locale
+
+private fun formatAgentWorkspaceString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
+
+private data class AgentPreviewOrigin(
+    val scheme: String,
+    val host: String,
+    val port: Int
+)
+
+private fun parseAgentPreviewOrigin(url: String): AgentPreviewOrigin? {
+    val uri = Uri.parse(url)
+    val scheme = uri.scheme?.lowercase(Locale.US) ?: return null
+    if (scheme != "http" && scheme != "https") return null
+    val authority = uri.encodedAuthority ?: return null
+    if (authority.contains('@')) return null
+    val host = uri.host?.lowercase(Locale.US)?.takeIf { it.isNotBlank() } ?: return null
+    val port = uri.port
+    val normalizedPort = when {
+        port > 0 -> port
+        scheme == "https" -> 443
+        else -> 80
+    }
+    return AgentPreviewOrigin(scheme = scheme, host = host, port = normalizedPort)
+}
+
+private fun isAllowedAgentPreviewUrl(url: String, origin: AgentPreviewOrigin): Boolean {
+    val uri = Uri.parse(url)
+    val scheme = uri.scheme?.lowercase(Locale.US) ?: return false
+    if (scheme != "http" && scheme != "https") return false
+    val authority = uri.encodedAuthority ?: return false
+    if (authority.contains('@')) return false
+    val host = uri.host?.lowercase(Locale.US) ?: return false
+    val port = when {
+        uri.port > 0 -> uri.port
+        scheme == "https" -> 443
+        else -> 80
+    }
+    return scheme == origin.scheme && host == origin.host && port == origin.port
+}
 
 /**
  * AgentWorkspaceScreen - File manager for AI Agent workspace
@@ -73,6 +118,24 @@ import java.io.File
 @Composable
 fun AgentWorkspaceScreen(navController: NavController) {
     val context = LocalContext.current
+    val statusDownloadingText = stringResource(R.string.status_downloading)
+    val statusCompleteText = stringResource(R.string.status_complete)
+    val agentErrorPrefixFormat = stringResource(R.string.agent_error_prefix)
+    val agentUploadSuccessFormat = stringResource(R.string.agent_upload_success)
+    val agentWorkspacePreviewTitleText = stringResource(R.string.agent_workspace_preview_title)
+    val actionCopyText = stringResource(R.string.action_copy)
+    val actionMoveText = stringResource(R.string.action_move)
+    val agentCompressSuccessFormat = stringResource(R.string.agent_compress_success)
+    val agentUncompressSuccessText = stringResource(R.string.agent_uncompress_success)
+    val statusProcessingText = stringResource(R.string.status_processing)
+    val errorParamFormat = stringResource(R.string.error_param)
+    val agentSaveToastText = stringResource(R.string.agent_save_toast)
+    val agentWorkspaceStopProjectShellsNoneText =
+        stringResource(R.string.agent_workspace_stop_project_shells_none)
+    val agentWorkspaceStopProjectShellsSuccessFormat =
+        stringResource(R.string.agent_workspace_stop_project_shells_success)
+    val agentDeleteToastText = stringResource(R.string.agent_delete_toast)
+    val agentCreateToastText = stringResource(R.string.agent_create_toast)
     val scope = rememberCoroutineScope()
     
     val agentService = remember { AgentForegroundService.getAgentService(context) }
@@ -153,11 +216,15 @@ fun AgentWorkspaceScreen(navController: NavController) {
         uri?.let {
             val target = downloadTarget ?: return@let
             scope.launch {
-                setIsLoading(true, context.getString(R.string.status_downloading))
+                setIsLoading(true, statusDownloadingText)
                 agentService.downloadFile(target.path, it).onSuccess {
-                    Toast.makeText(context, context.getString(R.string.status_complete), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, statusCompleteText, Toast.LENGTH_SHORT).show()
                 }.onFailure { e: Throwable ->
-                    Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        context,
+                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
                 setIsLoading(false)
             }
@@ -209,10 +276,18 @@ fun AgentWorkspaceScreen(navController: NavController) {
                 } ?: "uploaded_file"
                 
                 agentService.uploadFile(uri, "$currentPath/$fileName").onSuccess {
-                    Toast.makeText(context, context.getString(R.string.agent_upload_success, fileName), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(
+                        context,
+                        formatAgentWorkspaceString(agentUploadSuccessFormat, fileName),
+                        Toast.LENGTH_SHORT
+                    ).show()
                     loadFiles()
                 }.onFailure { e: Throwable ->
-                    Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                    Toast.makeText(
+                        context,
+                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
                 setIsLoading(false)
             }
@@ -289,7 +364,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                     agentService.openWorkspaceTerminal(projectRoot).onFailure { e: Throwable ->
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.agent_error_prefix, e.message ?: ""),
+                                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
@@ -329,7 +404,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 if (summary.totalActiveSessions == 0) {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.agent_workspace_stop_project_shells_none),
+                                        agentWorkspaceStopProjectShellsNoneText,
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 } else {
@@ -448,21 +523,33 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     onRun = {
                         scope.launch {
                             agentService.runLocalProject().onFailure { e ->
-                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    context,
+                                    formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
                         }
                     },
                     onStop = {
                         scope.launch {
                             agentService.stopLocalProjectRun(force = false).onFailure { e ->
-                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    context,
+                                    formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
                         }
                     },
                     onForceStop = {
                         scope.launch {
                             agentService.stopLocalProjectRun(force = true).onFailure { e ->
-                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                                Toast.makeText(
+                                    context,
+                                    formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                    Toast.LENGTH_LONG
+                                ).show()
                             }
                         }
                     },
@@ -476,7 +563,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     previewUrl = localRunState?.previewUrl,
                     backend = workspaceBackend,
                     onOpenExternal = { url ->
-                        navController.navigate(Screen.TermuxWebView.createRoute(url, context.getString(R.string.agent_workspace_preview_title), "agent_local"))
+                        navController.navigate(Screen.TermuxWebView.createRoute(url, agentWorkspacePreviewTitleText, "agent_local"))
                     }
                 )
             } else {
@@ -506,7 +593,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 clipboardAction = "copy" to selectedFiles.toList()
                                 isMultiSelectMode = false
                                 selectedFiles = emptySet()
-                                Toast.makeText(context, context.getString(R.string.action_copy), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, actionCopyText, Toast.LENGTH_SHORT).show()
                             }) {
                                 Icon(Icons.Default.ContentCopy, stringResource(R.string.action_copy))
                             }
@@ -514,7 +601,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 clipboardAction = "move" to selectedFiles.toList()
                                 isMultiSelectMode = false
                                 selectedFiles = emptySet()
-                                Toast.makeText(context, context.getString(R.string.action_move), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, actionMoveText, Toast.LENGTH_SHORT).show()
                             }) {
                                 Icon(Icons.Default.ContentCut, stringResource(R.string.action_move))
                             }
@@ -523,12 +610,20 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                     if (currentPath.isBlank()) return@launch
                                     val tarName = "archive_${System.currentTimeMillis()}.tar.gz"
                                         agentService.compress(selectedFiles.map { it.path }, "$currentPath/$tarName").onSuccess {
-                                            Toast.makeText(context, context.getString(R.string.agent_compress_success, tarName), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(
+                                                context,
+                                                formatAgentWorkspaceString(agentCompressSuccessFormat, tarName),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
                                             loadFiles()
                                             isMultiSelectMode = false
                                             selectedFiles = emptySet()
                                     }.onFailure { e: Throwable ->
-                                        Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                                        Toast.makeText(
+                                            context,
+                                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                     }
                                 }
                             }) {
@@ -544,7 +639,11 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                             .onFailure { error -> failure = failure ?: error }
                                     }
                                     failure?.let { error ->
-                                        Toast.makeText(context, context.getString(R.string.agent_error_prefix, error.message ?: ""), Toast.LENGTH_LONG).show()
+                                        Toast.makeText(
+                                            context,
+                                            formatAgentWorkspaceString(agentErrorPrefixFormat, error.message ?: ""),
+                                            Toast.LENGTH_LONG
+                                        ).show()
                                     }
                                     loadFiles()
                                     isMultiSelectMode = false
@@ -583,7 +682,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 val (action, targets) = clipboardAction ?: return@Button
                                 scope.launch {
                                     if (currentPath.isBlank()) return@launch
-                                    setIsLoading(true, context.getString(R.string.status_processing))
+                                    setIsLoading(true, statusProcessingText)
                                     targets.forEach { target ->
                                         val dest = "$currentPath/${target.name}"
                                         if (action == "copy") {
@@ -690,7 +789,11 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                             agentService.readFileBytes(file.path).onSuccess { bytes ->
                                                 imagePreviewPath = persistPreviewImage(file.name, bytes)
                                             }.onFailure { e: Throwable ->
-                                                Toast.makeText(context, context.getString(R.string.error_param, e.message), Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(
+                                                    context,
+                                                    formatAgentWorkspaceString(errorParamFormat, e.message),
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
                                                 viewingImage = null
                                             }
                                         }
@@ -702,7 +805,11 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                                 fileContent = content
                                                 editedContent = content
                                             }.onFailure { e: Throwable ->
-                                                Toast.makeText(context, context.getString(R.string.error_param, e.message), Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(
+                                                    context,
+                                                    formatAgentWorkspaceString(errorParamFormat, e.message),
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
                                             }
                                         }
                                     }
@@ -719,16 +826,24 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                         "compress" -> {
                                             scope.launch {
                                                 if (currentPath.isBlank()) return@launch
-                                                setIsLoading(true, context.getString(R.string.status_processing))
+                                                setIsLoading(true, statusProcessingText)
                                                 val archiveName = "${file.name}.tar.gz"
                                                 agentService.compress(
                                                     listOf(file.path),
                                                     "$currentPath/$archiveName"
                                                 ).onSuccess {
-                                                    Toast.makeText(context, context.getString(R.string.agent_compress_success), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(
+                                                        context,
+                                                        formatAgentWorkspaceString(agentCompressSuccessFormat, archiveName),
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
                                                     loadFiles()
                                                 }.onFailure { e: Throwable ->
-                                                    Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(
+                                                        context,
+                                                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
                                                 }
                                                 setIsLoading(false)
                                             }
@@ -736,12 +851,16 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                         "uncompress" -> {
                                             scope.launch {
                                                 if (currentPath.isBlank()) return@launch
-                                                setIsLoading(true, context.getString(R.string.status_processing))
+                                                setIsLoading(true, statusProcessingText)
                                                 agentService.uncompress(file.path, currentPath).onSuccess {
-                                                    Toast.makeText(context, context.getString(R.string.agent_uncompress_success), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, agentUncompressSuccessText, Toast.LENGTH_SHORT).show()
                                                     loadFiles()
                                                 }.onFailure { e: Throwable ->
-                                                    Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(
+                                                        context,
+                                                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
                                                 }
                                                 setIsLoading(false)
                                             }
@@ -773,11 +892,15 @@ fun AgentWorkspaceScreen(navController: NavController) {
             onSave = {
                 scope.launch {
                     agentService.writeFile(file.path, editedContent).onSuccess {
-                        Toast.makeText(context, context.getString(R.string.agent_save_toast), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, agentSaveToastText, Toast.LENGTH_SHORT).show()
                         fileContent = editedContent
                         isEditMode = false
                     }.onFailure { e: Throwable ->
-                        Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            context,
+                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
             },
@@ -851,8 +974,8 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 .onSuccess { result ->
                                     Toast.makeText(
                                         context,
-                                        context.getString(
-                                            R.string.agent_workspace_stop_project_shells_success,
+                                        formatAgentWorkspaceString(
+                                            agentWorkspaceStopProjectShellsSuccessFormat,
                                             result.totalStopped
                                         ),
                                         Toast.LENGTH_SHORT
@@ -861,7 +984,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                 .onFailure { error ->
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.agent_error_prefix, error.message ?: ""),
+                                        formatAgentWorkspaceString(agentErrorPrefixFormat, error.message ?: ""),
                                         Toast.LENGTH_LONG
                                     ).show()
                                 }
@@ -892,7 +1015,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     agentService.sendWorkspaceTerminalInput(resolvedProjectRoot, input).onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
-                            context.getString(R.string.agent_error_prefix, e.message ?: ""),
+                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -903,7 +1026,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     agentService.interruptWorkspaceTerminal(resolvedProjectRoot).onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
-                            context.getString(R.string.agent_error_prefix, e.message ?: ""),
+                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -914,7 +1037,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     agentService.reconnectWorkspaceTerminal(resolvedProjectRoot).onFailure { e: Throwable ->
                         Toast.makeText(
                             context,
-                            context.getString(R.string.agent_error_prefix, e.message ?: ""),
+                            formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
                             Toast.LENGTH_LONG
                         ).show()
                     }
@@ -940,10 +1063,14 @@ fun AgentWorkspaceScreen(navController: NavController) {
                         scope.launch {
                             if (currentPath.isBlank()) return@launch
                             agentService.deletePath(file.path, recursive = file.isDirectory).onSuccess {
-                                Toast.makeText(context, context.getString(R.string.agent_delete_toast), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, agentDeleteToastText, Toast.LENGTH_SHORT).show()
                                 loadFiles()
                             }.onFailure { e: Throwable ->
-                                Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                         deleteTarget = null
@@ -998,10 +1125,14 @@ fun AgentWorkspaceScreen(navController: NavController) {
                                     agentService.writeFile(fullPath, "")
                                 }
                                 result.onSuccess {
-                                    Toast.makeText(context, context.getString(R.string.agent_create_toast), Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, agentCreateToastText, Toast.LENGTH_SHORT).show()
                                     loadFiles()
                                 }.onFailure { e: Throwable ->
-                                    Toast.makeText(context, context.getString(R.string.agent_error_prefix, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        context,
+                                        formatAgentWorkspaceString(agentErrorPrefixFormat, e.message ?: ""),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             }
                             showNewDialog = false
@@ -1832,6 +1963,8 @@ private fun LocalSandboxRunTab(
     }
 }
 
+/* JavaScript is required by agent-created previews; navigation and storage stay origin-restricted. */
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun AgentWorkspacePreviewTab(
     modifier: Modifier,
@@ -1839,12 +1972,18 @@ private fun AgentWorkspacePreviewTab(
     backend: AgentWorkspaceBackendType,
     onOpenExternal: (String) -> Unit
 ) {
+    val configuredOrigin = remember(previewUrl) {
+        previewUrl?.let(::parseAgentPreviewOrigin)
+    }
+    val safePreviewUrl = remember(previewUrl, configuredOrigin) {
+        previewUrl?.takeIf { configuredOrigin != null && isAllowedAgentPreviewUrl(it, configuredOrigin) }
+    }
     Column(
         modifier = modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(stringResource(R.string.agent_workspace_tab_preview), fontWeight = FontWeight.Bold)
-        if (previewUrl.isNullOrBlank()) {
+        if (safePreviewUrl.isNullOrBlank()) {
             Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
@@ -1861,31 +2000,64 @@ private fun AgentWorkspacePreviewTab(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 AssistChip(
                     onClick = {},
-                    label = { Text(previewUrl, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(safePreviewUrl, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     leadingIcon = { Icon(Icons.Default.Link, null, modifier = Modifier.size(18.dp)) },
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = { onOpenExternal(previewUrl) }) {
+                IconButton(onClick = { onOpenExternal(safePreviewUrl) }) {
                     Icon(Icons.Default.OpenInNew, stringResource(R.string.agent_workspace_open_preview))
                 }
             }
             Card(modifier = Modifier.fillMaxSize(), shape = RoundedCornerShape(8.dp)) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { context ->
-                        WebView(context).apply {
-                            webViewClient = WebViewClient()
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            loadUrl(previewUrl)
-                            AgentPreviewBridge.register(this, AgentService.activeConversationId.value, previewUrl)
+                val origin = checkNotNull(configuredOrigin)
+                key(safePreviewUrl) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { context ->
+                            WebView(context).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.allowFileAccess = false
+                                settings.allowContentAccess = false
+                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView,
+                                        request: WebResourceRequest
+                                    ): Boolean = !isAllowedAgentPreviewUrl(request.url.toString(), origin)
+
+                                    @Suppress("DEPRECATION")
+                                    override fun shouldOverrideUrlLoading(view: WebView, url: String): Boolean =
+                                        !isAllowedAgentPreviewUrl(url, origin)
+                                }
+                                loadUrl(safePreviewUrl)
+                                AgentPreviewBridge.register(
+                                    this,
+                                    AgentService.activeConversationId.value,
+                                    safePreviewUrl
+                                )
+                            }
+                        },
+                        update = { webView ->
+                            AgentPreviewBridge.register(
+                                webView,
+                                AgentService.activeConversationId.value,
+                                safePreviewUrl
+                            )
+                            if (webView.url != safePreviewUrl && isAllowedAgentPreviewUrl(safePreviewUrl, origin)) {
+                                webView.loadUrl(safePreviewUrl)
+                            }
+                        },
+                        onRelease = { webView ->
+                            AgentPreviewBridge.unregister(webView)
+                            webView.stopLoading()
+                            webView.loadUrl("about:blank")
+                            webView.clearHistory()
+                            webView.removeAllViews()
+                            webView.destroy()
                         }
-                    },
-                    update = { webView ->
-                        AgentPreviewBridge.register(webView, AgentService.activeConversationId.value, previewUrl)
-                        if (webView.url != previewUrl) webView.loadUrl(previewUrl)
-                    }
-                )
+                    )
+                }
             }
         }
     }
@@ -2197,6 +2369,11 @@ private fun formatSize(bytes: Long): String {
     return when {
         bytes < 1024 -> "$bytes ${stringResource(R.string.agent_unit_b)}"
         bytes < 1024 * 1024 -> "${bytes / 1024} ${stringResource(R.string.agent_unit_kb)}"
-        else -> String.format("%.1f %s", bytes / (1024.0 * 1024.0), stringResource(R.string.agent_unit_mb))
+        else -> String.format(
+            Locale.getDefault(),
+            "%.1f %s",
+            bytes / (1024.0 * 1024.0),
+            stringResource(R.string.agent_unit_mb)
+        )
     }
 }

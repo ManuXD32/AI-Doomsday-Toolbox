@@ -7,8 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-class SettingsViewModel(private val context: Context) : ViewModel() {
-    private val prefs = context.getSharedPreferences("llama_prefs", Context.MODE_PRIVATE)
+class SettingsViewModel(context: Context) : ViewModel() {
+    private val prefs = context.applicationContext.getSharedPreferences("llama_prefs", Context.MODE_PRIVATE)
     
     private val _threads = MutableStateFlow(prefs.getInt("threads", 4))
     val threads = _threads.asStateFlow()

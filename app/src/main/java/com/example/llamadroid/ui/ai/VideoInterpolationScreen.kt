@@ -66,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -108,6 +109,7 @@ import java.io.File
 @Composable
 fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boolean = false) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val downloader = remember { MediaAssetDownloader(context) }
@@ -207,7 +209,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
             onSuccess = { savedPath ->
                 Toast.makeText(
                     context,
-                    context.getString(R.string.interpolation_success_toast, savedPath),
+                    resources.getString(R.string.interpolation_success_toast, savedPath),
                     Toast.LENGTH_LONG
                 ).show()
             },
@@ -233,7 +235,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                     }
                 }
             } catch (e: Exception) {
-                downloadError = e.message ?: context.getString(R.string.interpolation_download_failed)
+                downloadError = e.message ?: resources.getString(R.string.interpolation_download_failed)
             }
         }
     }
@@ -258,7 +260,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
         uri ?: return@rememberLauncherForActivityResult
         val path = copyUriToCache(uri, "interpolation_input.mp4")
         if (path == null) {
-            errorMessage = context.getString(R.string.interpolation_error_video_copy)
+            errorMessage = resources.getString(R.string.interpolation_error_video_copy)
         } else {
             selectedVideoPath = path
             scope.launch {
@@ -275,7 +277,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
         if (pending != null && pending.mimeType.startsWith("video/")) {
             val path = copyUriToCache(pending.uri, "interpolation_shared_input.mp4")
             if (path == null) {
-                errorMessage = context.getString(R.string.interpolation_error_video_copy)
+                errorMessage = resources.getString(R.string.interpolation_error_video_copy)
             } else {
                 selectedVideoPath = path
                 pendingSharedVideoPath = path
@@ -360,7 +362,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                                     putExtra(Intent.EXTRA_STREAM, uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 },
-                                context.getString(R.string.interpolation_share)
+                                resources.getString(R.string.interpolation_share)
                             )
                         )
                     },
@@ -502,7 +504,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                     val ok = MediaModelManager.isInstalled(context, it)
                     Toast.makeText(
                         context,
-                        context.getString(if (ok) R.string.interpolation_model_verify_ok else R.string.interpolation_model_verify_failed),
+                        resources.getString(if (ok) R.string.interpolation_model_verify_ok else R.string.interpolation_model_verify_failed),
                         Toast.LENGTH_SHORT
                     ).show()
                     refreshInstalled()
@@ -518,7 +520,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                 onStart = {
                     val path = selectedVideoPath
                     if (path == null) {
-                        errorMessage = context.getString(R.string.interpolation_error_no_video)
+                        errorMessage = resources.getString(R.string.interpolation_error_no_video)
                         return@StartInterpolationCard
                     }
                     if (!MediaModelManager.isInstalled(context, selectedModel)) {
@@ -540,7 +542,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                     if (combinedWorkflow) {
                         val model = combinedUpscaleModel
                         if (model == null || combinedAvailableScales.isEmpty()) {
-                            errorMessage = context.getString(R.string.upscaler_model_variant_unavailable)
+                            errorMessage = resources.getString(R.string.upscaler_model_variant_unavailable)
                             return@StartInterpolationCard
                         }
                         val upscaleOutput = File(context.cacheDir, "interpolated_upscaled_${System.currentTimeMillis()}.mp4")
@@ -584,7 +586,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                                     onSuccess = { savedPath ->
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.interpolation_success_toast, savedPath),
+                                            resources.getString(R.string.interpolation_success_toast, savedPath),
                                             Toast.LENGTH_LONG
                                         ).show()
                                     },

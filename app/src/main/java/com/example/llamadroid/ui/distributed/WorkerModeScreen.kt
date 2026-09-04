@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.distributed
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.zIndex
@@ -43,6 +44,7 @@ import com.example.llamadroid.R
 import com.example.llamadroid.util.SystemMonitor
 import com.example.llamadroid.util.SystemStats
 import android.webkit.WebView
+import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
 import android.webkit.WebSettings
 import androidx.compose.ui.viewinterop.AndroidView
@@ -693,24 +695,14 @@ fun WorkerModeScreen(navController: NavController) {
                                             // CRITICAL: Use applicationContext to avoid leaking Activity context
                                             // and to ensure WebView survives Activity recreation/backgrounding
                                             val appContext = context.applicationContext
+                                            val monitorUrl = "http://$masterIp:$masterPort"
                                             val view = webViewInstance ?: WebView(appContext).apply {
                                                 layoutParams = android.view.ViewGroup.LayoutParams(
                                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                                                     android.view.ViewGroup.LayoutParams.MATCH_PARENT
                                                 )
-                                                settings.javaScriptEnabled = true
-                                                settings.domStorageEnabled = true
-                                                settings.useWideViewPort = true
-                                                settings.loadWithOverviewMode = true
-                                                settings.builtInZoomControls = true
-                                                settings.displayZoomControls = false
-                                                
-                                                // Enable mixed content if strictly needed (usually not for local IP)
-                                                settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                                
-                                                webViewClient = WebViewClient()
-                                                
-                                                loadUrl("http://$masterIp:$masterPort")
+                                                configureWorkerMonitor(monitorUrl)
+                                                loadUrl(monitorUrl)
                                                 webViewRef = this
                                                 webViewInstance = this // Save instance
                                             }
@@ -926,6 +918,51 @@ fun WorkerModeScreen(navController: NavController) {
             }
         }
     }
+}
+
+@SuppressLint("SetJavaScriptEnabled")
+private fun WebView.configureWorkerMonitor(allowedUrl: String) {
+    settings.javaScriptEnabled = true
+    settings.domStorageEnabled = true
+    settings.allowFileAccess = false
+    settings.allowContentAccess = false
+    settings.javaScriptCanOpenWindowsAutomatically = false
+    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+    settings.useWideViewPort = true
+    settings.loadWithOverviewMode = true
+    settings.builtInZoomControls = true
+    settings.displayZoomControls = false
+    webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
+            request?.url?.toString()?.let { !hasSameWebOrigin(allowedUrl, it) } ?: true
+
+        @Suppress("DEPRECATION")
+        override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
+            url?.let { !hasSameWebOrigin(allowedUrl, it) } ?: true
+    }
+}
+
+private fun hasSameWebOrigin(allowedUrl: String, candidateUrl: String): Boolean {
+    val allowed = runCatching { java.net.URI(allowedUrl) }.getOrNull() ?: return false
+    val candidate = runCatching { java.net.URI(candidateUrl) }.getOrNull() ?: return false
+    val allowedScheme = allowed.scheme?.lowercase(java.util.Locale.US) ?: return false
+    val candidateScheme = candidate.scheme?.lowercase(java.util.Locale.US) ?: return false
+    if (allowedScheme !in setOf("http", "https") || candidateScheme !in setOf("http", "https")) {
+        return false
+    }
+    val allowedHost = allowed.host ?: return false
+    val candidateHost = candidate.host ?: return false
+    fun effectivePort(uri: java.net.URI): Int = when {
+        uri.port >= 0 -> uri.port
+        uri.scheme.equals("https", ignoreCase = true) -> 443
+        uri.scheme.equals("http", ignoreCase = true) -> 80
+        else -> -1
+    }
+    return allowed.userInfo == null &&
+        candidate.userInfo == null &&
+        allowedScheme == candidateScheme &&
+        allowedHost.equals(candidateHost, ignoreCase = true) &&
+        effectivePort(allowed) == effectivePort(candidate)
 }
 
 @Composable

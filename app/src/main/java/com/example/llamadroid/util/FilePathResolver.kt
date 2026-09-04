@@ -1,5 +1,6 @@
 package com.example.llamadroid.util
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.os.Build
@@ -168,6 +169,7 @@ object FilePathResolver {
     /**
      * Get list of external storage paths including SD cards.
      */
+    @SuppressLint("SdCardPath") // Retained only as a legacy vendor-mount fallback after platform paths.
     private fun getExternalStoragePaths(context: Context): List<String> {
         val paths = mutableListOf<String>()
         

@@ -62,6 +62,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -110,6 +111,7 @@ import kotlin.math.roundToInt
 @Composable
 fun OnnxModelsScreen(navController: NavController) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val resources = androidx.compose.ui.platform.LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
@@ -172,7 +174,7 @@ fun OnnxModelsScreen(navController: NavController) {
         scope.launch(Dispatchers.IO) {
             isImporting = true
             importProgress = 0f
-            importLabel = context.getString(R.string.onnx_models_importing)
+            importLabel = resources.getString(R.string.onnx_models_importing)
             val result = importOnnxBundleFromTree(
                 context = context,
                 repository = repository,
@@ -187,7 +189,7 @@ fun OnnxModelsScreen(navController: NavController) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(
                     context,
-                    result.getOrElse { it.message ?: context.getString(R.string.error_generic) },
+                    result.getOrElse { it.message ?: resources.getString(R.string.error_generic) },
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -297,7 +299,7 @@ fun OnnxModelsScreen(navController: NavController) {
                         repository.startOnnxCatalogDownload(entry)
                         Toast.makeText(
                             context,
-                            context.getString(R.string.onnx_models_download_started, entry.title),
+                            resources.getString(R.string.onnx_models_download_started, entry.title),
                             Toast.LENGTH_SHORT
                         ).show()
                     }

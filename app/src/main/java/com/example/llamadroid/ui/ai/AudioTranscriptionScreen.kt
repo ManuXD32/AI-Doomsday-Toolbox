@@ -30,10 +30,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.navigation.NavController
@@ -60,6 +62,7 @@ private const val RECORD_PERMISSION_REQUESTED_KEY = "audio_transcription_record_
 @Composable
 fun AudioTranscriptionScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     
@@ -92,7 +95,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
     val whisperState by whisperService?.state?.collectAsState() ?: remember { mutableStateOf(WhisperState.Idle) }
     val whisperProgress by whisperService?.progress?.collectAsState() ?: remember { mutableStateOf("") }
     
-    val lastOutputFormats = settingsRepo.whisperLastOutputFormats.value
+    val lastOutputFormats by settingsRepo.whisperLastOutputFormats.collectAsStateWithLifecycle()
     var transcriptionUiState by remember { mutableStateOf(TranscriptionUiState()) }
     val selectedAudioPath = transcriptionUiState.selectedAudioPath
     val transcriptionResult = transcriptionUiState.transcriptionResult
@@ -138,12 +141,12 @@ fun AudioTranscriptionScreen(navController: NavController) {
                 }
                 transcriptionUiState = transcriptionUiState.onAudioSelected(
                     path = tempFile.absolutePath,
-                    statusMessage = context.getString(R.string.whisper_video_loaded_note)
+                    statusMessage = resources.getString(R.string.whisper_video_loaded_note)
                         .takeIf { isVideo }
                 )
             } catch (e: Exception) {
                 transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                    context.getString(R.string.whisper_error_shared_file)
+                    resources.getString(R.string.whisper_error_shared_file)
                 )
             }
         }
@@ -198,7 +201,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
 
                     // Extract audio from video using FFmpeg
                     isExtractingAudio = true
-                    extractionProgress = context.getString(R.string.whisper_extracting_audio)
+                    extractionProgress = resources.getString(R.string.whisper_extracting_audio)
                     
                     val binaryRepo = com.example.llamadroid.data.binary.BinaryRepository(context)
                     val ffmpegBinary = binaryRepo.getFFmpegBinary()
@@ -209,7 +212,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     if (!libDir.exists()) libDir.mkdirs()
                     
                     if (ffmpegBinary == null || !ffmpegBinary.exists()) {
-                        throw IllegalStateException(context.getString(R.string.whisper_error_ffmpeg_not_found))
+                        throw IllegalStateException(resources.getString(R.string.whisper_error_ffmpeg_not_found))
                     }
                         
                     android.util.Log.d("AudioTranscription", "FFmpeg binary: ${ffmpegBinary.absolutePath}")
@@ -239,15 +242,15 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     android.util.Log.d("AudioTranscription", "FFmpeg exit code: $exitCode")
                         
                     if (exitCode == 0 && audioOutput.exists()) {
-                        extractionProgress = context.getString(R.string.whisper_extraction_success)
+                        extractionProgress = resources.getString(R.string.whisper_extraction_success)
                         transcriptionUiState = transcriptionUiState.onAudioSelected(
                             audioOutput.absolutePath,
-                            context.getString(R.string.whisper_extraction_success)
+                            resources.getString(R.string.whisper_extraction_success)
                         )
                         android.util.Log.d("AudioTranscription", "Audio extracted: ${audioOutput.length()} bytes")
                     } else {
                         transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                            context.getString(R.string.whisper_error_extraction, exitCode)
+                            resources.getString(R.string.whisper_error_extraction, exitCode)
                         )
                         android.util.Log.e("AudioTranscription", "FFmpeg failed: $output")
                     }
@@ -256,12 +259,12 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     android.util.Log.e("AudioTranscription", "Audio input error", e)
                     transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
                         if (isExtractingAudio) {
-                            context.getString(
+                            resources.getString(
                                 R.string.whisper_error_ffmpeg_detail,
-                                e.message ?: context.getString(R.string.error_generic)
+                                e.message ?: resources.getString(R.string.error_generic)
                             )
                         } else {
-                            context.getString(R.string.whisper_error_media_load)
+                            resources.getString(R.string.whisper_error_media_load)
                         }
                     )
                 } finally {
@@ -310,7 +313,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
             showPermissionRationale = false
             showPermissionSettings = false
             transcriptionUiState = transcriptionUiState.clearError(
-                context.getString(R.string.whisper_error_permission)
+                resources.getString(R.string.whisper_error_permission)
             )
         }
     }
@@ -355,7 +358,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
             showRecordingDialog = true
         } else {
             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                context.getString(R.string.whisper_error_permission)
+                resources.getString(R.string.whisper_error_permission)
             )
             when (microphonePermissionState) {
                 MicrophonePermissionState.RationaleRequired -> showPermissionRationale = true
@@ -375,7 +378,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
             MicrophonePermissionState.Requestable -> {
                 if (activity == null) {
                     transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                        context.getString(R.string.whisper_error_permission)
+                        resources.getString(R.string.whisper_error_permission)
                     )
                 } else {
                     hasRequestedRecordPermission = true
@@ -647,13 +650,13 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     onClick = {
                         if (selectedModelPath == null) {
                             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                context.getString(R.string.whisper_error_no_model)
+                                resources.getString(R.string.whisper_error_no_model)
                             )
                             return@Button
                         }
                         if (selectedAudioPath == null) {
                             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                context.getString(R.string.whisper_error_no_audio)
+                                resources.getString(R.string.whisper_error_no_audio)
                             )
                             return@Button
                         }
@@ -668,7 +671,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         val whisperVad = settingsRepo.whisperVadConfigSnapshot()
                         if (whisperVad.enabled && whisperVad.modelPath.isNullOrBlank()) {
                             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                context.getString(R.string.whisper_error_vad_model_missing)
+                                resources.getString(R.string.whisper_error_vad_model_missing)
                             )
                             return@Button
                         }
@@ -693,7 +696,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                             val service = whisperService
                             if (service == null) {
                                 transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                    context.getString(R.string.whisper_error_no_service)
+                                    resources.getString(R.string.whisper_error_no_service)
                                 )
                                 return@launch
                             }
@@ -710,7 +713,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                                     } else {
                                         transcriptionUiState.onTranscriptionFailed(
                                             error.message
-                                                ?: context.getString(R.string.error_generic)
+                                                ?: resources.getString(R.string.error_generic)
                                         )
                                     }
                                 }
@@ -786,69 +789,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
             // Result
             transcriptionResult?.let {
                 Spacer(modifier = Modifier.height(16.dp))
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.whisper_result_label),
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        val copyLabel = stringResource(R.string.action_copy)
-                        val shareLabel = stringResource(R.string.action_share)
-                        ResponsiveActionGroup(
-                            actions = listOf(
-                                ResponsiveAction(
-                                    label = copyLabel,
-                                    onClick = {
-                                        val clipboard = context.getSystemService(
-                                            Context.CLIPBOARD_SERVICE
-                                        ) as ClipboardManager
-                                        clipboard.setPrimaryClip(
-                                            ClipData.newPlainText(
-                                                context.getString(R.string.whisper_result_label),
-                                                it
-                                            )
-                                        )
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.whisper_copy_success),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    },
-                                    modifier = Modifier.heightIn(min = 48.dp),
-                                    icon = Icons.Default.ContentCopy,
-                                    contentDescription = copyLabel,
-                                    style = ResponsiveActionStyle.Secondary
-                                ),
-                                ResponsiveAction(
-                                    label = shareLabel,
-                                    onClick = {
-                                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "text/plain"
-                                            putExtra(Intent.EXTRA_TEXT, it)
-                                        }
-                                        context.startActivity(
-                                            Intent.createChooser(
-                                                shareIntent,
-                                                context.getString(R.string.whisper_share_result)
-                                            )
-                                        )
-                                    },
-                                    modifier = Modifier.heightIn(min = 48.dp),
-                                    icon = Icons.Default.Share,
-                                    contentDescription = shareLabel,
-                                    style = ResponsiveActionStyle.Secondary
-                                )
-                            )
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(it, style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                TranscriptionResultCard(result = it)
             }
         }
     }
@@ -909,7 +850,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     val minutes = recordingSeconds / 60
                     val seconds = recordingSeconds % 60
                     Text(
-                        String.format("%02d:%02d", minutes, seconds),
+                        String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds),
                         style = MaterialTheme.typography.headlineLarge,
                         fontWeight = FontWeight.Bold,
                         color = if (isRecording) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
@@ -943,9 +884,9 @@ fun AudioTranscriptionScreen(navController: NavController) {
                             recordingSeconds = 0
                         } catch (e: Exception) {
                             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                context.getString(
+                                resources.getString(
                                     R.string.whisper_error_save_recording,
-                                    e.message ?: context.getString(R.string.error_generic)
+                                    e.message ?: resources.getString(R.string.error_generic)
                                 )
                             )
                         }
@@ -972,9 +913,9 @@ fun AudioTranscriptionScreen(navController: NavController) {
                             isRecording = true
                         } catch (e: Exception) {
                             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                context.getString(
+                                resources.getString(
                                     R.string.whisper_error_start_recording,
-                                    e.message ?: context.getString(R.string.error_generic)
+                                    e.message ?: resources.getString(R.string.error_generic)
                                 )
                             )
                             showRecordingDialog = false
@@ -992,9 +933,9 @@ fun AudioTranscriptionScreen(navController: NavController) {
                             isRecording = false
                         } catch (e: Exception) {
                             transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                context.getString(
+                                resources.getString(
                                     R.string.whisper_error_stop_recording,
-                                    e.message ?: context.getString(R.string.error_generic)
+                                    e.message ?: resources.getString(R.string.error_generic)
                                 )
                             )
                         }
@@ -1067,3 +1008,74 @@ fun AudioTranscriptionScreen(navController: NavController) {
         )
     }
 }
+
+@Composable
+internal fun TranscriptionResultCard(
+    result: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val resources = LocalResources.current
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(
+                stringResource(R.string.whisper_result_label),
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            val copyLabel = stringResource(R.string.action_copy)
+            val shareLabel = stringResource(R.string.action_share)
+            ResponsiveActionGroup(
+                actions = listOf(
+                    ResponsiveAction(
+                        label = copyLabel,
+                        onClick = { copyTranscriptionResult(context, result) },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        icon = Icons.Default.ContentCopy,
+                        contentDescription = copyLabel,
+                        style = ResponsiveActionStyle.Secondary
+                    ),
+                    ResponsiveAction(
+                        label = shareLabel,
+                        onClick = {
+                            context.startActivity(
+                                Intent.createChooser(
+                                    createTranscriptionShareIntent(result),
+                                    resources.getString(R.string.whisper_share_result)
+                                )
+                            )
+                        },
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        icon = Icons.Default.Share,
+                        contentDescription = shareLabel,
+                        style = ResponsiveActionStyle.Secondary
+                    )
+                )
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(result, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+internal fun copyTranscriptionResult(context: Context, result: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(
+        ClipData.newPlainText(context.getString(R.string.whisper_result_label), result)
+    )
+    Toast.makeText(
+        context,
+        context.getString(R.string.whisper_copy_success),
+        Toast.LENGTH_SHORT
+    ).show()
+}
+
+internal fun createTranscriptionShareIntent(result: String): Intent =
+    Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, result)
+    }

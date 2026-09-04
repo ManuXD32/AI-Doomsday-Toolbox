@@ -27,8 +27,11 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.ui.ai.applyKeyboardAwareInsetsFix
 import com.example.llamadroid.ui.ai.injectKeyboardViewportFix
 import androidx.lifecycle.LifecycleEventObserver
+import java.net.URI
 
-// Singleton WebView holder to persist across navigation
+// This process-wide cache intentionally uses a WebView created from the application context,
+// so retaining it across navigation cannot retain an Activity.
+@SuppressLint("StaticFieldLeak")
 object ChatWebViewHolder {
     var webView: WebView? = null
     var isLoaded: Boolean = false
@@ -38,6 +41,15 @@ object ChatWebViewHolder {
 
 internal fun llamaChatWebViewUrl(port: Int): String =
     "http://127.0.0.1:${port.coerceIn(1, 65535)}/"
+
+internal fun isAllowedChatWebViewUrl(candidate: String?, allowedOrigin: String): Boolean = runCatching {
+    val candidateUri = URI(candidate ?: return false)
+    val allowedUri = URI(allowedOrigin)
+    candidateUri.userInfo == null &&
+        candidateUri.scheme.equals(allowedUri.scheme, ignoreCase = true) &&
+        candidateUri.host.equals(allowedUri.host, ignoreCase = true) &&
+        candidateUri.port == allowedUri.port
+}.getOrDefault(false)
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -72,7 +84,7 @@ fun ChatScreen(
     
     // Create or reuse WebView
     val webView = remember {
-        ChatWebViewHolder.webView ?: WebView(context).apply {
+        ChatWebViewHolder.webView ?: WebView(context.applicationContext).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
@@ -82,9 +94,9 @@ fun ChatScreen(
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
-                javaScriptCanOpenWindowsAutomatically = true
-                setSupportMultipleWindows(true)
-                allowFileAccess = true
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                allowFileAccess = false
                 allowContentAccess = true
                 databaseEnabled = true
                 mediaPlaybackRequiresUserGesture = false
@@ -92,9 +104,10 @@ fun ChatScreen(
                 displayZoomControls = false
                 loadWithOverviewMode = true
                 useWideViewPort = true
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                allowFileAccessFromFileURLs = true
-                allowUniversalAccessFromFileURLs = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                allowFileAccessFromFileURLs = false
+                allowUniversalAccessFromFileURLs = false
+                safeBrowsingEnabled = true
                 cacheMode = WebSettings.LOAD_DEFAULT
             }
             
@@ -122,8 +135,12 @@ fun ChatScreen(
     DisposableEffect(webView, lifecycleOwner, chatUrl) {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                return false
+                return !isAllowedChatWebViewUrl(request?.url?.toString(), chatUrl)
             }
+
+            @Suppress("DEPRECATION")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
+                !isAllowedChatWebViewUrl(url, chatUrl)
             
             override fun onPageFinished(view: WebView?, url: String?) {
                 view?.injectKeyboardViewportFix()
@@ -158,24 +175,6 @@ fun ChatScreen(
                 filePickerLauncher.launch(intent)
                 return true
             }
-            
-            override fun onCreateWindow(
-                view: WebView?,
-                isDialog: Boolean,
-                isUserGesture: Boolean,
-                resultMsg: android.os.Message?
-            ): Boolean {
-                val newWebView = WebView(context)
-                newWebView.settings.javaScriptEnabled = true
-                newWebView.settings.domStorageEnabled = true
-                
-                val transport = resultMsg?.obj as? WebView.WebViewTransport
-                transport?.webView = newWebView
-                resultMsg?.sendToTarget()
-                return true
-            }
-            
-            override fun onCloseWindow(window: WebView?) {}
             
             override fun onJsAlert(
                 view: WebView?,

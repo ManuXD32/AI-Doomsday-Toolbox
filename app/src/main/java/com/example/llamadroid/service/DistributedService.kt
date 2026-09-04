@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.app.ActivityManager
 import android.app.Service
 import android.content.Context
@@ -242,6 +243,8 @@ class DistributedService : Service() {
         val _lastRunParams = MutableStateFlow<Map<String, Any?>>(emptyMap())
         val lastRunParams: StateFlow<Map<String, Any?>> = _lastRunParams.asStateFlow()
         
+        // The server is process-scoped and normalizes its context to applicationContext.
+        @SuppressLint("StaticFieldLeak")
         private var remoteServer: RemoteMasterServer? = null
         
         // Remote Master Client State
@@ -1339,7 +1342,7 @@ class DistributedService : Service() {
         notificationJob = serviceScope.launch {
             val systemMonitor = SystemMonitor(applicationContext)
             systemMonitor.observeStats().collect { stats ->
-                val statusText = "RAM: ${String.format("%.1f", stats.freeRamGb)}GB Free / ${String.format("%.1f", stats.totalRamGb)}GB Total"
+                val statusText = "RAM: ${String.format(java.util.Locale.getDefault(), "%.1f", stats.freeRamGb)}GB Free / ${String.format(java.util.Locale.getDefault(), "%.1f", stats.totalRamGb)}GB Total"
                 UnifiedNotificationManager.updateProgress(taskId, -1f, statusText) // Indeterminate progress
             }
         }

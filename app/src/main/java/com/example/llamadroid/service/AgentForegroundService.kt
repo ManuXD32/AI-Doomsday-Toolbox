@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.app.Service
 import android.os.Binder
 import android.content.Context
@@ -56,7 +57,10 @@ class AgentForegroundService : Service() {
         private val resumeTriggered = AtomicBoolean(false)
         private val serviceInstanceIds = AtomicInteger(0)
         private val lastIdleReconciledAtMs = AtomicLong(0L)
+        // Both runtime services normalize their constructor input to applicationContext.
+        @SuppressLint("StaticFieldLeak")
         private var runtimeAgentService: AgentService? = null
+        @SuppressLint("StaticFieldLeak")
         private var runtimeOllamaService: OllamaService? = null
         private var runtimeSettingsRepository: SettingsRepository? = null
         private var runtimeOllamaManager: OllamaRuntimeManager? = null

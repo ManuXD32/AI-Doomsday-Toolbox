@@ -67,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -111,6 +112,7 @@ private val LiteRtEmbeddingBlue = Color(0xFF2F80ED)
 @Suppress("UNUSED_PARAMETER")
 fun LiteRtModelsScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember {
@@ -163,7 +165,7 @@ fun LiteRtModelsScreen(navController: NavController) {
         val fileName = DocumentFile.fromSingleUri(context, uri)?.name.orEmpty()
         val inferenceText = fileName.ifBlank { uri.lastPathSegment.orEmpty() }
         pendingImportUri = uri
-        pendingImportName = fileName.ifBlank { context.getString(R.string.litert_models_import) }
+        pendingImportName = fileName.ifBlank { resources.getString(R.string.litert_models_import) }
         importSupportsVision = liteRtVisionSupportFromText(inferenceText)
         importSupportsAudio = liteRtAudioSupportFromText(inferenceText)
         importSupportsEmbedding = liteRtEmbeddingSupportFromText(inferenceText)
@@ -179,8 +181,8 @@ fun LiteRtModelsScreen(navController: NavController) {
             val result = repository.exportModel(model, uri)
             toast(
                 result.fold(
-                    onSuccess = { context.getString(R.string.litert_models_exported) },
-                    onFailure = { it.message ?: context.getString(R.string.error_generic) }
+                    onSuccess = { resources.getString(R.string.litert_models_exported) },
+                    onFailure = { it.message ?: resources.getString(R.string.error_generic) }
                 )
             )
         }
@@ -191,8 +193,8 @@ fun LiteRtModelsScreen(navController: NavController) {
             val result = repository.startCatalogDownload(entry)
             toast(
                 result.fold(
-                    onSuccess = { context.getString(R.string.litert_models_download_started, entry.title) },
-                    onFailure = { it.message ?: context.getString(R.string.error_generic) }
+                    onSuccess = { resources.getString(R.string.litert_models_download_started, entry.title) },
+                    onFailure = { it.message ?: resources.getString(R.string.error_generic) }
                 )
             )
         }
@@ -389,12 +391,12 @@ fun LiteRtModelsScreen(navController: NavController) {
                         val trimmed = contextTokenValue.trim()
                         val parsed = trimmed.takeIf { it.isNotBlank() }?.toIntOrNull()
                         if (trimmed.isNotBlank() && (parsed == null || parsed !in LITERT_CONTEXT_USER_MIN..LITERT_CONTEXT_USER_MAX)) {
-                            toast(context.getString(R.string.litert_models_context_invalid))
+                            toast(resources.getString(R.string.litert_models_context_invalid))
                             return@TextButton
                         }
                         scope.launch {
                             repository.updateMaxContextTokens(model, parsed)
-                            toast(context.getString(R.string.litert_models_context_saved))
+                            toast(resources.getString(R.string.litert_models_context_saved))
                         }
                         pendingContextModel = null
                     }
@@ -447,7 +449,7 @@ fun LiteRtModelsScreen(navController: NavController) {
                                 supportsAudio = modalityAudioValue,
                                 supportsEmbedding = modalityEmbeddingValue
                             )
-                            toast(context.getString(R.string.litert_models_modalities_saved))
+                            toast(resources.getString(R.string.litert_models_modalities_saved))
                         }
                         pendingModalityModel = null
                     }
@@ -508,8 +510,8 @@ fun LiteRtModelsScreen(navController: NavController) {
                             )
                             toast(
                                 result.fold(
-                                    onSuccess = { context.getString(R.string.litert_models_imported) },
-                                    onFailure = { it.message ?: context.getString(R.string.error_generic) }
+                                    onSuccess = { resources.getString(R.string.litert_models_imported) },
+                                    onFailure = { it.message ?: resources.getString(R.string.error_generic) }
                                 )
                             )
                         }
@@ -536,8 +538,8 @@ fun LiteRtModelsScreen(navController: NavController) {
                             val result = repository.removeModel(model)
                             toast(
                                 result.fold(
-                                    onSuccess = { context.getString(R.string.litert_models_removed) },
-                                    onFailure = { it.message ?: context.getString(R.string.error_generic) }
+                                    onSuccess = { resources.getString(R.string.litert_models_removed) },
+                                    onFailure = { it.message ?: resources.getString(R.string.error_generic) }
                                 )
                             )
                         }

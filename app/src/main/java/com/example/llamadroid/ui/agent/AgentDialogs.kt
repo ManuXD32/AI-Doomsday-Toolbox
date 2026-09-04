@@ -62,6 +62,7 @@ import com.example.llamadroid.service.resolveAgentLiteRtMaxOutputTokens
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 enum class AgentSettingsSection {
     AGENTS,
@@ -171,6 +172,9 @@ fun ModelSelectorDialog(
 fun SetupInfoDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    val copySuccessFormat = stringResource(R.string.agent_copy_success)
+    val installCommandLabel = stringResource(R.string.agent_install_cmd_label)
+    val startCommandLabel = stringResource(R.string.agent_start_cmd_label)
     
     // One-line install command - configures SSH on port 8023 (separate from Termux tools port 8025)
     val oneLineInstall = """pkg install proot-distro -y && proot-distro install ubuntu --override-alias ai-agent && proot-distro login ai-agent --isolated -- bash -c "apt update && apt install -y openssh-server git ripgrep python3 nodejs npm curl wget && mkdir -p /run/sshd && sed -i 's/#Port 22/Port 8023/' /etc/ssh/sshd_config && echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && echo 'root:agent' | chpasswd && mkdir -p /workspace""""
@@ -181,7 +185,11 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
     fun copyToClipboard(text: String, label: String) {
         val clip = android.content.ClipData.newPlainText(label, text)
         clipboardManager.setPrimaryClip(clip)
-        Toast.makeText(context, context.getString(R.string.agent_copy_success, label), Toast.LENGTH_SHORT).show()
+        Toast.makeText(
+            context,
+            String.format(Locale.getDefault(), copySuccessFormat, label),
+            Toast.LENGTH_SHORT
+        ).show()
     }
 
     // Get available tools for Orchestrator
@@ -371,7 +379,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                             )
                         }
                         IconButton(
-                            onClick = { copyToClipboard(oneLineInstall, context.getString(R.string.agent_install_cmd_label)) },
+                            onClick = { copyToClipboard(oneLineInstall, installCommandLabel) },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
@@ -408,7 +416,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                             )
                         }
                         IconButton(
-                            onClick = { copyToClipboard(startCommand, context.getString(R.string.agent_start_cmd_label)) },
+                            onClick = { copyToClipboard(startCommand, startCommandLabel) },
                             modifier = Modifier.size(32.dp)
                         ) {
                             Icon(

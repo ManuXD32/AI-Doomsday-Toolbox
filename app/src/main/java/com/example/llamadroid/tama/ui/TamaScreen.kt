@@ -43,6 +43,7 @@ import com.example.llamadroid.service.RemoteSummaryBackendConfig
 import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.RemoteSummaryMetadata
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -164,6 +165,7 @@ fun TamaScreen(
     val questChecklist by questChecklistFeed.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val resources = LocalResources.current
     var queuedPaintingArtworkId by rememberSaveable { mutableStateOf<String?>(null) }
     var artworkAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
     var dreamAlbumAwaitingRevealId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -189,18 +191,18 @@ fun TamaScreen(
                 try {
                     val outputStream = context.contentResolver.openOutputStream(uri)
                     if (outputStream == null) {
-                        Toast.makeText(context, context.getString(R.string.tama_export_failed, context.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
                     } else {
                         outputStream.use { stream ->
                             if (gameEngine.exportToBackupZip(stream)) {
-                                Toast.makeText(context, context.getString(R.string.tama_export_success), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_export_success), Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(context, context.getString(R.string.tama_export_failed, context.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_export_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Toast.makeText(context, context.getString(R.string.tama_export_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.tama_export_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -215,20 +217,20 @@ fun TamaScreen(
                 scope.launch {
                     val inputStream = context.contentResolver.openInputStream(uri)
                     if (inputStream == null) {
-                        Toast.makeText(context, context.getString(R.string.tama_import_failed, context.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_import_failed, resources.getString(R.string.error_generic)), Toast.LENGTH_SHORT).show()
                     } else {
                         inputStream.use { stream ->
                             val success = gameEngine.importFromBackup(stream)
                             if (success) {
-                                Toast.makeText(context, context.getString(R.string.tama_import_success), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_import_success), Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(context, context.getString(R.string.tama_import_invalid), Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, resources.getString(R.string.tama_import_invalid), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
                 }
             } catch (e: Exception) {
-                Toast.makeText(context, context.getString(R.string.tama_import_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, resources.getString(R.string.tama_import_failed, e.message ?: ""), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -434,7 +436,7 @@ fun TamaScreen(
             TamaArtworkStatus.FAILED.name -> {
                 Toast.makeText(
                     context,
-                    artwork.errorMessage ?: context.getString(R.string.error_generic),
+                    artwork.errorMessage ?: resources.getString(R.string.error_generic),
                     Toast.LENGTH_SHORT
                 ).show()
                 artworkAwaitingRevealId = null
@@ -450,7 +452,7 @@ fun TamaScreen(
             .onFailure { error ->
                 Toast.makeText(
                     context,
-                    error.message ?: context.getString(R.string.error_generic),
+                    error.message ?: resources.getString(R.string.error_generic),
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -469,7 +471,7 @@ fun TamaScreen(
                 Toast.makeText(
                     context,
                     albumArtworks.firstOrNull { it.status == TamaArtworkStatus.FAILED.name }?.errorMessage
-                        ?: context.getString(R.string.error_generic),
+                        ?: resources.getString(R.string.error_generic),
                     Toast.LENGTH_SHORT
                 ).show()
                 gameEngine.clearPendingDreamAlbum(albumId)
@@ -665,7 +667,7 @@ fun TamaScreen(
                         if (dreamAlbumAwaitingRevealId == null && petId != null && sleepStartTime != null) {
                             artworkAwaitingRevealId = gameEngine.getLatestSleepDreamArtwork(petId, sleepStartTime)?.id
                         }
-                        Toast.makeText(context, context.getString(R.string.tama_woke_up, pet?.name ?: ""), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_woke_up, pet?.name ?: ""), Toast.LENGTH_SHORT).show()
                     }
                 } else {
                     if (actionCooldown) return@TamaControls
@@ -776,9 +778,9 @@ fun TamaScreen(
                 scope.launch {
                     try {
                         gameEngine.createPet(name, speciesLine.id)
-                        Toast.makeText(context, context.getString(R.string.tama_welcome_new, name), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_welcome_new, name), Toast.LENGTH_SHORT).show()
                     } catch (e: Exception) {
-                        Toast.makeText(context, context.getString(R.string.tama_hatch_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, resources.getString(R.string.tama_hatch_failed, e.message ?: ""), Toast.LENGTH_LONG).show()
                     }
                 }
                 showNameDialog = false
@@ -840,7 +842,7 @@ fun TamaScreen(
             onConfirm = {
                 scope.launch {
                     gameEngine.resetPet()
-                    Toast.makeText(context, context.getString(R.string.tama_deleted), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.tama_deleted), Toast.LENGTH_SHORT).show()
                 }
                 showSecondResetDialog = false
             },
@@ -946,9 +948,9 @@ fun TamaScreen(
                             Text(stringResource(R.string.tama_avail_jobs), fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                             TamaWorkCatalog.jobs.take(3).forEach { job ->
                                 Text(
-                                    context.getString(
+                                    resources.getString(
                                         R.string.tama_work_job_summary,
-                                        context.getString(job.titleRes),
+                                        resources.getString(job.titleRes),
                                         job.requiredEducation,
                                         job.hourlyPay.toInt()
                                     ),
@@ -999,7 +1001,7 @@ fun TamaScreen(
                                 val result = gameEngine.travelTo(loc)
                                 if (result.success) {
                                     if (!alreadyDiscovered) {
-                                        Toast.makeText(context, context.getString(R.string.tama_discovered, loc.name, loc.description), Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, resources.getString(R.string.tama_discovered, loc.name, loc.description), Toast.LENGTH_LONG).show()
                                     }
                                     showMap = false  // Switch to pet view
                                 } else {
@@ -1018,7 +1020,7 @@ fun TamaScreen(
                             TextButton(onClick = {
                                 if (pet!!.money >= 10) {
                                     scope.launch {
-                                        Toast.makeText(context, context.getString(R.string.tama_bought_apple), Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, resources.getString(R.string.tama_bought_apple), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                                 selectedLocation = null
@@ -1469,7 +1471,9 @@ private fun TamaParkEncounterDialog(
     marketQuotes: List<TamaMarketQuote> = emptyList()
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val npc = remember(encounter.npcId) { TamaParkSocialCatalog.npcById(encounter.npcId) }
     val sellableItems = remember(pet.inventory) {
         pet.inventory.filter { item ->
@@ -1493,9 +1497,9 @@ private fun TamaParkEncounterDialog(
     val speechText = remember(encounter, npc, locale) {
         when {
             encounter.type == TamaParkEncounterType.RECYCLER && encounter.phase == TamaParkEncounterPhase.CLEANUP ->
-                context.getString(R.string.tama_park_recycler_cleanup_body, pet.name)
+                resources.getString(R.string.tama_park_recycler_cleanup_body, pet.name)
             marketMode ->
-                context.getString(R.string.tama_park_seller_market_body)
+                resources.getString(R.string.tama_park_seller_market_body)
             else -> TamaParkSocialCatalog.localizedLine(context, encounter)
         }
     }
@@ -2100,7 +2104,8 @@ private fun ParkQuestCard(
     onPrimaryAction: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val npc = remember(quest.npcId) { TamaParkSocialCatalog.npcById(quest.npcId) }
     val cropLines = remember(quest.requests, locale) {
         quest.requests.joinToString(separator = "\n") { request ->
@@ -2233,7 +2238,8 @@ private fun ParkMarketBoardDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     TamaPopupDialog(
         title = stringResource(R.string.tama_market_board_title),
         backgroundAsset = PARK_MARKET_BACKGROUND_ASSET,
@@ -2357,7 +2363,8 @@ private fun TamaQuestChecklistDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     var showPicker by remember { mutableStateOf(false) }
     val requestableItems = remember {
         FarmTradeItemCatalog.allDefinitions()
@@ -2578,9 +2585,9 @@ private fun formatQuestCountdown(remainingMs: Long): String {
     val minutes = (totalSeconds % 3600L) / 60L
     val seconds = totalSeconds % 60L
     return if (hours > 0) {
-        String.format("%02d:%02d:%02d", hours, minutes, seconds)
+        String.format(java.util.Locale.getDefault(), "%02d:%02d:%02d", hours, minutes, seconds)
     } else {
-        String.format("%02d:%02d", minutes, seconds)
+        String.format(java.util.Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
 }
 
@@ -3220,7 +3227,9 @@ private fun AlchemistPotionKitchenTab(
     onBrew: () -> Unit
 ) {
     val context = LocalContext.current
-    val locale = context.resources.configuration.locales[0]
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
+    val locale = configuration.locales[0]
     val cropItems = pet.inventory
         .filter { it.id.startsWith("crop_") && FarmTradeItemCatalog.isTradeItem(it.id) && it.quantity > 0 }
         .sortedBy { FarmTradeItemCatalog.displayName(it.id, locale) }
@@ -4363,13 +4372,15 @@ fun TamaInventoryDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val configuration = LocalConfiguration.current
     val currentRoom = remember(pet.homeRoomId) {
         TamaRoomCatalog.roomById(pet.homeRoomId) ?: TamaRoomCatalog.roomById(TamaRoomCatalog.PRINCIPAL_ROOM_ID)
     }
     val ownedRooms = remember(pet.inventory, pet.homeRoomId) {
         pet.inventory.filter { TamaRoomCatalog.isRoomId(it.id) }
     }
-    val otherItems = remember(pet.inventory, context.resources.configuration.locales[0]) {
+    val otherItems = remember(pet.inventory, configuration.locales[0]) {
         pet.inventory.filterNot { TamaRoomCatalog.isRoomId(it.id) || TamaDecorCatalog.isDecorId(it.id) }
             .groupBy { it.id }
             .map { (_, items) ->
@@ -5063,6 +5074,7 @@ fun TamaPetDisplay(
     onMarketBoard: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val speciesName = remember(pet.species, pet.genetics.bodyStyle) {
         speciesDisplayName(context, pet.species, pet.genetics.bodyStyle)
     }
@@ -5143,16 +5155,22 @@ fun TamaPetDisplay(
                 val displaySecRem = durationSec % 60
 
                 val timeText = if (displayHours > 0) {
-                    String.format("%d:%02d:%02d", displayHours, displayMin, displaySecRem)
+                    String.format(
+                        java.util.Locale.getDefault(),
+                        "%d:%02d:%02d",
+                        displayHours,
+                        displayMin,
+                        displaySecRem
+                    )
                 } else {
-                    String.format("%02d:%02d", displayMin, displaySecRem)
+                    String.format(java.util.Locale.getDefault(), "%02d:%02d", displayMin, displaySecRem)
                 }
 
                 val activePomodoro = activeStudySession
                     ?.takeIf { it.mode == TamaStudyMode.POMODORO.name && it.status == TamaStudyStatus.ACTIVE.name }
                 Text(
                     if (activePomodoro != null) {
-                        context.getString(
+                        resources.getString(
                             R.string.tama_study_round_status,
                             activePomodoro.currentRound,
                             activePomodoro.roundsPlanned.coerceAtLeast(1)
@@ -5170,7 +5188,7 @@ fun TamaPetDisplay(
 
                 val hoursPassed = durationMs / (1000 * 60 * 60f)
                 val gainText = if (activePomodoro != null) {
-                    context.getString(
+                    resources.getString(
                         R.string.tama_study_timer_remaining,
                         TamaStudySessionSupport.localizedPhase(context, activePomodoro.currentPhase),
                         formatStudyDurationForUi(context, TamaStudySessionSupport.currentPhaseRemainingMs(activePomodoro, currentTime))
@@ -5178,25 +5196,25 @@ fun TamaPetDisplay(
                 } else when (pet.currentActivity) {
                     com.example.llamadroid.tama.data.ActivityType.WORKING -> {
                         val hourlyPay = TamaWorkCatalog.jobById(pet.currentWorkJobId)?.hourlyPay ?: 4
-                        context.getString(
+                        resources.getString(
                             R.string.tama_activity_gain_money,
                             (hoursPassed * hourlyPay).toInt()
                         )
                     }
-                    com.example.llamadroid.tama.data.ActivityType.STUDYING -> context.getString(
+                    com.example.llamadroid.tama.data.ActivityType.STUDYING -> resources.getString(
                         R.string.tama_activity_gain_education,
                         (hoursPassed * 5).toInt()
                     )
                     com.example.llamadroid.tama.data.ActivityType.TRAINING -> {
                         val hourlyPay = TamaTrainingCatalog.tierById(pet.currentWorkJobId)?.hourlyPay ?: 8
-                        context.getString(
+                        resources.getString(
                             R.string.tama_activity_gain_training,
                             (hoursPassed * TAMA_TRAINING_EXERCISE_PER_HOUR).toInt(),
                             (hoursPassed * TAMA_TRAINING_HAPPINESS_PER_HOUR).toInt(),
                             (hoursPassed * hourlyPay).toInt()
                         )
                     }
-                    com.example.llamadroid.tama.data.ActivityType.RELAXING -> context.getString(
+                    com.example.llamadroid.tama.data.ActivityType.RELAXING -> resources.getString(
                         R.string.tama_activity_gain_happiness,
                         (hoursPassed * 40).toInt(),
                         (hoursPassed * TAMA_RELAX_INTROSPECTION_PER_HOUR).toInt()

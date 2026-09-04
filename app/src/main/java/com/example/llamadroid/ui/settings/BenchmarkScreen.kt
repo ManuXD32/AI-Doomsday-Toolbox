@@ -199,13 +199,13 @@ fun BenchmarkScreen(navController: NavController) {
                                         color = if (isBest) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                     )
                                     Text(
-                                        stringResource(R.string.benchmark_speed_value, String.format("%.1f", result.promptTokensPerSecond)),
+                                        stringResource(R.string.benchmark_speed_value, String.format(java.util.Locale.getDefault(), "%.1f", result.promptTokensPerSecond)),
                                         modifier = Modifier.weight(1f),
                                         fontFamily = FontFamily.Monospace,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Text(
-                                        stringResource(R.string.benchmark_speed_value, String.format("%.1f", result.genTokensPerSecond)),
+                                        stringResource(R.string.benchmark_speed_value, String.format(java.util.Locale.getDefault(), "%.1f", result.genTokensPerSecond)),
                                         modifier = Modifier.weight(1f),
                                         fontFamily = FontFamily.Monospace,
                                         fontWeight = if (isBest) FontWeight.Bold else FontWeight.Normal,
@@ -228,7 +228,7 @@ fun BenchmarkScreen(navController: NavController) {
                                             fontWeight = FontWeight.Bold
                                         )
                                         Text(
-                                            stringResource(R.string.benchmark_gen_speed, String.format("%.1f", bestGen.genTokensPerSecond)),
+                                            stringResource(R.string.benchmark_gen_speed, String.format(java.util.Locale.getDefault(), "%.1f", bestGen.genTokensPerSecond)),
                                             style = MaterialTheme.typography.bodyMedium
                                         )
                                     }

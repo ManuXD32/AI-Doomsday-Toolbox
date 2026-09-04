@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
@@ -2001,6 +2002,8 @@ class LlamaService : Service() {
         // Global state for simple observation
         private val _state = MutableStateFlow<ServerState>(ServerState.Stopped)
         val state = _state.asStateFlow()
+        // Runtime projection is process-wide and attachRuntimeProcess stores applicationContext only.
+        @SuppressLint("StaticFieldLeak")
         @Volatile private var runtimeContext: android.content.Context? = null
         @Volatile private var runtimeGeneration: Long = 0L
         @Volatile private var recentStartupFailureAtMs: Long = 0L

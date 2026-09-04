@@ -61,6 +61,9 @@ private const val WEAR_TOOL_PINNED_NOTE = "pinned_note"
 private const val WEAR_TOOL_WEB = "web_search"
 private const val WEAR_TOOL_IMAGES = "image_generation"
 
+private fun formatLlamaChatListString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaChatListScreen(
@@ -68,6 +71,16 @@ fun LlamaChatListScreen(
     initialFolderId: Long? = null
 ) {
     val context = LocalContext.current
+    val importedChatTitleText = stringResource(R.string.llama_imported_chat_title)
+    val importedNotesChatTitleText = stringResource(R.string.llama_imported_notes_chat_title)
+    val notesImportDefaultTitleFormat = stringResource(R.string.notes_import_default_title)
+    val notesImportSourceLabelText = stringResource(R.string.notes_import_source_label)
+    val importedNoteChatTitleText = stringResource(R.string.llama_imported_note_chat_title)
+    val importErrorUnknownFormatText = stringResource(R.string.llama_import_error_unknown_format)
+    val importSuccessText = stringResource(R.string.llama_import_success)
+    val importErrorText = stringResource(R.string.llama_import_error)
+    val promptProfileSaveErrorText = stringResource(R.string.llama_prompt_profile_save_error)
+    val folderCreateErrorText = stringResource(R.string.llama_folder_create_error)
     val database = AppDatabase.getDatabase(context)
     val repository = remember { 
          LlamaRepository(
@@ -133,7 +146,7 @@ fun LlamaChatListScreen(
                         obj.has("messages") -> {
                             val payload = gson.fromJson(json, LlamaChatExportPayload::class.java)
                             Triple(
-                                payload.title.ifBlank { context.getString(R.string.llama_imported_chat_title) },
+                                payload.title.ifBlank { importedChatTitleText },
                                 payload.systemPrompt?.ifBlank { null },
                                 payload.messages
                             )
@@ -141,15 +154,15 @@ fun LlamaChatListScreen(
                         obj.has("notes") -> {
                             val payload = gson.fromJson(json, NotesExportPayload::class.java)
                             Triple(
-                                context.getString(R.string.llama_imported_notes_chat_title),
+                                importedNotesChatTitleText,
                                 null,
                                 payload.notes.mapIndexed { index, note ->
                                     note.toLlamaSerializedMessage(
-                                        fallbackTitle = context.getString(
-                                            R.string.notes_import_default_title,
+                                        fallbackTitle = formatLlamaChatListString(
+                                            notesImportDefaultTitleFormat,
                                             index + 1
                                         ),
-                                        sourceLabel = context.getString(R.string.notes_import_source_label)
+                                        sourceLabel = notesImportSourceLabelText
                                     )
                                 }
                             )
@@ -157,24 +170,24 @@ fun LlamaChatListScreen(
                         obj.has("content") -> {
                             val payload = gson.fromJson(json, NoteExportPayload::class.java)
                             Triple(
-                                payload.title.ifBlank { context.getString(R.string.llama_imported_note_chat_title) },
+                                payload.title.ifBlank { importedNoteChatTitleText },
                                 null,
                                 listOf(
                                     payload.toLlamaSerializedMessage(
-                                        fallbackTitle = context.getString(R.string.llama_imported_note_chat_title),
-                                        sourceLabel = context.getString(R.string.notes_import_source_label)
+                                        fallbackTitle = importedNoteChatTitleText,
+                                        sourceLabel = notesImportSourceLabelText
                                     )
                                 )
                             )
                         }
-                        else -> error(context.getString(R.string.llama_import_error_unknown_format))
+                        else -> error(importErrorUnknownFormatText)
                     }
                     viewModel.importChat(title, systemPrompt, messages) { newId ->
                         navController.navigate(Screen.LlamaChat.createRoute(newId, -1))
                     }
-                    Toast.makeText(context, context.getString(R.string.llama_import_success), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, importSuccessText, Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
-                    Toast.makeText(context, context.getString(R.string.llama_import_error) + ": ${e.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, importErrorText + ": ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -471,7 +484,7 @@ fun LlamaChatListScreen(
                                 if (!success) {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.llama_prompt_profile_save_error),
+                                        promptProfileSaveErrorText,
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }
@@ -521,7 +534,7 @@ fun LlamaChatListScreen(
                         if (cleanName.isNotBlank()) {
                             viewModel.createFolder(cleanName) { success ->
                                 if (!success) {
-                                    Toast.makeText(context, context.getString(R.string.llama_folder_create_error), Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, folderCreateErrorText, Toast.LENGTH_SHORT).show()
                                 }
                             }
                             showNewFolderDialog = false
@@ -564,7 +577,7 @@ fun LlamaChatListScreen(
                     if (!success) {
                         Toast.makeText(
                             context,
-                            context.getString(R.string.llama_prompt_profile_save_error),
+                            promptProfileSaveErrorText,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -575,7 +588,7 @@ fun LlamaChatListScreen(
                     if (!success) {
                         Toast.makeText(
                             context,
-                            context.getString(R.string.llama_prompt_profile_save_error),
+                            promptProfileSaveErrorText,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -694,7 +707,7 @@ fun LlamaChatListScreen(
                                 if (!success) {
                                     Toast.makeText(
                                         context,
-                                        context.getString(R.string.llama_prompt_profile_save_error),
+                                        promptProfileSaveErrorText,
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 }

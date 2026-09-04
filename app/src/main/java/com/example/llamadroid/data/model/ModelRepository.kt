@@ -1365,9 +1365,9 @@ data class FileInfo(
 ) {
     fun formattedSize(): String {
         return when {
-            sizeBytes >= 1_000_000_000 -> String.format("%.2f GB", sizeBytes / 1_000_000_000.0)
-            sizeBytes >= 1_000_000 -> String.format("%.1f MB", sizeBytes / 1_000_000.0)
-            sizeBytes >= 1_000 -> String.format("%.0f KB", sizeBytes / 1_000.0)
+            sizeBytes >= 1_000_000_000 -> String.format(Locale.getDefault(), "%.2f GB", sizeBytes / 1_000_000_000.0)
+            sizeBytes >= 1_000_000 -> String.format(Locale.getDefault(), "%.1f MB", sizeBytes / 1_000_000.0)
+            sizeBytes >= 1_000 -> String.format(Locale.getDefault(), "%.0f KB", sizeBytes / 1_000.0)
             else -> "$sizeBytes B"
         }
     }

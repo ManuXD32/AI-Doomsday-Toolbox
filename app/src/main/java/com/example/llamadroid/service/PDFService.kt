@@ -1,5 +1,6 @@
 package com.example.llamadroid.service
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -7492,6 +7493,9 @@ class PDFService(private val context: Context) {
         return best
     }
 
+    // Layout and LineBreaker expose the same IntDef values, but LineBreaker is API 29.
+    // Keep the API-23 Layout constant for minSdk 26; lint otherwise requests the newer symbol.
+    @SuppressLint("WrongConstant")
     private fun buildBitmapTextLayout(text: String, paint: TextPaint, width: Int): StaticLayout {
         return StaticLayout.Builder
             .obtain(text, 0, text.length, paint, width)

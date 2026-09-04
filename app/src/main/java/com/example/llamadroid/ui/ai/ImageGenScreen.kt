@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -110,14 +111,34 @@ import java.util.*
 @Composable
 fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val settingsRepo = remember { SettingsRepository(context) }
+    val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
+    val requestedInitialMode = initialMode.takeIf {
+        it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER
+    } ?: IMAGE_GEN_MODE_TXT2IMG
+    val restoredInitialMode = restoredDraft?.optInt("mode", IMAGE_GEN_MODE_TXT2IMG)
+        ?.takeIf { it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER }
+        ?: IMAGE_GEN_MODE_TXT2IMG
+    val effectiveInitialMode = if (requestedInitialMode != IMAGE_GEN_MODE_TXT2IMG) {
+        requestedInitialMode
+    } else {
+        restoredInitialMode
+    }
+
+    // Keep Enlarge inside the canonical Image Generation route, but render its smaller dedicated
+    // pane. The monolithic diffusion pane exceeds a Compose runtime/compiler edge case when its
+    // upscaler-only branch is entered, while the dedicated pane uses the same service/state model
+    // without corrupting the slot table.
+    if (effectiveInitialMode == IMAGE_GEN_MODE_UPSCALE) {
+        LegacyUpscaleScreen(navController)
+        return
+    }
+
     val startupGuard = rememberAiJobStartupGuard()
-
-
     val db = remember { AppDatabase.getDatabase(context) }
     val modelRepository = remember { ModelRepository(context, db.modelDao()) }
     val binaryRepo = remember { BinaryRepository(context) }
-    val settingsRepo = remember { SettingsRepository(context) }
-    val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
     val batteryGateState = rememberBatteryOptimizationGateState()
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdVaeTiling by settingsRepo.sdVaeTiling.collectAsState()
@@ -174,17 +195,30 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER)
         .collectAsState(initial = emptyList())
 
-    // Explicit deep links win over a saved draft; the normal entry point restores the draft.
-    val requestedInitialMode = initialMode.takeIf {
-        it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER
-    } ?: IMAGE_GEN_MODE_TXT2IMG
     var selectedMode by remember(initialMode) {
-        mutableIntStateOf(
-            if (requestedInitialMode != IMAGE_GEN_MODE_TXT2IMG) requestedInitialMode
-            else restoredDraft?.optInt("mode", IMAGE_GEN_MODE_TXT2IMG)
-                ?.takeIf { it in IMAGE_GEN_MODE_TXT2IMG..IMAGE_GEN_MODE_ADETAILER }
-                ?: IMAGE_GEN_MODE_TXT2IMG
+        mutableIntStateOf(effectiveInitialMode)
+    }
+    val imageGenerationModeOrder = remember {
+        listOf(
+            IMAGE_GEN_MODE_TXT2IMG,
+            IMAGE_GEN_MODE_IMG2IMG,
+            IMAGE_GEN_MODE_INPAINT,
+            IMAGE_GEN_MODE_ADETAILER,
+            IMAGE_GEN_MODE_UPSCALE
         )
+    }
+    // Start the horizontal mode list at the externally requested item. In particular, this
+    // avoids scheduling an initial animated scroll while the Enlarge pane is being subcomposed
+    // for the first frame, which can corrupt the nested lazy-list composition on a cold launch.
+    val modeRowState = rememberLazyListState(
+        initialFirstVisibleItemIndex = imageGenerationModeOrder
+            .indexOf(selectedMode)
+            .coerceAtLeast(0)
+    )
+    LaunchedEffect(selectedMode) {
+        imageGenerationModeOrder.indexOf(selectedMode)
+            .takeIf { it >= 0 && it != modeRowState.firstVisibleItemIndex }
+            ?.let { modeRowState.animateScrollToItem(it) }
     }
     var selectedWorkflowPresetId by remember { mutableStateOf(restoredDraft?.optString("workflowPreset").orEmpty().ifBlank { null }) }
     var workflowHashVerificationFinished by remember { mutableStateOf(false) }
@@ -692,32 +726,32 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 cleared += label
             }
         }
-        retain(selectedVaePath, compatibleVaeModels, context.getString(R.string.imagegen_component_vae)) {
+        retain(selectedVaePath, compatibleVaeModels, resources.getString(R.string.imagegen_component_vae)) {
             selectedVaePath = null
         }
-        retain(selectedTaePath, compatibleTaeModels, context.getString(R.string.imagegen_component_tae)) {
+        retain(selectedTaePath, compatibleTaeModels, resources.getString(R.string.imagegen_component_tae)) {
             selectedTaePath = null
         }
-        retain(selectedClipLPath, compatibleClipLModels, context.getString(R.string.imagegen_component_clip_l)) {
+        retain(selectedClipLPath, compatibleClipLModels, resources.getString(R.string.imagegen_component_clip_l)) {
             selectedClipLPath = null
         }
-        retain(selectedClipGPath, compatibleClipGModels, context.getString(R.string.imagegen_component_clip_g)) {
+        retain(selectedClipGPath, compatibleClipGModels, resources.getString(R.string.imagegen_component_clip_g)) {
             selectedClipGPath = null
         }
-        retain(selectedT5xxlPath, compatibleT5xxlModels, context.getString(R.string.imagegen_component_t5xxl)) {
+        retain(selectedT5xxlPath, compatibleT5xxlModels, resources.getString(R.string.imagegen_component_t5xxl)) {
             selectedT5xxlPath = null
         }
-        retain(selectedLlmPath, compatibleLlmModels, context.getString(R.string.imagegen_component_llm)) {
+        retain(selectedLlmPath, compatibleLlmModels, resources.getString(R.string.imagegen_component_llm)) {
             selectedLlmPath = null
         }
-        retain(selectedLlmVisionPath, compatibleLlmVisionModels, context.getString(R.string.imagegen_component_llm_vision)) {
+        retain(selectedLlmVisionPath, compatibleLlmVisionModels, resources.getString(R.string.imagegen_component_llm_vision)) {
             selectedLlmVisionPath = null
         }
-        retain(selectedPhotoMakerPath, compatiblePhotoMakerModels, context.getString(R.string.imagegen_component_photomaker)) {
+        retain(selectedPhotoMakerPath, compatiblePhotoMakerModels, resources.getString(R.string.imagegen_component_photomaker)) {
             selectedPhotoMakerPath = null
         }
         if (cleared.isNotEmpty()) {
-            componentResetNotice = context.getString(
+            componentResetNotice = resources.getString(
                 R.string.imagegen_components_cleared,
                 cleared.joinToString(", ")
             )
@@ -731,7 +765,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             loraStack = retained
             selectedLoraPath = retained.firstOrNull()?.path
             if (retained.isEmpty()) loraEnabled = false
-            componentResetNotice = context.getString(R.string.imagegen_loras_cleared_incompatible)
+            componentResetNotice = resources.getString(R.string.imagegen_loras_cleared_incompatible)
         }
     }
     val imagePreparationScope = rememberCoroutineScope()
@@ -826,7 +860,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -848,7 +882,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             canvasHeight = height,
                             transform = inpaintCanvasTransform
                         )
-                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                    } ?: error(resources.getString(R.string.imagegen_inpaint_choose_source_first))
                     InpaintWorkspaceManager.importMask(context, workspace, it)
                 }.onSuccess { importedWorkspace ->
                     inpaintWorkspace = importedWorkspace
@@ -858,7 +892,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -877,7 +911,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         canvasHeight = height,
                         transform = inpaintCanvasTransform
                     )
-                } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                } ?: error(resources.getString(R.string.imagegen_inpaint_choose_source_first))
             }.onSuccess { workspace ->
                 inpaintWorkspace = workspace
                 selectedImagePath = workspace.sourcePath
@@ -886,7 +920,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             }.onFailure { failure ->
                 android.widget.Toast.makeText(
                     context,
-                    failure.message ?: context.getString(R.string.error_generic),
+                    failure.message ?: resources.getString(R.string.error_generic),
                     android.widget.Toast.LENGTH_LONG
                 ).show()
             }
@@ -911,7 +945,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -934,7 +968,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             canvasHeight = height,
                             transform = inpaintCanvasTransform
                         )
-                    } ?: error(context.getString(R.string.imagegen_inpaint_choose_source_first))
+                    } ?: error(resources.getString(R.string.imagegen_inpaint_choose_source_first))
                 }.onSuccess { workspace ->
                     inpaintWorkspace = workspace
                     selectedImagePath = workspace.sourcePath
@@ -956,7 +990,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                 }.onFailure { failure ->
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -977,7 +1011,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     ?.takeIf { it.isFile && it.canRead() }
                 runCatching {
                     val foreground = readForegroundMaskExport(
-                        maskFile ?: error(context.getString(R.string.imagegen_inpaint_auto_mask_missing))
+                        maskFile ?: error(resources.getString(R.string.imagegen_inpaint_auto_mask_missing))
                     )
                     val raster = foregroundMaskToInpaintRaster(
                         foregroundMask = foreground,
@@ -1003,7 +1037,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     pendingAutoMaskPolarity = null
                     android.widget.Toast.makeText(
                         context,
-                        failure.message ?: context.getString(R.string.error_generic),
+                        failure.message ?: resources.getString(R.string.error_generic),
                         android.widget.Toast.LENGTH_LONG
                     ).show()
                 }
@@ -1083,7 +1117,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         val restoredProfile = resolveSdParamsBackendProfileForArtifacts(selectedProfileArtifacts)
         sdParamsBackendSpec = restoredProfile.storedValue
         if (restoredProfile.warnings.isNotEmpty()) {
-            componentResetNotice = context.getString(R.string.sd_params_backend_conflict)
+            componentResetNotice = resources.getString(R.string.sd_params_backend_conflict)
         }
         restoredProfileSelectionKey = profileSelectionIdentity
     }
@@ -1428,7 +1462,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
         if (selectedMode != IMAGE_GEN_MODE_UPSCALE &&
             selectedPipeline?.blockingIssues?.isNotEmpty() == true
         ) {
-            errorMessage = context.getString(R.string.imagegen_sd_pipeline_unresolved)
+            errorMessage = resources.getString(R.string.imagegen_sd_pipeline_unresolved)
             GenerationDiagnosticsStore.recordBreadcrumb(
                 source = IMAGE_GEN_UI_DIAGNOSTIC_SOURCE,
                 mode = effectiveSdMode.name,
@@ -1461,7 +1495,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     )
                 )
                 if (!gate.ready) {
-                    errorMessage = context.getString(R.string.sd_workflow_gate_missing)
+                    errorMessage = resources.getString(R.string.sd_workflow_gate_missing)
                     return@generate
                 }
             }
@@ -1549,7 +1583,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
             errorMessage = sdADetailerErrorMessage(context, configurationError)
             return@generate
         } catch (configurationError: IllegalArgumentException) {
-            errorMessage = configurationError.message ?: context.getString(R.string.error_generic)
+            errorMessage = configurationError.message ?: resources.getString(R.string.error_generic)
             return@generate
         }
 
@@ -1631,7 +1665,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             event = "ui_launch_failed",
                             details = "$launchDetails error=${error.javaClass.simpleName}: ${error.message}"
                         )
-                        errorMessage = error.message ?: context.getString(R.string.error_generic)
+                        errorMessage = error.message ?: resources.getString(R.string.error_generic)
                     }
                 }
             } else {
@@ -1762,7 +1796,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             event = "ui_launch_failed",
                             details = "$launchDetails error=${error.javaClass.simpleName}: ${error.message}"
                         )
-                        errorMessage = error.message ?: context.getString(R.string.error_generic)
+                        errorMessage = error.message ?: resources.getString(R.string.error_generic)
                     }
                 }
             }
@@ -3674,12 +3708,6 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                         IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
                         IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
                     )
-                    val modeRowState = rememberLazyListState()
-                    LaunchedEffect(selectedMode) {
-                        modes.indexOfFirst { it.first == selectedMode }
-                            .takeIf { it >= 0 }
-                            ?.let { modeRowState.animateScrollToItem(it) }
-                    }
                     LazyRow(
                         state = modeRowState,
                         modifier = Modifier.fillMaxWidth(),
@@ -3696,7 +3724,11 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                             FilterChip(
                                 selected = selectedMode == modeIndex,
                                 onClick = {
-                                    switchGenerationMode(modeIndex)
+                                    if (modeIndex == IMAGE_GEN_MODE_UPSCALE) {
+                                        navController.navigate(Screen.ImageGen.createRoute(modeIndex))
+                                    } else {
+                                        switchGenerationMode(modeIndex)
+                                    }
                                 },
                                 enabled = modeEnabled,
                                 label = {
@@ -3762,7 +3794,7 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     putExtra(Intent.EXTRA_STREAM, uri)
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
-                                context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.imagegen_share_chooser)))
+                                context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.imagegen_share_chooser)))
                             } catch (e: Exception) {
                                 android.widget.Toast.makeText(
                                     context,
@@ -3792,9 +3824,9 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                                     SDModeStateHolder.txt2img.removeImage(file)
                                     SDModeStateHolder.img2img.removeImage(file)
                                     SDModeStateHolder.upscale.removeImage(file)
-                                    android.widget.Toast.makeText(context, context.getString(R.string.imagegen_delete_confirm), android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, resources.getString(R.string.imagegen_delete_confirm), android.widget.Toast.LENGTH_SHORT).show()
                                 } else {
-                                    android.widget.Toast.makeText(context, context.getString(R.string.imagegen_delete_fail), android.widget.Toast.LENGTH_SHORT).show()
+                                    android.widget.Toast.makeText(context, resources.getString(R.string.imagegen_delete_fail), android.widget.Toast.LENGTH_SHORT).show()
                                 }
                                 fullscreenImage = null
                             }
@@ -3803,18 +3835,18 @@ fun ImageGenScreen(navController: NavController, initialMode: Int = 0) {
                     ) {
                         Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text(context.getString(R.string.action_delete))
+                        Text(resources.getString(R.string.action_delete))
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     // Close button
                     TextButton(onClick = { fullscreenImage = null }) {
-                        Text(context.getString(R.string.action_close))
+                        Text(resources.getString(R.string.action_close))
                     }
                 }
             },
             title = {
                 Column {
-                    Text(context.getString(R.string.imagegen_generated_title))
+                    Text(resources.getString(R.string.imagegen_generated_title))
                     val actualResolution = fullscreenImage?.absolutePath?.let { readImageFileResolution(it) }
                     val displayResolution = actualResolution ?: bitmap?.let { it.width to it.height }
                     displayResolution?.let {

@@ -140,6 +140,8 @@ object PhoneWearGateway {
     private lateinit var repository: LlamaRepository
     private lateinit var settingsRepo: SettingsRepository
     private lateinit var tamaDatabase: TamaDatabase
+    // The gateway is process-scoped and TamaAgentService stores applicationContext only.
+    @SuppressLint("StaticFieldLeak")
     private lateinit var tamaAgentService: TamaAgentService
     private lateinit var publisher: WearStatePublisher
     private lateinit var deltaEmitter: WearDeltaEmitter

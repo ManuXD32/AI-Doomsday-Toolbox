@@ -17,10 +17,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -56,11 +60,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -77,6 +83,7 @@ import com.example.llamadroid.service.StableDiffusionService
 import com.example.llamadroid.service.sdLaunchIssueMessage
 import com.example.llamadroid.service.validateSdLaunchInputs
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 import java.io.FileOutputStream
@@ -91,6 +98,7 @@ private const val LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE = "image_generation_ui"
 @Composable
 fun LegacyUpscaleScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val binaryRepo = remember { BinaryRepository(context) }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -98,6 +106,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
     val keepScreenAwakeDuringGeneration by settingsRepo.keepScreenAwakeDuringGeneration.collectAsState()
     val sdMaxCpuRamEnabled by settingsRepo.sdMaxCpuRamEnabled.collectAsState()
     val sdMaxCpuRamGiB by settingsRepo.sdMaxCpuRamGiB.collectAsState()
+    val sdUpscaleThreads by settingsRepo.sdUpscaleThreads.collectAsStateWithLifecycle()
     val upscalerModels by db.modelDao().getModelsByType(ModelType.SD_UPSCALER).collectAsState(initial = emptyList())
 
     var mainTab by remember { mutableIntStateOf(0) }
@@ -145,6 +154,8 @@ fun LegacyUpscaleScreen(navController: NavController) {
 
     LaunchedEffect(Unit) {
         val pendingFile = com.example.llamadroid.data.SharedFileHolder.consumeFor(
+            com.example.llamadroid.data.SharedFileTarget.IMAGE_GENERATION
+        ) ?: com.example.llamadroid.data.SharedFileHolder.consumeFor(
             com.example.llamadroid.data.SharedFileTarget.LEGACY_IMAGE_UPSCALER
         )
         if (pendingFile != null && pendingFile.mimeType.startsWith("image/")) {
@@ -244,7 +255,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
         }
 
         val threadCount = threadsText.toIntOrNull()?.takeIf { it > 0 }
-            ?: settingsRepo.sdUpscaleThreads.value
+            ?: sdUpscaleThreads
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val outputFile = File(upscaledDir, "sd_$timestamp.png")
         val config = SDUpscaleConfig(
@@ -286,7 +297,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                     details = launchDetails
                 )
             }.onFailure { error ->
-                errorMessage = error.message ?: context.getString(R.string.error_generic)
+                errorMessage = error.message ?: resources.getString(R.string.error_generic)
                 GenerationDiagnosticsStore.recordBreadcrumb(
                     source = LEGACY_UPSCALE_UI_DIAGNOSTIC_SOURCE,
                     mode = SDMode.UPSCALE.name,
@@ -335,9 +346,12 @@ fun LegacyUpscaleScreen(navController: NavController) {
             "🎨 " + stringResource(R.string.imagegen_tab_generate),
             "📂 " + stringResource(R.string.imagegen_tab_gallery)
         )
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier.padding(horizontal = 16.dp),
+            edgePadding = 12.dp,
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.primary
         ) {
             mainTabs.forEachIndexed { index, title ->
                 Tab(
@@ -351,30 +365,36 @@ fun LegacyUpscaleScreen(navController: NavController) {
         if (mainTab == 0) {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
                     .padding(horizontal = 16.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 val modes = listOf(
-                    stringResource(R.string.imagegen_mode_txt2img),
-                    stringResource(R.string.imagegen_mode_img2img),
-                    stringResource(R.string.imagegen_mode_upscale)
+                    IMAGE_GEN_MODE_TXT2IMG to stringResource(R.string.imagegen_task_create),
+                    IMAGE_GEN_MODE_IMG2IMG to stringResource(R.string.imagegen_task_transform),
+                    IMAGE_GEN_MODE_INPAINT to stringResource(R.string.imagegen_task_repair),
+                    IMAGE_GEN_MODE_ADETAILER to stringResource(R.string.imagegen_task_enhance),
+                    IMAGE_GEN_MODE_UPSCALE to stringResource(R.string.imagegen_task_enlarge)
                 )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    modes.forEachIndexed { index, label ->
-                        SegmentedButton(
-                            selected = index == 2,
+                val modeRowState = rememberLazyListState(
+                    initialFirstVisibleItemIndex = modes.lastIndex
+                )
+                LazyRow(
+                    state = modeRowState,
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(end = 20.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(modes, key = { it.first }) { (mode, label) ->
+                        FilterChip(
+                            selected = mode == IMAGE_GEN_MODE_UPSCALE,
                             onClick = {
-                                when (index) {
-                                    0 -> navController.navigate(Screen.ImageGen.route)
-                                    1 -> navController.navigate("${Screen.ImageGen.route}?startMode=1")
-                                    else -> Unit
+                                if (mode != IMAGE_GEN_MODE_UPSCALE) {
+                                    navController.navigate(Screen.ImageGen.createRoute(mode))
                                 }
                             },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
-                        ) {
-                            Text(label)
-                        }
+                            label = { Text(label, maxLines = 1) }
+                        )
                     }
                 }
 
@@ -476,7 +496,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 onValueChange = { threadsText = it.filter(Char::isDigit) },
                                 modifier = Modifier.fillMaxWidth(),
                                 label = { Text(stringResource(R.string.imagegen_threads_label)) },
-                                placeholder = { Text(settingsRepo.sdUpscaleThreads.value.toString()) },
+                                placeholder = { Text(sdUpscaleThreads.toString()) },
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                                 shape = RoundedCornerShape(12.dp)
                             )
@@ -724,7 +744,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
         } else {
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
                     .padding(horizontal = 16.dp)
             ) {
                 Spacer(modifier = Modifier.height(12.dp))
@@ -823,7 +843,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 context.startActivity(
                                     Intent.createChooser(
                                         shareIntent,
-                                        context.getString(R.string.imagegen_share_chooser)
+                                        resources.getString(R.string.imagegen_share_chooser)
                                     )
                                 )
                             }
@@ -845,13 +865,13 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                     modeStateHolder.removeImage(file)
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.imagegen_delete_confirm),
+                                        resources.getString(R.string.imagegen_delete_confirm),
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
                                 } else {
                                     android.widget.Toast.makeText(
                                         context,
-                                        context.getString(R.string.imagegen_delete_fail),
+                                        resources.getString(R.string.imagegen_delete_fail),
                                         android.widget.Toast.LENGTH_SHORT
                                     ).show()
                                 }

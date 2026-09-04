@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -62,6 +63,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun PDFToolboxScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val pdfService = remember { PDFService(context) }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -96,9 +98,9 @@ fun PDFToolboxScreen(navController: NavController) {
             PDFTranslationJobService.clearTerminalMessages()
         }
         if (pdfTranslationJobState.cancelled) {
-            ocrProgressMessage = context.getString(R.string.action_cancelled)
+            ocrProgressMessage = resources.getString(R.string.action_cancelled)
             ocrProgressDetails = ""
-            Toast.makeText(context, context.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, resources.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
             PDFTranslationJobService.clearTerminalMessages()
         }
     }
@@ -122,7 +124,7 @@ fun PDFToolboxScreen(navController: NavController) {
                     SharedFileHolder.importToCache(
                         context = context,
                         pendingFile = pendingFile,
-                        fallbackDisplayName = context.getString(R.string.pdf_selected_file),
+                        fallbackDisplayName = resources.getString(R.string.pdf_selected_file),
                         filePrefix = "shared_pdf_toolbox"
                     )
                 }
@@ -132,7 +134,7 @@ fun PDFToolboxScreen(navController: NavController) {
             }.onFailure { error ->
                 android.util.Log.w("PDFToolboxScreen", "Shared PDF import failed", error)
                 selectedPdfStrings = emptyList()
-                sharedPdfImportError = context.getString(R.string.pdf_shared_file_import_failed)
+                sharedPdfImportError = resources.getString(R.string.pdf_shared_file_import_failed)
             }
         }
     }
@@ -288,7 +290,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                         DocumentUriDisplayName.resolve(
                                             context,
                                             uri,
-                                            context.getString(R.string.pdf_selected_file)
+                                            resources.getString(R.string.pdf_selected_file)
                                         ),
                                         maxLines = 1,
                                         overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
@@ -534,12 +536,12 @@ fun PDFToolboxScreen(navController: NavController) {
                                             val result = pdfService.mergePdfs(selectedPdfs)
                                             result.fold(
                                                 onSuccess = { 
-                                                    Toast.makeText(context, context.getString(R.string.pdf_merged_success), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, resources.getString(R.string.pdf_merged_success), Toast.LENGTH_SHORT).show()
                                                     selectedTool = null
                                                     selectedPdfStrings = emptyList()
                                                 },
                                                 onFailure = {
-                                                    Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                 }
                                             )
                                         } finally {
@@ -634,13 +636,13 @@ fun PDFToolboxScreen(navController: NavController) {
                                             val result = pdfService.splitPdf(selectedPdfs.first(), splitPageRange)
                                             result.fold(
                                                 onSuccess = {
-                                                    Toast.makeText(context, context.getString(R.string.pdf_split_success), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, resources.getString(R.string.pdf_split_success), Toast.LENGTH_SHORT).show()
                                                     selectedTool = null
                                                     selectedPdfStrings = emptyList()
                                                     splitPageRange = ""
                                                 },
                                                 onFailure = {
-                                                    Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                 }
                                             )
                                         } finally {
@@ -721,12 +723,12 @@ fun PDFToolboxScreen(navController: NavController) {
                                                     val db = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
                                                     db.noteDao().insert(
                                                         com.example.llamadroid.data.db.NoteEntity(
-                                                            title = context.getString(
+                                                            title = resources.getString(
                                                                 R.string.pdf_extract_note_title,
                                                                 DocumentUriDisplayName.resolve(
                                                                     context,
                                                                     selectedPdfs.first(),
-                                                                    context.getString(R.string.pdf_extract_default_source_name)
+                                                                    resources.getString(R.string.pdf_extract_default_source_name)
                                                                 )
                                                             ),
                                                             content = text,
@@ -734,12 +736,12 @@ fun PDFToolboxScreen(navController: NavController) {
                                                             sourceFile = selectedPdfs.first().toString()
                                                         )
                                                     )
-                                                    Toast.makeText(context, context.getString(R.string.pdf_extract_success), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, resources.getString(R.string.pdf_extract_success), Toast.LENGTH_SHORT).show()
                                                     selectedTool = null
                                                     selectedPdfStrings = emptyList()
                                                 },
                                                 onFailure = {
-                                                    Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                 }
                                             )
                                         } finally {
@@ -868,7 +870,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                 try {
                                                     val result = if (hasOcrPdf && selectedOcrPdf != null) {
                                                         pdfService.performOcrOnPdf(selectedOcrPdf) { progress ->
-                                                            ocrProgressMessage = context.getString(
+                                                            ocrProgressMessage = resources.getString(
                                                                 R.string.pdf_ocr_progress_pages,
                                                                 progress.processedPages,
                                                                 progress.totalPages,
@@ -879,16 +881,16 @@ fun PDFToolboxScreen(navController: NavController) {
                                                     } else if (selectedOcrImage != null) {
                                                         pdfService.performOCR(selectedOcrImage)
                                                     } else {
-                                                        Result.failure(Exception(context.getString(R.string.pdf_ocr_select_source_first)))
+                                                        Result.failure(Exception(resources.getString(R.string.pdf_ocr_select_source_first)))
                                                     }
                                                     result.fold(
                                                         onSuccess = { text ->
                                                             ocrResult = text
                                                             ocrProgressMessage = ""
-                                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_extract_success), Toast.LENGTH_SHORT).show()
+                                                            Toast.makeText(context, resources.getString(R.string.pdf_ocr_extract_success), Toast.LENGTH_SHORT).show()
                                                         },
                                                         onFailure = {
-                                                            Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                            Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                         }
                                                     )
                                                 } finally {
@@ -914,7 +916,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                     ocrProgressMessage = ""
                                                     try {
                                                         pdfService.exportSearchableOcrPdf(selectedOcrPdf) { progress ->
-                                                            ocrProgressMessage = context.getString(
+                                                            ocrProgressMessage = resources.getString(
                                                                 R.string.pdf_ocr_progress_pages,
                                                                 progress.processedPages,
                                                                 progress.totalPages,
@@ -924,10 +926,10 @@ fun PDFToolboxScreen(navController: NavController) {
                                                         }.fold(
                                                             onSuccess = {
                                                                 ocrProgressMessage = ""
-                                                                Toast.makeText(context, context.getString(R.string.pdf_ocr_pdf_export_success), Toast.LENGTH_LONG).show()
+                                                                Toast.makeText(context, resources.getString(R.string.pdf_ocr_pdf_export_success), Toast.LENGTH_LONG).show()
                                                             },
                                                             onFailure = {
-                                                                Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                                Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                             }
                                                         )
                                                     } finally {
@@ -945,9 +947,9 @@ fun PDFToolboxScreen(navController: NavController) {
 
                                         OutlinedButton(
                                             onClick = {
-                                                ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
+                                                ocrProgressMessage = resources.getString(R.string.pdf_translation_background_started)
                                                 if (!PDFTranslationJobService.startOcrPdfTranslation(context, selectedOcrPdf)) {
-                                                    Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, resources.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
                                                 }
                                             },
                                             modifier = Modifier.fillMaxWidth(),
@@ -991,16 +993,16 @@ fun PDFToolboxScreen(navController: NavController) {
                                             val db = com.example.llamadroid.data.db.AppDatabase.getDatabase(context)
                                             db.noteDao().insert(
                                                 com.example.llamadroid.data.db.NoteEntity(
-                                                    title = context.getString(
+                                                    title = resources.getString(
                                                         R.string.pdf_ocr_note_title,
-                                                        sourceLabel.ifBlank { context.getString(R.string.pdf_ocr_default_source_name) }
+                                                        sourceLabel.ifBlank { resources.getString(R.string.pdf_ocr_default_source_name) }
                                                     ),
                                                     content = ocrResult,
                                                     type = com.example.llamadroid.data.db.NoteType.PDF_SUMMARY,
                                                     sourceFile = sourceUri?.toString()
                                                 )
                                             )
-                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_note_success), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, resources.getString(R.string.pdf_ocr_note_success), Toast.LENGTH_SHORT).show()
                                             selectedTool = null
                                             selectedPdfStrings = emptyList()
                                             selectedImageStrings = emptyList()
@@ -1024,7 +1026,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                 ocrProgressMessage = ""
                                                 try {
                                                     pdfService.exportSearchableOcrPdf(selectedOcrPdf) { progress ->
-                                                        ocrProgressMessage = context.getString(
+                                                        ocrProgressMessage = resources.getString(
                                                             R.string.pdf_ocr_progress_pages,
                                                             progress.processedPages,
                                                             progress.totalPages,
@@ -1034,10 +1036,10 @@ fun PDFToolboxScreen(navController: NavController) {
                                                     }.fold(
                                                         onSuccess = {
                                                             ocrProgressMessage = ""
-                                                            Toast.makeText(context, context.getString(R.string.pdf_ocr_pdf_export_success), Toast.LENGTH_LONG).show()
+                                                            Toast.makeText(context, resources.getString(R.string.pdf_ocr_pdf_export_success), Toast.LENGTH_LONG).show()
                                                         },
                                                         onFailure = {
-                                                            Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                            Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                         }
                                                     )
                                                 } finally {
@@ -1056,9 +1058,9 @@ fun PDFToolboxScreen(navController: NavController) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     OutlinedButton(
                                         onClick = {
-                                            ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
+                                            ocrProgressMessage = resources.getString(R.string.pdf_translation_background_started)
                                             if (!PDFTranslationJobService.startOcrPdfTranslation(context, selectedOcrPdf)) {
-                                                Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
+                                                Toast.makeText(context, resources.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
                                             }
                                         },
                                         modifier = Modifier.fillMaxWidth(),
@@ -1148,9 +1150,9 @@ fun PDFToolboxScreen(navController: NavController) {
 
                             Button(
                                 onClick = {
-                                    ocrProgressMessage = context.getString(R.string.pdf_translation_background_started)
+                                    ocrProgressMessage = resources.getString(R.string.pdf_translation_background_started)
                                     if (!PDFTranslationJobService.startTextLayerPdfTranslationBatch(context, selectedPdfs)) {
-                                        Toast.makeText(context, context.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, resources.getString(R.string.pdf_translation_already_running), Toast.LENGTH_LONG).show()
                                     }
                                 },
                                 modifier = Modifier.fillMaxWidth(),
@@ -1237,12 +1239,12 @@ fun PDFToolboxScreen(navController: NavController) {
                                             val result = pdfService.imagesToPdf(selectedImages)
                                             result.fold(
                                                 onSuccess = { 
-                                                    Toast.makeText(context, context.getString(R.string.pdf_images_to_pdf_success), Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, resources.getString(R.string.pdf_images_to_pdf_success), Toast.LENGTH_SHORT).show()
                                                     selectedTool = null
                                                     selectedImageStrings = emptyList()
                                                 },
                                                 onFailure = {
-                                                    Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                    Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                 }
                                             )
                                         } finally {
@@ -1348,7 +1350,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                         onClick = {
                                             currentJob?.cancel()
                                             isProcessing = false
-                                            Toast.makeText(context, context.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, resources.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
                                         },
                                         modifier = Modifier.weight(1f),
                                         colors = ButtonDefaults.outlinedButtonColors(
@@ -1368,11 +1370,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                             try {
                                                 pdfService.compressPdf(selectedPdfs.first(), compressionLevel).fold(
                                                     onSuccess = { result ->
-                                                        Toast.makeText(context, context.getString(R.string.pdf_compress_success), Toast.LENGTH_LONG).show()
+                                                        Toast.makeText(context, resources.getString(R.string.pdf_compress_success), Toast.LENGTH_LONG).show()
                                                         selectedPdfStrings = emptyList()
                                                     },
                                                     onFailure = {
-                                                        Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                        Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                     }
                                                 )
                                             } finally {
@@ -1466,7 +1468,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                         onClick = {
                                             currentJob?.cancel()
                                             isProcessing = false
-                                            Toast.makeText(context, context.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, resources.getString(R.string.action_cancelled), Toast.LENGTH_SHORT).show()
                                         },
                                         modifier = Modifier.weight(1f),
                                         colors = ButtonDefaults.outlinedButtonColors(
@@ -1488,11 +1490,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                             try {
                                                 pdfService.splitBySize(selectedPdfs.first(), sizeBytes).fold(
                                                     onSuccess = { uris ->
-                                                        Toast.makeText(context, context.getString(R.string.pdf_split_size_success, uris.size), Toast.LENGTH_LONG).show()
+                                                        Toast.makeText(context, resources.getString(R.string.pdf_split_size_success, uris.size), Toast.LENGTH_LONG).show()
                                                         selectedPdfStrings = emptyList()
                                                     },
                                                     onFailure = {
-                                                        Toast.makeText(context, context.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
+                                                        Toast.makeText(context, resources.getString(R.string.error_param, it.message), Toast.LENGTH_LONG).show()
                                                     }
                                                 )
                                             } finally {
@@ -1533,6 +1535,7 @@ private fun GuidedPdfOcrTool(
     jobState: PdfTranslationJobState
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val installedModels by db.modelDao().getAllModels().collectAsState(initial = emptyList())
@@ -1816,7 +1819,7 @@ private fun GuidedPdfOcrTool(
                                     displayName = DocumentUriDisplayName.resolve(
                                         context,
                                         selectedSource,
-                                        context.getString(R.string.pdf_selected_file)
+                                        resources.getString(R.string.pdf_selected_file)
                                     ),
                                     mimeType = "application/pdf"
                                 )
@@ -1849,7 +1852,7 @@ private fun GuidedPdfOcrTool(
                                         selectedPdf,
                                         optionsOverride = options
                                     ) { progress ->
-                                        progressText = context.getString(
+                                        progressText = resources.getString(
                                             R.string.pdf_ocr_progress_pages,
                                             progress.processedPages,
                                             progress.totalPages,
@@ -1866,7 +1869,7 @@ private fun GuidedPdfOcrTool(
                                             selectedPdf,
                                             optionsOverride = options
                                         ) { progress ->
-                                            progressText = context.getString(
+                                            progressText = resources.getString(
                                                 R.string.pdf_ocr_progress_pages,
                                                 progress.processedPages,
                                                 progress.totalPages,
@@ -1880,12 +1883,12 @@ private fun GuidedPdfOcrTool(
                                     textResult.map { text ->
                                         db.noteDao().insert(
                                             com.example.llamadroid.data.db.NoteEntity(
-                                                title = context.getString(
+                                                title = resources.getString(
                                                     R.string.pdf_ocr_note_title,
                                                     DocumentUriDisplayName.resolve(
                                                         context,
                                                         selectedSource,
-                                                        context.getString(R.string.pdf_ocr_default_source_name)
+                                                        resources.getString(R.string.pdf_ocr_default_source_name)
                                                     )
                                                 ),
                                                 content = text,
@@ -1898,7 +1901,7 @@ private fun GuidedPdfOcrTool(
                                 }
                                 result.onSuccess {
                                     persistPdfOcrOptions(settingsRepo, options)
-                                    progressText = context.getString(R.string.pdf_guided_completed)
+                                    progressText = resources.getString(R.string.pdf_guided_completed)
                                 }.onFailure { progressText = it.message.orEmpty() }
                                 isWorking = false
                             }
@@ -1923,6 +1926,7 @@ private fun GuidedSearchablePdfTranslationTool(
     jobState: PdfTranslationJobState
 ) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     var settings by remember { mutableStateOf(settingsRepo.pdfTranslationSettings.snapshot()) }
     var options by remember { mutableStateOf(settingsRepo.pdfTranslationOptionsSnapshot()) }
     val running = jobState.isRunning && jobState.kind == PdfTranslationJobKind.TEXT_LAYER_PDF
@@ -2035,7 +2039,7 @@ private fun GuidedSearchablePdfTranslationTool(
                                         displayName = DocumentUriDisplayName.resolve(
                                             context,
                                             uri,
-                                            context.getString(R.string.pdf_selected_file)
+                                            resources.getString(R.string.pdf_selected_file)
                                         ),
                                         mimeType = "application/pdf"
                                     )
@@ -2239,6 +2243,7 @@ private fun PdfReadinessSummary(
 @Composable
 private fun PdfOutputActions(uri: Uri) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -2264,7 +2269,7 @@ private fun PdfOutputActions(uri: Uri) {
                                 putExtra(Intent.EXTRA_STREAM, uri)
                                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                             },
-                            context.getString(R.string.action_share)
+                            resources.getString(R.string.action_share)
                         )
                     )
                 },

@@ -6034,6 +6034,8 @@
     <string name="widget_chat_reply_button">Reply</string>
     <string name="widget_chat_reply_title">Reply to chat</string>
     <string name="widget_chat_reply_hint">Message</string>
+    <string name="widget_navigation_previous_symbol">‹</string>
+    <string name="widget_navigation_next_symbol">›</string>
     <string name="widget_chat_reply_sent">Message sent</string>
     <string name="accel_dashboard_desc">Compatible devices install specialized binaries automatically and fall back to CPU when unavailable.</string>
     <string name="accel_dashboard_title">Snapdragon acceleration</string>

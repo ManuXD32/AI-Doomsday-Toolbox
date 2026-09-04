@@ -102,6 +102,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -365,6 +366,7 @@ fun SdDistributedGalleryScreen(navController: NavController) {
 @Composable
 fun SdDistributedWorkerScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val isRunning by SdDistributedService.isWorkerRunning.collectAsState()
     val localIp by SdDistributedService.localIp.collectAsState()
     val connections by SdDistributedService.connectionCount.collectAsState()
@@ -497,7 +499,7 @@ fun SdDistributedWorkerScreen(navController: NavController) {
                             port = portDraft.toIntOrNull() ?: SdDistributedService.RPC_DEFAULT_PORT,
                             ramMB = ramDraft.toIntOrNull() ?: 4096,
                             threads = threadsDraft.toIntOrNull() ?: 4,
-                            deviceName = deviceName.ifBlank { context.getString(R.string.sd_dist_default_worker_name) },
+                            deviceName = deviceName.ifBlank { resources.getString(R.string.sd_dist_default_worker_name) },
                             cacheEnabled = cacheEnabled
                         )
                     },
@@ -527,6 +529,7 @@ fun SdDistributedWorkerScreen(navController: NavController) {
 @Composable
 fun SdDistributedMasterScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val dao = db.sdDistributedDao()
@@ -659,7 +662,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
                     imageInputPath = it
                     launchError = null
                 },
-                onFailure = { launchError = it.message ?: context.getString(R.string.sd_dist_input_image_import_failed) }
+                onFailure = { launchError = it.message ?: resources.getString(R.string.sd_dist_input_image_import_failed) }
             )
         }
     }
@@ -671,7 +674,7 @@ fun SdDistributedMasterScreen(navController: NavController) {
                     videoInputPath = it
                     launchError = null
                 },
-                onFailure = { launchError = it.message ?: context.getString(R.string.sd_dist_input_image_import_failed) }
+                onFailure = { launchError = it.message ?: resources.getString(R.string.sd_dist_input_image_import_failed) }
             )
         }
     }
@@ -1015,28 +1018,28 @@ fun SdDistributedMasterScreen(navController: NavController) {
         val parsedScmPolicy = SdCacheScmPolicy.fromStoredValue(scmPolicy)
 
         launchError = when {
-            mode != SDMode.UPSCALE && imageModelPath.isBlank() -> context.getString(R.string.sd_dist_error_select_image_model)
-            mode != SDMode.UPSCALE && imagePrompt.isBlank() -> context.getString(R.string.sd_dist_error_prompt_required)
-            mode != SDMode.UPSCALE && width == null -> context.getString(
+            mode != SDMode.UPSCALE && imageModelPath.isBlank() -> resources.getString(R.string.sd_dist_error_select_image_model)
+            mode != SDMode.UPSCALE && imagePrompt.isBlank() -> resources.getString(R.string.sd_dist_error_prompt_required)
+            mode != SDMode.UPSCALE && width == null -> resources.getString(
                 R.string.video_gen_error_invalid_number,
-                context.getString(R.string.imagegen_width_label)
+                resources.getString(R.string.imagegen_width_label)
             )
-            mode != SDMode.UPSCALE && height == null -> context.getString(
+            mode != SDMode.UPSCALE && height == null -> resources.getString(
                 R.string.video_gen_error_invalid_number,
-                context.getString(R.string.imagegen_height_label)
+                resources.getString(R.string.imagegen_height_label)
             )
-            mode != SDMode.UPSCALE && imageMissingRequiredRoles.isNotEmpty() -> context.getString(
+            mode != SDMode.UPSCALE && imageMissingRequiredRoles.isNotEmpty() -> resources.getString(
                 R.string.imagegen_error_missing_required_components,
                 imageMissingRequiredRoles.joinToString(", ") { sdDistributedComponentRoleLabel(context, it) }
             )
-            mode == SDMode.IMG2IMG && imageInputPath.isBlank() -> context.getString(R.string.sd_dist_error_input_image_required)
-            mode == SDMode.UPSCALE && imageUpscalerModelPath.isBlank() -> context.getString(R.string.sd_dist_error_select_upscaler_model)
-            mode == SDMode.UPSCALE && imageInputPath.isBlank() -> context.getString(R.string.sd_dist_error_input_image_required)
-            mode == SDMode.IMG2IMG && imageControlNetEnabled && imageControlNetPath.isBlank() -> context.getString(
+            mode == SDMode.IMG2IMG && imageInputPath.isBlank() -> resources.getString(R.string.sd_dist_error_input_image_required)
+            mode == SDMode.UPSCALE && imageUpscalerModelPath.isBlank() -> resources.getString(R.string.sd_dist_error_select_upscaler_model)
+            mode == SDMode.UPSCALE && imageInputPath.isBlank() -> resources.getString(R.string.sd_dist_error_input_image_required)
+            mode == SDMode.IMG2IMG && imageControlNetEnabled && imageControlNetPath.isBlank() -> resources.getString(
                 R.string.imagegen_error_missing_required_components,
                 sdDistributedComponentRoleLabel(context, SdComponentRole.CONTROLNET)
             )
-            imageLoraEnabled && imageLoraPath.isBlank() -> context.getString(
+            imageLoraEnabled && imageLoraPath.isBlank() -> resources.getString(
                 R.string.imagegen_error_missing_required_components,
                 sdDistributedComponentRoleLabel(context, SdComponentRole.LORA)
             )
@@ -1154,22 +1157,22 @@ fun SdDistributedMasterScreen(navController: NavController) {
         val parsedScmPolicy = SdCacheScmPolicy.fromStoredValue(scmPolicy)
 
         launchError = when {
-            videoModelPath.isBlank() -> context.getString(R.string.sd_dist_error_select_video_model)
-            videoPrompt.isBlank() -> context.getString(R.string.sd_dist_error_prompt_required)
-            width == null -> context.getString(
+            videoModelPath.isBlank() -> resources.getString(R.string.sd_dist_error_select_video_model)
+            videoPrompt.isBlank() -> resources.getString(R.string.sd_dist_error_prompt_required)
+            width == null -> resources.getString(
                 R.string.video_gen_error_invalid_number,
-                context.getString(R.string.video_gen_width_label)
+                resources.getString(R.string.video_gen_width_label)
             )
-            height == null -> context.getString(
+            height == null -> resources.getString(
                 R.string.video_gen_error_invalid_number,
-                context.getString(R.string.video_gen_height_label)
+                resources.getString(R.string.video_gen_height_label)
             )
-            mode == VideoGenerationMode.IMG2VID && videoInputPath.isBlank() -> context.getString(R.string.sd_dist_error_input_image_required)
-            videoUseVae && videoVaePath.isBlank() -> context.getString(
+            mode == VideoGenerationMode.IMG2VID && videoInputPath.isBlank() -> resources.getString(R.string.sd_dist_error_input_image_required)
+            videoUseVae && videoVaePath.isBlank() -> resources.getString(
                 R.string.imagegen_error_missing_required_components,
                 sdDistributedComponentRoleLabel(context, SdComponentRole.VAE)
             )
-            videoUseT5xxl && videoT5xxlPath.isBlank() -> context.getString(
+            videoUseT5xxl && videoT5xxlPath.isBlank() -> resources.getString(
                 R.string.imagegen_error_missing_required_components,
                 sdDistributedComponentRoleLabel(context, SdComponentRole.T5XXL)
             )

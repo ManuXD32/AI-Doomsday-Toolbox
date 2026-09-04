@@ -71,6 +71,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,6 +119,7 @@ private val BGR_RESIZE_PRESETS = listOf(256, 384, 512, 768, 1024, 1536, 2048)
 @Composable
 fun OnnxBackgroundRemovalScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val installedModels by db.modelDao().getModelsByType(ModelType.ONNX_BACKGROUND_REMOVAL).collectAsState(initial = emptyList())
@@ -180,7 +182,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                         }
                         when {
                             exitSummary != null -> {
-                                val message = context.getString(R.string.bgr_worker_stopped, exitSummary)
+                                val message = resources.getString(R.string.bgr_worker_stopped, exitSummary)
                                 OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(message))
                                 withContext(Dispatchers.IO) {
                                     OnnxBackgroundRemovalStorage.writeRuntimeState(
@@ -194,7 +196,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                 }
                             }
                             staleMs >= BGR_WORKER_STALE_MS -> {
-                                val message = context.getString(R.string.bgr_worker_stale)
+                                val message = resources.getString(R.string.bgr_worker_stale)
                                 OnnxBackgroundRemovalStateStore.updateState(OnnxBackgroundRemovalState.Error(message))
                                 withContext(Dispatchers.IO) {
                                     OnnxBackgroundRemovalStorage.writeRuntimeState(
@@ -261,9 +263,9 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
-            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.imagegen_share_chooser)))
+            context.startActivity(Intent.createChooser(shareIntent, resources.getString(R.string.imagegen_share_chooser)))
         }.onFailure {
-            Toast.makeText(context, context.getString(R.string.bgr_share_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
+            Toast.makeText(context, resources.getString(R.string.bgr_share_failed, it.message ?: ""), Toast.LENGTH_LONG).show()
         }
     }
 

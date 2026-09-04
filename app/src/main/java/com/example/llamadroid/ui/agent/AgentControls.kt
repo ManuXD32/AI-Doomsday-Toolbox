@@ -835,6 +835,7 @@ fun DebugPanel(
     onClear: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val debugJournalExportLabel = stringResource(R.string.agent_debug_journal_export)
     val clipboardManager = LocalClipboardManager.current
     var selectedFilter by rememberSaveable { mutableStateOf("ALL") }
     val filters = listOf(
@@ -891,7 +892,7 @@ fun DebugPanel(
                             type = "text/plain"
                             putExtra(Intent.EXTRA_TEXT, exportText)
                         }
-                        context.startActivity(Intent.createChooser(sendIntent, context.getString(R.string.agent_debug_journal_export)))
+                        context.startActivity(Intent.createChooser(sendIntent, debugJournalExportLabel))
                     }) {
                         Text(stringResource(R.string.action_share), fontSize = 10.sp)
                     }

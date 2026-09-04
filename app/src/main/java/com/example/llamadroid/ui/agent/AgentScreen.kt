@@ -110,6 +110,9 @@ private data class AgentPlanEditSession(
     val originalPlan: String
 )
 
+private fun formatAgentString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
+
 /**
  * AgentScreen - AI Coding Agent Chat Interface
  */
@@ -117,6 +120,30 @@ private data class AgentPlanEditSession(
 @Composable
 fun AgentScreen(navController: NavController) {
     val context = LocalContext.current
+    val attachImageFailedText = stringResource(R.string.agent_attach_image_failed)
+    val skillImportSuccessFormat = stringResource(R.string.agent_skill_import_success)
+    val skillImportFailedFormat = stringResource(R.string.agent_skill_import_failed)
+    val folderMoveInvalidText = stringResource(R.string.agent_folder_move_invalid)
+    val folderDeleteNotEmptyText = stringResource(R.string.agent_folder_delete_not_empty)
+    val restoredMessagesFormat = stringResource(R.string.agent_restored_messages)
+    val workflowPlanApprovalFailedFormat = stringResource(R.string.agent_workflow_plan_approval_failed)
+    val genericToolText = stringResource(R.string.agent_generic_tool)
+    val deniedExecutionFormat = stringResource(R.string.agent_denied_execution)
+    val resumeReasonStoppedByUserText = stringResource(R.string.agent_resume_reason_stopped_by_user)
+    val resumeReasonInterruptedText = stringResource(R.string.agent_resume_reason_interrupted)
+    val resumeReasonNeedsDirectionText = stringResource(R.string.agent_resume_reason_needs_direction)
+    val resumeReasonGenericText = stringResource(R.string.agent_resume_reason_generic)
+    val resumeSystemNoteFormat = stringResource(R.string.agent_resume_system_note)
+    val projectDefaultPrefixText = stringResource(R.string.agent_project_default_prefix)
+    val readyMessageFormat = stringResource(R.string.agent_ready_msg)
+    val compactionRequestedText = stringResource(R.string.agent_compaction_requested)
+    val retryDebugStartFormat = stringResource(R.string.agent_retry_debug_start)
+    val retryDebugSshFormat = stringResource(R.string.agent_retry_debug_ssh)
+    val retryDebugSshNotRequiredText = stringResource(R.string.agent_retry_debug_ssh_not_required)
+    val retryDebugStatusFormat = stringResource(R.string.agent_retry_debug_status)
+    val retryDebugNoDetailText = stringResource(R.string.agent_retry_debug_no_detail)
+    val retryDebugDoneText = stringResource(R.string.agent_retry_debug_done)
+    val guidanceInterruptingText = stringResource(R.string.agent_guidance_interrupting)
     val scope = rememberCoroutineScope()
 
     // Services
@@ -146,8 +173,10 @@ fun AgentScreen(navController: NavController) {
             }
         }
     }
-    // Initialize Ollama URL from saved settings
-    remember { ollamaService.initFromSettings() }
+    // Initialize Ollama URL from saved settings once for this service instance.
+    LaunchedEffect(ollamaService) {
+        ollamaService.initFromSettings()
+    }
 
     // State - use STATIC companion object for navigation persistence
     val messages by AgentService.messages.collectAsStateWithLifecycle()
@@ -444,7 +473,7 @@ fun AgentScreen(navController: NavController) {
                 }.onFailure {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.agent_attach_image_failed),
+                        attachImageFailedText,
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -473,8 +502,8 @@ fun AgentScreen(navController: NavController) {
                 Toast.makeText(
                     context,
                     result.fold(
-                        onSuccess = { context.getString(R.string.agent_skill_import_success, it.name) },
-                        onFailure = { context.getString(R.string.agent_skill_import_failed, it.message ?: it.javaClass.simpleName) }
+                        onSuccess = { formatAgentString(skillImportSuccessFormat, it.name) },
+                        onFailure = { formatAgentString(skillImportFailedFormat, it.message ?: it.javaClass.simpleName) }
                     ),
                     Toast.LENGTH_LONG
                 ).show()
@@ -549,7 +578,7 @@ fun AgentScreen(navController: NavController) {
 
     fun moveFolder(folder: AgentProjectFolderEntity, parentId: Long?) {
         if (folder.id == parentId || isFolderDescendant(folder.id, parentId)) {
-            Toast.makeText(context, context.getString(R.string.agent_folder_move_invalid), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, folderMoveInvalidText, Toast.LENGTH_SHORT).show()
             return
         }
         scope.launch {
@@ -588,7 +617,7 @@ fun AgentScreen(navController: NavController) {
         val hasChildren = projectFolders.any { it.parentId == folder.id } ||
             conversations.any { it.projectFolderId == folder.id }
         if (hasChildren) {
-            Toast.makeText(context, context.getString(R.string.agent_folder_delete_not_empty), Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, folderDeleteNotEmptyText, Toast.LENGTH_SHORT).show()
             return
         }
         scope.launch {
@@ -776,7 +805,7 @@ fun AgentScreen(navController: NavController) {
             if (token != restoreToken) return
 
             if (restoredMessages.isNotEmpty()) {
-                AgentService.addDebugLog(context.getString(R.string.agent_restored_messages, restoredMessages.size))
+                AgentService.addDebugLog(formatAgentString(restoredMessagesFormat, restoredMessages.size))
             }
             AgentService.restoreQuestionWorkflow(
                 context = context,
@@ -890,7 +919,7 @@ fun AgentScreen(navController: NavController) {
                             if (result.approved) {
                                 result.message
                             } else {
-                                context.getString(R.string.agent_workflow_plan_approval_failed, result.message)
+                                formatAgentString(workflowPlanApprovalFailedFormat, result.message)
                             },
                             Toast.LENGTH_LONG
                         ).show()
@@ -946,11 +975,11 @@ fun AgentScreen(navController: NavController) {
         } else {
             AgentService.updateMessage(msg.id) { it.copy(needsApproval = false, isApproved = false) }
             com.example.llamadroid.service.UnifiedNotificationManager.dismissAgentAttention()
-            val toolName = msg.toolName ?: context.getString(R.string.agent_generic_tool)
+            val toolName = msg.toolName ?: genericToolText
             val denialContent = if (denyReason.isNotBlank()) {
                 "DENIED by user: $toolName. Reason: $denyReason"
             } else {
-                context.getString(R.string.agent_denied_execution, toolName)
+                formatAgentString(deniedExecutionFormat, toolName)
             }
             AgentService.addMessage(AgentService.Companion.ChatMessage(
                 role = "user",
@@ -976,15 +1005,15 @@ fun AgentScreen(navController: NavController) {
             beginConversationRestore(conv.id, dismissPicker = true)
             val reason = conv.lastStopReason?.takeIf { it.isNotBlank() }
                 ?: when (conv.resumeState) {
-                    AgentService.RESUME_STATE_STOPPED_BY_USER -> context.getString(R.string.agent_resume_reason_stopped_by_user)
-                    AgentService.RESUME_STATE_INTERRUPTED -> context.getString(R.string.agent_resume_reason_interrupted)
-                    AgentService.RESUME_STATE_NEEDS_DIRECTION -> context.getString(R.string.agent_resume_reason_needs_direction)
-                    else -> context.getString(R.string.agent_resume_reason_generic)
+                    AgentService.RESUME_STATE_STOPPED_BY_USER -> resumeReasonStoppedByUserText
+                    AgentService.RESUME_STATE_INTERRUPTED -> resumeReasonInterruptedText
+                    AgentService.RESUME_STATE_NEEDS_DIRECTION -> resumeReasonNeedsDirectionText
+                    else -> resumeReasonGenericText
                 }
             AgentService.addMessage(
                 AgentService.Companion.ChatMessage(
                     role = "system",
-                    content = context.getString(R.string.agent_resume_system_note, reason)
+                    content = formatAgentString(resumeSystemNoteFormat, reason)
                 )
             )
             db.agentChatDao().updateResumeState(conv.id, AgentService.RESUME_STATE_IDLE, null)
@@ -993,12 +1022,12 @@ fun AgentScreen(navController: NavController) {
     }
 
     fun createNewConversation(
-        projectName: String = context.getString(R.string.agent_project_default_prefix) + System.currentTimeMillis(),
+        projectName: String = projectDefaultPrefixText + System.currentTimeMillis(),
         backend: AgentWorkspaceBackendType = AgentWorkspaceBackendType.REMOTE_SSH,
         parentFolderId: Long? = null
     ) {
         scope.launch {
-            val safeName = projectName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50).ifBlank { context.getString(R.string.agent_project_default_prefix) + System.currentTimeMillis() }
+            val safeName = projectName.trim().replace(Regex("[^a-zA-Z0-9_-]"), "_").take(50).ifBlank { projectDefaultPrefixText + System.currentTimeMillis() }
             val sortOrder = (conversations.filter { it.projectFolderId == parentFolderId }.maxOfOrNull { it.sortOrder } ?: -1) + 1
             val newId = db.agentChatDao().insertConversation(
                 AgentConversationEntity(
@@ -1038,7 +1067,7 @@ fun AgentScreen(navController: NavController) {
             val initialMessages = listOf(
                 AgentService.Companion.ChatMessage(
                     role = "system",
-                    content = context.getString(R.string.agent_ready_msg, projectName, safeName)
+                    content = formatAgentString(readyMessageFormat, projectName, safeName)
                 )
             )
             activateConversationRuntime(
@@ -1191,10 +1220,7 @@ fun AgentScreen(navController: NavController) {
                     if (result.approved) {
                         result.message
                     } else {
-                        context.getString(
-                            R.string.agent_workflow_plan_approval_failed,
-                            result.message
-                        )
+                        formatAgentString(workflowPlanApprovalFailedFormat, result.message)
                     },
                     Toast.LENGTH_LONG
                 ).show()
@@ -1354,7 +1380,7 @@ fun AgentScreen(navController: NavController) {
                 AgentService.addMessage(
                     AgentService.Companion.ChatMessage(
                         role = "system",
-                        content = context.getString(R.string.agent_compaction_requested)
+                        content = compactionRequestedText
                     )
                 )
                 inputText = ""
@@ -1884,7 +1910,7 @@ fun AgentScreen(navController: NavController) {
                 onRetry = {
                     scope.launch {
                         val backendName = backendLabel
-                        AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_start, backendName))
+                        AgentService.addDebugLog(formatAgentString(retryDebugStartFormat, backendName))
                         if (
                             !hasNamedRuntimeEndpoint &&
                             !activeRuntime.hasManagedServerAssignment &&
@@ -1900,7 +1926,7 @@ fun AgentScreen(navController: NavController) {
                         }
                         if (selectedProjectNeedsSsh && agentConnectionStatus == AgentService.Companion.ConnectionStatus.DISCONNECTED) {
                             val portInt = sshPort.toIntOrNull() ?: 8023
-                            AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_ssh, sshHost, portInt))
+                            AgentService.addDebugLog(formatAgentString(retryDebugSshFormat, sshHost, portInt))
                             agentService.connect(
                                 host = sshHost,
                                 port = portInt,
@@ -1911,19 +1937,19 @@ fun AgentScreen(navController: NavController) {
                         val sshState = if (selectedProjectNeedsSsh) {
                             agentConnectionStatus.name
                         } else {
-                            context.getString(R.string.agent_retry_debug_ssh_not_required)
+                            retryDebugSshNotRequiredText
                         }
                         AgentService.addDebugLog(
-                            context.getString(
-                                R.string.agent_retry_debug_status,
+                            formatAgentString(
+                                retryDebugStatusFormat,
                                 backendName,
                                 backendConnected.toString(),
                                 selectedProjectNeedsSsh.toString(),
                                 sshState,
-                                retryMessage ?: context.getString(R.string.agent_retry_debug_no_detail)
+                                retryMessage ?: retryDebugNoDetailText
                             )
                         )
-                        AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_done))
+                        AgentService.addDebugLog(retryDebugDoneText)
                     }
                 }
             )
@@ -1936,7 +1962,7 @@ fun AgentScreen(navController: NavController) {
                     onRetry = {
                         scope.launch {
                             val portInt = sshPort.toIntOrNull() ?: 8023
-                            AgentService.addDebugLog(context.getString(R.string.agent_retry_debug_ssh, sshHost, portInt))
+                            AgentService.addDebugLog(formatAgentString(retryDebugSshFormat, sshHost, portInt))
                             agentService.connect(
                                 host = sshHost,
                                 port = portInt,
@@ -1944,13 +1970,13 @@ fun AgentScreen(navController: NavController) {
                                 password = sshPassword.ifEmpty { "agent" }
                             )
                             AgentService.addDebugLog(
-                                context.getString(
-                                    R.string.agent_retry_debug_status,
+                                formatAgentString(
+                                    retryDebugStatusFormat,
                                     backendLabel,
                                     backendConnected.toString(),
                                     selectedProjectNeedsSsh.toString(),
                                     agentConnectionStatus.name,
-                                    retryMessage ?: context.getString(R.string.agent_retry_debug_no_detail)
+                                    retryMessage ?: retryDebugNoDetailText
                                 )
                             )
                         }
@@ -2193,7 +2219,7 @@ fun AgentScreen(navController: NavController) {
                             inputText = ""
                             attachedImagePath = null
                             imagePreviewPath = null
-                            AgentService.addDebugLog(context.getString(R.string.agent_guidance_interrupting))
+                            AgentService.addDebugLog(guidanceInterruptingText)
                             AgentService.stopAllJobs()
                             AgentService.updateActiveConversationResumeState(AgentService.RESUME_STATE_IDLE, null)
                             AgentService.addMessage(pendingMessage)

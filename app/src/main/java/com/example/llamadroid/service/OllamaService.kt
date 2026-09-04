@@ -32,7 +32,8 @@ import java.net.URL
  * - Chat with tool calling
  * - Streaming responses
  */
-class OllamaService(private val context: Context) {
+class OllamaService(context: Context) {
+    private val context = context.applicationContext
     
     companion object {
         private const val TAG = "OllamaService"

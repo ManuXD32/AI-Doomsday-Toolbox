@@ -42,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -65,6 +66,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun PDFSummaryScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val pdfService = remember { PDFService(context) }
@@ -115,7 +117,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     SharedFileHolder.importToCache(
                         context = context,
                         pendingFile = pendingFile,
-                        fallbackDisplayName = context.getString(R.string.file_type_pdf),
+                        fallbackDisplayName = resources.getString(R.string.file_type_pdf),
                         filePrefix = "shared_pdf_summary"
                     )
                 }
@@ -128,7 +130,7 @@ fun PDFSummaryScreen(navController: NavController) {
             }.onFailure { error ->
                 android.util.Log.w("PDFSummaryScreen", "Shared PDF import failed", error)
                 PdfSummaryStateHolder.setError(
-                    context.getString(R.string.pdf_shared_file_import_failed)
+                    resources.getString(R.string.pdf_shared_file_import_failed)
                 )
             }
         }
@@ -149,7 +151,7 @@ fun PDFSummaryScreen(navController: NavController) {
                 DocumentUriDisplayName.resolve(
                     context,
                     it,
-                    context.getString(R.string.file_type_pdf)
+                    resources.getString(R.string.file_type_pdf)
                 )
             )
             PDFSummaryService.clearResult()
@@ -309,12 +311,12 @@ fun PDFSummaryScreen(navController: NavController) {
                         onClick = {
                             scope.launch {
                                 PdfSummaryStateHolder.setIsExtracting(true)
-                                PdfSummaryStateHolder.setProgressMessage(context.getString(R.string.pdf_extracting_progress))
+                                PdfSummaryStateHolder.setProgressMessage(resources.getString(R.string.pdf_extracting_progress))
                                 PdfSummaryStateHolder.setError(null)
                                 val result = pdfService.extractTextDetailed(selectedPdf)
                                 result.onSuccess { extraction ->
                                     PdfSummaryStateHolder.setExtractedText(extraction.text)
-                                    val details = context.getString(
+                                    val details = resources.getString(
                                         R.string.pdf_extract_success_pages,
                                         extraction.text.length,
                                         extraction.totalPages,
@@ -326,17 +328,17 @@ fun PDFSummaryScreen(navController: NavController) {
                                     PDFSummaryService.estimateChunkCount(context, extraction.text)
                                         .onSuccess { estimate ->
                                             val estimateLabel = if (estimate.tokenCountMode.name == "EXACT") {
-                                                context.getString(R.string.pdf_chunk_count_exact, estimate.chunkCount)
+                                                resources.getString(R.string.pdf_chunk_count_exact, estimate.chunkCount)
                                             } else {
-                                                context.getString(R.string.pdf_chunk_count_estimated, estimate.chunkCount)
+                                                resources.getString(R.string.pdf_chunk_count_estimated, estimate.chunkCount)
                                             }
                                             PdfSummaryStateHolder.setExtractionDetails("$details\n$estimateLabel")
                                         }
                                 }.onFailure {
                                     PdfSummaryStateHolder.setError(
-                                        context.getString(
+                                        resources.getString(
                                             R.string.pdf_extract_failed,
-                                            it.message ?: context.getString(R.string.error_generic)
+                                            it.message ?: resources.getString(R.string.error_generic)
                                         )
                                     )
                                 }
@@ -385,12 +387,12 @@ fun PDFSummaryScreen(navController: NavController) {
                     if (summary.isBlank()) {
                         Button(
                             onClick = {
-                                PdfSummaryStateHolder.setProgressMessage(context.getString(R.string.pdf_summarizing_ai))
+                                PdfSummaryStateHolder.setProgressMessage(resources.getString(R.string.pdf_summarizing_ai))
                                 PdfSummaryStateHolder.setError(null)
                                 PDFSummaryService.startSummarization(
                                     context = context,
                                     text = extractedText,
-                                    pdfFileName = selectedPdfName ?: context.getString(R.string.file_type_pdf)
+                                    pdfFileName = selectedPdfName ?: resources.getString(R.string.file_type_pdf)
                                 )
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -472,7 +474,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     SummaryMarkdownCard(
                         title = stringResource(R.string.pdf_partial_results_title),
                         markdown = partialSummaries.mapIndexed { index, summaryPart ->
-                            "### ${context.getString(R.string.summary_partial_item_label, index + 1)}\n$summaryPart"
+                            "### ${resources.getString(R.string.summary_partial_item_label, index + 1)}\n$summaryPart"
                         }.joinToString("\n\n")
                     )
                 }

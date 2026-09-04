@@ -155,6 +155,66 @@ private const val LITERT_CHAT_MIN_CONTEXT_TOKENS = 512
 private const val LITERT_CHAT_FALLBACK_CONTEXT_MAX = 4000
 private const val LITERT_CHAT_GPU_HIGH_CONTEXT_WARNING_TOKENS = 16_384
 
+private fun formatLlamaChatString(template: String, vararg args: Any?): String =
+    String.format(Locale.getDefault(), template, *args)
+
+private data class LlamaChatLocalizedStrings(
+    val exportSuccess: String,
+    val exportFailedFormat: String,
+    val errorGeneric: String,
+    val noteTranscriptSystem: String,
+    val noteTranscriptImage: String,
+    val noteTranscriptAudio: String,
+    val notesImportSourceNativeChat: String,
+    val saveChatAsNoteSuccess: String,
+    val saveChatAsNoteFailedFormat: String,
+    val engineLiteRt: String,
+    val engineOllama: String,
+    val engineLlamaServer: String,
+    val noServers: String,
+    val samplerInvalidNumber: String,
+    val samplerInvalidRangeFormat: String,
+    val noServerSelected: String,
+    val attachMediaFailed: String,
+    val kbUploadNeedsEmbedding: String,
+    val documentQueueFailedFormat: String,
+    val documentQueuedForChatFormat: String,
+    val recordPermissionDenied: String,
+    val unpinAiHubDone: String,
+    val pinAiHubRequiresServer: String,
+    val pinAiHubDone: String,
+    val clearChatDone: String
+)
+
+@Composable
+private fun llamaChatLocalizedStrings() = LlamaChatLocalizedStrings(
+    exportSuccess = stringResource(R.string.llama_export_success),
+    exportFailedFormat = stringResource(R.string.llama_export_failed),
+    errorGeneric = stringResource(R.string.error_generic),
+    noteTranscriptSystem = stringResource(R.string.llama_note_transcript_system),
+    noteTranscriptImage = stringResource(R.string.llama_note_transcript_image),
+    noteTranscriptAudio = stringResource(R.string.llama_note_transcript_audio),
+    notesImportSourceNativeChat = stringResource(R.string.notes_import_source_native_chat),
+    saveChatAsNoteSuccess = stringResource(R.string.llama_save_chat_as_note_success),
+    saveChatAsNoteFailedFormat = stringResource(R.string.llama_save_chat_as_note_failed),
+    engineLiteRt = stringResource(R.string.llama_engine_litert),
+    engineOllama = stringResource(R.string.llama_engine_ollama),
+    engineLlamaServer = stringResource(R.string.llama_engine_llama_server),
+    noServers = stringResource(R.string.llama_no_servers),
+    samplerInvalidNumber = stringResource(R.string.llama_sampler_invalid_number),
+    samplerInvalidRangeFormat = stringResource(R.string.llama_sampler_invalid_range),
+    noServerSelected = stringResource(R.string.llama_no_server_selected),
+    attachMediaFailed = stringResource(R.string.llama_attach_media_failed),
+    kbUploadNeedsEmbedding = stringResource(R.string.kb_upload_needs_embedding),
+    documentQueueFailedFormat = stringResource(R.string.llama_document_queue_failed),
+    documentQueuedForChatFormat = stringResource(R.string.llama_document_queued_for_chat),
+    recordPermissionDenied = stringResource(R.string.llama_record_permission_denied),
+    unpinAiHubDone = stringResource(R.string.llama_unpin_ai_hub_done),
+    pinAiHubRequiresServer = stringResource(R.string.llama_pin_ai_hub_requires_server),
+    pinAiHubDone = stringResource(R.string.llama_pin_ai_hub_done),
+    clearChatDone = stringResource(R.string.llama_clear_chat_done)
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LlamaChatScreen(
@@ -163,6 +223,7 @@ fun LlamaChatScreen(
     initialServerId: Long
 ) {
     val context = LocalContext.current
+    val localizedStrings = llamaChatLocalizedStrings()
     val density = LocalDensity.current
     val rootView = LocalView.current
     val database = AppDatabase.getDatabase(context)
@@ -322,13 +383,13 @@ fun LlamaChatScreen(
                     )
                     val json = Gson().toJson(exportData)
                     context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
-                    Toast.makeText(context, context.getString(R.string.llama_export_success), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, localizedStrings.exportSuccess, Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
-                        context.getString(
-                            R.string.llama_export_failed,
-                            e.message ?: context.getString(R.string.error_generic)
+                        formatLlamaChatString(
+                            localizedStrings.exportFailedFormat,
+                            e.message ?: localizedStrings.errorGeneric
                         ),
                         Toast.LENGTH_SHORT
                     ).show()
@@ -347,22 +408,22 @@ fun LlamaChatScreen(
                     content = llamaMessagesToNoteMarkdown(
                         systemPrompt = chat.systemPrompt,
                         messages = msgs,
-                        systemLabel = context.getString(R.string.llama_note_transcript_system),
-                        imageLabel = context.getString(R.string.llama_note_transcript_image),
-                        audioLabel = context.getString(R.string.llama_note_transcript_audio)
+                        systemLabel = localizedStrings.noteTranscriptSystem,
+                        imageLabel = localizedStrings.noteTranscriptImage,
+                        audioLabel = localizedStrings.noteTranscriptAudio
                     ),
                     type = NoteType.MANUAL,
-                    sourceFile = context.getString(R.string.notes_import_source_native_chat),
+                    sourceFile = localizedStrings.notesImportSourceNativeChat,
                     isLlmWhitelisted = false
                 )
                 database.noteDao().insert(note)
-                Toast.makeText(context, context.getString(R.string.llama_save_chat_as_note_success), Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, localizedStrings.saveChatAsNoteSuccess, Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
                 Toast.makeText(
                     context,
-                    context.getString(
-                        R.string.llama_save_chat_as_note_failed,
-                        e.message ?: context.getString(R.string.error_generic)
+                    formatLlamaChatString(
+                        localizedStrings.saveChatAsNoteFailedFormat,
+                        e.message ?: localizedStrings.errorGeneric
                     ),
                     Toast.LENGTH_LONG
                 ).show()
@@ -433,22 +494,28 @@ fun LlamaChatScreen(
                 !lastPersistedMessage.imagePath.isNullOrBlank() ||
                 !lastPersistedMessage.audioPath.isNullOrBlank()
         )
-    val activeServerSubtitle = remember(activeServer, context) {
+    val activeServerSubtitle = remember(
+        activeServer,
+        localizedStrings.engineLiteRt,
+        localizedStrings.engineOllama,
+        localizedStrings.engineLlamaServer,
+        localizedStrings.noServers
+    ) {
         activeServer?.let { server ->
             buildList {
                 add(server.name)
                 add(
                     if (server.isLiteRtEngine()) {
-                        context.getString(R.string.llama_engine_litert)
+                        localizedStrings.engineLiteRt
                     } else if (server.isOllamaEngine()) {
-                        context.getString(R.string.llama_engine_ollama)
+                        localizedStrings.engineOllama
                     } else {
-                        context.getString(R.string.llama_engine_llama_server)
+                        localizedStrings.engineLlamaServer
                     }
                 )
                 server.modelName?.takeIf { it.isNotBlank() }?.let { add(displayLlamaModelName(it)) }
             }.joinToString(separator = " · ")
-        } ?: context.getString(R.string.llama_no_servers)
+        } ?: localizedStrings.noServers
     }
     val liteRtContextCap = activeLiteRtModel?.defaultLiteRtEngineMaxTokens()
         ?: LITERT_CHAT_FALLBACK_CONTEXT_MAX
@@ -873,10 +940,10 @@ fun LlamaChatScreen(
         if (value == null) {
             samplerErrorField = field
             samplerErrorMessage = if (!LlamaChatSamplerValidation.isNumeric(text)) {
-                context.getString(R.string.llama_sampler_invalid_number)
+                localizedStrings.samplerInvalidNumber
             } else {
-                context.getString(
-                    R.string.llama_sampler_invalid_range,
+                formatLlamaChatString(
+                    localizedStrings.samplerInvalidRangeFormat,
                     LlamaChatSamplerValidation.rangeText(field, liteRt)
                 )
             }
@@ -888,10 +955,10 @@ fun LlamaChatScreen(
         val value = LlamaChatSamplerValidation.parse(text, field, liteRt)
         samplerErrorField = field
         samplerErrorMessage = when {
-            text.isBlank() -> context.getString(R.string.llama_sampler_invalid_number)
-            !LlamaChatSamplerValidation.isNumeric(text) -> context.getString(R.string.llama_sampler_invalid_number)
-            value == null -> context.getString(
-                R.string.llama_sampler_invalid_range,
+            text.isBlank() -> localizedStrings.samplerInvalidNumber
+            !LlamaChatSamplerValidation.isNumeric(text) -> localizedStrings.samplerInvalidNumber
+            value == null -> formatLlamaChatString(
+                localizedStrings.samplerInvalidRangeFormat,
                 LlamaChatSamplerValidation.rangeText(field, liteRt)
             )
             else -> null
@@ -1313,7 +1380,7 @@ fun LlamaChatScreen(
         if (serverId == null) {
             Toast.makeText(
                 context,
-                context.getString(R.string.llama_no_server_selected),
+                localizedStrings.noServerSelected,
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -1336,7 +1403,7 @@ fun LlamaChatScreen(
         if (serverId == null) {
             Toast.makeText(
                 context,
-                context.getString(R.string.llama_no_server_selected),
+                localizedStrings.noServerSelected,
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -1381,7 +1448,7 @@ fun LlamaChatScreen(
                     } catch (e: Exception) {
                         Toast.makeText(
                             context,
-                            context.getString(R.string.llama_attach_media_failed),
+                            localizedStrings.attachMediaFailed,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -1401,7 +1468,7 @@ fun LlamaChatScreen(
                         if (!embeddingConfig.isConfigured) {
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.kb_upload_needs_embedding),
+                                localizedStrings.kbUploadNeedsEmbedding,
                                 Toast.LENGTH_LONG
                             ).show()
                             return@launch
@@ -1450,9 +1517,9 @@ fun LlamaChatScreen(
                             }.onFailure { error ->
                                 Toast.makeText(
                                     context,
-                                    context.getString(
-                                        R.string.llama_document_queue_failed,
-                                        error.message ?: context.getString(R.string.error_generic)
+                                    formatLlamaChatString(
+                                        localizedStrings.documentQueueFailedFormat,
+                                        error.message ?: localizedStrings.errorGeneric
                                     ),
                                     Toast.LENGTH_LONG
                                 ).show()
@@ -1464,16 +1531,16 @@ fun LlamaChatScreen(
                         if (queuedCount > 0) {
                             Toast.makeText(
                                 context,
-                                context.getString(R.string.llama_document_queued_for_chat, queuedCount),
+                                formatLlamaChatString(localizedStrings.documentQueuedForChatFormat, queuedCount),
                                 Toast.LENGTH_SHORT
                             ).show()
                         }
                     } catch (e: Exception) {
                         Toast.makeText(
                             context,
-                            context.getString(
-                                R.string.llama_document_queue_failed,
-                                e.message ?: context.getString(R.string.error_generic)
+                            formatLlamaChatString(
+                                localizedStrings.documentQueueFailedFormat,
+                                e.message ?: localizedStrings.errorGeneric
                             ),
                             Toast.LENGTH_LONG
                         ).show()
@@ -1507,7 +1574,7 @@ fun LlamaChatScreen(
             if (!granted) {
                 Toast.makeText(
                     context,
-                    context.getString(R.string.llama_record_permission_denied),
+                    localizedStrings.recordPermissionDenied,
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -1527,7 +1594,7 @@ fun LlamaChatScreen(
             if (!granted) {
                 Toast.makeText(
                     context,
-                    context.getString(R.string.llama_record_permission_denied),
+                    localizedStrings.recordPermissionDenied,
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -1555,7 +1622,7 @@ fun LlamaChatScreen(
                 } catch (e: Exception) {
                     Toast.makeText(
                         context,
-                        context.getString(R.string.llama_attach_media_failed),
+                        localizedStrings.attachMediaFailed,
                         Toast.LENGTH_SHORT
                     ).show()
                 }
@@ -1568,7 +1635,7 @@ fun LlamaChatScreen(
         if (serverId == null) {
             Toast.makeText(
                 context,
-                context.getString(R.string.llama_no_server_selected),
+                localizedStrings.noServerSelected,
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -1810,14 +1877,14 @@ fun LlamaChatScreen(
                                     val chat = currentChat ?: return@DropdownMenuItem
                                     if (chat.pinnedToAiHub) {
                                         viewModel.setChatPinnedToAiHub(chat, pinned = false, serverId = null)
-                                        Toast.makeText(context, context.getString(R.string.llama_unpin_ai_hub_done), Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, localizedStrings.unpinAiHubDone, Toast.LENGTH_SHORT).show()
                                     } else {
                                         val serverId = activeServer?.id
                                         if (serverId == null) {
-                                            Toast.makeText(context, context.getString(R.string.llama_pin_ai_hub_requires_server), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, localizedStrings.pinAiHubRequiresServer, Toast.LENGTH_SHORT).show()
                                         } else {
                                             viewModel.setChatPinnedToAiHub(chat, pinned = true, serverId = serverId)
-                                            Toast.makeText(context, context.getString(R.string.llama_pin_ai_hub_done), Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, localizedStrings.pinAiHubDone, Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -3202,7 +3269,7 @@ fun LlamaChatScreen(
                                     } else {
                                         Toast.makeText(
                                             context,
-                                            context.getString(R.string.llama_no_server_selected),
+                                            localizedStrings.noServerSelected,
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     }
@@ -3284,7 +3351,7 @@ fun LlamaChatScreen(
                         currentMatchIndex = 0
                         Toast.makeText(
                             context,
-                            context.getString(R.string.llama_clear_chat_done),
+                            localizedStrings.clearChatDone,
                             Toast.LENGTH_SHORT
                         ).show()
                     }
@@ -5465,6 +5532,8 @@ fun LlamaMessageItem(
 ) {
     val isUser = message.role == "user"
     val context = LocalContext.current
+    val clipboardLabelMessageText = stringResource(R.string.clipboard_label_message)
+    val termuxCopyToastText = stringResource(R.string.termux_copy_toast)
     val clipboardManager: ClipboardManager =
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val imageFile = remember(message.imagePath) { message.imagePath?.let(::File)?.takeIf { it.exists() } }
@@ -5482,9 +5551,9 @@ fun LlamaMessageItem(
     val transcriptionFailed = isUser && audioFile != null && message.isError && embeddedTranscript.isNullOrBlank()
 
     fun copyMessageToClipboard() {
-        val clip = android.content.ClipData.newPlainText(context.getString(R.string.clipboard_label_message), message.content)
+        val clip = android.content.ClipData.newPlainText(clipboardLabelMessageText, message.content)
         clipboardManager.setPrimaryClip(clip)
-        Toast.makeText(context, context.getString(R.string.termux_copy_toast), Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, termuxCopyToastText, Toast.LENGTH_SHORT).show()
     }
 
     DisposableEffect(message.audioPath) {

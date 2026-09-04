@@ -54,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -78,6 +79,7 @@ import java.io.File
 @Composable
 fun OnnxTtsScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val models by db.modelDao().getModelsByType(ModelType.ONNX_TTS).collectAsState(initial = emptyList())
     var selectedModelId by remember(models) { mutableStateOf(models.firstOrNull()?.filename.orEmpty()) }
@@ -134,7 +136,7 @@ fun OnnxTtsScreen(navController: NavController) {
                     lastCompletedPath = state.audioPath
                     lastAudio = File(state.audioPath)
                     historyRefresh++
-                    Toast.makeText(context, context.getString(R.string.onnx_tts_complete), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, resources.getString(R.string.onnx_tts_complete), Toast.LENGTH_SHORT).show()
                 }
             }
             is OnnxTtsGenerationState.Error -> {
@@ -143,7 +145,7 @@ fun OnnxTtsScreen(navController: NavController) {
                 status = state.message
                 Toast.makeText(
                     context,
-                    context.getString(R.string.onnx_tts_error_generate, state.message),
+                    resources.getString(R.string.onnx_tts_error_generate, state.message),
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -166,7 +168,7 @@ fun OnnxTtsScreen(navController: NavController) {
         sourceUri = uri.toString()
         sourceName = name
         text = ""
-        Toast.makeText(context, context.getString(R.string.onnx_tts_file_loaded, name), Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, resources.getString(R.string.onnx_tts_file_loaded, name), Toast.LENGTH_SHORT).show()
     }
 
     AppPageBackground {
@@ -305,7 +307,7 @@ fun OnnxTtsScreen(navController: NavController) {
                                     onClick = {
                                         val model = selectedModel ?: return@Button
                                         progress = 0f
-                                        status = context.getString(R.string.onnx_tts_status_starting)
+                                        status = resources.getString(R.string.onnx_tts_status_starting)
                                         OnnxTtsGenerationService.start(
                                             context,
                                             OnnxTtsGenerationJobSpec(

@@ -250,6 +250,7 @@ private fun isTableSeparator(line: String): Boolean {
 @Composable
 private fun CodeBlockView(block: MdBlock.CodeBlock) {
     val context = LocalContext.current
+    val codeCopiedText = stringResource(R.string.llama_code_copied)
     val clipboardManager = LocalClipboardManager.current
     val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
     val codeScrollState = rememberScrollState()
@@ -278,7 +279,7 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
                 TextButton(
                     onClick = {
                         clipboardManager.setText(AnnotatedString(block.code))
-                        Toast.makeText(context, context.getString(R.string.llama_code_copied), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, codeCopiedText, Toast.LENGTH_SHORT).show()
                     },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {

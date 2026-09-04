@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -51,6 +52,7 @@ import java.io.File
 @Composable
 fun WhisperModelsScreen(navController: NavController) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
@@ -89,16 +91,16 @@ fun WhisperModelsScreen(navController: NavController) {
                     .onSuccess { filename ->
                         Toast.makeText(
                             context,
-                            context.getString(R.string.models_export_success, filename),
+                            resources.getString(R.string.models_export_success, filename),
                             Toast.LENGTH_SHORT
                         ).show()
                     }
                     .onFailure { error ->
                         Toast.makeText(
                             context,
-                            context.getString(
+                            resources.getString(
                                 R.string.models_export_failed,
-                                error.message ?: context.getString(R.string.error_generic)
+                                error.message ?: resources.getString(R.string.error_generic)
                             ),
                             Toast.LENGTH_LONG
                         ).show()
@@ -125,7 +127,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 ).onSuccess { result ->
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             if (result.didCopy) {
                                 R.string.whisper_import_success_copied
                             } else {
@@ -138,9 +140,9 @@ fun WhisperModelsScreen(navController: NavController) {
                 }.onFailure { error ->
                     Toast.makeText(
                         context,
-                        context.getString(
+                        resources.getString(
                             R.string.whisper_import_failed,
-                            error.message ?: context.getString(R.string.error_generic)
+                            error.message ?: resources.getString(R.string.error_generic)
                         ),
                         Toast.LENGTH_LONG
                     ).show()
