@@ -7,13 +7,23 @@ data class LlamaConfig(
     val threads: Int = 4,
     val batchSize: Int = 512,
     val physicalBatchSize: Int? = null,
+    /** Optional CPU threads used for batch and prompt processing (`--threads-batch`). */
+    val threadsBatch: Int? = null,
     val port: Int = 8080,
     val temperature: Float = 0.8f,
     val host: String = "0.0.0.0",
     val mmprojPath: String? = null, // Vision model projector path
     /** null keeps llama.cpp's default; false emits --no-mmproj-offload. */
     val mmprojOffload: Boolean? = null,
+    /**
+     * The canonical llama.cpp model loading mode.  This replaces the historical
+     * [noMmap] boolean while retaining that property below for wire compatibility
+     * with callers that still construct an older config.
+     */
+    val loadMode: String = LlamaLoadMode.MMAP.value,
     val loraPath: String? = null,
+    /** Ordered, uncapped LoRA stack.  Duplicates are intentional and preserved. */
+    val loras: List<LlamaLoraSpec> = emptyList(),
     // KV Cache quantization settings
     val kvCacheEnabled: Boolean = false,
     val kvCacheTypeK: String = "f16",  // f16, q8_0, q4_0
@@ -88,6 +98,47 @@ data class LlamaConfig(
     val customFlags: String? = null,
     val flashAttention: Boolean = false
 )
+
+/**
+ * Stable llama.cpp model loading modes.  The values are the command-line strings
+ * accepted by `--load-mode`; keep them stable because they are persisted in saved
+ * launch profiles and preferences.
+ */
+enum class LlamaLoadMode(val value: String) {
+    AUTO("auto"),
+    NONE("none"),
+    MMAP("mmap"),
+    MLOCK("mlock"),
+    MMAP_MLOCK("mmap+mlock"),
+    DIO("dio");
+
+    companion object {
+        fun fromValueOrNull(value: String?): LlamaLoadMode? =
+            entries.firstOrNull { it.value == value?.trim()?.lowercase() }
+
+        fun fromValue(value: String?): LlamaLoadMode =
+            fromValueOrNull(value) ?: MMAP
+    }
+}
+
+/** One ordered llama.cpp LoRA adapter and its independent scaling factor. */
+data class LlamaLoraSpec(
+    val path: String,
+    val strength: Float = 1.0f
+)
+
+/**
+ * Return the canonical ordered LoRA stack while keeping the old single-path
+ * field usable for profiles written before multi-LoRA support.
+ */
+fun LlamaConfig.effectiveLoraSpecs(): List<LlamaLoraSpec> =
+    loras.takeIf { it.isNotEmpty() }
+        ?: loraPath?.trim()?.takeIf { it.isNotBlank() }?.let { listOf(LlamaLoraSpec(it)) }
+        ?: emptyList()
+
+/** Resolve the deprecated noMmap constructor field for older callers. */
+fun LlamaConfig.effectiveLoadMode(): LlamaLoadMode =
+    if (noMmap) LlamaLoadMode.NONE else LlamaLoadMode.fromValue(loadMode)
 
 enum class LlamaKvUnifiedMode(val value: String) {
     AUTO("auto"),

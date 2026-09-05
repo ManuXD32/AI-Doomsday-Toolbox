@@ -57,7 +57,7 @@ class AgentRuntimeProfileSupportTest {
         )
 
         assertTrue(result.profiles.all { it.managedLlamaServerId == null })
-        assertEquals(setOf("CODER", "SUMMARIZER"), result.requiresServerSelection)
+        assertTrue(result.requiresServerSelection.isEmpty())
     }
 
     @Test
@@ -123,6 +123,60 @@ class AgentRuntimeProfileSupportTest {
     }
 
     @Test
+    fun `llama server without managed id uses the global connection`() = kotlinx.coroutines.runBlocking {
+        val profile = AgentRuntimeProfile(
+            agentKey = "ORCHESTRATOR",
+            backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+            model = "Ling-3.0-tiny-Q4_K_M.gguf"
+        )
+
+        val result = AgentRuntimeDispatchResolver.resolve(profile, null)
+
+        assertTrue(result is AgentRuntimeDispatch.Ready)
+        result as AgentRuntimeDispatch.Ready
+        assertEquals(profile, result.profile)
+        assertNull(result.managedServer)
+        assertNull(result.endpointConfig)
+    }
+
+    @Test
+    fun `explicit unassigned managed llama marker still fails closed`() = kotlinx.coroutines.runBlocking {
+        val profile = AgentRuntimeProfile(
+            agentKey = "ORCHESTRATOR",
+            backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+            managedLlamaServerId = 0L
+        )
+
+        val result = AgentRuntimeDispatchResolver.resolve(profile, null)
+
+        assertTrue(result is AgentRuntimeDispatch.NeedsDirection)
+        result as AgentRuntimeDispatch.NeedsDirection
+        assertEquals(AgentRuntimeNeedsDirectionReason.SERVER_MISSING, result.reason)
+        assertEquals(0L, result.continueAction.managedLlamaServerId)
+    }
+
+    @Test
+    fun `running managed server with invalid endpoint fails closed`() = kotlinx.coroutines.runBlocking {
+        val profile = AgentRuntimeProfile(
+            agentKey = "CODER",
+            backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+            managedLlamaServerId = 7L
+        )
+
+        val result = AgentRuntimeDispatchResolver.resolve(
+            profile,
+            server(7L, 8084, host = "file:///not-an-http-host")
+        )
+
+        assertTrue(result is AgentRuntimeDispatch.NeedsDirection)
+        assertEquals(
+            AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY,
+            (result as AgentRuntimeDispatch.NeedsDirection).reason
+        )
+        assertEquals(7L, result.continueAction.managedLlamaServerId)
+    }
+
+    @Test
     fun `assigned llama swap server also refuses a stopped managed server`() = kotlinx.coroutines.runBlocking {
         val profile = AgentRuntimeProfile(
             agentKey = "RESEARCHER",
@@ -157,6 +211,58 @@ class AgentRuntimeProfileSupportTest {
         val ready = dispatch as AgentRuntimeDispatch.Ready
         assertEquals(profile, ready.profile)
         assertNull(ready.managedServer)
+    }
+
+    @Test
+    fun `enabled global override replaces route for direct dispatch resolution`() = kotlinx.coroutines.runBlocking {
+        val profile = AgentRuntimeProfile(
+            agentKey = "CUSTOM:DEBUGGER",
+            backend = AgentRuntimeBackend.OLLAMA.id,
+            model = "role-model",
+            endpointConfigId = 4L,
+            managedLlamaServerId = 8L
+        )
+        val override = AgentRuntimeGlobalOverride(
+            enabled = true,
+            backend = AgentRuntimeBackend.LLAMA_SWAP.id,
+            model = "general-model",
+            managedLlamaServerId = null
+        )
+
+        val result = AgentRuntimeDispatchResolver.resolve(
+            profile = profile,
+            managedServer = null,
+            globalOverride = override
+        )
+
+        assertTrue(result is AgentRuntimeDispatch.Ready)
+        val ready = result as AgentRuntimeDispatch.Ready
+        assertEquals(AgentRuntimeBackend.LLAMA_SWAP.id, ready.profile.backend)
+        assertEquals("general-model", ready.profile.model)
+        assertNull(ready.profile.endpointConfigId)
+        assertNull(ready.profile.managedLlamaServerId)
+    }
+
+    @Test
+    fun `disabled global override leaves direct profile unchanged`() = kotlinx.coroutines.runBlocking {
+        val profile = AgentRuntimeProfile(
+            agentKey = "CODER",
+            backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+            model = "role-model",
+            managedLlamaServerId = 8L
+        )
+        val result = AgentRuntimeDispatchResolver.resolve(
+            profile = profile,
+            managedServer = server(8L, 8080),
+            globalOverride = AgentRuntimeGlobalOverride(
+                enabled = false,
+                backend = AgentRuntimeBackend.OLLAMA.id,
+                model = "ignored-model"
+            )
+        )
+
+        assertTrue(result is AgentRuntimeDispatch.Ready)
+        assertEquals(profile, (result as AgentRuntimeDispatch.Ready).profile)
     }
 
     @Test

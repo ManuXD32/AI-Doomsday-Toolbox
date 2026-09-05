@@ -319,6 +319,7 @@ class LlamaService : Service() {
                     val threadsOverride = if (intent.hasExtra(EXTRA_THREADS)) intent.getIntExtra(EXTRA_THREADS, -1) else null
                     val batchSizeOverride = if (intent.hasExtra(EXTRA_BATCH_SIZE)) intent.getIntExtra(EXTRA_BATCH_SIZE, 512) else null
                     val physicalBatchSizeOverride = if (intent.hasExtra(EXTRA_PHYSICAL_BATCH_SIZE)) intent.getIntExtra(EXTRA_PHYSICAL_BATCH_SIZE, 512) else null
+                    val threadsBatchOverride = if (intent.hasExtra(EXTRA_THREADS_BATCH)) intent.getIntExtra(EXTRA_THREADS_BATCH, 4) else null
                     val contextSizeOverride = if (intent.hasExtra(EXTRA_CONTEXT_SIZE)) intent.getIntExtra(EXTRA_CONTEXT_SIZE, -1) else null
                     val temperatureOverride = if (intent.hasExtra(EXTRA_TEMPERATURE)) intent.getFloatExtra(EXTRA_TEMPERATURE, -1f) else null
                     val hostOverride = intent.getStringExtra(EXTRA_HOST)
@@ -367,6 +368,7 @@ class LlamaService : Service() {
                             commandTemplateOverride = commandTemplateOverride,
                             batchSizeOverride = batchSizeOverride,
                             physicalBatchSizeOverride = physicalBatchSizeOverride,
+                            threadsBatchOverride = threadsBatchOverride,
                             parallelOverride = parallelOverride, cacheRamOverride = cacheRamOverride, customFlagsOverride = customFlagsOverride, flashAttentionOverride = flashAttentionOverride,
                             settingsProfile = settingsProfile,
                             allowSettingsMmproj = allowSettingsMmproj,
@@ -400,6 +402,8 @@ class LlamaService : Service() {
                                 modelPath = newModelPath,
                                 isEmbedding = params["isEmbedding"] as? Boolean ?: false,
                                 mmprojPath = params["mmprojPath"] as? String,
+                                loraSpecsOverride = params["loras"] as? List<LlamaLoraSpec>,
+                                loadModeOverride = params["loadMode"] as? String,
                                 threadsOverride = params["threads"] as? Int,
                                 contextSizeOverride = params["contextSize"] as? Int,
                                 temperatureOverride = params["temperature"] as? Float,
@@ -417,6 +421,7 @@ class LlamaService : Service() {
                                 kvCacheReuseOverride = params["kvCacheReuse"] as? Int,
                                 batchSizeOverride = params["batchSize"] as? Int,
                                 physicalBatchSizeOverride = params["physicalBatchSize"] as? Int,
+                                threadsBatchOverride = params["threadsBatch"] as? Int,
                                 parallelOverride = params["parallel"] as? Int,
                                 cacheRamOverride = params["cacheRam"] as? Int,
                                 customFlagsOverride = params["customFlags"] as? String,
@@ -455,6 +460,8 @@ class LlamaService : Service() {
                                     ?.getIntExtra(EXTRA_BATCH_SIZE, 512),
                                 physicalBatchSizeOverride = intent.takeIf { it.hasExtra(EXTRA_PHYSICAL_BATCH_SIZE) }
                                     ?.getIntExtra(EXTRA_PHYSICAL_BATCH_SIZE, 512),
+                                threadsBatchOverride = intent.takeIf { it.hasExtra(EXTRA_THREADS_BATCH) }
+                                    ?.getIntExtra(EXTRA_THREADS_BATCH, 4),
                                 kvCacheEnabledOverride = intent.takeIf { it.hasExtra(EXTRA_KV_CACHE_ENABLED) }
                                     ?.getBooleanExtra(EXTRA_KV_CACHE_ENABLED, false),
                                 kvCacheTypeKOverride = intent.getStringExtra(EXTRA_KV_CACHE_TYPE_K),
@@ -489,6 +496,7 @@ class LlamaService : Service() {
                      val threadsOverride = if (intent.hasExtra(EXTRA_THREADS)) intent.getIntExtra(EXTRA_THREADS, -1) else null
                      val batchSizeOverride = if (intent.hasExtra(EXTRA_BATCH_SIZE)) intent.getIntExtra(EXTRA_BATCH_SIZE, 512) else null
                      val physicalBatchSizeOverride = if (intent.hasExtra(EXTRA_PHYSICAL_BATCH_SIZE)) intent.getIntExtra(EXTRA_PHYSICAL_BATCH_SIZE, 512) else null
+                     val threadsBatchOverride = if (intent.hasExtra(EXTRA_THREADS_BATCH)) intent.getIntExtra(EXTRA_THREADS_BATCH, 4) else null
                      val contextSizeOverride = if (intent.hasExtra(EXTRA_CONTEXT_SIZE)) intent.getIntExtra(EXTRA_CONTEXT_SIZE, -1) else null
                      val temperatureOverride = if (intent.hasExtra(EXTRA_TEMPERATURE)) intent.getFloatExtra(EXTRA_TEMPERATURE, -1f) else null
                      val hostOverride = intent.getStringExtra(EXTRA_HOST)
@@ -526,6 +534,7 @@ class LlamaService : Service() {
                              commandTemplateOverride = commandTemplateOverride,
                              batchSizeOverride = batchSizeOverride,
                              physicalBatchSizeOverride = physicalBatchSizeOverride,
+                             threadsBatchOverride = threadsBatchOverride,
                              parallelOverride = parallelOverride, cacheRamOverride = cacheRamOverride, customFlagsOverride = customFlagsOverride, flashAttentionOverride = flashAttentionOverride,
                              settingsProfile = settingsProfile,
                              allowSettingsMmproj = allowSettingsMmproj,
@@ -559,6 +568,8 @@ class LlamaService : Service() {
         temperatureOverride: Float? = null,
         hostOverride: String? = null,
         portOverride: Int? = null,
+        loraSpecsOverride: List<LlamaLoraSpec>? = null,
+        loadModeOverride: String? = null,
         previewMode: Boolean = false,
         draftModelPath: String? = null,
         draftMax: Int? = null,
@@ -574,6 +585,7 @@ class LlamaService : Service() {
         commandTemplateOverride: String? = null,
         batchSizeOverride: Int? = null,
         physicalBatchSizeOverride: Int? = null,
+        threadsBatchOverride: Int? = null,
         parallelOverride: Int? = null,
         cacheRamOverride: Int? = null,
         customFlagsOverride: String? = null,
@@ -621,6 +633,10 @@ class LlamaService : Service() {
             isOcrProfile -> 512
             else -> settingsRepo.serverPhysicalBatchSize.value
         }
+        val threadsBatch = distributedConfig?.threadsBatch ?: localLaunchProfile?.threadsBatch ?: threadsBatchOverride ?: when {
+            isMasterProfile || isOcrProfile -> null
+            else -> settingsRepo.serverThreadsBatch.value
+        }
         val contextSize = distributedConfig?.contextSize ?: localLaunchProfile?.contextSize ?: contextSizeOverride ?: when {
             isMasterProfile -> DistributedService.masterContextSize.value
             isOcrProfile -> 4096
@@ -639,7 +655,10 @@ class LlamaService : Service() {
         val port = distributedConfig?.port ?: portOverride ?: if (isMasterProfile) 8080 else settingsRepo.serverPort.value
         val enableVision = localLaunchProfile?.visionEnabled ?: if (isMasterProfile || isOcrProfile) mmprojPath != null else settingsRepo.enableVision.value
         val selectedMmprojPath = localLaunchProfile?.mmprojPath ?: if (isMasterProfile || isOcrProfile) null else settingsRepo.selectedMmprojPath.value
-        val selectedLoraPath = localLaunchProfile?.loraPath ?: if (isMasterProfile || isOcrProfile) null else settingsRepo.selectedLlmLoraPath.value
+        val selectedLoras = localLaunchProfile?.resolvedLoras()
+            ?: loraSpecsOverride
+            ?: if (isMasterProfile || isOcrProfile) emptyList() else settingsRepo.selectedLlmLoras.value
+        val selectedLoraPath = selectedLoras.firstOrNull()?.path
         
         // KV Cache settings for server
         val kvCacheEnabled = distributedConfig?.kvCacheEnabled ?: localLaunchProfile?.kvCacheEnabled ?: kvCacheEnabledOverride ?: when {
@@ -667,10 +686,10 @@ class LlamaService : Service() {
             isOcrProfile -> com.example.llamadroid.data.SettingsRepository.LLAMA_KV_OFFLOAD_CPU
             else -> settingsRepo.llamaKvOffloadMode.value
         }
-        val noMmap = localLaunchProfile?.noMmap ?: when {
-            isMasterProfile || isOcrProfile -> false
-            else -> settingsRepo.lowMemoryMode.value
-        }
+        val loadMode = localLaunchProfile?.resolvedLoadMode()
+            ?: loadModeOverride?.let(LlamaLoadMode::fromValue)
+            ?: if (isMasterProfile || isOcrProfile) LlamaLoadMode.MMAP else settingsRepo.llamaLoadMode.value
+        val noMmap = loadMode == LlamaLoadMode.NONE
         val parallel = distributedConfig?.parallel ?: localLaunchProfile?.parallel ?: parallelOverride ?: when {
             isMasterProfile -> DistributedService.masterParallel.value
             isOcrProfile -> 1
@@ -841,7 +860,7 @@ class LlamaService : Service() {
             mmprojPath ?: selectedMmprojPath.takeIf { allowSettingsMmproj }
         } else null
         
-        DebugLog.log("LlamaService: Settings - threads=$threads, batch=$batchSize, ubatch=${physicalBatchSize ?: "auto"}, ctx=$contextSize, temp=$temperature, host=$host, port=$port, parallel=${parallel ?: "auto"}, cacheRam=${cacheRam ?: "auto"}")
+        DebugLog.log("LlamaService: Settings - threads=$threads, batch=$batchSize, ubatch=${physicalBatchSize ?: "auto"}, threadsBatch=${threadsBatch ?: "auto"}, ctx=$contextSize, temp=$temperature, host=$host, port=$port, parallel=${parallel ?: "auto"}, cacheRam=${cacheRam ?: "auto"}")
         DebugLog.log("LlamaService: Vision enabled=$enableVision, mmproj=$effectiveMmprojPath")
         
         // Save last run params for remote switch support
@@ -851,9 +870,12 @@ class LlamaService : Service() {
                 "isEmbedding" to isEmbedding,
                 "mmprojPath" to effectiveMmprojPath,
                 "loraPath" to selectedLoraPath,
+                "loras" to selectedLoras,
+                "loadMode" to loadMode.value,
                 "threads" to threads,
                 "batchSize" to batchSize,
                 "physicalBatchSize" to physicalBatchSize,
+                "threadsBatch" to threadsBatch,
                 "contextSize" to contextSize,
                 "temperature" to temperature,
                 "host" to host,
@@ -1177,12 +1199,15 @@ class LlamaService : Service() {
                     threads = threads,
                     batchSize = batchSize,
                     physicalBatchSize = physicalBatchSize,
+                    threadsBatch = threadsBatch,
                     contextSize = contextSize,
                     temperature = temperature,
                     port = port,
                     host = host,
                     mmprojPath = effectiveMmprojPath,
+                    loadMode = loadMode.value,
                     loraPath = selectedLoraPath,
+                    loras = selectedLoras,
                     kvCacheEnabled = kvCacheEnabled,
                     kvCacheTypeK = kvCacheTypeK,
                     kvCacheTypeV = kvCacheTypeV,
@@ -1964,6 +1989,7 @@ class LlamaService : Service() {
         const val EXTRA_THREADS = "THREADS"
         const val EXTRA_BATCH_SIZE = "BATCH_SIZE"
         const val EXTRA_PHYSICAL_BATCH_SIZE = "PHYSICAL_BATCH_SIZE"
+        const val EXTRA_THREADS_BATCH = "THREADS_BATCH"
         const val EXTRA_CONTEXT_SIZE = "CONTEXT_SIZE"
         const val EXTRA_TEMPERATURE = "TEMPERATURE"
         const val EXTRA_HOST = "HOST"

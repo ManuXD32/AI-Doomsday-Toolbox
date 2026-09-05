@@ -27,6 +27,17 @@ class AgentRuntimeEndpointConfigTest {
     }
 
     @Test
+    fun `validation upgrades a legacy scheme-less endpoint to http`() {
+        val config = AgentRuntimeEndpointConfig(
+            name = "Local llama",
+            backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+            baseUrl = "127.0.0.1:8084/v1"
+        ).validate()
+
+        assertEquals("http://127.0.0.1:8084/v1", config.baseUrl)
+    }
+
+    @Test
     fun `validation rejects unsupported backend and non HTTP URL`() {
         val unsupported = runCatching {
             AgentRuntimeEndpointConfig(

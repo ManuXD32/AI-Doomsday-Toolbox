@@ -1,5 +1,6 @@
 package com.example.llamadroid.data.runtime
 
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.db.AgentRuntimeBackend
 import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
 import com.example.llamadroid.data.db.AgentRuntimeEndpointConfigDao
@@ -43,6 +44,7 @@ data class ManagedLlamaServerDescriptor(
 ) {
     val normalizedBackend: String get() = normalizeAgentRuntimeBackend(backend)
     val isReady: Boolean get() = state == ManagedLlamaServerState.RUNNING
+    val baseUrl: String? get() = HttpEndpointUrlSupport.fromHostPort(host, port)
 
     /** Safe compact label for narrow UI surfaces. */
     fun compactLabel(): String = buildString {
@@ -84,6 +86,98 @@ data class LegacyAgentRuntimeSettings(
     val roleModels: Map<String, String?> = emptyMap(),
     val customModels: Map<String, String?> = emptyMap()
 )
+
+/**
+ * Optional settings owned by the General agent card.
+ *
+ * This is deliberately separate from every role profile.  The card can be
+ * edited without rewriting the individual built-in/custom preferences, and
+ * the [enabled] bit is the only switch that makes these values authoritative
+ * for a dispatch.
+ */
+data class AgentRuntimeGlobalOverride(
+    val enabled: Boolean = false,
+    val backend: String = AgentRuntimeBackend.OLLAMA.id,
+    val model: String? = null,
+    val endpointConfigId: Long? = null,
+    val managedLlamaServerId: Long? = null,
+    val liteRtModelId: Long? = null,
+    val liteRtBackend: String = "auto",
+    val liteRtMtpEnabled: Boolean = false,
+    val contextSize: Int = 16_384,
+    val maxOutputTokens: Int = 8_096,
+    val thinkingEnabled: Boolean = true,
+    val visionEnabled: Boolean = true
+) {
+    val normalizedBackend: AgentRuntimeBackend
+        get() = AgentRuntimeBackend.from(backend)
+
+    fun normalized(): AgentRuntimeGlobalOverride {
+        val normalizedEndpoint = endpointConfigId?.takeIf { it > 0L }
+        return copy(
+            backend = normalizedBackend.id,
+            model = model?.trim()?.takeIf { it.isNotEmpty() },
+            endpointConfigId = normalizedEndpoint,
+            // A named endpoint is authoritative over a managed-server card.
+            managedLlamaServerId = managedLlamaServerId?.takeIf { normalizedEndpoint == null },
+            liteRtModelId = liteRtModelId?.takeIf { it > 0L },
+            liteRtBackend = liteRtBackend.trim().ifBlank { "auto" },
+            contextSize = contextSize.coerceIn(1_024, 1_048_576),
+            maxOutputTokens = maxOutputTokens.coerceIn(1, 1_048_576)
+        )
+    }
+
+    /** Apply only when enabled; disabled overrides are intentionally inert. */
+    fun applyTo(profile: AgentRuntimeProfile): AgentRuntimeProfile =
+        if (!enabled) {
+            profile
+        } else {
+            val effective = normalized()
+            profile.copy(
+                backend = effective.backend,
+                model = effective.model,
+                endpointConfigId = effective.endpointConfigId,
+                managedLlamaServerId = effective.managedLlamaServerId,
+                liteRtModelId = effective.liteRtModelId
+            ).normalized()
+        }
+}
+
+/**
+ * Immutable settings captured at the start of an agent dispatch.
+ *
+ * Keeping routing and tuning in one value prevents callers from accidentally
+ * combining a global backend with a role-local model/context or vice versa.
+ */
+data class AgentRuntimeDispatchSettings(
+    val backend: String,
+    val model: String?,
+    val endpointConfigId: Long? = null,
+    val managedLlamaServerId: Long? = null,
+    val liteRtModelId: Long? = null,
+    val liteRtBackend: String = "auto",
+    val liteRtMtpEnabled: Boolean = false,
+    val contextSize: Int,
+    val maxOutputTokens: Int,
+    val thinkingEnabled: Boolean,
+    val visionEnabled: Boolean
+) {
+    val normalizedBackend: AgentRuntimeBackend
+        get() = AgentRuntimeBackend.from(backend)
+
+    fun normalized(): AgentRuntimeDispatchSettings = copy(
+        backend = normalizedBackend.id,
+        model = model?.trim()?.takeIf { it.isNotEmpty() },
+        endpointConfigId = endpointConfigId?.takeIf { it > 0L },
+        managedLlamaServerId = managedLlamaServerId?.takeIf {
+            endpointConfigId == null
+        },
+        liteRtModelId = liteRtModelId?.takeIf { it > 0L },
+        liteRtBackend = liteRtBackend.trim().ifBlank { "auto" },
+        contextSize = contextSize.coerceIn(1_024, 1_048_576),
+        maxOutputTokens = maxOutputTokens.coerceIn(1, 1_048_576)
+    )
+}
 
 data class AgentRuntimeProfileMigrationResult(
     val profiles: List<AgentRuntimeProfile>,
@@ -141,13 +235,11 @@ object AgentRuntimeProfileMigration {
                 )
             }
         }
+        // A legacy llama-server profile which did not bind unambiguously to a
+        // managed card continues to use the legacy global URL. Null is the
+        // canonical global target; explicit managed-without-card uses id 0.
+        val requiresSelection = emptySet<String>()
         val created = profiles.filter { it.agentKey !in existingByKey }.map { it.agentKey }.toSet()
-        val requiresSelection = profiles.asSequence()
-            .filter { it.agentKey in created }
-            .filter { AgentRuntimeBackend.from(it.backend) == AgentRuntimeBackend.LLAMA_SERVER }
-            .filter { it.managedLlamaServerId == null }
-            .map { it.agentKey }
-            .toSet()
         val bound = profiles.mapNotNull { profile ->
             profile.managedLlamaServerId?.let { profile.agentKey to it }
         }.toMap()
@@ -295,15 +387,27 @@ class AgentRuntimeProfileRepository(
     /** Capture a profile and resolve the assigned resources without starting anything. */
     suspend fun resolveForDispatch(
         agentKey: String,
-        liteRtModelCatalog: AgentLiteRtModelCatalog = EmptyAgentLiteRtModelCatalog
+        liteRtModelCatalog: AgentLiteRtModelCatalog = EmptyAgentLiteRtModelCatalog,
+        globalOverride: AgentRuntimeGlobalOverride? = null
     ): AgentRuntimeDispatch {
-        val profile = get(agentKey)
-            ?: return AgentRuntimeDispatch.NeedsDirection(
+        val storedProfile = get(agentKey)
+        val profile = when {
+            storedProfile != null -> globalOverride?.applyTo(storedProfile) ?: storedProfile
+            globalOverride?.enabled == true -> AgentRuntimeProfile(
+                agentKey = agentKey,
+                backend = globalOverride.backend,
+                model = globalOverride.model,
+                endpointConfigId = globalOverride.endpointConfigId,
+                managedLlamaServerId = globalOverride.managedLlamaServerId,
+                liteRtModelId = globalOverride.liteRtModelId
+            ).normalized()
+            else -> return AgentRuntimeDispatch.NeedsDirection(
                 agentKey = agentKey,
                 profile = null,
                 reason = AgentRuntimeNeedsDirectionReason.PROFILE_MISSING,
                 continueAction = AgentRuntimeContinueAction.openProfile(agentKey)
             )
+        }
         val endpoint = profile.endpointConfigId?.let { endpointDao.get(it)?.toConfig() }
         if (profile.endpointConfigId != null && endpoint == null) {
             return AgentRuntimeDispatch.NeedsDirection(
@@ -402,9 +506,10 @@ object AgentRuntimeDispatchResolver {
         profile: AgentRuntimeProfile,
         managedServer: ManagedLlamaServerDescriptor?,
         liteRtModelCatalog: AgentLiteRtModelCatalog = EmptyAgentLiteRtModelCatalog,
-        endpointConfig: AgentRuntimeEndpointConfig? = null
+        endpointConfig: AgentRuntimeEndpointConfig? = null,
+        globalOverride: AgentRuntimeGlobalOverride? = null
     ): AgentRuntimeDispatch {
-        val normalized = profile.normalized()
+        val normalized = (globalOverride?.applyTo(profile) ?: profile).normalized()
         val endpoint = endpointConfig?.normalized()
         if (endpoint != null && runCatching { endpoint.validate() }.isFailure) {
             return AgentRuntimeDispatch.NeedsDirection(
@@ -415,6 +520,7 @@ object AgentRuntimeDispatchResolver {
             )
         }
         val hasNamedEndpoint = endpoint != null && endpoint.baseUrl.isNotBlank()
+        val managedEndpointValid = managedServer == null || managedServer.baseUrl != null
         return when (normalized.normalizedBackend) {
             AgentRuntimeBackend.OLLAMA -> {
                 if ((!hasNamedEndpoint && endpoint != null) || normalized.model.isNullOrBlank()) {
@@ -467,16 +573,21 @@ object AgentRuntimeDispatchResolver {
                     },
                     AgentRuntimeContinueAction.openServer(normalized.agentKey, managedServer.id)
                 )
+                normalized.managedLlamaServerId != null && !managedEndpointValid -> AgentRuntimeDispatch.NeedsDirection(
+                    normalized.agentKey,
+                    normalized,
+                    AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY,
+                    AgentRuntimeContinueAction.openServer(normalized.agentKey, managedServer?.id)
+                )
                 else -> AgentRuntimeDispatch.Ready(normalized.agentKey, normalized, managedServer, endpoint)
             }
             AgentRuntimeBackend.LLAMA_SERVER -> when {
                 hasNamedEndpoint -> AgentRuntimeDispatch.Ready(normalized.agentKey, normalized, managedServer, endpoint)
-                normalized.managedLlamaServerId == null -> AgentRuntimeDispatch.NeedsDirection(
-                    normalized.agentKey,
-                    normalized,
-                    AgentRuntimeNeedsDirectionReason.SERVER_MISSING,
-                    AgentRuntimeContinueAction.openServer(normalized.agentKey, null)
-                )
+                // No named endpoint and no managed-card id means the explicit global
+                // llama-server connection. A non-null id (including the UI's zero
+                // "choose a card" marker) remains fail-closed as a managed target.
+                normalized.managedLlamaServerId == null ->
+                    AgentRuntimeDispatch.Ready(normalized.agentKey, normalized, null, null)
                 managedServer == null -> AgentRuntimeDispatch.NeedsDirection(
                     normalized.agentKey,
                     normalized,
@@ -497,6 +608,12 @@ object AgentRuntimeDispatchResolver {
                     } else {
                         AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY
                     },
+                    AgentRuntimeContinueAction.openServer(normalized.agentKey, managedServer.id)
+                )
+                !managedEndpointValid -> AgentRuntimeDispatch.NeedsDirection(
+                    normalized.agentKey,
+                    normalized,
+                    AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY,
                     AgentRuntimeContinueAction.openServer(normalized.agentKey, managedServer.id)
                 )
                 else -> AgentRuntimeDispatch.Ready(normalized.agentKey, normalized, managedServer, endpoint)

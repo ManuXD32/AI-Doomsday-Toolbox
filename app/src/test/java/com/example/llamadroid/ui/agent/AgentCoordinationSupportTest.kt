@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.agent
 
 import com.example.llamadroid.data.db.AiRuntimeJobEntity
+import com.example.llamadroid.service.AgentWorkspaceBackendType
 import com.example.llamadroid.service.AiRuntimeJobStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -10,6 +11,65 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentCoordinationSupportTest {
+    @Test
+    fun `canonical conversation backend overrides a stale restored snapshot`() {
+        assertEquals(
+            AgentWorkspaceBackendType.LOCAL_SANDBOX,
+            resolveRestoredWorkspaceBackend(
+                canonicalConversationBackend = "LOCAL_SANDBOX",
+                snapshotBackend = AgentWorkspaceBackendType.REMOTE_SSH
+            )
+        )
+        assertEquals(
+            AgentWorkspaceBackendType.REMOTE_SSH,
+            resolveRestoredWorkspaceBackend(
+                canonicalConversationBackend = "REMOTE_SSH",
+                snapshotBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+            )
+        )
+    }
+
+    @Test
+    fun `invalid canonical backend preserves the restored snapshot value`() {
+        assertEquals(
+            AgentWorkspaceBackendType.LOCAL_SANDBOX,
+            resolveRestoredWorkspaceBackend(
+                canonicalConversationBackend = "",
+                snapshotBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+            )
+        )
+    }
+
+    @Test
+    fun `saved messages only short circuit persisted restore during a live generation`() {
+        assertTrue(
+            shouldSkipPersistedRuntimeRestore(
+                isLoading = true,
+                liveMessagesEmpty = false
+            )
+        )
+        assertFalse(
+            shouldSkipPersistedRuntimeRestore(
+                isLoading = false,
+                liveMessagesEmpty = false
+            )
+        )
+        assertFalse(
+            shouldSkipPersistedRuntimeRestore(
+                isLoading = true,
+                liveMessagesEmpty = true
+            )
+        )
+    }
+
+    @Test
+    fun `knowledge header stacks before accessibility text reaches two hundred percent`() {
+        assertFalse(shouldStackAgentKnowledgeHeader(1.0f))
+        assertFalse(shouldStackAgentKnowledgeHeader(1.49f))
+        assertTrue(shouldStackAgentKnowledgeHeader(1.5f))
+        assertTrue(shouldStackAgentKnowledgeHeader(2.0f))
+    }
+
     @Test
     fun `newest conversation fallback skips excluded conversation`() {
         val fallback = newestConversationIdExcluding(listOf(42L, 31L, 12L), excludedId = 42L)

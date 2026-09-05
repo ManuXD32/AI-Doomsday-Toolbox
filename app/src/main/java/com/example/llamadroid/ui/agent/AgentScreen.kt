@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +64,7 @@ import com.example.llamadroid.data.db.AiRuntimeJobEntity
 import com.example.llamadroid.data.db.AgentConversationEntity
 import com.example.llamadroid.data.db.AgentMessageEntity
 import com.example.llamadroid.data.db.AgentProjectFolderEntity
+import com.example.llamadroid.data.db.AgentRuntimeProfile
 import com.example.llamadroid.data.db.KnowledgeBaseEntity
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
@@ -98,6 +100,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.json.JSONArray
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
 import com.example.llamadroid.data.runtime.EmptyAgentRuntimeProfileStore
 import com.example.llamadroid.data.runtime.ManagedLlamaServerState
@@ -198,6 +201,8 @@ fun AgentScreen(navController: NavController) {
     var imagePreviewPath by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val agentBackend by settingsRepository.agentBackend.collectAsStateWithLifecycle()
+    val ollamaUrl by ollamaService.baseUrl.collectAsStateWithLifecycle()
+    val globalRuntimeOverride by settingsRepository.agentGlobalRuntimeOverride.collectAsStateWithLifecycle()
     val runtimeProfiles by remember(runtimeProfileStore) {
         runtimeProfileStore.observeProfiles()
     }.collectAsState(initial = emptyList())
@@ -213,13 +218,31 @@ fun AgentScreen(navController: NavController) {
     val currentRuntimeProfile = runtimeProfiles.firstOrNull {
         it.agentKey == activeRuntimeProfileKey
     }
-    val activeRuntime = remember(
+    val effectiveRuntimeProfile = remember(
         currentRuntimeProfile,
+        activeRuntimeProfileKey,
+        globalRuntimeOverride
+    ) {
+        when {
+            currentRuntimeProfile != null -> globalRuntimeOverride.applyTo(currentRuntimeProfile)
+            globalRuntimeOverride.enabled -> AgentRuntimeProfile(
+                agentKey = activeRuntimeProfileKey,
+                backend = globalRuntimeOverride.backend,
+                model = globalRuntimeOverride.model,
+                endpointConfigId = globalRuntimeOverride.endpointConfigId,
+                managedLlamaServerId = globalRuntimeOverride.managedLlamaServerId,
+                liteRtModelId = globalRuntimeOverride.liteRtModelId
+            ).normalized()
+            else -> null
+        }
+    }
+    val activeRuntime = remember(
+        effectiveRuntimeProfile,
         runtimeEndpointConfigs,
         managedRuntimeServers
     ) {
         resolveAgentRuntimeUi(
-            profile = currentRuntimeProfile,
+            profile = effectiveRuntimeProfile,
             endpointConfigs = runtimeEndpointConfigs,
             managedServers = managedRuntimeServers
         )
@@ -229,12 +252,109 @@ fun AgentScreen(navController: NavController) {
     val effectiveAgentBackend = activeRuntime.backendId ?: agentBackend
     val isAgentLlamaServer = SettingsRepository.isLlamaServerBackend(effectiveAgentBackend)
     val isAgentLlamaSwap = SettingsRepository.isLlamaSwapBackend(effectiveAgentBackend)
+    val isAgentGlobalLlamaServer = isAgentLlamaServer && activeRuntime.usesGlobalLlamaServer
     val isAgentLiteRt = SettingsRepository.isLiteRtBackend(effectiveAgentBackend)
     val isAgentOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(effectiveAgentBackend)
     val llamaServerUrl by settingsRepository.llamaServerUrl.collectAsStateWithLifecycle()
     val llamaSwapUrl by settingsRepository.agentLlamaSwapUrl.collectAsStateWithLifecycle()
     val llamaServerRuntimeState by AgentService.llamaServerRuntimeState.collectAsStateWithLifecycle()
     val orchestratorVisionEnabled by settingsRepository.agentOrchestratorVisionEnabled.collectAsStateWithLifecycle()
+
+    // This probe is deliberately local to the selected agent/runtime.  Named endpoints and
+    // managed servers must not be represented by the global Ollama connection flow, otherwise a
+    // retry can report a stale/global status (or send the user to the dashboard).
+    var activeEndpointProbeKey by remember { mutableStateOf<String?>(null) }
+    var activeEndpointProbeResult by remember { mutableStateOf<com.example.llamadroid.service.AgentEndpointProbeResult?>(null) }
+    val activeEndpointBaseUrl = when {
+        activeRuntime.endpointConfig != null -> activeRuntime.endpointConfig.baseUrl
+        activeRuntime.managedServer != null -> activeRuntime.managedServer.baseUrl
+        isAgentGlobalLlamaServer -> llamaServerUrl
+        isAgentLlamaSwap -> llamaSwapUrl
+        else -> ollamaUrl
+    }
+    val activeEndpointBackend = activeRuntime.endpointConfig?.normalizedBackend?.id
+        ?: effectiveAgentBackend
+    val activeEndpointKey = remember(activeEndpointBackend, activeEndpointBaseUrl) {
+        val normalizedBaseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(activeEndpointBaseUrl)
+            ?: activeEndpointBaseUrl?.trim().orEmpty()
+        "$activeEndpointBackend|$normalizedBaseUrl"
+    }
+
+    /** Retest the exact endpoint currently selected by this agent, keeping the chat in place. */
+    suspend fun retestActiveAgentEndpoint() {
+        // Read the latest global flow values at invocation time so Save can probe a URL edited in
+        // ConnectionSettingsDialog before Compose has delivered the next recomposition.
+        val latestBaseUrl = when {
+            activeRuntime.endpointConfig != null -> activeRuntime.endpointConfig.baseUrl
+            activeRuntime.managedServer != null -> activeRuntime.managedServer.baseUrl
+            isAgentGlobalLlamaServer -> settingsRepository.llamaServerUrl.value
+            isAgentLlamaSwap -> settingsRepository.agentLlamaSwapUrl.value
+            else -> ollamaService.baseUrl.value
+        }
+        val result = agentService.probeAgentEndpoint(latestBaseUrl, activeEndpointBackend)
+        activeEndpointProbeKey = "${result.backend}|${result.baseUrl ?: latestBaseUrl?.trim().orEmpty()}"
+        activeEndpointProbeResult = result
+
+        // Global backends also maintain their richer metadata/connection flows. Refresh those
+        // after the exact probe so model/context labels and the status bar agree with the result.
+        if (activeRuntime.endpointConfig == null && activeRuntime.managedServer == null) {
+            when {
+                isAgentGlobalLlamaServer || isAgentLlamaSwap -> {
+                    agentService.refreshLlamaServerRuntimeState(
+                        settingsRepository,
+                        force = true,
+                        backendOverride = effectiveAgentBackend
+                    )
+                }
+                !isAgentLlamaServer && !isAgentLiteRt -> {
+                    ollamaService.initFromSettings()
+                    ollamaService.checkConnection()
+                }
+            }
+        }
+    }
+
+    suspend fun retestConfiguredAgentEndpoint(agentKey: String) {
+        if (agentKey == activeRuntimeProfileKey) {
+            retestActiveAgentEndpoint()
+            return
+        }
+        val storedProfile = runtimeProfiles.firstOrNull { it.agentKey == agentKey }
+        val profile = when {
+            storedProfile != null -> globalRuntimeOverride.applyTo(storedProfile)
+            globalRuntimeOverride.enabled -> AgentRuntimeProfile(
+                agentKey = agentKey,
+                backend = globalRuntimeOverride.backend,
+                model = globalRuntimeOverride.model,
+                endpointConfigId = globalRuntimeOverride.endpointConfigId,
+                managedLlamaServerId = globalRuntimeOverride.managedLlamaServerId,
+                liteRtModelId = globalRuntimeOverride.liteRtModelId
+            ).normalized()
+            else -> null
+        }
+        val runtime = resolveAgentRuntimeUi(
+            profile = profile,
+            endpointConfigs = runtimeEndpointConfigs,
+            managedServers = managedRuntimeServers
+        )
+        val backend = runtime.backendId ?: agentBackend
+        val baseUrl = when {
+            runtime.endpointConfig != null -> runtime.endpointConfig.baseUrl
+            runtime.managedServer != null -> runtime.managedServer.baseUrl
+            SettingsRepository.isLlamaServerBackend(backend) -> settingsRepository.llamaServerUrl.value
+            SettingsRepository.isLlamaSwapBackend(backend) -> settingsRepository.agentLlamaSwapUrl.value
+            SettingsRepository.isLiteRtBackend(backend) -> null
+            else -> ollamaService.baseUrl.value
+        }
+        agentService.probeAgentEndpoint(baseUrl, backend)
+    }
+
+    LaunchedEffect(activeEndpointKey) {
+        if (hasNamedRuntimeEndpoint || activeRuntime.hasManagedServerAssignment) {
+            delay(350)
+            retestActiveAgentEndpoint()
+        }
+    }
 
     var runtimeConversationId by rememberSaveable { mutableStateOf<Long?>(null) }
     var selectedConversationId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -257,7 +377,8 @@ fun AgentScreen(navController: NavController) {
         llamaSwapUrl,
         hasNamedRuntimeEndpoint,
         activeRuntime.hasManagedServerAssignment,
-        activeRuntime.endpointReferenceMissing
+        activeRuntime.endpointReferenceMissing,
+        isAgentGlobalLlamaServer
     ) {
         delay(350)
         if (
@@ -267,9 +388,19 @@ fun AgentScreen(navController: NavController) {
         ) {
             return@LaunchedEffect
         }
-        if (isAgentLlamaSwap) {
+        if (isAgentGlobalLlamaServer) {
+            agentService.refreshLlamaServerRuntimeState(
+                settingsRepository,
+                force = true,
+                backendOverride = effectiveAgentBackend
+            )
+        } else if (isAgentLlamaSwap) {
             if (llamaSwapUrl.isNotBlank()) {
-                agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
             }
         } else if (!isAgentLlamaServer && !isAgentLiteRt) {
             ollamaService.checkConnection()
@@ -387,7 +518,6 @@ fun AgentScreen(navController: NavController) {
     var sshPort by remember { mutableStateOf("8023") }
     var sshUser by remember { mutableStateOf("root") }
     var sshPassword by remember { mutableStateOf("") }
-    val ollamaUrl by ollamaService.baseUrl.collectAsStateWithLifecycle()
     
     // Database and conversation management
     val conversations by db.agentChatDao().getAllConversations().collectAsState(initial = emptyList())
@@ -644,6 +774,23 @@ fun AgentScreen(navController: NavController) {
         initialConversationRestorePending = false
     }
 
+    fun applyConversationRuntimeMetadata(conversation: AgentConversationEntity) {
+        // The Room conversation is authoritative. Runtime snapshots are transient recovery data
+        // and older payloads may omit the backend (historically interpreted as REMOTE_SSH).
+        // Select the backend before the project folder so scaffold writes use the correct store.
+        AgentService.setCurrentWorkspaceBackend(
+            resolveRestoredWorkspaceBackend(
+                canonicalConversationBackend = conversation.workspaceBackend,
+                snapshotBackend = AgentService.currentWorkspaceBackend.value
+            )
+        )
+        AgentService.setCurrentProjectFolder(conversation.projectFolder)
+        AgentService.setCurrentRuntimeCapabilities(
+            AgentLocalRuntimeCapabilities.fromJson(conversation.runtimeCapabilitiesJson)
+        )
+        AgentService.setCurrentPlanningModeEnabled(conversation.planningModeEnabled)
+    }
+
     suspend fun activateConversationRuntime(
         conversationId: Long,
         projectFolder: String,
@@ -696,8 +843,8 @@ fun AgentScreen(navController: NavController) {
         hydratingConversationTitle = conversationTitle
         AgentService.setPreferredConversationId(conversationId)
         AgentService.setActiveConversationId(conversationId)
-        AgentService.setCurrentProjectFolder(projectFolder)
         AgentService.setCurrentWorkspaceBackend(workspaceBackend)
+        AgentService.setCurrentProjectFolder(projectFolder)
         AgentService.setCurrentRuntimeCapabilities(runtimeCapabilities)
         AgentService.setCurrentPlanningModeEnabled(planningModeEnabled)
         AgentService.clearPlanningImplementationUnlock()
@@ -731,7 +878,11 @@ fun AgentScreen(navController: NavController) {
                 syncConversationUiFromRuntime(it)
                 settingsRepository.setLastAgentConversationId(it)
             }
-            if (liveMessages.isNotEmpty()) {
+            if (shouldSkipPersistedRuntimeRestore(
+                    isLoading = AgentService.isLoading.value,
+                    liveMessagesEmpty = liveMessages.isEmpty()
+                )
+            ) {
                 return
             }
         }
@@ -747,7 +898,15 @@ fun AgentScreen(navController: NavController) {
             (liveConversationId == null || liveMessages.isEmpty() || liveConversationId == jobConversationId)
         ) {
             agentService.restorePersistentState(activeJob.payloadJson)
-            val restoredConversationId = AgentService.activeConversationId.value ?: jobConversationId
+            // The runtime-job row and conversation row own identity/project metadata. A legacy
+            // checkpoint can contain an absent or stale backend and must never redirect local
+            // file tools to the SSH workspace during automatic continuation.
+            val restoredConversationId = jobConversationId
+            val restoredConversation = db.agentChatDao().getConversation(restoredConversationId)
+            if (restoredConversation != null) {
+                AgentService.setActiveConversationId(restoredConversation.id)
+                applyConversationRuntimeMetadata(restoredConversation)
+            }
             syncConversationUiFromRuntime(restoredConversationId)
             settingsRepository.setLastAgentConversationId(restoredConversationId)
         }
@@ -1520,11 +1679,17 @@ fun AgentScreen(navController: NavController) {
             )
         }
     }
+    val activeEndpointProbe = activeEndpointProbeResult?.takeIf { result ->
+        activeEndpointProbeKey == activeEndpointKey && result.backend == activeEndpointBackend
+    }
     val backendConnected = when {
         activeRuntime.endpointReferenceMissing -> false
-        hasNamedRuntimeEndpoint -> true
-        activeRuntime.hasManagedServerAssignment -> activeManagedRuntimeServer?.isReady == true
-        isAgentLlamaServer -> activeManagedRuntimeServer?.isReady == true
+        hasNamedRuntimeEndpoint -> activeEndpointProbe?.isConnected ?: true
+        activeRuntime.hasManagedServerAssignment ->
+            activeEndpointProbe?.isConnected ?: (activeManagedRuntimeServer?.isReady == true)
+        isAgentGlobalLlamaServer -> llamaServerRuntimeState.isConnected
+        isAgentLlamaServer -> activeEndpointProbe?.isConnected
+            ?: (activeManagedRuntimeServer?.isReady == true)
         isAgentLlamaSwap -> llamaServerRuntimeState.isConnected
         isAgentOpenAiBackend -> true
         isAgentLiteRt -> true
@@ -1537,6 +1702,7 @@ fun AgentScreen(navController: NavController) {
             ManagedLlamaServerState.STARTING,
             ManagedLlamaServerState.LOADING
         )
+        isAgentGlobalLlamaServer -> llamaServerRuntimeState.isRefreshing
         isAgentLlamaServer -> activeManagedRuntimeServer?.state in setOf(
             ManagedLlamaServerState.STARTING,
             ManagedLlamaServerState.LOADING
@@ -1550,6 +1716,7 @@ fun AgentScreen(navController: NavController) {
         activeRuntime.endpointReferenceMissing -> false
         hasNamedRuntimeEndpoint -> true
         activeRuntime.hasManagedServerAssignment -> activeManagedRuntimeServer != null
+        isAgentGlobalLlamaServer -> llamaServerRuntimeState.hasChecked
         isAgentLlamaServer -> activeManagedRuntimeServer != null
         isAgentLlamaSwap -> llamaServerRuntimeState.hasChecked
         isAgentOpenAiBackend -> true
@@ -1911,18 +2078,8 @@ fun AgentScreen(navController: NavController) {
                     scope.launch {
                         val backendName = backendLabel
                         AgentService.addDebugLog(formatAgentString(retryDebugStartFormat, backendName))
-                        if (
-                            !hasNamedRuntimeEndpoint &&
-                            !activeRuntime.hasManagedServerAssignment &&
-                            !activeRuntime.endpointReferenceMissing
-                        ) {
-                            if (isAgentLlamaServer) {
-                                navController.navigate(Screen.Dashboard.route)
-                            } else if (isAgentLlamaSwap) {
-                                agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-                            } else if (!isAgentLiteRt && !isOllamaConnected) {
-                                ollamaService.checkConnection()
-                            }
+                        if (!activeRuntime.endpointReferenceMissing && !isAgentLiteRt) {
+                            retestActiveAgentEndpoint()
                         }
                         if (selectedProjectNeedsSsh && agentConnectionStatus == AgentService.Companion.ConnectionStatus.DISCONNECTED) {
                             val portInt = sshPort.toIntOrNull() ?: 8023
@@ -2106,6 +2263,12 @@ fun AgentScreen(navController: NavController) {
                         delegationsByParentToolCallId = delegationsByParentToolCallId,
                         onOpenDelegation = { delegation ->
                             navController.navigate(Screen.AgentInvocation.createRoute(delegation.invocationId))
+                        },
+                        onRetryNeedsDirection = {
+                            // The retry action is an explicit user turn. AgentService resets
+                            // the run epoch/loop counters and removes the stale pause card
+                            // before dispatching the new request.
+                            triggerAgent()
                         },
                         modifier = Modifier
                             .weight(1f)
@@ -2326,22 +2489,13 @@ fun AgentScreen(navController: NavController) {
                 ollamaService.setBaseUrl(it)
                 settingsRepository.setOllamaUrl(it)
             },
-            onConnect = {
+            onSave = {
                 scope.launch {
                     val portInt = sshPort.toIntOrNull() ?: 8023
-                    if (
-                        !hasNamedRuntimeEndpoint &&
-                        !activeRuntime.hasManagedServerAssignment &&
-                        !activeRuntime.endpointReferenceMissing
-                    ) {
-                        if (isAgentLlamaServer) {
-                            navController.navigate(Screen.Dashboard.route)
-                        } else if (isAgentLlamaSwap) {
-                            agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
-                        } else if (!isAgentLiteRt) {
-                            ollamaService.initFromSettings()
-                            ollamaService.checkConnection()
-                        }
+                    if (!activeRuntime.endpointReferenceMissing && !isAgentLiteRt) {
+                        // Save both persists the edited fields in the dialog and retests the
+                        // exact endpoint selected by this agent. Keep the project/chat open.
+                        retestActiveAgentEndpoint()
                     }
                     agentService.connect(host = sshHost, port = portInt, username = sshUser, password = sshPassword.ifEmpty { "agent" })
                     showConnectionSettings = false
@@ -2358,8 +2512,10 @@ fun AgentScreen(navController: NavController) {
             activeRuntime.hasManagedServerAssignment,
             activeRuntime.endpointReferenceMissing,
             isAgentLlamaSwap,
-            isAgentLlamaServer,
-            isAgentLiteRt
+            isAgentGlobalLlamaServer,
+            isAgentLiteRt,
+            llamaServerUrl,
+            llamaSwapUrl
         ) {
             if (
                 hasNamedRuntimeEndpoint ||
@@ -2368,8 +2524,18 @@ fun AgentScreen(navController: NavController) {
             ) {
                 return@LaunchedEffect
             }
-            if (isAgentLlamaSwap) {
-                agentService.refreshLlamaServerRuntimeState(settingsRepository, force = true)
+            if (isAgentGlobalLlamaServer) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
+            } else if (isAgentLlamaSwap) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
             } else if (!isAgentLlamaServer && !isAgentLiteRt) {
                 ollamaService.checkConnection()
             }
@@ -2391,20 +2557,41 @@ fun AgentScreen(navController: NavController) {
             runtimeProfileStore = runtimeProfileStore,
             managedLlamaServers = managedRuntimeServers,
             onRuntimeContinue = { action ->
-                if (action.destination == "managed_llama_server") {
-                    showAgentSettings = false
-                    navController.navigate(Screen.Dashboard.route)
-                }
+                scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
             }
         )
     }
     
     if (showToolSettings) {
-        LaunchedEffect(Unit) {
-            if (isAgentLlamaSwap) {
+        LaunchedEffect(
+            hasNamedRuntimeEndpoint,
+            activeRuntime.hasManagedServerAssignment,
+            activeRuntime.endpointReferenceMissing,
+            isAgentGlobalLlamaServer,
+            isAgentLlamaSwap,
+            isAgentLlamaServer,
+            isAgentLiteRt,
+            llamaServerUrl,
+            llamaSwapUrl
+        ) {
+            if (
+                hasNamedRuntimeEndpoint ||
+                activeRuntime.hasManagedServerAssignment ||
+                activeRuntime.endpointReferenceMissing
+            ) {
+                return@LaunchedEffect
+            }
+            if (isAgentGlobalLlamaServer) {
                 agentService.refreshLlamaServerRuntimeState(
                     settingsRepository,
-                    force = true
+                    force = true,
+                    backendOverride = effectiveAgentBackend
+                )
+            } else if (isAgentLlamaSwap) {
+                agentService.refreshLlamaServerRuntimeState(
+                    settingsRepository,
+                    force = true,
+                    backendOverride = effectiveAgentBackend
                 )
             } else if (!isAgentLlamaServer && !isAgentLiteRt) {
                 ollamaService.checkConnection()
@@ -2429,10 +2616,7 @@ fun AgentScreen(navController: NavController) {
             runtimeProfileStore = runtimeProfileStore,
             managedLlamaServers = managedRuntimeServers,
             onRuntimeContinue = { action ->
-                if (action.destination == "managed_llama_server") {
-                    showToolSettings = false
-                    navController.navigate(Screen.Dashboard.route)
-                }
+                scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
             }
         )
     }
@@ -2460,10 +2644,7 @@ fun AgentScreen(navController: NavController) {
                 ollamaModels = availableModels,
                 llamaSwapModels = llamaServerRuntimeState.availableModels,
                 onRuntimeContinue = { action ->
-                    if (action.destination == "managed_llama_server") {
-                        showCustomAgents = false
-                        navController.navigate(Screen.Dashboard.route)
-                    }
+                    scope.launch { retestConfiguredAgentEndpoint(action.agentKey) }
                 }
             )
         }
@@ -3526,6 +3707,29 @@ fun AgentKnowledgeBaseSelector(
     onSelectionChange: (List<Long>) -> Unit,
     onManage: () -> Unit
 ) {
+    val stackHeader = shouldStackAgentKnowledgeHeader(LocalDensity.current.fontScale)
+    val titleBlock: @Composable () -> Unit = {
+        Column {
+            Text(
+                text = stringResource(R.string.agent_kb_selector_title),
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = if (selectedIds.isEmpty()) {
+                    stringResource(R.string.agent_kb_selector_none)
+                } else {
+                    stringResource(R.string.agent_kb_selector_count, selectedIds.size)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
@@ -3534,27 +3738,27 @@ fun AgentKnowledgeBaseSelector(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.agent_kb_selector_title),
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        text = if (selectedIds.isEmpty()) {
-                            stringResource(R.string.agent_kb_selector_none)
-                        } else {
-                            stringResource(R.string.agent_kb_selector_count, selectedIds.size)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+            if (stackHeader) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    titleBlock()
+                    TextButton(
+                        onClick = onManage,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(stringResource(R.string.kb_manage_action))
+                    }
                 }
-                TextButton(onClick = onManage) {
-                    Text(stringResource(R.string.kb_manage_action))
+            } else {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        titleBlock()
+                    }
+                    TextButton(onClick = onManage) {
+                        Text(stringResource(R.string.kb_manage_action))
+                    }
                 }
             }
             if (knowledgeBases.isNotEmpty()) {

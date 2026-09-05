@@ -23,6 +23,28 @@ class AgentRuntimeUiResolutionTest {
     )
 
     @Test
+    fun `picker-only runtime fields are read only and free-entry models remain editable`() {
+        assertTrue(
+            agentRuntimeDropdownIsReadOnly(
+                allowTextEntry = false,
+                forceReadOnly = false
+            )
+        )
+        assertFalse(
+            agentRuntimeDropdownIsReadOnly(
+                allowTextEntry = true,
+                forceReadOnly = false
+            )
+        )
+        assertTrue(
+            agentRuntimeDropdownIsReadOnly(
+                allowTextEntry = true,
+                forceReadOnly = true
+            )
+        )
+    }
+
+    @Test
     fun `custom agent uses collision safe profile key`() {
         assertEquals(
             "CUSTOM:DEBUGGER",
@@ -56,6 +78,7 @@ class AgentRuntimeUiResolutionTest {
 
         assertTrue(resolved.hasNamedEndpoint)
         assertFalse(resolved.hasManagedServer)
+        assertFalse(resolved.usesGlobalLlamaServer)
         assertEquals(AgentRuntimeBackend.OLLAMA.id, resolved.backendId)
         assertEquals("studio-model", resolved.model)
         assertEquals("Studio endpoint", resolved.targetLabel)
@@ -76,8 +99,44 @@ class AgentRuntimeUiResolutionTest {
 
         assertFalse(resolved.hasNamedEndpoint)
         assertTrue(resolved.hasManagedServer)
+        assertFalse(resolved.usesGlobalLlamaServer)
         assertEquals(8L, resolved.managedServer?.id)
         assertEquals("managed-8.gguf", resolved.model)
+    }
+
+    @Test
+    fun `null managed server id selects the global llama server`() {
+        val resolved = resolveAgentRuntimeUi(
+            profile = AgentRuntimeProfile(
+                agentKey = "ORCHESTRATOR",
+                backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+                model = "global-model"
+            ),
+            endpointConfigs = emptyList(),
+            managedServers = listOf(managedServer())
+        )
+
+        assertTrue(resolved.usesGlobalLlamaServer)
+        assertFalse(resolved.hasManagedServerAssignment)
+        assertFalse(resolved.hasManagedServer)
+        assertNull(resolved.managedServer)
+    }
+
+    @Test
+    fun `non-null zero managed server id stays an explicit managed selection`() {
+        val resolved = resolveAgentRuntimeUi(
+            profile = AgentRuntimeProfile(
+                agentKey = "ORCHESTRATOR",
+                backend = AgentRuntimeBackend.LLAMA_SERVER.id,
+                managedLlamaServerId = 0L
+            ),
+            endpointConfigs = emptyList(),
+            managedServers = emptyList()
+        )
+
+        assertFalse(resolved.usesGlobalLlamaServer)
+        assertTrue(resolved.hasManagedServerAssignment)
+        assertFalse(resolved.hasManagedServer)
     }
 
     @Test

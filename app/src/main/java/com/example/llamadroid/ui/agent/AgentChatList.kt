@@ -62,6 +62,8 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
+internal const val AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP = 48
+
 @Composable
 private fun agentRoleLabel(roleName: String): String {
     return when (roleName.uppercase()) {
@@ -136,6 +138,17 @@ data class AgentDelegationInfo(
 private fun resolvedToolName(message: AgentService.Companion.ChatMessage): String? =
     message.toolName ?: message.pendingToolCall?.name
 
+/**
+ * A call_agent request becomes a delegation card only after it has passed approval.
+ * Rendering a pending request as a delegation hides the generic approval controls and leaves
+ * the card disabled with a misleading "Working" status because no invocation exists yet.
+ */
+internal fun shouldRenderCallAgentAsDelegation(
+    message: AgentService.Companion.ChatMessage
+): Boolean = message.role == "assistant" &&
+    resolvedToolName(message) == "call_agent" &&
+    !message.needsApproval
+
 private fun isGroupableToolCall(message: AgentService.Companion.ChatMessage): Boolean {
     return message.role == "assistant" &&
         resolvedToolName(message) != null &&
@@ -166,7 +179,7 @@ private fun buildAgentChatListItems(
     val items = mutableListOf<AgentChatListItem>()
     val visibleDelegationToolCallIds = visibleMessages
         .asSequence()
-        .filter { it.role == "assistant" && resolvedToolName(it) == "call_agent" }
+        .filter(::shouldRenderCallAgentAsDelegation)
         .mapNotNull { it.toolCallId ?: it.pendingToolCall?.id }
         .toSet()
     val unmatchedDelegations = delegationsByParentToolCallId.values
@@ -194,7 +207,7 @@ private fun buildAgentChatListItems(
         appendUnmatchedDelegations(message.timestamp)
         // Keep delegation separate even when it is next to other tool calls. The
         // parent handoff is meaningful workflow, not merely tool activity.
-        if (message.role == "assistant" && resolvedToolName(message) == "call_agent") {
+        if (shouldRenderCallAgentAsDelegation(message)) {
             val toolCallId = message.toolCallId ?: message.pendingToolCall?.id
             items += AgentChatListItem.Delegation(
                 message = message,
@@ -274,6 +287,7 @@ internal fun buildVisibleAgentTimelineMessages(
             msg.role == "assistant" && msg.content.isBlank() && msg.toolName == null &&
                 msg.thinking.isNullOrBlank() && !msg.isStreaming -> false
             showAllOutput -> true
+            AgentService.isRetryableNeedsDirectionMessage(msg) -> true
             msg.role == "system" ->
                 msg.content.contains("ready") || AgentService.isTransientCompactionStatusMessageForUi(msg)
             isBackgroundCommandReminder(msg.toolName, msg.content, msg.toolOutput) -> false
@@ -331,6 +345,7 @@ fun AgentChatList(
     onKnowledgeLinkClick: (String) -> Boolean = { false },
     delegationsByParentToolCallId: Map<String, AgentDelegationInfo> = emptyMap(),
     onOpenDelegation: (AgentDelegationInfo) -> Unit = {},
+    onRetryNeedsDirection: (AgentService.Companion.ChatMessage) -> Unit = {},
     readOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -368,6 +383,7 @@ fun AgentChatList(
                         isPlanResolving = resolvingPlanMessageId == message.id,
                         onToggleOutput = { onToggleOutput(message.id) },
                         onKnowledgeLinkClick = onKnowledgeLinkClick,
+                        onRetry = { onRetryNeedsDirection(message) },
                         showMessageActions = !readOnly
                     )
                 }
@@ -729,6 +745,7 @@ fun ChatMessageBubble(
     isPlanResolving: Boolean = false,
     onToggleOutput: () -> Unit = {},
     onKnowledgeLinkClick: (String) -> Boolean = { false },
+    onRetry: () -> Unit = {},
     showMessageActions: Boolean = true
 ) {
     val context = LocalContext.current
@@ -740,6 +757,7 @@ fun ChatMessageBubble(
     val isAssistant = message.role == "assistant"
     val isDelegation = message.isDelegation
     val isCompactionStatus = AgentService.isTransientCompactionStatusMessageForUi(message)
+    val isRetryableNeedsDirection = AgentService.isRetryableNeedsDirectionMessage(message)
     val formattedTimestamp = remember(message.timestamp) { formatAgentMessageTimestamp(message.timestamp) }
     val imageFile = remember(message.imagePath) { message.imagePath?.let(::File)?.takeIf { it.exists() } }
     var showImagePreview by remember(message.imagePath) { mutableStateOf(false) }
@@ -780,6 +798,7 @@ fun ChatMessageBubble(
                 containerColor = when {
                     isUser -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
                     isCompactionStatus -> Color(0xFF2E7D32).copy(alpha = 0.92f)
+                    isRetryableNeedsDirection -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
                 }
             ),
@@ -894,6 +913,27 @@ fun ChatMessageBubble(
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(stringResource(R.string.action_allow), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                        }
+                    }
+                } else if (isRetryableNeedsDirection) {
+                    Text(
+                        text = message.content,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (showMessageActions) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = onRetry,
+                            modifier = Modifier.align(Alignment.End),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error,
+                                contentColor = MaterialTheme.colorScheme.onError
+                            )
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(stringResource(R.string.action_retry))
                         }
                     }
                 } else {
@@ -1110,44 +1150,60 @@ fun ChatMessageBubble(
                 modifier = Modifier.padding(start = 4.dp, top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    stringResource(R.string.action_copy),
-                    modifier = Modifier.size(14.dp).clickable {
+                IconButton(
+                    onClick = {
                         val clip = ClipData.newPlainText(clipboardLabelMessage, message.content)
                         clipboardManager.setPrimaryClip(clip)
                     },
-                    tint = MaterialTheme.colorScheme.outline
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                if ((isUser || isAssistant || message.isPlan) && !isEditing) {
+                    modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                ) {
                     Icon(
-                        Icons.Default.Edit,
-                        stringResource(R.string.action_edit),
-                        modifier = Modifier.size(14.dp).clickable { onEdit() },
+                        Icons.Default.ContentCopy,
+                        stringResource(R.string.action_copy),
+                        modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.outline
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                if ((isUser || isAssistant || message.isPlan) && !isEditing) {
+                    IconButton(
+                        onClick = onEdit,
+                        modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            stringResource(R.string.action_edit),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
 
                 if (isAssistant) {
-                    Icon(
-                        Icons.Default.Refresh,
-                        stringResource(R.string.action_regenerate),
-                        modifier = Modifier.size(14.dp).clickable { onRegenerate() },
-                        tint = MaterialTheme.colorScheme.outline
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = onRegenerate,
+                        modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            stringResource(R.string.action_regenerate),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.outline
+                        )
+                    }
                 }
 
-                Icon(
-                    Icons.Default.Delete,
-                    stringResource(R.string.action_delete),
-                    modifier = Modifier.size(14.dp).clickable { onDelete() },
-                    tint = MaterialTheme.colorScheme.outline
-                )
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        stringResource(R.string.action_delete),
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.outline
+                    )
+                }
             }
         }
     }

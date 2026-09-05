@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.agent
 
 import com.example.llamadroid.data.db.AgentRuntimeEndpointConfig
+import com.example.llamadroid.data.db.AgentRuntimeBackend
 import com.example.llamadroid.data.db.AgentRuntimeProfile
 import com.example.llamadroid.data.db.AgentRuntimeProfileKeys
 import com.example.llamadroid.data.runtime.ManagedLlamaServerDescriptor
@@ -28,6 +29,19 @@ internal data class AgentRuntimeUiResolution(
         get() = endpointConfig == null &&
             !endpointReferenceMissing &&
             profile?.managedLlamaServerId != null
+
+    /**
+     * True when the profile is using the process-wide llama-server connection.
+     *
+     * A null managed-server id is the explicit Global choice. Keep a missing
+     * profile in this bucket as well so the first composition can still use the
+     * legacy global backend while profile migration is settling.
+     */
+    val usesGlobalLlamaServer: Boolean
+        get() = endpointConfig == null &&
+            !endpointReferenceMissing &&
+            !hasManagedServerAssignment &&
+            (profile == null || profile.normalizedBackend == AgentRuntimeBackend.LLAMA_SERVER)
 
     val backendId: String?
         get() = endpointConfig?.normalizedBackend?.id ?: profile?.normalizedBackend?.id

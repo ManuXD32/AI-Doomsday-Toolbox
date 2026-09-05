@@ -11,6 +11,133 @@ import org.json.JSONObject
 
 class AgentRuntimeSupportTest {
     @Test
+    fun `ling tagged tool call is recovered from reasoning output`() {
+        val calls = parseLegacyTaggedToolCalls(
+            """
+            Action rationale: Inspect the workspace.
+            <tool_call>tool_help
+            <arg_key>tool_name</arg_key>
+            <arg_value>ls</arg_value>
+            </tool_call>
+            """.trimIndent()
+        )
+
+        assertEquals(1, calls.size)
+        assertEquals("tool_help", calls.single().name)
+        assertEquals(mapOf("tool_name" to "ls"), calls.single().arguments)
+        assertEquals("{\"tool_name\":\"ls\"}", calls.single().rawArgumentsJson)
+    }
+
+    @Test
+    fun `tagged tool recovery preserves multiple argument values and order`() {
+        val call = parseLegacyTaggedToolCalls(
+            """
+            <tool_call>write_file
+            <arg_key>path</arg_key><arg_value>index.html</arg_value>
+            <arg_key>content</arg_key><arg_value>&lt;h1&gt;Ling QA&lt;/h1&gt;</arg_value>
+            </tool_call>
+            """.trimIndent()
+        ).single()
+
+        assertEquals(listOf("path", "content"), call.arguments.keys.toList())
+        assertEquals("index.html", call.arguments["path"])
+        assertEquals("&lt;h1&gt;Ling QA&lt;/h1&gt;", call.arguments["content"])
+    }
+
+    @Test
+    fun `tagged write payload preserves multiline content`() {
+        val call = parseLegacyTaggedToolCalls(
+            """
+            <tool_call>write_file
+            <arg_key>path</arg_key><arg_value>index.html</arg_value>
+            <arg_key>content</arg_key><arg_value><!doctype html>
+            <h1>Ling Agent QA</h1>
+            <button>Run</button></arg_value>
+            </tool_call>
+            """.trimIndent()
+        ).single()
+
+        assertEquals(
+            "<!doctype html>\n<h1>Ling Agent QA</h1>\n<button>Run</button>",
+            call.arguments["content"]
+        )
+    }
+
+    @Test
+    fun `partial tagged tool calls remain malformed instead of becoming executable`() {
+        assertTrue(
+            parseLegacyTaggedToolCalls(
+                "<tool_call>write_file <arg_key>path</arg_key></tool_call>"
+            ).isEmpty()
+        )
+        assertTrue(
+            parseLegacyTaggedToolCalls(
+                "<tool_call>write_file; run_command <arg_key>path</arg_key>" +
+                    "<arg_value>index.html</arg_value></tool_call>"
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `tool help resolves ling shell listing vocabulary without exposing a shell`() {
+        val available = listOf("read_file", "list_directory", "tool_help")
+
+        assertEquals("list_directory", resolveToolHelpName("ls", available))
+        assertEquals("list_directory", resolveToolHelpName("DIR", available))
+        assertEquals("read_file", resolveToolHelpName("READ_FILE", available))
+        assertNull(resolveToolHelpName("rm", available))
+    }
+
+    @Test
+    fun `legacy runtime snapshot without backend preserves the current local workspace`() {
+        assertEquals(
+            AgentWorkspaceBackendType.LOCAL_SANDBOX,
+            resolveSnapshotWorkspaceBackend(
+                payload = JSONObject(),
+                currentBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+            )
+        )
+        assertEquals(
+            AgentWorkspaceBackendType.REMOTE_SSH,
+            resolveSnapshotWorkspaceBackend(
+                payload = JSONObject().put("workspaceBackend", "REMOTE_SSH"),
+                currentBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+            )
+        )
+        listOf("", "UNKNOWN_BACKEND").forEach { stored ->
+            assertEquals(
+                AgentWorkspaceBackendType.LOCAL_SANDBOX,
+                resolveSnapshotWorkspaceBackend(
+                    payload = JSONObject().put("workspaceBackend", stored),
+                    currentBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `restored delegated work is interrupted from either session or database evidence`() {
+        assertTrue(
+            shouldInterruptRestoredAgentWork(
+                hadRestoredSessionState = true,
+                runningInvocationCount = 0
+            )
+        )
+        assertTrue(
+            shouldInterruptRestoredAgentWork(
+                hadRestoredSessionState = false,
+                runningInvocationCount = 1
+            )
+        )
+        assertFalse(
+            shouldInterruptRestoredAgentWork(
+                hadRestoredSessionState = false,
+                runningInvocationCount = 0
+            )
+        )
+    }
+
+    @Test
     fun `memory rollover stays at the trigger and preserves the heading without recursion`() {
         val source = listOf("# Timeline") + (1..400).map { "event-$it" }
 
@@ -67,6 +194,76 @@ class AgentRuntimeSupportTest {
         assertTrue(shouldPersistFullAgentSnapshot("llama-server heartbeat", force = true))
         assertFalse(shouldPersistFullAgentSnapshot("Agent status update", force = false))
         assertFalse(shouldPersistFullAgentSnapshot("llama-server heartbeat", force = false))
+    }
+
+    @Test
+    fun `runtime snapshot is active only for live work or unresolved user attention`() {
+        assertEquals(
+            AiRuntimeJobStore.STATUS_RUNNING,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = true,
+                hasPendingToolApproval = false,
+                hasPendingPlanApproval = false,
+                pendingQuestionCount = 0
+            )
+        )
+        assertEquals(
+            AiRuntimeJobStore.STATUS_RECOVERING,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = false,
+                hasPendingToolApproval = true,
+                hasPendingPlanApproval = false,
+                pendingQuestionCount = 0
+            )
+        )
+        assertEquals(
+            AiRuntimeJobStore.STATUS_RECOVERING,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = false,
+                hasPendingToolApproval = false,
+                hasPendingPlanApproval = true,
+                pendingQuestionCount = 0
+            )
+        )
+        assertEquals(
+            AiRuntimeJobStore.STATUS_RECOVERING,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = false,
+                hasPendingToolApproval = false,
+                hasPendingPlanApproval = false,
+                pendingQuestionCount = 1
+            )
+        )
+        assertEquals(
+            AiRuntimeJobStore.STATUS_COMPLETED,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = false,
+                hasPendingToolApproval = false,
+                hasPendingPlanApproval = false,
+                pendingQuestionCount = 0
+            )
+        )
+        assertEquals(
+            AiRuntimeJobStore.STATUS_CANCELLED,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = false,
+                hasPendingToolApproval = false,
+                hasPendingPlanApproval = false,
+                pendingQuestionCount = 0,
+                existingStatus = AiRuntimeJobStore.STATUS_CANCELLED
+            )
+        )
+        assertEquals(
+            AiRuntimeJobStore.STATUS_RUNNING,
+            resolveAgentRuntimeSnapshotStatus(
+                isLoading = true,
+                hasPendingToolApproval = false,
+                hasPendingPlanApproval = false,
+                pendingQuestionCount = 0,
+                existingStatus = AiRuntimeJobStore.STATUS_CANCELLED
+            )
+        )
+        assertTrue(isCriticalAgentProtocolTool("todo_write"))
     }
 
     @Test
@@ -242,6 +439,81 @@ class AgentRuntimeSupportTest {
             AgentRuntimeSupport.shouldReleaseLoadingOnConnectionLoss(
                 loadingCount = 0,
                 hasActiveJob = true
+            )
+        )
+    }
+
+    @Test
+    fun `queued continuation from an invalidated epoch cannot be dispatched`() {
+        assertFalse(
+            AgentRuntimeSupport.shouldDispatchQueuedContinuation(
+                queuedEpoch = 4L,
+                activeEpoch = 5L,
+                automaticContinuationsBlocked = false,
+                userInitiated = false
+            )
+        )
+        assertFalse(
+            AgentRuntimeSupport.shouldDispatchQueuedContinuation(
+                queuedEpoch = 5L,
+                activeEpoch = 5L,
+                automaticContinuationsBlocked = true,
+                userInitiated = false
+            )
+        )
+        assertTrue(
+            AgentRuntimeSupport.shouldDispatchQueuedContinuation(
+                queuedEpoch = 5L,
+                activeEpoch = 5L,
+                automaticContinuationsBlocked = true,
+                userInitiated = true
+            )
+        )
+    }
+
+    @Test
+    fun `current job completion wakes a waiting continuation drain only when work is queued`() {
+        assertTrue(
+            AgentRuntimeSupport.shouldWakeContinuationDrainAfterCurrentJobCompletion(
+                currentJobWasCleared = true,
+                pendingContinuationCount = 1
+            )
+        )
+        assertFalse(
+            AgentRuntimeSupport.shouldWakeContinuationDrainAfterCurrentJobCompletion(
+                currentJobWasCleared = true,
+                pendingContinuationCount = 0
+            )
+        )
+        assertFalse(
+            AgentRuntimeSupport.shouldWakeContinuationDrainAfterCurrentJobCompletion(
+                currentJobWasCleared = false,
+                pendingContinuationCount = 1
+            )
+        )
+    }
+
+    @Test
+    fun `drain completion waits for current job completion before restarting`() {
+        assertFalse(
+            AgentRuntimeSupport.shouldRestartContinuationDrainAfterCompletion(
+                runEpochStillActive = true,
+                currentJobActive = true,
+                pendingContinuationCount = 1
+            )
+        )
+        assertTrue(
+            AgentRuntimeSupport.shouldRestartContinuationDrainAfterCompletion(
+                runEpochStillActive = true,
+                currentJobActive = false,
+                pendingContinuationCount = 1
+            )
+        )
+        assertFalse(
+            AgentRuntimeSupport.shouldRestartContinuationDrainAfterCompletion(
+                runEpochStillActive = false,
+                currentJobActive = false,
+                pendingContinuationCount = 1
             )
         )
     }
@@ -802,6 +1074,8 @@ class AgentRuntimeSupportTest {
         assertTrue(buildAgentRuntimeModeControl(true, true).contains("PLAN"))
         assertTrue(buildAgentRuntimeModeControl(true, true).contains("microsteps"))
         assertTrue(buildAgentRuntimeModeControl(false, true).contains("todo_write"))
+        assertTrue(buildAgentRuntimeModeControl(false, true).contains("zero durable TODOs"))
+        assertTrue(buildAgentRuntimeModeControl(false, true).contains("before any todo_transition"))
         assertFalse(buildAgentRuntimeModeControl(false, true).contains("microsteps"))
     }
 }

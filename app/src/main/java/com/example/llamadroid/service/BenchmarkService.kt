@@ -258,7 +258,7 @@ class BenchmarkService(context: Context) {
                 "-p", promptTokens.toString(),
                 "-n", genTokens.toString(),
                 "-r", repetitions.toString(),
-                "-mmp", "0",         // disable mmap
+                "--load-mode", "none", // load without mmap
                 "-ngl", "0",         // CPU only
                 "--progress",        // Enable progress output
                 "-o", "md"

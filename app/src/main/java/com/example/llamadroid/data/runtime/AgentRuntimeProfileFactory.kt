@@ -79,8 +79,15 @@ object AgentRuntimeProfileRuntime {
         managedServerCatalog = EmptyManagedLlamaServerCatalog
     }
 
-    suspend fun resolve(agentKey: String): AgentRuntimeDispatch? =
-        repository?.resolveForDispatch(agentKey, liteRtModelCatalog)
+    suspend fun resolve(
+        agentKey: String,
+        globalOverride: AgentRuntimeGlobalOverride? = null
+    ): AgentRuntimeDispatch? =
+        repository?.resolveForDispatch(
+            agentKey = agentKey,
+            liteRtModelCatalog = liteRtModelCatalog,
+            globalOverride = globalOverride
+        )
 
     fun installedRepository(): AgentRuntimeProfileRepository? = repository
 

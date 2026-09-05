@@ -1909,7 +1909,7 @@ fun MasterModeScreen(navController: NavController) {
                                 label = { Text(stringResource(R.string.dist_advanced_custom_flags)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = false,
-                                placeholder = { Text("--mlock --no-mmap") }
+                                placeholder = { Text("--load-mode mlock") }
                             )
                         }
                         
@@ -4632,7 +4632,7 @@ fun RemoteMasterCard(modifier: Modifier = Modifier) {
                             OutlinedTextField(value = remoteCacheRam, onValueChange = { DistributedService.setRemoteUICacheRam(it.filter { char -> char.isDigit() }) }, label = { Text(stringResource(R.string.dist_advanced_cache_ram)) }, modifier = Modifier.weight(1f), singleLine = true, placeholder = { Text("0") })
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(value = remoteCustomFlags, onValueChange = { DistributedService.setRemoteUICustomFlags(it) }, label = { Text(stringResource(R.string.dist_advanced_custom_flags)) }, modifier = Modifier.fillMaxWidth(), singleLine = false, placeholder = { Text("--mlock --no-mmap") })
+                        OutlinedTextField(value = remoteCustomFlags, onValueChange = { DistributedService.setRemoteUICustomFlags(it) }, label = { Text(stringResource(R.string.dist_advanced_custom_flags)) }, modifier = Modifier.fillMaxWidth(), singleLine = false, placeholder = { Text("--load-mode mlock") })
                         
                         Spacer(modifier = Modifier.height(12.dp))
                         HorizontalDivider()

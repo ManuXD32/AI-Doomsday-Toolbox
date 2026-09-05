@@ -2,7 +2,9 @@ package com.example.llamadroid.service
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.util.DebugLog
 import org.json.JSONArray
 import org.json.JSONObject
@@ -11,6 +13,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.concurrent.atomic.AtomicBoolean
 
 const val NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS_ENABLED = "max_output_tokens_enabled"
 const val NATIVE_CHAT_PARAM_MAX_OUTPUT_TOKENS = "max_output_tokens"
@@ -83,6 +86,8 @@ internal fun classifySseProcessingFailure(error: Exception): SseProcessingFailur
     else -> SseProcessingFailureKind.PROCESSING
 }
 
+internal fun llamaServerHealthResponseReady(responseCode: Int): Boolean = responseCode == 200
+
 /**
  * Chat service for llama-server (llama.cpp HTTP server).
  * Uses the OpenAI-compatible /v1/chat/completions endpoint.
@@ -100,25 +105,41 @@ class LlamaServerChatService {
         private const val TAG = "LlamaServerChat"
         private const val INPUT_TOKEN_COUNT_TIMEOUT_MS = 5_000
         private const val INPUT_TOKEN_UNSUPPORTED_TTL_MS = 10L * 60L * 1000L
+        private const val HEALTH_CHECK_ATTEMPTS = 3
+        private const val HEALTH_CHECK_RETRY_DELAY_MS = 500L
         private val unsupportedInputTokenEndpoints =
             java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 
+    /**
+     * Cancellation belongs to one request, not to the service singleton. A retry can start
+     * while the previous HTTP connection is still unwinding; a global stop flag would be
+     * cleared by that retry and let the old stream continue writing into the new turn.
+     */
+    private class GenerationRequest {
+        val cancelled = AtomicBoolean(false)
+        @Volatile var connection: HttpURLConnection? = null
+        @Volatile var baseUrl: String? = null
+        @Volatile var slotId: Int? = null
+    }
+
+    @Volatile
+    private var activeGeneration: GenerationRequest? = null
+
     @Volatile
     var shouldStop = false
 
-    @Volatile
-    private var activeConnection: HttpURLConnection? = null
-    @Volatile
-    private var activeBaseUrl: String? = null
-    @Volatile
-    private var activeSlotId: Int? = null
-
     fun stopGeneration() {
         shouldStop = true
-        val cancelBaseUrl = activeBaseUrl
-        val cancelSlotId = activeSlotId
-        runCatching { activeConnection?.disconnect() }
+        activeGeneration?.let(::cancelGeneration)
+    }
+
+    /** Cancel one request without touching a newer retry that now owns the singleton. */
+    private fun cancelGeneration(generation: GenerationRequest) {
+        if (!generation.cancelled.compareAndSet(false, true)) return
+        val cancelBaseUrl = generation.baseUrl
+        val cancelSlotId = generation.slotId
+        runCatching { generation.connection?.disconnect() }
         if (!cancelBaseUrl.isNullOrBlank()) {
             Thread {
                 sendBestEffortLlamaServerCancel(cancelBaseUrl, cancelSlotId)
@@ -175,8 +196,14 @@ class LlamaServerChatService {
                 remove("cache_prompt")
                 remove("id_slot")
             }
-            conn = URL("$normalizedBase/v1/chat/completions/input_tokens")
-                .openConnection() as HttpURLConnection
+            val requestUrl = HttpEndpointUrlSupport.appendPath(
+                normalizedBase,
+                "/v1/chat/completions/input_tokens"
+            ) ?: return@withContext LlamaInputTokenCountResult(
+                status = LlamaInputTokenCountStatus.TRANSIENT_FAILURE,
+                errorMessage = "Invalid llama-server URL"
+            )
+            conn = URL(requestUrl).openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
             conn.doOutput = true
@@ -278,6 +305,8 @@ class LlamaServerChatService {
         onPromptProgress: (LlamaPromptProcessingProgress) -> Unit = {},
         onChunk: (String?, String?) -> Unit = { _, _ -> }
     ): Result<OllamaService.ChatResponse> = withContext(Dispatchers.IO) {
+        val generation = GenerationRequest()
+        activeGeneration = generation
         shouldStop = false
         var sawStreamOutput = false
         val guardedOnChunk: (String?, String?) -> Unit = { chunk, thinkingChunk ->
@@ -321,7 +350,8 @@ class LlamaServerChatService {
                                 samplingParams,
                                 options,
                                 onPromptProgress,
-                                guardedOnChunk
+                                guardedOnChunk,
+                                generation
                             )
                         }
                     }
@@ -352,6 +382,10 @@ class LlamaServerChatService {
             throw cancelled
         } catch (e: Exception) {
             Result.failure(e)
+        } finally {
+            if (activeGeneration === generation) {
+                activeGeneration = null
+            }
         }
     }
 
@@ -365,13 +399,21 @@ class LlamaServerChatService {
         samplingParams: LlamaServerSamplingParams,
         requestOptions: LlamaServerRequestOptions,
         onPromptProgress: (LlamaPromptProcessingProgress) -> Unit,
-        onChunk: (String?, String?) -> Unit
+        onChunk: (String?, String?) -> Unit,
+        generation: GenerationRequest
     ): OllamaService.ChatResponse {
-        val url = URL("${baseUrl.trimEnd('/')}/v1/chat/completions")
+        ensureGenerationActive(generation)
+        val normalizedBaseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl)
+            ?: throw IllegalArgumentException("Invalid llama-server URL")
+        val requestUrl = HttpEndpointUrlSupport.appendPath(
+            normalizedBaseUrl,
+            "/v1/chat/completions"
+        ) ?: throw IllegalArgumentException("Invalid llama-server URL")
+        val url = URL(requestUrl)
         val conn = url.openConnection() as HttpURLConnection
-        activeConnection = conn
-        activeBaseUrl = baseUrl
-        activeSlotId = requestOptions.slotId
+        generation.connection = conn
+        generation.baseUrl = normalizedBaseUrl
+        generation.slotId = requestOptions.slotId
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
         conn.doOutput = true
@@ -410,17 +452,17 @@ class LlamaServerChatService {
 
             BufferedReader(InputStreamReader(conn.inputStream)).use { reader ->
                 while (true) {
-                    if (shouldStop) {
+                    if (isGenerationCancelled(generation)) {
                         DebugLog.log("[$TAG] stop requested, breaking SSE stream")
                         conn.disconnect()
-                        throw Exception("Stopped by user")
+                        throw CancellationException("Stopped by user")
                     }
 
                     val data = reader.readLine() ?: break
-                    if (shouldStop) {
+                    if (isGenerationCancelled(generation)) {
                         DebugLog.log("[$TAG] stop requested after SSE read")
                         conn.disconnect()
-                        throw Exception("Stopped by user")
+                        throw CancellationException("Stopped by user")
                     }
                     if (!data.startsWith("data: ")) continue
                     val jsonStr = data.removePrefix("data: ").trim()
@@ -429,7 +471,7 @@ class LlamaServerChatService {
                     try {
                         val chunk = JSONObject(jsonStr)
                         if (chunk.has("id_slot")) {
-                            activeSlotId = chunk.optInt("id_slot")
+                            generation.slotId = chunk.optInt("id_slot")
                         }
                         parseLlamaPromptProcessingProgress(chunk)?.let(onPromptProgress)
                         parseLlamaServerUsage(chunk)?.let { usage = it }
@@ -508,7 +550,7 @@ class LlamaServerChatService {
                         when (classifySseProcessingFailure(e)) {
                             SseProcessingFailureKind.CANCELLATION -> {
                                 DebugLog.log("[$TAG] SSE stream cancelled because the owning Agent job stopped")
-                                stopGeneration()
+                                cancelGeneration(generation)
                                 throw e
                             }
                             SseProcessingFailureKind.MALFORMED_JSON -> {
@@ -564,10 +606,10 @@ class LlamaServerChatService {
                 usage = usage
             )
         } finally {
-            if (activeConnection === conn) {
-                activeConnection = null
-                activeBaseUrl = null
-                activeSlotId = null
+            if (generation.connection === conn) {
+                generation.connection = null
+                generation.baseUrl = null
+                generation.slotId = null
             }
             try {
                 conn.disconnect()
@@ -581,27 +623,46 @@ class LlamaServerChatService {
      */
     suspend fun checkConnection(baseUrl: String): Boolean = withContext(Dispatchers.IO) {
         val normalizedBaseUrl = normalizeLlamaServerBaseUrlForHealth(baseUrl) ?: return@withContext false
-        try {
-            RemoteBackendResilience.runWithSingleRetry(
-                onRetry = { firstError ->
-                    DebugLog.log("[$TAG] Recoverable llama-server health failure, retrying: ${RemoteBackendResilience.summarize(firstError)}")
-                }
-            ) {
-                val url = URL("$normalizedBaseUrl/health")
+        repeat(HEALTH_CHECK_ATTEMPTS) { attempt ->
+            val healthy = try {
+                val url = URL(
+                    HttpEndpointUrlSupport.appendPath(normalizedBaseUrl, "/health")
+                        ?: return@withContext false
+                )
                 val conn = url.openConnection() as HttpURLConnection
                 try {
                     conn.requestMethod = "GET"
                     conn.connectTimeout = 5000
                     conn.readTimeout = 5000
-                    conn.responseCode == 200
+                    llamaServerHealthResponseReady(conn.responseCode)
                 } finally {
                     conn.disconnect()
                 }
+            } catch (cancelled: CancellationException) {
+                // Stop/retry cancellation must unwind the agent turn. Treating it as an
+                // offline server causes the canceled turn to append a false Needs Direction
+                // pause and can re-block the next user retry.
+                throw cancelled
+            } catch (error: Exception) {
+                DebugLog.log("[$TAG] llama-server health probe failed: ${error.message ?: error.javaClass.simpleName}")
+                false
             }
-        } catch (e: Exception) {
-            false
+            if (healthy) return@withContext true
+            if (attempt + 1 < HEALTH_CHECK_ATTEMPTS) {
+                delay(HEALTH_CHECK_RETRY_DELAY_MS)
+            }
+        }
+        false
+    }
+
+    private fun ensureGenerationActive(generation: GenerationRequest) {
+        if (isGenerationCancelled(generation)) {
+            throw CancellationException("Generation stopped")
         }
     }
+
+    private fun isGenerationCancelled(generation: GenerationRequest): Boolean =
+        generation.cancelled.get() || (shouldStop && activeGeneration === generation)
 
     suspend fun discoverCapabilities(baseUrl: String): LlamaServerCapabilities = withContext(Dispatchers.IO) {
         val normalized = normalizeLlamaServerBaseUrlForHealth(baseUrl)
@@ -610,7 +671,10 @@ class LlamaServerChatService {
         var sleeping = false
 
         runCatching {
-            val conn = URL("$normalized/props").openConnection() as HttpURLConnection
+            val conn = URL(
+                HttpEndpointUrlSupport.appendPath(normalized, "/props")
+                    ?: return@runCatching
+            ).openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "GET"
                 conn.connectTimeout = 5_000
@@ -631,7 +695,10 @@ class LlamaServerChatService {
         }
 
         val slotsSupported = runCatching {
-            val conn = URL("$normalized/slots").openConnection() as HttpURLConnection
+            val conn = URL(
+                HttpEndpointUrlSupport.appendPath(normalized, "/slots")
+                    ?: return@runCatching false
+            ).openConnection() as HttpURLConnection
             try {
                 conn.requestMethod = "GET"
                 conn.connectTimeout = 5_000
@@ -654,13 +721,7 @@ class LlamaServerChatService {
     }
 
     private fun normalizeLlamaServerBaseUrlForHealth(baseUrl: String): String? {
-        val trimmed = baseUrl.trim().trimEnd('/')
-        if (trimmed.isBlank()) return null
-        val parsed = runCatching { URL(trimmed) }.getOrNull() ?: return null
-        val protocol = parsed.protocol?.lowercase().orEmpty()
-        if (protocol != "http" && protocol != "https") return null
-        if (parsed.host.isNullOrBlank()) return null
-        return trimmed
+        return HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl)
     }
 
     /**
@@ -676,11 +737,14 @@ class LlamaServerChatService {
     }
 
     private fun sendBestEffortLlamaServerCancel(baseUrl: String, slotId: Int?) {
-        val normalizedBase = baseUrl.trimEnd('/')
+        val normalizedBase = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl) ?: return
         val candidateSlotIds = listOfNotNull(slotId, -1).distinct()
         for (candidate in candidateSlotIds) {
             runCatching {
-                val conn = URL("$normalizedBase/slots").openConnection() as HttpURLConnection
+                val conn = URL(
+                    HttpEndpointUrlSupport.appendPath(normalizedBase, "/slots")
+                        ?: return@runCatching
+                ).openConnection() as HttpURLConnection
                 try {
                     conn.requestMethod = "POST"
                     conn.setRequestProperty("Content-Type", "application/json")

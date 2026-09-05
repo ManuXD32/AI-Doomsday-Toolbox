@@ -4,12 +4,19 @@ import android.content.Context
 import android.content.SharedPreferences
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.db.AgentRuntimeProfile
+import com.example.llamadroid.data.runtime.AgentRuntimeDispatchSettings
+import com.example.llamadroid.data.runtime.AgentRuntimeGlobalOverride
 import com.example.llamadroid.onnx.OnnxBackendOverride
 import com.example.llamadroid.onnx.OnnxCatalogProvider
 import com.example.llamadroid.onnx.OnnxExecutionMode
 import com.example.llamadroid.onnx.OnnxGraphOptimizationLevel
 import com.example.llamadroid.onnx.OnnxRuntimeBackend
 import com.example.llamadroid.service.LlamaSpeculativeMode
+import com.example.llamadroid.service.LlamaLoadMode
+import com.example.llamadroid.service.LlamaLoraSpec
+import com.example.llamadroid.service.ProcessController
+import com.example.llamadroid.service.migrateLegacyLlamaManagedSettings
 import com.example.llamadroid.service.AgentPromptComparisonStore
 import com.example.llamadroid.service.WhisperOutputFormat
 import com.example.llamadroid.service.WhisperVadAssetStore
@@ -18,7 +25,9 @@ import com.example.llamadroid.tama.data.TamaPicGenDefaults
 import com.example.llamadroid.util.AIConstants
 import com.example.llamadroid.util.PromptUtils
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 
@@ -147,6 +156,71 @@ data class LlamaOcrSettingsSnapshot(
 
 class SettingsRepository(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+    @Suppress("unused")
+    private val llamaManagedSettingsMigration = migrateLegacyLlamaManagedPreferences()
+
+    private fun migrateLegacyLlamaManagedPreferences() {
+        if (prefs.getInt(PREF_LLAMA_MANAGED_SCHEMA, 0) >= LLAMA_MANAGED_SCHEMA) return
+
+        val configuredLoadMode = if (prefs.contains(PREF_LLAMA_LOAD_MODE)) {
+            LlamaLoadMode.fromValue(prefs.getString(PREF_LLAMA_LOAD_MODE, null))
+        } else if (prefs.getBoolean(PREF_LOW_MEMORY_MODE, false)) {
+            LlamaLoadMode.NONE
+        } else {
+            // The packaged llama.cpp revision defaulted to mmap. Keep that
+            // behavior for every existing or fresh profile until the user
+            // explicitly selects Auto or another new mode.
+            LlamaLoadMode.MMAP
+        }
+        val selectedLoras = if (prefs.contains(PREF_SELECTED_LLM_LORAS)) {
+            decodeLlamaLoraSpecs(prefs.getString(PREF_SELECTED_LLM_LORAS, "[]"))
+        } else {
+            prefs.getString(PREF_SELECTED_LLM_LORA_PATH, null)
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { listOf(LlamaLoraSpec(it)) }
+                .orEmpty()
+        }
+        val controller = ProcessController()
+        val migrated = migrateLegacyLlamaManagedSettings(
+            args = controller.splitCommandLine(prefs.getString(PREF_CUSTOM_FLAGS, "").orEmpty()),
+            configuredLoadMode = configuredLoadMode,
+            selectedLoras = selectedLoras
+        )
+        val legacyPath = migrated.loras.firstOrNull()?.path
+        prefs.edit()
+            .putInt(PREF_LLAMA_MANAGED_SCHEMA, LLAMA_MANAGED_SCHEMA)
+            .putString(PREF_LLAMA_LOAD_MODE, migrated.loadMode.value)
+            .putBoolean(PREF_LOW_MEMORY_MODE, migrated.loadMode == LlamaLoadMode.NONE)
+            .putString(PREF_SELECTED_LLM_LORAS, encodeLlamaLoraSpecs(migrated.loras))
+            .putString(PREF_SELECTED_LLM_LORA_PATH, legacyPath)
+            .putString(PREF_CUSTOM_FLAGS, controller.buildCommandString(migrated.filteredArgs))
+            .commit()
+    }
+
+    private fun encodeLlamaLoraSpecs(loras: List<LlamaLoraSpec>): String =
+        JSONArray().apply {
+            loras.forEach { spec ->
+                put(JSONObject().apply {
+                    put("path", spec.path)
+                    put("strength", spec.strength.toDouble())
+                })
+            }
+        }.toString().replace("\\/", "/")
+
+    private fun decodeLlamaLoraSpecs(value: String?): List<LlamaLoraSpec> = runCatching {
+        val array = JSONArray(value ?: "[]")
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val path = item.optString("path").trim()
+                val strength = item.optDouble("strength", 1.0).toFloat()
+                if (path.isNotBlank() && strength.isFinite()) {
+                    add(LlamaLoraSpec(path, strength))
+                }
+            }
+        }
+    }.getOrDefault(emptyList())
 
     init {
         if (prefs.contains("model_storage_uri")) {
@@ -173,6 +247,11 @@ class SettingsRepository(private val context: Context) {
                 putInt(key, value)
             }
         }.apply()
+    }
+
+    private fun optionalLongPref(key: String, allowZero: Boolean = false): Long? {
+        if (!prefs.contains(key)) return null
+        return prefs.getLong(key, -1L).takeIf { if (allowZero) it >= 0L else it > 0L }
     }
 
     inner class RemoteSummarySettingsGroup(
@@ -558,14 +637,36 @@ class SettingsRepository(private val context: Context) {
         _selectedModelPath.value = path
     }
 
+    private val _selectedLlmLoras = MutableStateFlow(
+        decodeLlamaLoraSpecs(prefs.getString(PREF_SELECTED_LLM_LORAS, "[]"))
+    )
+    val selectedLlmLoras = _selectedLlmLoras.asStateFlow()
+
     private val _selectedLlmLoraPath = MutableStateFlow(
-        prefs.getString("selected_llm_lora_path", null)
+        _selectedLlmLoras.value.firstOrNull()?.path
+            ?: prefs.getString(PREF_SELECTED_LLM_LORA_PATH, null)
     )
     val selectedLlmLoraPath = _selectedLlmLoraPath.asStateFlow()
 
+    /** Legacy single-adapter setter retained for older call sites. */
     fun setSelectedLlmLoraPath(path: String?) {
-        prefs.edit().putString("selected_llm_lora_path", path).apply()
-        _selectedLlmLoraPath.value = path
+        val normalized = path?.trim()?.takeIf { it.isNotBlank() }
+        setSelectedLlmLoras(normalized?.let { listOf(LlamaLoraSpec(it)) }.orEmpty())
+    }
+
+    fun setSelectedLlmLoras(loras: List<LlamaLoraSpec>) {
+        val normalized = loras.mapNotNull { spec ->
+            val path = spec.path.trim()
+            spec.takeIf { path.isNotBlank() && spec.strength.isFinite() }
+                ?.copy(path = path)
+        }
+        val legacyPath = normalized.firstOrNull()?.path
+        prefs.edit()
+            .putString(PREF_SELECTED_LLM_LORAS, encodeLlamaLoraSpecs(normalized))
+            .putString(PREF_SELECTED_LLM_LORA_PATH, legacyPath)
+            .apply()
+        _selectedLlmLoras.value = normalized
+        _selectedLlmLoraPath.value = legacyPath
     }
     
     // Selected Embedding Model Path
@@ -1240,6 +1341,23 @@ class SettingsRepository(private val context: Context) {
             if (normalized == null) remove("server_physical_batch_size") else putInt("server_physical_batch_size", normalized)
         }.apply()
         _serverPhysicalBatchSize.value = normalized
+    }
+
+    private val _serverThreadsBatch = MutableStateFlow(
+        if (prefs.contains("server_threads_batch")) {
+            prefs.getInt("server_threads_batch", 4).coerceIn(1, 131072)
+        } else {
+            null
+        }
+    )
+    val serverThreadsBatch = _serverThreadsBatch.asStateFlow()
+
+    fun setServerThreadsBatch(size: Int?) {
+        val normalized = size?.coerceIn(1, 131072)
+        prefs.edit().apply {
+            if (normalized == null) remove("server_threads_batch") else putInt("server_threads_batch", normalized)
+        }.apply()
+        _serverThreadsBatch.value = normalized
     }
 
     private val _serverParallel = MutableStateFlow(
@@ -2864,19 +2982,28 @@ class SettingsRepository(private val context: Context) {
     val workflowSummaryMergePrompt = workflowSummarySettings.mergePrompt
     fun setWorkflowSummaryMergePrompt(prompt: String?) = workflowSummarySettings.setMergePrompt(prompt)
     
-    // ========== Low Memory Mode (disable mmap for large models) ==========
-    
-    /**
-     * When enabled, passes --no-mmap to llama.cpp, loading the entire model into RAM.
-     * This is SLOWER to start but can help on devices with limited virtual memory.
-     * Most users should keep this OFF since mmap allows running larger models by paging.
-     */
-    private val _lowMemoryMode = MutableStateFlow(prefs.getBoolean("low_memory_mode", false))
+    // ========== llama.cpp model loading mode ==========
+
+    private val _llamaLoadMode = MutableStateFlow(
+        LlamaLoadMode.fromValue(prefs.getString(PREF_LLAMA_LOAD_MODE, LlamaLoadMode.MMAP.value))
+    )
+    val llamaLoadMode = _llamaLoadMode.asStateFlow()
+
+    /** Deprecated compatibility projection for older callers and backups. */
+    private val _lowMemoryMode = MutableStateFlow(_llamaLoadMode.value == LlamaLoadMode.NONE)
     val lowMemoryMode = _lowMemoryMode.asStateFlow()
-    
+
+    fun setLlamaLoadMode(mode: LlamaLoadMode) {
+        prefs.edit()
+            .putString(PREF_LLAMA_LOAD_MODE, mode.value)
+            .putBoolean(PREF_LOW_MEMORY_MODE, mode == LlamaLoadMode.NONE)
+            .apply()
+        _llamaLoadMode.value = mode
+        _lowMemoryMode.value = mode == LlamaLoadMode.NONE
+    }
+
     fun setLowMemoryMode(enabled: Boolean) {
-        prefs.edit().putBoolean("low_memory_mode", enabled).apply()
-        _lowMemoryMode.value = enabled
+        setLlamaLoadMode(if (enabled) LlamaLoadMode.NONE else LlamaLoadMode.MMAP)
     }
     
     // ========== Termux Tool Network Visibility Settings ==========
@@ -4170,11 +4297,341 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    // ========== Optional General Agent Override ==========
+
+    /**
+     * The General card has its own persisted values.  Individual role/custom
+     * settings are never copied or rewritten when this card is edited; the
+     * values below are consulted only by [resolveAgentSettingsForDispatch]
+     * while the toggle is enabled.
+     */
+    private val _agentGlobalOverrideEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, false)
+    )
+    val agentGlobalOverrideEnabled = _agentGlobalOverrideEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideBackend = MutableStateFlow(
+        normalizeOllamaOrLlamaBackend(
+            prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, _agentBackend.value)
+        )
+    )
+    val agentGlobalOverrideBackend = _agentGlobalOverrideBackend.asStateFlow()
+
+    private val _agentGlobalOverrideModel = MutableStateFlow(
+        prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, _agentOrchestratorModel.value)
+    )
+    val agentGlobalOverrideModel = _agentGlobalOverrideModel.asStateFlow()
+
+    private val _agentGlobalOverrideEndpointConfigId = MutableStateFlow(
+        optionalLongPref(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+    )
+    val agentGlobalOverrideEndpointConfigId = _agentGlobalOverrideEndpointConfigId.asStateFlow()
+
+    private val _agentGlobalOverrideManagedLlamaServerId = MutableStateFlow(
+        optionalLongPref(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, allowZero = true)
+    )
+    val agentGlobalOverrideManagedLlamaServerId = _agentGlobalOverrideManagedLlamaServerId.asStateFlow()
+
+    private val _agentGlobalOverrideLiteRtModelId = MutableStateFlow(
+        optionalLongPref(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)
+            ?: _agentLiteRtModelId.value.takeIf { it > 0L }
+    )
+    val agentGlobalOverrideLiteRtModelId = _agentGlobalOverrideLiteRtModelId.asStateFlow()
+
+    private val _agentGlobalOverrideLiteRtBackend = MutableStateFlow(
+        normalizeLiteRtBackend(
+            prefs.getString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, _agentLiteRtBackend.value)
+        )
+    )
+    val agentGlobalOverrideLiteRtBackend = _agentGlobalOverrideLiteRtBackend.asStateFlow()
+
+    private val _agentGlobalOverrideLiteRtMtpEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, _agentLiteRtMtpEnabled.value)
+    )
+    val agentGlobalOverrideLiteRtMtpEnabled = _agentGlobalOverrideLiteRtMtpEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideContextSize = MutableStateFlow(
+        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, _agentOrchestratorCtx.value)
+            .coerceIn(1_024, 1_048_576)
+    )
+    val agentGlobalOverrideContextSize = _agentGlobalOverrideContextSize.asStateFlow()
+
+    private val _agentGlobalOverrideMaxOutputTokens = MutableStateFlow(
+        prefs.getInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, _agentOrchestratorMaxOutputTokens.value)
+            .coerceIn(1, 1_048_576)
+    )
+    val agentGlobalOverrideMaxOutputTokens = _agentGlobalOverrideMaxOutputTokens.asStateFlow()
+
+    private val _agentGlobalOverrideThinkingEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, _agentOrchestratorThinkingEnabled.value)
+    )
+    val agentGlobalOverrideThinkingEnabled = _agentGlobalOverrideThinkingEnabled.asStateFlow()
+
+    private val _agentGlobalOverrideVisionEnabled = MutableStateFlow(
+        prefs.getBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, _agentOrchestratorVisionEnabled.value)
+    )
+    val agentGlobalOverrideVisionEnabled = _agentGlobalOverrideVisionEnabled.asStateFlow()
+
+    private val _agentGlobalRuntimeOverride = MutableStateFlow(
+        readAgentGlobalRuntimeOverride()
+    )
+    /** Atomic immutable snapshot for UI and dispatch callers. */
+    val agentGlobalRuntimeOverride: StateFlow<AgentRuntimeGlobalOverride> =
+        _agentGlobalRuntimeOverride.asStateFlow()
+
+    private fun readAgentGlobalRuntimeOverride(): AgentRuntimeGlobalOverride =
+        AgentRuntimeGlobalOverride(
+            enabled = _agentGlobalOverrideEnabled.value,
+            backend = _agentGlobalOverrideBackend.value,
+            model = _agentGlobalOverrideModel.value,
+            endpointConfigId = _agentGlobalOverrideEndpointConfigId.value,
+            managedLlamaServerId = _agentGlobalOverrideManagedLlamaServerId.value,
+            liteRtModelId = _agentGlobalOverrideLiteRtModelId.value,
+            liteRtBackend = _agentGlobalOverrideLiteRtBackend.value,
+            liteRtMtpEnabled = _agentGlobalOverrideLiteRtMtpEnabled.value,
+            contextSize = _agentGlobalOverrideContextSize.value,
+            maxOutputTokens = _agentGlobalOverrideMaxOutputTokens.value,
+            thinkingEnabled = _agentGlobalOverrideThinkingEnabled.value,
+            visionEnabled = _agentGlobalOverrideVisionEnabled.value
+        ).normalized()
+
+    private fun publishAgentGlobalRuntimeOverride() {
+        _agentGlobalRuntimeOverride.value = readAgentGlobalRuntimeOverride()
+    }
+
+    fun getAgentGlobalRuntimeOverride(): AgentRuntimeGlobalOverride =
+        agentGlobalRuntimeOverride.value
+
+    fun setAgentGlobalOverrideEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, enabled).apply()
+        _agentGlobalOverrideEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideBackend(backend: String) {
+        val normalized = normalizeOllamaOrLlamaBackend(backend)
+        prefs.edit().putString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, normalized).apply()
+        _agentGlobalOverrideBackend.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideModel(model: String?) {
+        val normalized = model?.trim()?.takeIf { it.isNotEmpty() }
+        prefs.edit().apply {
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MODEL)
+            else putString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, normalized)
+        }.apply()
+        _agentGlobalOverrideModel.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Select a named endpoint for every agent; clears managed-server selection. */
+    fun setAgentGlobalOverrideEndpointConfigId(id: Long?) {
+        val normalized = id?.takeIf { it > 0L }
+        prefs.edit().apply {
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID, normalized)
+            remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+        }.apply()
+        _agentGlobalOverrideEndpointConfigId.value = normalized
+        _agentGlobalOverrideManagedLlamaServerId.value = null
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Select a managed llama server for every agent; clears named endpoint selection. */
+    fun setAgentGlobalOverrideManagedLlamaServerId(id: Long?) {
+        val normalized = id?.takeIf { it >= 0L }
+        prefs.edit().apply {
+            remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, normalized)
+        }.apply()
+        _agentGlobalOverrideEndpointConfigId.value = null
+        _agentGlobalOverrideManagedLlamaServerId.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Use the backend's ordinary global URL/model connection for every agent. */
+    fun clearAgentGlobalOverrideConnection() {
+        prefs.edit()
+            .remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            .remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            .apply()
+        _agentGlobalOverrideEndpointConfigId.value = null
+        _agentGlobalOverrideManagedLlamaServerId.value = null
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideLiteRtModelId(modelId: Long?) {
+        val normalized = modelId?.takeIf { it > 0L }
+        prefs.edit().apply {
+            if (normalized == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID, normalized)
+        }.apply()
+        _agentGlobalOverrideLiteRtModelId.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideLiteRtBackend(backend: String) {
+        val normalized = normalizeLiteRtBackend(backend)
+        prefs.edit().putString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, normalized).apply()
+        _agentGlobalOverrideLiteRtBackend.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideLiteRtMtpEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, enabled).apply()
+        _agentGlobalOverrideLiteRtMtpEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideContextSize(size: Int) {
+        val normalized = size.coerceIn(1_024, 1_048_576)
+        prefs.edit().putInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, normalized).apply()
+        _agentGlobalOverrideContextSize.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideMaxOutputTokens(value: Int) {
+        val normalized = value.coerceIn(1, 1_048_576)
+        prefs.edit().putInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, normalized).apply()
+        _agentGlobalOverrideMaxOutputTokens.value = normalized
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideThinkingEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, enabled).apply()
+        _agentGlobalOverrideThinkingEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    fun setAgentGlobalOverrideVisionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, enabled).apply()
+        _agentGlobalOverrideVisionEnabled.value = enabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /** Persist a complete General-card snapshot in one preference transaction. */
+    fun setAgentGlobalRuntimeOverride(value: AgentRuntimeGlobalOverride) {
+        val normalized = value.normalized()
+        prefs.edit().apply {
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_ENABLED, normalized.enabled)
+            putString(PREF_AGENT_GLOBAL_OVERRIDE_BACKEND, normalized.backend)
+            if (normalized.model == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MODEL)
+            else putString(PREF_AGENT_GLOBAL_OVERRIDE_MODEL, normalized.model)
+            if (normalized.endpointConfigId == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID, normalized.endpointConfigId)
+            if (normalized.managedLlamaServerId == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID, normalized.managedLlamaServerId)
+            if (normalized.liteRtModelId == null) remove(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID)
+            else putLong(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID, normalized.liteRtModelId)
+            putString(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND, normalized.liteRtBackend)
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED, normalized.liteRtMtpEnabled)
+            putInt(PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE, normalized.contextSize)
+            putInt(PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS, normalized.maxOutputTokens)
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED, normalized.thinkingEnabled)
+            putBoolean(PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED, normalized.visionEnabled)
+        }.apply()
+        _agentGlobalOverrideEnabled.value = normalized.enabled
+        _agentGlobalOverrideBackend.value = normalized.backend
+        _agentGlobalOverrideModel.value = normalized.model
+        _agentGlobalOverrideEndpointConfigId.value = normalized.endpointConfigId
+        _agentGlobalOverrideManagedLlamaServerId.value = normalized.managedLlamaServerId
+        _agentGlobalOverrideLiteRtModelId.value = normalized.liteRtModelId
+        _agentGlobalOverrideLiteRtBackend.value = normalized.liteRtBackend
+        _agentGlobalOverrideLiteRtMtpEnabled.value = normalized.liteRtMtpEnabled
+        _agentGlobalOverrideContextSize.value = normalized.contextSize
+        _agentGlobalOverrideMaxOutputTokens.value = normalized.maxOutputTokens
+        _agentGlobalOverrideThinkingEnabled.value = normalized.thinkingEnabled
+        _agentGlobalOverrideVisionEnabled.value = normalized.visionEnabled
+        publishAgentGlobalRuntimeOverride()
+    }
+
+    /**
+     * Resolve all runtime and tuning choices for one dispatch.  The global
+     * card is selected as a whole when enabled; otherwise the stored profile,
+     * custom-agent values, and existing role preferences remain authoritative.
+     */
+    fun resolveAgentSettingsForDispatch(
+        role: String,
+        customModel: String? = null,
+        customVisionEnabled: Boolean? = null,
+        runtimeProfile: AgentRuntimeProfile? = null
+    ): AgentRuntimeDispatchSettings {
+        val global = getAgentGlobalRuntimeOverride().takeIf { it.enabled }
+        val profile = runtimeProfile?.normalized()
+        val roleName = role.trim().uppercase(Locale.US)
+        val backend = normalizeOllamaOrLlamaBackend(
+            global?.backend ?: profile?.backend ?: agentBackend.value
+        )
+        val model = if (global != null) {
+            global.model
+        } else {
+            profile?.model?.takeIf { it.isNotBlank() }
+                ?: customModel?.trim()?.takeIf { it.isNotBlank() }
+                ?: getAgentModelForRole(roleName)
+        }
+        // A null target in an enabled General override means "use this
+        // backend's ordinary global connection".  Do not accidentally fall
+        // through to the role profile's named endpoint or managed server.
+        val endpointConfigId = if (global != null) {
+            global.endpointConfigId
+        } else {
+            profile?.endpointConfigId
+        }
+        val managedServerId = if (global != null) {
+            global.managedLlamaServerId
+        } else {
+            profile?.managedLlamaServerId
+        }
+        val liteRtModelId = if (global != null) {
+            global.liteRtModelId
+        } else {
+            profile?.liteRtModelId?.takeIf { it > 0L }
+                ?: agentLiteRtModelId.value.takeIf { it > 0L }
+        }
+        return AgentRuntimeDispatchSettings(
+            backend = backend,
+            model = model,
+            endpointConfigId = endpointConfigId,
+            managedLlamaServerId = managedServerId,
+            liteRtModelId = liteRtModelId,
+            liteRtBackend = global?.liteRtBackend ?: agentLiteRtBackend.value,
+            liteRtMtpEnabled = global?.liteRtMtpEnabled ?: agentLiteRtMtpEnabled.value,
+            contextSize = global?.contextSize ?: getAgentContextForRole(roleName),
+            maxOutputTokens = global?.maxOutputTokens ?: getAgentMaxOutputTokensForRole(roleName),
+            thinkingEnabled = global?.thinkingEnabled
+                ?: getAgentThinkingEnabledForRole(roleName),
+            visionEnabled = global?.visionEnabled
+                ?: customVisionEnabled
+                ?: getAgentVisionEnabledForRole(roleName)
+        ).normalized()
+    }
+
 
     // ========== AI Agent Per-Role System Prompts ==========
     
     companion object {
         private const val MANGA_TRANSLATION_CONFIG_KEY = "manga_translation_run_config_v4"
+        private const val LLAMA_MANAGED_SCHEMA = 1
+        private const val PREF_LLAMA_MANAGED_SCHEMA = "llama_managed_settings_schema"
+        private const val PREF_LLAMA_LOAD_MODE = "llama_load_mode"
+        private const val PREF_SELECTED_LLM_LORAS = "selected_llm_loras_json"
+        private const val PREF_SELECTED_LLM_LORA_PATH = "selected_llm_lora_path"
+        private const val PREF_LOW_MEMORY_MODE = "low_memory_mode"
+        private const val PREF_CUSTOM_FLAGS = "custom_flags"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_ENABLED = "agent_global_override_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_BACKEND = "agent_global_override_backend"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_MODEL = "agent_global_override_model"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_ENDPOINT_CONFIG_ID = "agent_global_override_endpoint_config_id"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_MANAGED_SERVER_ID = "agent_global_override_managed_server_id"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MODEL_ID = "agent_global_override_litert_model_id"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_LITERT_BACKEND = "agent_global_override_litert_backend"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_LITERT_MTP_ENABLED = "agent_global_override_litert_mtp_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_CONTEXT_SIZE = "agent_global_override_context_size"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_MAX_OUTPUT_TOKENS = "agent_global_override_max_output_tokens"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_THINKING_ENABLED = "agent_global_override_thinking_enabled"
+        private const val PREF_AGENT_GLOBAL_OVERRIDE_VISION_ENABLED = "agent_global_override_vision_enabled"
         const val PDF_BACKEND_OLLAMA = "ollama"
         const val PDF_BACKEND_LLAMA_SERVER = "llama-server"
         const val PDF_BACKEND_LLAMA_SWAP = "llama-swap"

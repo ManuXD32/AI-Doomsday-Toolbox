@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.ForeignKey
 import androidx.room.Index
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 
 @Entity(tableName = "llama_servers")
 data class LlamaServerEntity(
@@ -284,12 +285,10 @@ fun normalizeLlamaServerEngine(engine: String?): String =
     }
 
 fun buildLlamaServerBaseUrl(host: String, port: Int): String {
-    val trimmedHost = host.trim()
-    return if (trimmedHost.startsWith("http://") || trimmedHost.startsWith("https://")) {
-        "$trimmedHost:$port/"
-    } else {
-        "http://$trimmedHost:$port/"
-    }
+    return HttpEndpointUrlSupport.fromHostPort(host, port)
+        ?.trimEnd('/')
+        ?.plus('/')
+        ?: "http://${host.trim()}:$port/"
 }
 
 fun mergeUserTextWithAudioTranscript(userText: String, transcript: String): String {

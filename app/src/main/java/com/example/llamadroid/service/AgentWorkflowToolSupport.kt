@@ -3,6 +3,7 @@ package com.example.llamadroid.service
 import com.example.llamadroid.data.db.AgentTodoEntity
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Locale
 import java.util.UUID
 
 internal fun parseQuestionToolCall(toolCall: OllamaService.ToolCall): QuestionSpec {
@@ -54,11 +55,11 @@ internal fun parseTodoToolCall(
             ?: throw IllegalArgumentException("Todo ${index + 1} is not an object")
         val text = item.optString("text").trim()
         require(text.isNotBlank()) { "Todo ${index + 1} needs text" }
-        val status = item.optString("status", "PENDING").uppercase()
-        require(status in setOf("PENDING", "IN_PROGRESS", "COMPLETED", "CANCELLED")) {
+        val status = item.optString("status", "PENDING").uppercase(Locale.ROOT)
+        require(status in AgentTodoStatus.all) {
             "Unsupported todo status: $status"
         }
-        val priority = item.optString("priority", "NORMAL").uppercase()
+        val priority = item.optString("priority", "NORMAL").uppercase(Locale.ROOT)
         require(priority in setOf("LOW", "NORMAL", "HIGH")) {
             "Unsupported todo priority: $priority"
         }
@@ -74,15 +75,16 @@ internal fun parseTodoToolCall(
 }
 
 internal fun todoEntitiesJson(todos: List<AgentTodoEntity>): String {
-    val actionable = todos.filterNot { it.status == "CANCELLED" }
-    val completedCount = actionable.count { it.status == "COMPLETED" }
+    val actionable = todos.filterNot { it.status == AgentTodoStatus.CANCELLED }
+    val completedCount = actionable.count { it.status == AgentTodoStatus.COMPLETED }
     val progressPercent = when {
         actionable.isNotEmpty() -> (completedCount * 100 / actionable.size).coerceIn(0, 100)
         todos.isNotEmpty() -> 100
         else -> 0
     }
-    val nextTodo = todos.firstOrNull { it.status == "IN_PROGRESS" }
-        ?: todos.firstOrNull { it.status == "PENDING" }
+    val nextTodo = AgentTodoStatus.actionPriority.firstNotNullOfOrNull { status ->
+        todos.firstOrNull { it.status == status }
+    }
     return stableJson(
         mapOf(
             "todos" to todos.map { todo ->

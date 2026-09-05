@@ -19,6 +19,7 @@ import com.example.llamadroid.util.CpuFeatures
 import com.example.llamadroid.util.NativeModuleCatalog
 import com.example.llamadroid.util.NativeProcessCleanup
 import java.security.MessageDigest
+import java.util.Locale
 import kotlin.math.min
 
 data class ProcessRunResult(
@@ -116,8 +117,15 @@ class ProcessController {
     fun getCommand(binaryPath: String, config: LlamaConfig): List<String> {
         val forceOpenClCpuTargetGpuDraft = shouldForceOpenClCpuTargetGpuDraft(binaryPath, config)
         val rawCustomFlagsArgs = splitCommandLine(config.customFlags.orEmpty())
+        val managedCustomFlags = resolveManagedLlamaCustomFlags(
+            args = rawCustomFlagsArgs,
+            configuredLoadMode = config.effectiveLoadMode()
+        )
+        require(managedCustomFlags.errors.isEmpty()) {
+            managedCustomFlags.errors.joinToString(prefix = "Invalid managed llama flags: ")
+        }
         val baseCustomFlagsArgs = filterDistributedLlamaCustomFlags(
-            filterManagedLlamaCustomFlags(rawCustomFlagsArgs, config),
+            filterManagedLlamaCustomFlags(managedCustomFlags.filteredArgs, config),
             config
         )
         val customFlagsArgs = if (forceOpenClCpuTargetGpuDraft) {
@@ -135,9 +143,17 @@ class ProcessController {
             "--port", config.port.toString(),
             "--host", config.host
         )
+        // Always emit one canonical load-mode pair. Legacy mmap/mlock/direct-io
+        // spellings in custom flags are promoted into this value and removed.
+        args.add("--load-mode")
+        args.add(managedCustomFlags.loadMode.value)
         config.physicalBatchSize?.let { physicalBatchSize ->
             args.add("--ubatch-size")
             args.add(physicalBatchSize.toString())
+        }
+        config.threadsBatch?.let { threadsBatch ->
+            args.add("--threads-batch")
+            args.add(threadsBatch.toString())
         }
         
         // Add vision model projector if available
@@ -149,11 +165,8 @@ class ProcessController {
             }
         }
 
-        if (!config.loraPath.isNullOrBlank() &&
-            !hasAnyCommandFlag(customFlagsText, setOf("--lora"))
-        ) {
-            args.add("--lora")
-            args.add(config.loraPath)
+        if (config.effectiveLoraSpecs().isNotEmpty() && !managedCustomFlags.containsLoraFlag) {
+            args.addAll(buildLlamaLoraArgs(config.effectiveLoraSpecs()))
         }
         
         if (config.isEmbedding) {
@@ -247,11 +260,6 @@ class ProcessController {
         ) {
             args.add("-ngl")
             args.add("999")
-        }
-        
-        // Add --no-mmap flag if memory mapping is disabled
-        if (config.noMmap) {
-            args.add("--no-mmap")
         }
         
         val speculativeConfig = if (forceOpenClCpuTargetGpuDraft) {
@@ -381,25 +389,40 @@ class ProcessController {
     ): List<String> {
         if (template.isBlank()) return getCommand(binaryPath, config)
 
+        // This exact legacy pattern represented the one selected adapter. Promote
+        // only that known-safe spelling so a migrated stack can expand in place;
+        // arbitrary uses of {lora} intentionally retain first-adapter semantics.
+        val canonicalTemplate = template.replace("--lora {lora}", "{lora_args}")
         val defaultArgs = getCommand(binaryPath, config)
-        val templateContainsNativeToolsPlaceholder = template.contains("{native_tools_args}")
+        val templateContainsNativeToolsPlaceholder = canonicalTemplate.contains("{native_tools_args}")
         val templateContainsLoraPlaceholder =
-            template.contains("{lora}") || template.contains("{lora_args}")
-        val substituted = substituteTemplateValues(template, binaryPath, config, defaultArgs)
+            canonicalTemplate.contains("{lora}") || canonicalTemplate.contains("{lora_args}")
+        val substituted = substituteTemplateValues(canonicalTemplate, binaryPath, config, defaultArgs)
         val renderedArgs = splitCommandLine(substituted).filter { it.isNotBlank() }.let { args ->
             val scopedArgs = if (config.rpcWorkers.isEmpty()) {
                 filterDistributedLlamaCustomFlags(args, config)
             } else args
-            val withTools = appendNativeToolsArgsIfNeeded(
+            val managedArgs = resolveManagedLlamaCustomFlags(
                 args = scopedArgs,
+                configuredLoadMode = config.effectiveLoadMode()
+            )
+            require(managedArgs.errors.isEmpty()) {
+                managedArgs.errors.joinToString(prefix = "Invalid managed llama flags: ")
+            }
+            val withTools = appendNativeToolsArgsIfNeeded(
+                args = managedArgs.filteredArgs,
                 enabled = config.nativeToolsEnabled && !templateContainsNativeToolsPlaceholder
             )
             appendLoraArgsIfNeeded(
                 args = withTools,
-                loraPath = config.loraPath.takeUnless {
+                loras = config.effectiveLoraSpecs().takeUnless {
                     templateContainsLoraPlaceholder
-                }
+                },
+                containsLoraFlag = managedArgs.containsLoraFlag
             )
+                .let { withLoras ->
+                    normalizeManagedLlamaLoadModeArgs(withLoras, managedArgs.loadMode)
+                }
         }
         if (renderedArgs.isEmpty()) return defaultArgs
 
@@ -409,7 +432,7 @@ class ProcessController {
             config = config
         )
 
-        val hasExplicitBinary = template.contains("{binary}") ||
+        val hasExplicitBinary = canonicalTemplate.contains("{binary}") ||
             effectiveRenderedArgs.firstOrNull() == binaryPath ||
             effectiveRenderedArgs.firstOrNull()?.startsWith("-") == false
 
@@ -423,8 +446,15 @@ class ProcessController {
         defaultArgs: List<String>
     ): String {
         val forceOpenClCpuTargetGpuDraft = shouldForceOpenClCpuTargetGpuDraft(binaryPath, config)
+        val managedCustomFlags = resolveManagedLlamaCustomFlags(
+            args = splitCommandLine(config.customFlags.orEmpty()),
+            configuredLoadMode = config.effectiveLoadMode()
+        )
+        require(managedCustomFlags.errors.isEmpty()) {
+            managedCustomFlags.errors.joinToString(prefix = "Invalid managed llama flags: ")
+        }
         val customFlagsArgs = filterDistributedLlamaCustomFlags(
-            filterManagedLlamaCustomFlags(splitCommandLine(config.customFlags.orEmpty()), config),
+            managedCustomFlags.filteredArgs,
             config
         )
         val speculativeConfig = if (forceOpenClCpuTargetGpuDraft) {
@@ -440,10 +470,13 @@ class ProcessController {
         val speculativeArgs = buildSpeculativeArgs(speculativeConfig)
         val mtpArgs = if (config.speculativeMode == LlamaSpeculativeMode.DRAFT_MTP) speculativeArgs else emptyList()
         val nativeToolsArgs = buildNativeToolsArgs(config.nativeToolsEnabled)
-        val loraArgs = config.loraPath
-            ?.takeIf { it.isNotBlank() }
-            ?.let { listOf("--lora", it) }
-            .orEmpty()
+        // Preserve the historical rule: any explicit custom LoRA flag owns the
+        // adapter selection. This matters for legacy templates that expand both
+        // {custom_flags} and {lora_args} before their profile is saved again.
+        val loraArgs = buildLlamaLoraArgs(
+            config.effectiveLoraSpecs().takeUnless { managedCustomFlags.containsLoraFlag }.orEmpty()
+        )
+        val loadModeArgs = listOf("--load-mode", managedCustomFlags.loadMode.value)
         val kvOffloadArgs = buildKvOffloadArgs(config, customFlagsArgs)
         val kvCacheArgs = if (config.kvCacheEnabled) {
             buildList {
@@ -465,10 +498,11 @@ class ProcessController {
             "{model}" to config.modelPath,
             "{draft_model}" to (config.draftModelPath ?: ""),
             "{mmproj}" to (config.mmprojPath ?: ""),
-            "{lora}" to (config.loraPath ?: ""),
+            "{lora}" to (config.effectiveLoraSpecs().firstOrNull()?.path ?: ""),
             "{threads}" to config.threads.toString(),
             "{batch_size}" to config.batchSize.toString(),
             "{physical_batch_size}" to (config.physicalBatchSize ?: config.batchSize).toString(),
+            "{threads_batch}" to (config.threadsBatch ?: config.threads).toString(),
             "{context_size}" to config.contextSize.toString(),
             "{temperature}" to String.format(java.util.Locale.US, "%.2f", config.temperature),
             "{host}" to config.host,
@@ -491,6 +525,8 @@ class ProcessController {
             "{mtp_args}" to buildCommandString(mtpArgs),
             "{native_tools_args}" to buildCommandString(nativeToolsArgs),
             "{lora_args}" to buildCommandString(loraArgs),
+            "{load_mode_args}" to buildCommandString(loadModeArgs),
+            "{load_mode}" to managedCustomFlags.loadMode.value,
             "{kv_cache_args}" to buildCommandString(kvCacheArgs + kvOffloadArgs),
             "{kv_offload_args}" to buildCommandString(kvOffloadArgs),
             "{draft_device_args}" to buildCommandString(
@@ -520,12 +556,11 @@ class ProcessController {
 
     private fun appendLoraArgsIfNeeded(
         args: List<String>,
-        loraPath: String?
+        loras: List<LlamaLoraSpec>?,
+        containsLoraFlag: Boolean
     ): List<String> {
-        if (loraPath.isNullOrBlank() ||
-            hasAnyCommandFlag(args, setOf("--lora"))
-        ) return args
-        return args + listOf("--lora", loraPath)
+        if (loras.isNullOrEmpty() || containsLoraFlag || hasAnyLoraCommandFlag(args)) return args
+        return args + buildLlamaLoraArgs(loras)
     }
 
     private fun buildSpeculativeArgs(config: LlamaConfig): List<String> {
@@ -724,6 +759,12 @@ class ProcessController {
     private fun hasAnyCommandFlag(args: List<String>, flags: Set<String>): Boolean =
         args.any { token ->
             flags.any { flag -> token == flag || token.startsWith("$flag=") }
+        }
+
+    private fun hasAnyLoraCommandFlag(args: List<String>): Boolean =
+        args.any { token ->
+            val flag = token.substringBefore('=')
+            flag == "--lora" || flag == "--lora-scaled"
         }
 
     private fun shouldForceOpenClCpuTargetGpuDraft(
@@ -985,6 +1026,17 @@ class ProcessController {
             
             // Start log consumer
             onClearServerLogs?.invoke()
+            // Keep the exact argv handed to ProcessBuilder at the head of each server's
+            // retained log. buildCommandString applies shell quoting so paths/flags containing
+            // whitespace or apostrophes remain readable and copyable without changing meaning.
+            val commandLog = "Command: ${buildCommandString(args)}"
+            if (onServerLog != null) {
+                onServerLog.invoke(commandLog)
+            } else {
+                // The distributed-master runtime exposes only its native-output callback.
+                // Keep the command first there too without duplicating it for normal servers.
+                onLog?.invoke(commandLog)
+            }
             if (stoppedIntentionally || shouldStop?.invoke() == true) {
                 stop()
                 return@withContext ProcessRunResult(
@@ -1310,6 +1362,254 @@ class ProcessController {
     }
 }
 
+/** Parsed custom flags whose model-loading options are owned by typed settings. */
+internal data class ManagedLlamaCustomFlagsResult(
+    val filteredArgs: List<String>,
+    val loadMode: LlamaLoadMode,
+    val containsLoraFlag: Boolean,
+    val errors: List<String> = emptyList()
+)
+
+/**
+ * Promote every legacy or canonical load-mode spelling in [args]. The last valid
+ * managed load flag wins, while malformed managed tokens remain in [filteredArgs]
+ * and are reported in [errors] instead of being silently discarded.
+ */
+internal fun resolveManagedLlamaCustomFlags(
+    args: List<String>,
+    configuredLoadMode: LlamaLoadMode
+): ManagedLlamaCustomFlagsResult {
+    val filtered = mutableListOf<String>()
+    val errors = mutableListOf<String>()
+    var loadMode = configuredLoadMode
+    var containsLora = false
+    var index = 0
+
+    fun parseLoadMode(raw: String, source: String): Boolean {
+        val normalized = raw.trim().lowercase(Locale.US)
+        val parsed = LlamaLoadMode.entries.firstOrNull { it.value == normalized }
+        if (parsed == null) {
+            errors += "$source has an unsupported load mode '$raw'"
+            return false
+        }
+        loadMode = parsed
+        return true
+    }
+
+    while (index < args.size) {
+        val token = args[index]
+        val flagName = token.substringBefore('=')
+        val inlineValue = token.substringAfter('=', missingDelimiterValue = "")
+        when {
+            flagName == "--load-mode" || flagName == "-lm" -> {
+                if ('=' in token) {
+                    if (inlineValue.isBlank()) {
+                        errors += "$token requires a load mode value"
+                        filtered += token
+                    } else if (!parseLoadMode(inlineValue, token)) {
+                        filtered += token
+                    }
+                    index += 1
+                } else {
+                    val value = args.getOrNull(index + 1)
+                    if (value.isNullOrBlank() || value.startsWith("-")) {
+                        errors += "$token requires a load mode value"
+                        filtered += token
+                        index += 1
+                    } else if (parseLoadMode(value, token)) {
+                        index += 2
+                    } else {
+                        filtered += token
+                        filtered += value
+                        index += 2
+                    }
+                }
+            }
+            flagName in LEGACY_LLAMA_LOAD_FLAGS -> {
+                if ('=' in token) {
+                    errors += "$token is not a valid legacy load-mode flag"
+                    filtered += token
+                } else {
+                    loadMode = LEGACY_LLAMA_LOAD_FLAGS.getValue(flagName)
+                }
+                index += 1
+            }
+            flagName == "--lora" || flagName == "--lora-scaled" -> {
+                containsLora = true
+                val validInline = '=' in token && inlineValue.isNotBlank()
+                if ('=' in token) {
+                    if (!validInline) errors += "$token requires a LoRA value"
+                    filtered += token
+                    index += 1
+                } else {
+                    val value = args.getOrNull(index + 1)
+                    if (value.isNullOrBlank() || value.startsWith("-")) {
+                        errors += "$token requires a LoRA value"
+                        filtered += token
+                        index += 1
+                    } else {
+                        filtered += token
+                        filtered += value
+                        index += 2
+                    }
+                }
+            }
+            else -> {
+                filtered += token
+                index += 1
+            }
+        }
+    }
+
+    return ManagedLlamaCustomFlagsResult(
+        filteredArgs = filtered,
+        loadMode = loadMode,
+        containsLoraFlag = containsLora,
+        errors = errors
+    )
+}
+
+/** Canonicalise a complete template argv to exactly one --load-mode pair. */
+internal fun normalizeManagedLlamaLoadModeArgs(
+    args: List<String>,
+    configuredLoadMode: LlamaLoadMode
+): List<String> {
+    val parsed = resolveManagedLlamaCustomFlags(args, configuredLoadMode)
+    require(parsed.errors.isEmpty()) {
+        parsed.errors.joinToString(prefix = "Invalid managed llama flags: ")
+    }
+    val result = parsed.filteredArgs.toMutableList()
+    val insertion = result.indexOfFirst { it == "--host" || it == "-H" }
+        .takeIf { it >= 0 } ?: result.size
+    result.addAll(insertion, listOf("--load-mode", parsed.loadMode.value))
+    return result
+}
+
+/** A typed LoRA stack is represented by one repeated flag per adapter. */
+internal fun buildLlamaLoraArgs(loras: List<LlamaLoraSpec>): List<String> = buildList {
+    loras.forEachIndexed { index, lora ->
+        val path = lora.path.trim()
+        require(path.isNotBlank()) { "LoRA[$index] path must not be blank" }
+        require(',' !in path) {
+            "LoRA[$index] path contains ',', which llama.cpp reserves as an adapter delimiter"
+        }
+        require(lora.strength.isFinite()) { "LoRA[$index] strength must be finite" }
+        if (lora.strength == 1.0f) {
+            add("--lora")
+            add(path)
+        } else {
+            require(':' !in path) {
+                "LoRA[$index] path contains ':', which llama.cpp reserves before a scaled strength"
+            }
+            add("--lora-scaled")
+            add("$path:${formatLlamaLoraStrength(lora.strength)}")
+        }
+    }
+}
+
+internal fun formatLlamaLoraStrength(strength: Float): String {
+    require(strength.isFinite()) { "LoRA strength must be finite" }
+    return String.format(Locale.US, "%.6f", strength)
+        .trimEnd('0')
+        .trimEnd('.')
+        .ifBlank { "0" }
+}
+
+private val LEGACY_LLAMA_LOAD_FLAGS: Map<String, LlamaLoadMode> = mapOf(
+    "--mmap" to LlamaLoadMode.MMAP,
+    "--no-mmap" to LlamaLoadMode.NONE,
+    "--mlock" to LlamaLoadMode.MLOCK,
+    "--direct-io" to LlamaLoadMode.DIO,
+    "-dio" to LlamaLoadMode.DIO,
+    "--no-direct-io" to LlamaLoadMode.NONE,
+    "-ndio" to LlamaLoadMode.NONE
+)
+
+/** Result of promoting legacy typed llama settings out of the custom-flags field. */
+internal data class MigratedLlamaManagedSettings(
+    val filteredArgs: List<String>,
+    val loadMode: LlamaLoadMode,
+    val loras: List<LlamaLoraSpec>,
+    val errors: List<String>
+)
+
+/**
+ * Convert valid legacy load/LoRA flags into typed settings without losing their
+ * historical ordering semantics. Invalid tokens remain in [filteredArgs] and
+ * are reported so callers never silently discard user input.
+ */
+internal fun migrateLegacyLlamaManagedSettings(
+    args: List<String>,
+    configuredLoadMode: LlamaLoadMode,
+    selectedLoras: List<LlamaLoraSpec>
+): MigratedLlamaManagedSettings {
+    val loadResult = resolveManagedLlamaCustomFlags(args, configuredLoadMode)
+    val filtered = mutableListOf<String>()
+    val customLoras = mutableListOf<LlamaLoraSpec>()
+    val errors = loadResult.errors.toMutableList()
+    var sawPlainLora = false
+    var index = 0
+
+    fun parsePlain(value: String): List<LlamaLoraSpec>? {
+        val paths = value.split(',').map { it.trim() }
+        return paths.takeIf { it.isNotEmpty() && it.all(String::isNotBlank) }
+            ?.map { LlamaLoraSpec(path = it, strength = 1f) }
+    }
+
+    fun parseScaled(value: String): List<LlamaLoraSpec>? {
+        val parsed = mutableListOf<LlamaLoraSpec>()
+        for (item in value.split(',')) {
+            val parts = item.trim().split(':')
+            if (parts.size != 2) return null
+            val path = parts[0].trim()
+            val strength = parts[1].trim().toFloatOrNull()
+            if (path.isBlank() || strength == null || !strength.isFinite()) return null
+            parsed += LlamaLoraSpec(path = path, strength = strength)
+        }
+        return parsed.takeIf { it.isNotEmpty() }
+    }
+
+    while (index < loadResult.filteredArgs.size) {
+        val token = loadResult.filteredArgs[index]
+        val flag = token.substringBefore('=')
+        if (flag != "--lora" && flag != "--lora-scaled") {
+            filtered += token
+            index += 1
+            continue
+        }
+
+        val inline = '=' in token
+        val value = if (inline) token.substringAfter('=') else loadResult.filteredArgs.getOrNull(index + 1)
+        val parsed = value?.takeIf { it.isNotBlank() }?.let {
+            if (flag == "--lora") parsePlain(it) else parseScaled(it)
+        }
+        if (parsed == null) {
+            if (errors.none { it.contains(token) }) {
+                errors += "$token has an invalid LoRA value"
+            }
+            filtered += token
+            if (!inline && value != null) {
+                filtered += value
+                index += 2
+            } else {
+                index += 1
+            }
+        } else {
+            if (flag == "--lora") sawPlainLora = true
+            customLoras += parsed
+            index += if (inline) 1 else 2
+        }
+    }
+
+    val migratedLoras = if (sawPlainLora) customLoras else selectedLoras + customLoras
+    return MigratedLlamaManagedSettings(
+        filteredArgs = filtered,
+        loadMode = loadResult.loadMode,
+        loras = migratedLoras,
+        errors = errors
+    )
+}
+
 /**
  * Removes custom arguments that are already owned by typed settings.
  *
@@ -1320,6 +1620,10 @@ internal fun filterManagedLlamaCustomFlags(
     args: List<String>,
     config: LlamaConfig
 ): List<String> {
+    val loadAndLora = resolveManagedLlamaCustomFlags(
+        args = args,
+        configuredLoadMode = config.effectiveLoadMode()
+    )
     val valueFlags = buildSet {
         add("--sleep-idle-seconds")
         if (config.parallel != null) {
@@ -1339,6 +1643,10 @@ internal fun filterManagedLlamaCustomFlags(
             add("--checkpoint-min-step")
             add("-cms")
         }
+        if (config.threadsBatch != null) {
+            add("--threads-batch")
+            add("-tb")
+        }
     }
     val toggleFlags = setOf(
         "--cache-prompt",
@@ -1352,21 +1660,26 @@ internal fun filterManagedLlamaCustomFlags(
         "--swa-full",
         "--no-swa-full"
     )
-    val managed = valueFlags + toggleFlags
     val filtered = mutableListOf<String>()
+    // Load-mode flags are promoted into the typed/canonical --load-mode argument.
+    // Keep malformed managed tokens in the returned list so callers that inspect
+    // filtered custom flags can report the original input rather than losing it.
+    filtered += loadAndLora.filteredArgs
+    val managed = valueFlags + toggleFlags
+    val advancedFiltered = mutableListOf<String>()
     var index = 0
-    while (index < args.size) {
-        val argument = args[index]
+    while (index < filtered.size) {
+        val argument = filtered[index]
         val flagName = argument.substringBefore('=')
         if (flagName in managed) {
             val consumesFollowingValue = flagName in valueFlags && '=' !in argument
-            index += if (consumesFollowingValue && index + 1 < args.size) 2 else 1
+            index += if (consumesFollowingValue && index + 1 < filtered.size) 2 else 1
         } else {
-            filtered += argument
+            advancedFiltered += argument
             index += 1
         }
     }
-    return filtered
+    return advancedFiltered
 }
 
 /**

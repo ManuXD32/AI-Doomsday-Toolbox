@@ -26,6 +26,13 @@ class LlamaServerChatServiceTest {
     }
 
     @Test
+    fun `health probe only promotes an HTTP 200 response`() {
+        assertTrue(llamaServerHealthResponseReady(200))
+        assertFalse(llamaServerHealthResponseReady(503))
+        assertFalse(llamaServerHealthResponseReady(0))
+    }
+
+    @Test
     fun `generationElapsedMs starts from first token when present`() {
         assertEquals(
             1_500L,

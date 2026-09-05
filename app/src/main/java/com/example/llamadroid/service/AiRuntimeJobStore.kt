@@ -51,6 +51,24 @@ object AiRuntimeJobStore {
         AppDatabase.getDatabase(context).aiRuntimeJobDao().getByJobKey(jobKey)
     }
 
+    suspend fun markActiveAgentConversationState(
+        context: Context,
+        conversationId: Long,
+        status: String,
+        checkpointJson: String? = null,
+        progressText: String? = null,
+        errorMessage: String? = null
+    ) = withContext(Dispatchers.IO) {
+        AppDatabase.getDatabase(context).aiRuntimeJobDao().updateActiveAgentConversationState(
+            conversationId = conversationId,
+            status = status,
+            checkpointJson = checkpointJson,
+            progressText = progressText,
+            errorMessage = errorMessage,
+            updatedAt = System.currentTimeMillis()
+        )
+    }
+
     suspend fun deleteByConversationId(context: Context, conversationId: Long) = withContext(Dispatchers.IO) {
         AppDatabase.getDatabase(context).aiRuntimeJobDao().deleteByConversationId(conversationId)
     }

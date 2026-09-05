@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.PowerManager
 import androidx.room.withTransaction
 import com.example.llamadroid.R
+import com.example.llamadroid.data.HttpEndpointUrlSupport
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.AgentRuntimeBackend
@@ -15,6 +16,7 @@ import com.example.llamadroid.data.db.AgentProjectEventEntity
 import com.example.llamadroid.data.db.AgentProjectRunEntity
 import com.example.llamadroid.data.db.AgentPendingPlanEntity
 import com.example.llamadroid.data.runtime.AgentRuntimeDispatch
+import com.example.llamadroid.data.runtime.AgentRuntimeGlobalOverride
 import com.example.llamadroid.data.runtime.AgentRuntimeNeedsDirectionReason
 import com.example.llamadroid.data.runtime.AgentRuntimeProfileRuntime
 import com.example.llamadroid.data.db.ModelType
@@ -60,8 +62,11 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.roundToInt
 
 private fun AgentRuntimeNeedsDirectionReason.toNeedsDirectionMessage(context: Context): String =
@@ -91,6 +96,14 @@ data class FileInfo(
     val isDirectory: Boolean,
     val size: Long,
     val permissions: String
+)
+
+/** Result of an explicit in-place probe of the endpoint currently assigned to an Agent. */
+data class AgentEndpointProbeResult(
+    val backend: String,
+    val baseUrl: String?,
+    val isConnected: Boolean,
+    val errorMessage: String? = null
 )
 
 /**
@@ -481,10 +494,18 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         val jobId = "agent-runtime-${conversationId ?: "global"}"
         val jobKey = "agent|${conversationId ?: "global"}|${_currentProjectFolder.value}"
 
+        val expectedPersistenceGeneration = runtimePersistenceGeneration.get()
+
         agentScope.launch(Dispatchers.IO) {
             runtimePersistenceMutex.withLock {
+                if (runtimePersistenceGeneration.get() != expectedPersistenceGeneration) {
+                    return@withLock
+                }
                 runCatching {
                     val existing = AiRuntimeJobStore.getByJobKey(appContext, jobKey)
+                    if (runtimePersistenceGeneration.get() != expectedPersistenceGeneration) {
+                        return@runCatching
+                    }
                     if (existing != null) {
                         AiRuntimeJobStore.markState(
                             appContext,
@@ -530,22 +551,49 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         if (finalStatus == AiRuntimeJobStore.STATUS_COMPLETED || finalStatus == AiRuntimeJobStore.STATUS_CANCELLED) {
             closeRemoteWorkerRootSession(appContext, finalStatus)
         }
-        val jobId = "agent-runtime-${_activeConversationId.value ?: "global"}"
+        // Capture the identity before asynchronous cleanup can switch projects. Older app
+        // versions could persist the same stable jobKey under a different jobId, so resolving
+        // by key is required to make Stop terminal instead of leaving a phantom RUNNING row.
+        val conversationId = _activeConversationId.value
+        val projectFolder = _currentProjectFolder.value
+        val fallbackJobId = "agent-runtime-${conversationId ?: "global"}"
+        val jobKey = "agent|${conversationId ?: "global"}|$projectFolder"
+        val expectedPersistenceGeneration = runtimePersistenceGeneration.incrementAndGet()
+        terminalRuntimePersistence.set(expectedPersistenceGeneration to finalStatus)
+        synchronized(runtimePersistenceScheduleLock) {
+            scheduledVisiblePersistenceJob?.cancel()
+            scheduledVisiblePersistenceJob = null
+        }
         agentScope.launch(Dispatchers.IO) {
             runtimePersistenceMutex.withLock {
+                if (runtimePersistenceGeneration.get() != expectedPersistenceGeneration) {
+                    return@withLock
+                }
                 runCatching {
-                    AiRuntimeJobStore.markState(
-                        appContext,
-                        jobId = jobId,
-                        status = finalStatus,
-                        checkpointJson = buildCheckpointJson(),
-                        progressText = finalStatus.lowercase()
-                    )
+                    if (conversationId != null) {
+                        AiRuntimeJobStore.markActiveAgentConversationState(
+                            context = appContext,
+                            conversationId = conversationId,
+                            status = finalStatus,
+                            checkpointJson = buildCheckpointJson(),
+                            progressText = finalStatus.lowercase()
+                        )
+                    } else {
+                        val actualJobId = AiRuntimeJobStore.getByJobKey(appContext, jobKey)?.jobId
+                            ?: fallbackJobId
+                        AiRuntimeJobStore.markState(
+                            appContext,
+                            jobId = actualJobId,
+                            status = finalStatus,
+                            checkpointJson = buildCheckpointJson(),
+                            progressText = finalStatus.lowercase()
+                        )
+                    }
                     if (finalStatus == AiRuntimeJobStore.STATUS_COMPLETED) {
-                        _activeConversationId.value?.let { conversationId ->
+                        conversationId?.let {
                             AppDatabase.getDatabase(appContext)
                                 .agentChatDao()
-                                .updateResumeState(conversationId, RESUME_STATE_IDLE, null)
+                                .updateResumeState(it, RESUME_STATE_IDLE, null)
                         }
                     }
                 }.onFailure {
@@ -557,9 +605,13 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     suspend fun persistVisibleRuntimeStateNow(
         reason: String? = null,
-        pruneMissingMessages: Boolean = false
+        pruneMissingMessages: Boolean = false,
+        expectedPersistenceGeneration: Long = runtimePersistenceGeneration.get()
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runtimePersistenceMutex.withLock {
+            if (runtimePersistenceGeneration.get() != expectedPersistenceGeneration) {
+                return@withLock Result.success(Unit)
+            }
             try {
                 val appContext = context.applicationContext
                 val conversationId = _activeConversationId.value ?: return@withLock Result.success(Unit)
@@ -611,14 +663,22 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
                     val jobId = "agent-runtime-$conversationId"
                     val jobKey = "agent|$conversationId|${_currentProjectFolder.value}"
                     val existing = db.aiRuntimeJobDao().getByJobKey(jobKey)
-                    val status = if (
-                        _isLoading.value ||
-                        snapshot.any { it.needsApproval || (it.isPlan && it.isPlanApproved != true) }
-                    ) {
-                        AiRuntimeJobStore.STATUS_RUNNING
-                    } else {
-                        AiRuntimeJobStore.STATUS_RECOVERING
-                    }
+                    val terminalStatus = terminalRuntimePersistence.get()
+                        ?.takeIf { (generation, _) ->
+                            generation == expectedPersistenceGeneration
+                        }
+                        ?.second
+                    val status = resolveAgentRuntimeSnapshotStatus(
+                        isLoading = _isLoading.value,
+                        hasPendingToolApproval = snapshot.any {
+                            it.needsApproval && it.isApproved == null
+                        },
+                        hasPendingPlanApproval = snapshot.any {
+                            it.isPlan && it.isPlanApproved == null
+                        },
+                        pendingQuestionCount = _pendingQuestionCount.value,
+                        existingStatus = terminalStatus ?: existing?.status
+                    )
                     db.aiRuntimeJobDao().upsert(
                         com.example.llamadroid.data.db.AiRuntimeJobEntity(
                             jobId = jobId,
@@ -682,8 +742,14 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         }
     }
 
-    private suspend fun persistRuntimeHeartbeat(status: String) = withContext(Dispatchers.IO) {
+    private suspend fun persistRuntimeHeartbeat(
+        status: String,
+        expectedPersistenceGeneration: Long
+    ) = withContext(Dispatchers.IO) {
         runtimePersistenceMutex.withLock {
+            if (runtimePersistenceGeneration.get() != expectedPersistenceGeneration) {
+                return@withLock
+            }
             val conversationId = _activeConversationId.value ?: return@withLock
             val appContext = context.applicationContext
             val jobKey = "agent|$conversationId|${_currentProjectFolder.value}"
@@ -708,11 +774,15 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
     }
 
     private fun scheduleVisibleRuntimePersistence(reason: String) {
+        val expectedPersistenceGeneration = runtimePersistenceGeneration.get()
         synchronized(runtimePersistenceScheduleLock) {
             scheduledVisiblePersistenceJob?.cancel()
             scheduledVisiblePersistenceJob = agentScope.launch(Dispatchers.IO) {
                 delay(VISIBLE_RUNTIME_PERSIST_DEBOUNCE_MS)
-                persistVisibleRuntimeStateNow(reason)
+                persistVisibleRuntimeStateNow(
+                    reason = reason,
+                    expectedPersistenceGeneration = expectedPersistenceGeneration
+                )
             }
         }
     }
@@ -895,8 +965,15 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
         val payload = JSONObject(payloadJson)
         _currentProjectFolder.value = payload.optString("projectFolder", _currentProjectFolder.value)
-        _currentWorkspaceBackend.value = AgentWorkspaceBackendType.fromStored(payload.optString("workspaceBackend"))
-        _currentRuntimeCapabilities.value = AgentLocalRuntimeCapabilities.fromJson(payload.optString("runtimeCapabilitiesJson"))
+        _currentWorkspaceBackend.value = resolveSnapshotWorkspaceBackend(
+            payload = payload,
+            currentBackend = _currentWorkspaceBackend.value
+        )
+        if (payload.has("runtimeCapabilitiesJson") && !payload.isNull("runtimeCapabilitiesJson")) {
+            _currentRuntimeCapabilities.value = AgentLocalRuntimeCapabilities.fromJson(
+                payload.optString("runtimeCapabilitiesJson")
+            )
+        }
         _currentAgent.value = runCatching { AgentRole.valueOf(payload.optString("currentAgent", AgentRole.ORCHESTRATOR.name)) }
             .getOrDefault(AgentRole.ORCHESTRATOR)
         _currentTask.value = payload.optString("currentTask").takeIf { it.isNotBlank() }
@@ -962,18 +1039,25 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
             restoredSessions[session.id] = session
         }
         _sessions.value = restoredSessions
-        if (_currentSessionId.value != null || restoredSessions.isNotEmpty()) {
-            val interruptedConversationId = _activeConversationId.value
+        val interruptedConversationId = _activeConversationId.value
+        val hadRestoredSessionState = _currentSessionId.value != null || restoredSessions.isNotEmpty()
+        if (hadRestoredSessionState) {
             _sessions.value = emptyMap()
             _currentSessionId.value = null
             _currentAgent.value = AgentRole.ORCHESTRATOR
             _activeCustomAgent.value = null
             activeInvocationId = null
-            if (interruptedConversationId != null) {
-                agentScope.launch(Dispatchers.IO) {
-                    val database = AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
-                    val runningInvocations = database.agentWorkflowDao().getInvocations(interruptedConversationId)
-                        .filter { it.status == "RUNNING" }
+        }
+        if (interruptedConversationId != null) {
+            // restorePersistentState is entered only for a persisted active runtime job. The
+            // process that owned that job no longer exists, so the row must become terminal
+            // before the UI decides whether Send or Stop should be visible.
+            completeAgentRuntimeState(AiRuntimeJobStore.STATUS_CANCELLED)
+            agentScope.launch(Dispatchers.IO) {
+                val database = AppDatabase.getDatabase(com.example.llamadroid.LlamaApplication.instance)
+                val runningInvocations = database.agentWorkflowDao().getInvocations(interruptedConversationId)
+                    .filter { it.status == "RUNNING" }
+                if (shouldInterruptRestoredAgentWork(hadRestoredSessionState, runningInvocations.size)) {
                     database.agentWorkflowDao().interruptRunningInvocations(
                         conversationId = interruptedConversationId,
                         reason = "Process recreation interrupted delegated work. Continue explicitly."
@@ -1016,9 +1100,12 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
 
     suspend fun refreshLlamaServerRuntimeState(
         settingsRepo: com.example.llamadroid.data.SettingsRepository,
-        force: Boolean = false
+        force: Boolean = false,
+        backendOverride: String? = null
     ): Result<AgentLlamaServerRuntimeState> = withContext(Dispatchers.IO) {
-        val backend = com.example.llamadroid.data.SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+        val backend = com.example.llamadroid.data.SettingsRepository.normalizeOllamaOrLlamaBackend(
+            backendOverride ?: settingsRepo.agentBackend.value
+        )
         val isLlamaSwap = com.example.llamadroid.data.SettingsRepository.isLlamaSwapBackend(backend)
         val backendLabel = if (isLlamaSwap) "llama-swap" else "llama-server"
         val baseUrl = if (isLlamaSwap) {
@@ -1122,6 +1209,83 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
             _llamaServerRuntimeState.value = state
             Result.success(state)
         }
+    }
+
+    /**
+     * Probe the endpoint selected by the active agent profile without changing
+     * global connection state or navigating away from the current project.
+     *
+     * Named Ollama endpoints use `/api/tags`; llama-server and llama-swap use
+     * the same `/health` check as the runtime.  Keeping this operation on the
+     * service lets the retry and settings-save paths share the exact endpoint
+     * resolution and cancellation behavior.
+     */
+    suspend fun probeAgentEndpoint(
+        baseUrl: String?,
+        backend: String
+    ): AgentEndpointProbeResult = withContext(Dispatchers.IO) {
+        val normalizedBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(backend)
+        val normalizedBaseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(baseUrl)
+
+        if (SettingsRepository.isLiteRtBackend(normalizedBackend)) {
+            return@withContext AgentEndpointProbeResult(
+                backend = normalizedBackend,
+                baseUrl = normalizedBaseUrl,
+                isConnected = true
+            )
+        }
+
+        if (normalizedBaseUrl == null) {
+            return@withContext AgentEndpointProbeResult(
+                backend = normalizedBackend,
+                baseUrl = null,
+                isConnected = false,
+                errorMessage = "Invalid endpoint URL"
+            )
+        }
+
+        val isConnected = try {
+            if (
+                SettingsRepository.isLlamaServerBackend(normalizedBackend) ||
+                    SettingsRepository.isLlamaSwapBackend(normalizedBackend)
+            ) {
+                llamaServerChatService.checkConnection(normalizedBaseUrl)
+            } else {
+                val requestUrl = HttpEndpointUrlSupport.appendPath(normalizedBaseUrl, "/api/tags")
+                    ?: return@withContext AgentEndpointProbeResult(
+                        backend = normalizedBackend,
+                        baseUrl = normalizedBaseUrl,
+                        isConnected = false,
+                        errorMessage = "Invalid endpoint URL"
+                    )
+                val connection = (URL(requestUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = 5_000
+                    readTimeout = 5_000
+                    useCaches = false
+                }
+                try {
+                    connection.responseCode in 200..299
+                } finally {
+                    connection.disconnect()
+                }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            addDebugLog(
+                "⚠️ Agent endpoint probe failed for $normalizedBackend: " +
+                    error.javaClass.simpleName
+            )
+            false
+        }
+
+        AgentEndpointProbeResult(
+            backend = normalizedBackend,
+            baseUrl = normalizedBaseUrl,
+            isConnected = isConnected,
+            errorMessage = if (isConnected) null else "Endpoint is unreachable"
+        )
     }
 
     private fun retainBackgroundCommandRuntime(command: BackgroundCommand) {
@@ -2572,6 +2736,12 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         private const val REFLECTION_MAX_CALLS = 2
         private const val REFLECTION_TURN_WINDOW = 6
         private const val LEGACY_COMPACTION_STATUS_TOOL = "context_compaction_status"
+        /**
+         * Existing message persistence already carries [ChatMessage.toolName]. Keep the
+         * retry affordance in that field so pause actions survive Room/runtime checkpoint
+         * restore without another schema migration.
+         */
+        const val RETRYABLE_NEEDS_DIRECTION_TOOL = "__agent_retryable_needs_direction__"
         private const val HARD_COMPACTION_TIMEOUT_MS = 3L * 60L * 1000L
         const val RESUME_STATE_IDLE = "IDLE"
         const val RESUME_STATE_STOPPED_BY_USER = "STOPPED_BY_USER"
@@ -2635,6 +2805,9 @@ class AgentService(context: Context, private val isRuntimeOwner: Boolean = false
         private val continuationsByEpoch = java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicInteger>()
         private val pendingContinuations = java.util.concurrent.ConcurrentLinkedQueue<PendingAgentContinuation>()
         private val continuationDrainActive = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val continuationDrainLock = Any()
+        @Volatile
+        private var continuationDrainJob: Job? = null
         private val pendingUrgentUserGuidance = java.util.concurrent.ConcurrentLinkedQueue<ChatMessage>()
         private val pendingInputSequence = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis() * 1_000L)
         private val pendingInputPersistenceJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
@@ -3626,14 +3799,17 @@ PLAN MODE:
 
 BUILD MODE:
 1. Read project_state.
-2. Select only the current permitted TODO transition.
-3. Delegate exactly one TODO using call_agent(todo_id=...).
-4. After the structured report returns, read project_state again.
-5. Dispatch CODER → REVIEWER → EXECUTOR according to the runtime-owned TODO
+2. If the durable TODO list is empty, initialize it once with todo_write before
+   attempting any todo_transition or worker delegation. Otherwise preserve all
+   existing stable TODO IDs.
+3. Select only the current permitted TODO transition.
+4. Delegate exactly one TODO using call_agent(todo_id=...).
+5. After the structured report returns, read project_state again.
+6. Dispatch CODER → REVIEWER → EXECUTOR according to the runtime-owned TODO
    status. Never reconstruct or replace the complete TODO list from memory.
-6. Use SUMMARIZER only for bounded human-readable brain-file projection
+7. Use SUMMARIZER only for bounded human-readable brain-file projection
    checkpoints. Room state remains authoritative.
-7. Finalize only when all required TODOs are terminal and verified.
+8. Finalize only when all required TODOs are terminal and verified.
 
 You do not inspect source files, run commands, browse the web, or edit memory
 directly. Those responsibilities belong to isolated specialists. Never repeat a
@@ -3777,6 +3953,33 @@ TODO status. Return via finish_task with JSON:
 
         fun isTransientCompactionStatusMessageForPersistence(message: ChatMessage): Boolean {
             return isTransientCompactionStatusMessage(message)
+        }
+
+        /**
+         * A safety pause caused by the continuation/loop guards is rendered as an explicit
+         * user-retry action. The English/Spanish prefixes retain the action for pause messages
+         * written by older builds before the marker was introduced.
+         */
+        fun isRetryableNeedsDirectionMessage(message: ChatMessage): Boolean {
+            if (message.role != "system") return false
+            if (message.toolName == RETRYABLE_NEEDS_DIRECTION_TOOL) return true
+            return message.content.startsWith("Paused because the agent may be looping:") ||
+                message.content.startsWith("Pausado porque el agente podria estar en bucle:")
+        }
+
+        /** Removes only stale safety-pause cards; ordinary interruptions remain in the history. */
+        fun withoutRetryableNeedsDirectionMessages(messages: List<ChatMessage>): List<ChatMessage> =
+            messages.filterNot(::isRetryableNeedsDirectionMessage)
+
+        private fun clearRetryableNeedsDirectionMessages() {
+            _messages.update { current ->
+                withoutRetryableNeedsDirectionMessages(current)
+            }
+            _sessions.value.values.forEach { session ->
+                synchronized(session.messages) {
+                    session.messages.removeAll(::isRetryableNeedsDirectionMessage)
+                }
+            }
         }
 
         private fun nextModelTurnNumber(): Int {
@@ -4513,7 +4716,11 @@ TODO status. Return via finish_task with JSON:
                     queueDepth
                 )
                 recordRunawayContinuationSuspected(context, guardReason, runEpoch, rootTurnId, queueDepth, continuationCount, noProgressCount)
-                pauseForNeedsDirection(context, guardReason)
+                pauseForNeedsDirection(
+                    context = context,
+                    reason = guardReason,
+                    loopDetected = true
+                )
                 return agentScope.launch { }
             }
             pendingContinuations.add(
@@ -4542,20 +4749,35 @@ TODO status. Return via finish_task with JSON:
         }
 
         private fun drainAgentContinuationQueue() {
-            if (!continuationDrainActive.compareAndSet(false, true)) return
-            agentScope.launch {
-                try {
-                    while (isActive) {
+            val drainEpoch = currentRunEpoch()
+            lateinit var drainJob: Job
+            synchronized(continuationDrainLock) {
+                if (continuationDrainJob?.isActive == true) return
+                continuationDrainActive.set(true)
+                // LAZY lets us publish the job and install its completion fence before it can
+                // observe a concurrent Stop. This avoids the old active-flag/job race.
+                drainJob = agentScope.launch(start = CoroutineStart.LAZY) {
+                    while (isActive && isAgentRunActive(drainEpoch)) {
                         val existingJob = synchronized(currentChatJobLock) { currentChatJob }
                         if (existingJob?.isActive == true) break
                         val next = pendingContinuations.poll() ?: break
-                        if (!isAgentRunActive(next.runEpoch)) continue
+                        if (!AgentRuntimeSupport.shouldDispatchQueuedContinuation(
+                                queuedEpoch = next.runEpoch,
+                                activeEpoch = currentRunEpoch(),
+                                automaticContinuationsBlocked = areAutomaticContinuationsBlocked(),
+                                userInitiated = next.userInitiated
+                            )
+                        ) {
+                            continue
+                        }
                         GenerationDiagnosticsStore.recordBreadcrumb(
                             source = "agent_turn_runner",
                             event = "continuation_dequeued",
                             details = "reason=${next.reason.take(120)} epoch=${next.runEpoch} rootTurn=${next.rootTurnId} " +
                                 "queueDepth=${pendingContinuations.size} loadingLeases=${loadingRefCount.get().coerceAtLeast(0)}"
                         )
+                        // expectedRunEpoch is checked again inside sendMessage. The second check
+                        // closes the race between the queue predicate and a concurrent Stop.
                         val turnJob = sendMessage(
                             next.context,
                             next.ollamaService,
@@ -4565,17 +4787,35 @@ TODO status. Return via finish_task with JSON:
                             recoveryInstruction = next.recoveryInstruction,
                             recoveryMode = next.recoveryMode,
                             queueBehindActiveJob = false,
-                            userInitiated = next.userInitiated
+                            userInitiated = next.userInitiated,
+                            expectedRunEpoch = next.runEpoch
                         )
                         turnJob.join()
                     }
-                } finally {
-                    continuationDrainActive.set(false)
-                    if (pendingContinuations.isNotEmpty()) {
-                        val existingJob = synchronized(currentChatJobLock) { currentChatJob }
-                        if (existingJob?.isActive != true) drainAgentContinuationQueue()
-                    }
                 }
+                continuationDrainJob = drainJob
+                drainJob.invokeOnCompletion {
+                    // Only clear the drain handle while holding its lock. Inspect the current
+                    // chat slot afterwards: taking currentChatJobLock here would invert the
+                    // lock order used by the enqueue/current-job paths. If the slot is still
+                    // active, its completion callback is the reliable one-shot wake-up.
+                    val drainEpochStillActive = synchronized(continuationDrainLock) {
+                        if (continuationDrainJob !== drainJob) {
+                            false
+                        } else {
+                            continuationDrainJob = null
+                            continuationDrainActive.set(false)
+                            true
+                        }
+                    }
+                    val shouldRestart = AgentRuntimeSupport.shouldRestartContinuationDrainAfterCompletion(
+                        runEpochStillActive = drainEpochStillActive && isAgentRunActive(drainEpoch),
+                        currentJobActive = peekCurrentChatJob()?.isActive == true,
+                        pendingContinuationCount = pendingContinuations.size
+                    )
+                    if (shouldRestart) drainAgentContinuationQueue()
+                }
+                drainJob.start()
             }
         }
 
@@ -5177,7 +5417,11 @@ TODO status. Return via finish_task with JSON:
             }
         }
 
-        private fun pauseForNeedsDirection(context: Context, reason: String) {
+        private fun pauseForNeedsDirection(
+            context: Context,
+            reason: String,
+            loopDetected: Boolean = false
+        ) {
             blockAutomaticContinuations()
             _currentAgent.value = AgentRole.ORCHESTRATOR
             _currentTask.value = null
@@ -5186,10 +5430,58 @@ TODO status. Return via finish_task with JSON:
             addMessage(
                 ChatMessage(
                     role = "system",
-                    content = context.getString(R.string.agent_needs_direction_message, reason)
+                    content = context.getString(
+                        if (loopDetected) {
+                            R.string.agent_needs_direction_message
+                        } else {
+                            R.string.agent_needs_direction_interrupted_message
+                        },
+                        reason
+                    ),
+                    toolName = RETRYABLE_NEEDS_DIRECTION_TOOL.takeIf { loopDetected }
                 )
             )
             updateActiveConversationResumeState(RESUME_STATE_NEEDS_DIRECTION, reason)
+        }
+
+        /**
+         * The managed-server catalog is a durable, cross-process projection. During a stop or
+         * quick restart it can briefly lag behind the endpoint that is already serving health
+         * checks. Re-read that projection and probe only the assigned server before surfacing a
+         * false Needs Direction pause. The caller still owns the run-epoch cancellation fence.
+         */
+        private suspend fun resolveRuntimeDispatchForTurn(
+            agentKey: String,
+            globalOverride: AgentRuntimeGlobalOverride? = null
+        ): AgentRuntimeDispatch? {
+            val dispatch = AgentRuntimeProfileRuntime.resolve(agentKey, globalOverride) ?: return null
+            val needsDirection = dispatch as? AgentRuntimeDispatch.NeedsDirection ?: return dispatch
+            if (needsDirection.reason != AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY) {
+                return dispatch
+            }
+            val profile = needsDirection.profile ?: return dispatch
+            val serverId = profile.managedLlamaServerId ?: return dispatch
+            val server = AgentRuntimeProfileRuntime.installedManagedServerCatalog()
+                .getServer(serverId)
+                ?: return dispatch
+            if (server.normalizedBackend != profile.normalizedBackend.id) return dispatch
+            val endpoint = server.baseUrl ?: return dispatch
+            val healthy = try {
+                llamaServerChatService.checkConnection(endpoint)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            }
+            if (!healthy) return dispatch
+            GenerationDiagnosticsStore.recordBreadcrumb(
+                source = "agent_turn_runner",
+                event = "managed_server_readiness_recovered",
+                details = "agentKey=$agentKey serverId=$serverId catalogState=${server.state.name}"
+            )
+            return AgentRuntimeDispatch.Ready(
+                agentKey = needsDirection.agentKey,
+                profile = profile,
+                managedServer = server
+            )
         }
 
         private fun postLoopWakeup(
@@ -5523,6 +5815,9 @@ TODO status. Return via finish_task with JSON:
         private val activeAgentWorkJobsLock = Any()
         private val activeAgentWorkJobs = mutableSetOf<Job>()
         private val activeRunEpoch = AtomicLong(0L)
+        private val runtimePersistenceGeneration = AtomicLong(0L)
+        private val terminalRuntimePersistence =
+            AtomicReference<Pair<Long, String>?>(null)
         private val automaticContinuationBlocked = AtomicBoolean(false)
         private val runtimeCheckpointLock = Any()
         @Volatile private var lastRuntimeCheckpointAt = 0L
@@ -5544,11 +5839,21 @@ TODO status. Return via finish_task with JSON:
                 currentChatJob = job
             }
             job.invokeOnCompletion {
-                synchronized(currentChatJobLock) {
+                val shouldWakeDrain = synchronized(currentChatJobLock) {
                     if (currentChatJob === job) {
                         currentChatJob = null
+                        AgentRuntimeSupport.shouldWakeContinuationDrainAfterCurrentJobCompletion(
+                            currentJobWasCleared = true,
+                            pendingContinuationCount = pendingContinuations.size
+                        )
+                    } else {
+                        false
                     }
                 }
+                // Do not invoke the drain while holding currentChatJobLock. The drain takes the
+                // same lock to verify that the slot is idle, and the completion callback must
+                // remain a one-shot, non-polling wake-up for queued work.
+                if (shouldWakeDrain) drainAgentContinuationQueue()
             }
             return true
         }
@@ -5579,6 +5884,11 @@ TODO status. Return via finish_task with JSON:
 
         private fun invalidateRunEpoch(): Long {
             val next = activeRunEpoch.incrementAndGet()
+            // Cancel the queue-drain coroutine as part of the same stop fence as the epoch
+            // increment. Clearing the queue alone is insufficient when a drain already polled
+            // an item and is waiting for its turn job: it could otherwise dispatch that stale
+            // item after a user retry has reopened automatic continuations.
+            cancelContinuationDrain()
             recoveryTurnsByEpoch.clear()
             supervisorRetriesByEpoch.clear()
             handoffsByEpoch.clear()
@@ -5589,6 +5899,14 @@ TODO status. Return via finish_task with JSON:
             contextOverflowRetriesByAttempt.clear()
             forceContextCompactionByAttempt.clear()
             return next
+        }
+
+        private fun cancelContinuationDrain() {
+            val job = synchronized(continuationDrainLock) {
+                continuationDrainActive.set(false)
+                continuationDrainJob.also { continuationDrainJob = null }
+            }
+            job?.cancel(CancellationException("Agent continuation drain cancelled"))
         }
 
         private fun isAgentRunActive(runEpoch: Long): Boolean = activeRunEpoch.get() == runEpoch
@@ -5653,8 +5971,12 @@ TODO status. Return via finish_task with JSON:
             if (persistFullSnapshot) {
                 instance.scheduleVisibleRuntimePersistence(reason ?: checkpointStatus)
             } else {
+                val expectedPersistenceGeneration = runtimePersistenceGeneration.get()
                 agentScope.launch(Dispatchers.IO) {
-                    instance.persistRuntimeHeartbeat(checkpointStatus)
+                    instance.persistRuntimeHeartbeat(
+                        checkpointStatus,
+                        expectedPersistenceGeneration
+                    )
                 }
             }
         }
@@ -6145,6 +6467,7 @@ TODO status. Return via finish_task with JSON:
         }
 
         fun clearTransientConversationState() {
+            invalidateRunEpoch()
             cancelCurrentChatJob()
             loadingRefCount.set(0)
             _isLoading.value = false
@@ -7311,9 +7634,15 @@ TODO status. Return via finish_task with JSON:
             recoveryInstruction: String? = null,
             recoveryMode: Boolean = false,
             queueBehindActiveJob: Boolean = true,
-            userInitiated: Boolean = false
+            userInitiated: Boolean = false,
+            expectedRunEpoch: Long? = null
         ): Job {
             rememberRuntimeRefs(context, ollamaService, settingsRepo, agentService)
+            if (expectedRunEpoch != null && currentRunEpoch() != expectedRunEpoch) {
+                // A queue drain can race with Stop after it has dequeued an item. Do not let that
+                // stale item become a fresh turn in the next user retry epoch.
+                return agentScope.launch { }
+            }
             if (hasPendingPlanApproval()) {
                 setStatusText(context.getString(R.string.agent_status_awaiting_approval))
                 updateActiveConversationResumeState(
@@ -7324,6 +7653,13 @@ TODO status. Return via finish_task with JSON:
                 return agentScope.launch { }
             }
             if (userInitiated) {
+                // A new explicit turn supersedes any terminal persistence write still queued
+                // from Stop or process-recovery cleanup.
+                runtimePersistenceGeneration.incrementAndGet()
+                // A user retry is a fresh root turn. Remove the old loop-pause card from both
+                // live and delegated session projections before the new turn is constructed so
+                // it cannot be mistaken for a fresh model instruction or remain as stale UI.
+                clearRetryableNeedsDirectionMessages()
                 startNewRootTurn()
                 allowAutomaticContinuations()
                 recoveryTurnsByEpoch.clear()
@@ -7372,19 +7708,25 @@ TODO status. Return via finish_task with JSON:
                     )
                 }
                 if (recoveryCount > MAX_RECOVERY_TURNS_PER_REQUEST) {
-                    pauseForNeedsDirection(context, context.getString(R.string.agent_loop_recovery_budget_reason))
+                    pauseForNeedsDirection(
+                        context = context,
+                        reason = context.getString(R.string.agent_loop_recovery_budget_reason),
+                        loopDetected = true
+                    )
                     return agentScope.launch { }
                 }
             }
             val runtimeAgentKey = activeCustom?.let {
                 AgentRuntimeProfileKeys.custom(it.name)
             } ?: currentAgent.name
-            val legacyConfiguredModel = activeCustom?.model?.takeIf { it.isNotBlank() } ?: if (currentAgent == AgentRole.ORCHESTRATOR) {
-                settingsRepo.getAgentModelForRole("ORCHESTRATOR")
-            } else {
-                settingsRepo.getAgentModelForRole(currentAgent.name)
-            }
-            val preflightBackend = SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+            val globalOverride = settingsRepo.getAgentGlobalRuntimeOverride()
+            val preflightSettings = settingsRepo.resolveAgentSettingsForDispatch(
+                role = activeCustom?.name ?: currentAgent.name,
+                customModel = activeCustom?.model,
+                customVisionEnabled = activeCustom?.visionEnabled
+            )
+            val legacyConfiguredModel = preflightSettings.model.orEmpty()
+            val preflightBackend = preflightSettings.backend
             val requiresPerRoleModel = !SettingsRepository.isLiteRtBackend(preflightBackend) &&
                 !SettingsRepository.usesOpenAiChatBackend(preflightBackend)
 
@@ -7417,7 +7759,11 @@ TODO status. Return via finish_task with JSON:
             val newJob = agentScope.launch(start = CoroutineStart.LAZY) {
                 try {
                     ensureAgentRunActive(runEpoch)
-                    val runtimeDispatch = AgentRuntimeProfileRuntime.resolve(runtimeAgentKey)
+                    val runtimeDispatch = resolveRuntimeDispatchForTurn(
+                        agentKey = runtimeAgentKey,
+                        globalOverride = globalOverride
+                    )
+                    ensureAgentRunActive(runEpoch)
                     if (runtimeDispatch is AgentRuntimeDispatch.NeedsDirection) {
                         // Keep this event metadata-only. The visible pause contains the
                         // localized recovery copy, while durable diagnostics retain only the
@@ -7435,22 +7781,60 @@ TODO status. Return via finish_task with JSON:
                     }
                     val runtimeReady = runtimeDispatch as? AgentRuntimeDispatch.Ready
                     val runtimeProfile = runtimeReady?.profile
-                    val backend = runtimeProfile?.normalizedBackend?.id
-                        ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
+                    val dispatchSettings = settingsRepo.resolveAgentSettingsForDispatch(
+                        role = activeCustom?.name ?: currentAgent.name,
+                        customModel = activeCustom?.model,
+                        customVisionEnabled = activeCustom?.visionEnabled,
+                        runtimeProfile = runtimeProfile
+                    )
+                    val backend = dispatchSettings.backend
                     val useLlamaServer = SettingsRepository.isLlamaServerBackend(backend)
                     val useLlamaSwap = SettingsRepository.isLlamaSwapBackend(backend)
                     val useOpenAiBackend = SettingsRepository.usesOpenAiChatBackend(backend)
                     val useLiteRtBackend = SettingsRepository.isLiteRtBackend(backend)
-                    val configuredModel = runtimeProfile?.model?.takeIf { it.isNotBlank() }
+                    val configuredModel = dispatchSettings.model?.takeIf { it.isNotBlank() }
                         ?: legacyConfiguredModel
                     val managedServerUrl = runtimeReady?.managedServer?.let { server ->
-                        "http://${server.host.trim().trimEnd('/')}:${server.port}"
+                        HttpEndpointUrlSupport.fromHostPort(server.host, server.port)
                     }
                     val namedEndpointUrl = runtimeReady?.endpointConfig?.baseUrl
-                        ?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+                        ?.let(HttpEndpointUrlSupport::normalizeBaseUrl)
+                        ?.takeIf { it.isNotBlank() }
+                    if (runtimeReady?.managedServer != null && managedServerUrl == null) {
+                        val message = AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY
+                            .toNeedsDirectionMessage(context)
+                        recordAgentEvent(
+                            kind = "agent_runtime_needs_direction",
+                            summary = "Managed llama-server endpoint is invalid",
+                            details = "agentKey=$runtimeAgentKey reason=${AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY.name}"
+                        )
+                        pauseForNeedsDirection(context, message)
+                        return@launch
+                    }
+                    val managedServerReachable = if (runtimeReady?.managedServer != null &&
+                        (useLlamaServer || useLlamaSwap)
+                    ) {
+                        llamaServerChatService.checkConnection(requireNotNull(managedServerUrl)).also {
+                            // A health probe may finish after Stop invalidated the turn. Do not
+                            // convert that canceled turn into a false server-readiness pause.
+                            ensureAgentRunActive(runEpoch)
+                        }
+                    } else {
+                        true
+                    }
+                    if (!managedServerReachable) {
+                        val message = AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY
+                            .toNeedsDirectionMessage(context)
+                        recordAgentEvent(
+                            kind = "agent_runtime_needs_direction",
+                            summary = "Managed llama-server is not reachable",
+                            details = "agentKey=$runtimeAgentKey reason=${AgentRuntimeNeedsDirectionReason.SERVER_NOT_READY.name}"
+                        )
+                        pauseForNeedsDirection(context, message)
+                        return@launch
+                    }
                     val liteRtModel = if (useLiteRtBackend) {
-                        val selectedId = runtimeProfile?.liteRtModelId?.takeIf { it > 0L }
-                            ?: settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
+                        val selectedId = dispatchSettings.liteRtModelId?.takeIf { it > 0L }
                             ?: run {
                                 val message = context.getString(R.string.agent_litert_model_required_error)
                                 addDebugLog("❌ LLM Error: $message")
@@ -7482,9 +7866,17 @@ TODO status. Return via finish_task with JSON:
                     val model = if (useLiteRtBackend) {
                         liteRtModel?.displayName ?: configuredModel
                     } else if (useLlamaServer) {
-                        runtimeReady?.managedServer?.modelName
+                        val globalModel = globalOverride
+                            .takeIf { it.enabled }
+                            ?.model
+                            ?.takeIf { it.isNotBlank() }
+                        globalModel
+                            ?: runtimeReady?.managedServer?.modelName
                             ?: runtimeProfile?.model
-                            ?: agentService.refreshLlamaServerRuntimeState(settingsRepo).getOrNull()?.modelLabel
+                            ?: agentService.refreshLlamaServerRuntimeState(
+                                settingsRepo,
+                                backendOverride = backend
+                            ).getOrNull()?.modelLabel
                             ?: settingsRepo.agentLlamaServerModelLabel.value
                             ?: configuredModel
                     } else {
@@ -7507,11 +7899,11 @@ TODO status. Return via finish_task with JSON:
                     // Set context size for this agent
                     val configuredContextSize = if (useLiteRtBackend) {
                         resolveAgentLiteRtContextTokens(
-                            settingsRepo.agentLiteRtContextTokens.value,
+                            dispatchSettings.contextSize,
                             liteRtModel
                         )
                     } else {
-                        settingsRepo.getAgentContextForRole(currentAgent.name)
+                        dispatchSettings.contextSize
                     }
                     val reportedServerContextSize = if (useLlamaServer) {
                         _llamaServerRuntimeState.value.contextTokens
@@ -7557,20 +7949,8 @@ TODO status. Return via finish_task with JSON:
                                 "⚠️ Failed to restore hard compaction state: ${it.message}"
                             )
                         }
-                    val thinkingEnabled = if (useLiteRtBackend) {
-                        settingsRepo.agentLiteRtThinkingEnabled.value
-                    } else {
-                        settingsRepo.getAgentThinkingEnabledForRole(
-                            activeCustomAgent?.name ?: activeAgentRole.name
-                        )
-                    }
-                    val configuredMaxOutputTokens = if (useLiteRtBackend) {
-                        settingsRepo.agentLiteRtMaxOutputTokens.value
-                    } else {
-                        settingsRepo.getAgentMaxOutputTokensForRole(
-                            activeCustomAgent?.name ?: activeAgentRole.name
-                        )
-                    }
+                    val thinkingEnabled = dispatchSettings.thinkingEnabled
+                    val configuredMaxOutputTokens = dispatchSettings.maxOutputTokens
                     val modelClampedOutputTokens = if (
                         useLiteRtBackend && liteRtModel != null
                     ) {
@@ -8330,7 +8710,7 @@ TODO status. Return via finish_task with JSON:
                                 "systemHash=${cacheDiagnostics.systemPromptHash.take(16)} " +
                                 "toolsHash=${cacheDiagnostics.toolDefinitionsHash.take(16)} " +
                                 "prefixHash=${cacheDiagnostics.stablePrefixHash.take(16)} " +
-                                "cachePrompt=${settingsRepo.serverCachePrompt.value} mtp=${settingsRepo.agentLiteRtMtpEnabled.value} " +
+                            "cachePrompt=${settingsRepo.serverCachePrompt.value} mtp=${dispatchSettings.liteRtMtpEnabled} " +
                                 "slotMode=${settingsRepo.agentLlamaSlotAffinityMode.value}"
                         )
                     }
@@ -8364,7 +8744,7 @@ TODO status. Return via finish_task with JSON:
                             visibleMessages.lastOrNull()?.content.orEmpty()
                         }
                         val liteRtMaxOutputTokens = effectiveMaxOutputTokens
-                        val liteRtBackendMode = settingsRepo.agentLiteRtBackend.value
+                        val liteRtBackendMode = dispatchSettings.liteRtBackend
                         val liteRtModelDisplay = friendlyBackendModelLabel(liteRtModel.displayName)
                             ?: friendlyBackendModelLabel(liteRtModel.filename)
                             ?: liteRtModel.displayName
@@ -8425,7 +8805,7 @@ TODO status. Return via finish_task with JSON:
                                 temperature = 0.7f,
                                 thinkingEnabled = thinkingEnabled,
                                 backendMode = liteRtBackendMode,
-                                mtpEnabled = settingsRepo.agentLiteRtMtpEnabled.value,
+                                mtpEnabled = dispatchSettings.liteRtMtpEnabled,
                                 onStatus = { status ->
                                     if (isAgentRunActive(runEpoch)) {
                                         lastLiteRtActivityAt = android.os.SystemClock.elapsedRealtime()
@@ -8489,10 +8869,27 @@ TODO status. Return via finish_task with JSON:
                         }
                     } else if (useOpenAiBackend) {
                         // Use OpenAI-compatible API (llama-server or llama-swap)
-                        val llamaUrl = namedEndpointUrl ?: managedServerUrl ?: if (useLlamaSwap) {
+                        val configuredLlamaUrl = if (useLlamaSwap) {
                             settingsRepo.agentLlamaSwapUrl.value
                         } else {
                             settingsRepo.llamaServerUrl.value
+                        }
+                        val llamaUrl = HttpEndpointUrlSupport.normalizeBaseUrl(
+                            namedEndpointUrl ?: managedServerUrl ?: configuredLlamaUrl
+                        )
+                        if (llamaUrl == null) {
+                            val backendLabel = if (useLlamaSwap) "llama-swap" else "llama-server"
+                            val message = context.getString(
+                                R.string.agent_runtime_backend_url_invalid,
+                                backendLabel
+                            )
+                            recordAgentEvent(
+                                kind = "backend_startup_failure",
+                                summary = message,
+                                details = "backend=$backend role=${currentAgent.name}"
+                            )
+                            pauseForNeedsDirection(context, message)
+                            return@launch
                         }
                         val backendDisplay = if (useLlamaSwap) "llama-swap" else "llama-server"
                         val modelDisplay = friendlyBackendModelLabel(model) ?: model
@@ -8912,7 +9309,7 @@ TODO status. Return via finish_task with JSON:
                                         settingsRepo = settingsRepo,
                                         agentService = agentService,
                                         reason = "empty assistant response repair",
-                                        recoveryInstruction = "Your previous response produced no visible answer and no structured tool call. First emit `{\"name\": \"read_file\", \"arguments\": {\"path\": \"brain/tools_reference.md\"}}`, then reply with either a concise answer or a proper structured tool call only. Tool calls must be emitted outside <think>, markdown fences, and plain text.",
+                                        recoveryInstruction = "Your previous response produced no visible answer and no structured tool call. Reply with either a concise answer or one real structured tool call. If one tool schema is unclear, call tool_help for that tool only. Do not write tool-call JSON as assistant prose or place it inside <think> or markdown fences, and do not load a global tool reference.",
                                         recoveryMode = true,
                                         runEpoch = runEpoch
                                     )
@@ -9319,11 +9716,12 @@ TODO status. Return via finish_task with JSON:
                             ensureAgentRunActive(runEpoch)
                             if (policyFailureCount > 1) {
                                 pauseForNeedsDirection(
-                                    context,
-                                    "Repeated runtime-policy violation for " +
+                                    context = context,
+                                    reason = "Repeated runtime-policy violation for " +
                                         toolCall.name +
                                         ". " +
-                                        error.recoveryHint
+                                        error.recoveryHint,
+                                    loopDetected = true
                                 )
                                 return@launch
                             }
@@ -9352,7 +9750,11 @@ TODO status. Return via finish_task with JSON:
                             )
                         }
                         if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) {
-                            pauseForNeedsDirection(context, context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name))
+                            pauseForNeedsDirection(
+                                context = context,
+                                reason = context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name),
+                                loopDetected = true
+                            )
                             return@launch
                         }
                         val invalidOutput = buildToolResultEnvelope(
@@ -9984,10 +10386,11 @@ TODO status. Return via finish_task with JSON:
                                 }
                                 if (handoffCount > MAX_HANDOFFS_PER_REQUEST) {
                                     pauseForNeedsDirection(
-                                        context,
-                                        context.getString(
+                                        context = context,
+                                        reason = context.getString(
                                             R.string.agent_loop_handoff_budget_reason
-                                        )
+                                        ),
+                                        loopDetected = true
                                     )
                                     toolHandlesContinuation = true
                                     return@launch
@@ -10394,7 +10797,11 @@ TODO status. Return via finish_task with JSON:
                                     )
                                 }
                                 if (repeatedPlanCount > MAX_REPEATED_PLANS) {
-                                    pauseForNeedsDirection(context, context.getString(R.string.agent_loop_repeated_plan_reason))
+                                    pauseForNeedsDirection(
+                                        context = context,
+                                        reason = context.getString(R.string.agent_loop_repeated_plan_reason),
+                                        loopDetected = true
+                                    )
                                     toolHandlesContinuation = true
                                     return@launch
                                 }
@@ -10571,7 +10978,9 @@ TODO status. Return via finish_task with JSON:
                                 if (_currentAgent.value != AgentRole.VISUAL_TESTER) {
                                     throw IllegalStateException("observe_preview is only available to VISUAL_TESTER.")
                                 }
-                                if (!settingsRepo.agentVisualTestingEnabled.value || !settingsRepo.getAgentVisionEnabledForRole("VISUAL_TESTER")) {
+                                if (!settingsRepo.agentVisualTestingEnabled.value ||
+                                    !isVisionEnabledForAgent(AgentRole.VISUAL_TESTER, null, settingsRepo)
+                                ) {
                                     throw IllegalStateException("Visual testing is disabled or the selected tester model does not have vision enabled.")
                                 }
                                 val observation = AgentPreviewBridge.observe(
@@ -10593,7 +11002,9 @@ TODO status. Return via finish_task with JSON:
                                 if (_currentAgent.value != AgentRole.VISUAL_TESTER) {
                                     throw IllegalStateException("interact_preview is only available to VISUAL_TESTER.")
                                 }
-                                if (!settingsRepo.agentVisualTestingEnabled.value || !settingsRepo.getAgentVisionEnabledForRole("VISUAL_TESTER")) {
+                                if (!settingsRepo.agentVisualTestingEnabled.value ||
+                                    !isVisionEnabledForAgent(AgentRole.VISUAL_TESTER, null, settingsRepo)
+                                ) {
                                     throw IllegalStateException("Visual testing is disabled or the selected tester model does not have vision enabled.")
                                 }
                                 AgentPreviewBridge.interact(
@@ -10865,12 +11276,11 @@ TODO status. Return via finish_task with JSON:
                                             _activeCustomAgent.value,
                                             settingsRepo
                                         )
-                                val selected = available.firstOrNull {
-                                    it.name.equals(
-                                        requestedTool,
-                                        ignoreCase = true
-                                    )
-                                }
+                                val selectedName = resolveToolHelpName(
+                                    requestedName = requestedTool,
+                                    availableToolNames = available.map { it.name }
+                                )
+                                val selected = available.firstOrNull { it.name == selectedName }
                                 if (selected == null) {
                                     AgentRuntimeSupport.buildBoundedToolRepairCard(
                                         suspectedToolName = requestedTool,
@@ -11257,7 +11667,11 @@ TODO status. Return via finish_task with JSON:
                             )
                         }
                         if (failureCount >= MAX_TOOL_FAILURES_PER_SIGNATURE) {
-                            pauseForNeedsDirection(context, context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name))
+                            pauseForNeedsDirection(
+                                context = context,
+                                reason = context.getString(R.string.agent_loop_tool_failure_reason, toolCall.name),
+                                loopDetected = true
+                            )
                             toolHandlesContinuation = true
                         }
                     }
@@ -11803,9 +12217,12 @@ TODO status. Return via finish_task with JSON:
             activeCustom: com.example.llamadroid.data.db.CustomAgentEntity?,
             settingsRepo: com.example.llamadroid.data.SettingsRepository? = null
         ): Boolean {
-            if (activeCustom != null) return activeCustom.visionEnabled
             val repo = settingsRepo ?: AgentForegroundService.getSettingsRepository(com.example.llamadroid.LlamaApplication.instance)
-            return repo.getAgentVisionEnabledForRole(role.name)
+            return repo.resolveAgentSettingsForDispatch(
+                role = activeCustom?.name ?: role.name,
+                customModel = activeCustom?.model,
+                customVisionEnabled = activeCustom?.visionEnabled
+            ).visionEnabled
         }
 
         /**
@@ -13652,6 +14069,14 @@ TODO status. Return via finish_task with JSON:
 
             for ((source, rawText) in sources) {
                 if (rawText.isBlank()) continue
+                parseLegacyTaggedToolCalls(rawText).firstOrNull()?.let { taggedToolCall ->
+                    return ToolCallRecoveryAttempt(
+                        toolCall = taggedToolCall,
+                        attempted = true,
+                        source = "$source tagged tool block",
+                        suspectedToolName = taggedToolCall.name
+                    )
+                }
                 val text = sanitizeThinkingForContext(rawText)
                 if (text.isBlank()) continue
                 val sourceToolHint = detectLikelyToolName(text)
@@ -14251,7 +14676,7 @@ TODO status. Return via finish_task with JSON:
             val localCapabilities = _currentRuntimeCapabilities.value
             val visualPreviewAvailable = localBackend &&
                 repo.agentVisualTestingEnabled.value &&
-                repo.getAgentVisionEnabledForRole("VISUAL_TESTER") &&
+                repo.resolveAgentSettingsForDispatch(role = "VISUAL_TESTER").visionEnabled &&
                 AgentPreviewBridge.hasActivePreview(_activeConversationId.value ?: _preferredConversationId.value)
 
             if (role == AgentRole.VISUAL_TESTER) {
@@ -17189,7 +17614,12 @@ sys.exit(proc.returncode)
             )
         )
 
-        val runtimeDispatch = AgentRuntimeProfileRuntime.resolve("SUMMARIZER")
+        val globalOverride = settingsRepo.getAgentGlobalRuntimeOverride()
+        val runtimeDispatch = resolveRuntimeDispatchForTurn(
+            agentKey = "SUMMARIZER",
+            globalOverride = globalOverride
+        )
+        currentCoroutineContext().ensureActive()
         if (runtimeDispatch is AgentRuntimeDispatch.NeedsDirection) {
             recordAgentEvent(
                 kind = "agent_runtime_needs_direction",
@@ -17206,28 +17636,28 @@ sys.exit(proc.returncode)
         }
         val runtimeReady = runtimeDispatch as? AgentRuntimeDispatch.Ready
         val runtimeProfile = runtimeReady?.profile
-        val backend = runtimeProfile?.normalizedBackend?.id
-            ?: SettingsRepository.normalizeOllamaOrLlamaBackend(settingsRepo.agentBackend.value)
-        val effectiveSummarizerModel = runtimeProfile?.model?.takeIf { it.isNotBlank() }
+        val dispatchSettings = settingsRepo.resolveAgentSettingsForDispatch(
+            role = "SUMMARIZER",
+            customModel = summarizerModel,
+            runtimeProfile = runtimeProfile
+        )
+        val backend = dispatchSettings.backend
+        val effectiveSummarizerModel = dispatchSettings.model?.takeIf { it.isNotBlank() }
             ?: summarizerModel
         val managedServerUrl = runtimeReady?.managedServer?.let { server ->
-            "http://${server.host.trim().trimEnd('/')}:${server.port}"
+            HttpEndpointUrlSupport.fromHostPort(server.host, server.port)
         }
         val namedEndpointUrl = runtimeReady?.endpointConfig?.baseUrl
-            ?.trim()?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?.let(HttpEndpointUrlSupport::normalizeBaseUrl)
+            ?.takeIf { it.isNotBlank() }
         val summaryOutputTokens = resolveAgentEffectiveMaxOutputTokens(
-            configuredMaxOutputTokens = if (SettingsRepository.isLiteRtBackend(backend)) {
-                settingsRepo.agentLiteRtMaxOutputTokens.value
-            } else {
-                settingsRepo.agentSummarizerMaxOutputTokens.value
-            },
-            contextTokens = summarizerCtx,
+            configuredMaxOutputTokens = dispatchSettings.maxOutputTokens,
+            contextTokens = dispatchSettings.contextSize,
             estimatedPromptTokens = summaryMessages.sumOf { it.content.length }.div(4).coerceAtLeast(1)
         )
         val result = if (SettingsRepository.isLiteRtBackend(backend)) {
             val appContext = context.applicationContext
-            val selectedId = runtimeProfile?.liteRtModelId?.takeIf { it > 0L }
-                ?: settingsRepo.agentLiteRtModelId.value.takeIf { it > 0L }
+            val selectedId = dispatchSettings.liteRtModelId?.takeIf { it > 0L }
                 ?: return Result.failure(IllegalStateException("Missing LiteRT model"))
             val liteRtModel = AppDatabase.getDatabase(appContext)
                 .liteRtModelDao()
@@ -17240,12 +17670,12 @@ sys.exit(proc.returncode)
                     systemPrompt = systemPrompt,
                     messages = emptyList(),
                     userPrompt = userPrompt,
-                    contextSize = summarizerCtx,
+                    contextSize = dispatchSettings.contextSize,
                     maxTokens = summaryOutputTokens,
                     temperature = 0.3f,
-                    thinkingEnabled = false,
-                    backendMode = settingsRepo.agentLiteRtBackend.value,
-                    mtpEnabled = settingsRepo.agentLiteRtMtpEnabled.value
+                    thinkingEnabled = dispatchSettings.thinkingEnabled,
+                    backendMode = dispatchSettings.liteRtBackend,
+                    mtpEnabled = dispatchSettings.liteRtMtpEnabled
                 )
                 OllamaService.ChatResponse(
                     message = OllamaService.ChatMessage(role = "assistant", content = generated.output),
@@ -17259,14 +17689,20 @@ sys.exit(proc.returncode)
                 )
             }
         } else if (SettingsRepository.usesOpenAiChatBackend(backend)) {
-            val baseUrl = (namedEndpointUrl ?: managedServerUrl ?: if (SettingsRepository.isLlamaSwapBackend(backend)) {
+            val baseUrl = HttpEndpointUrlSupport.normalizeBaseUrl(
+                namedEndpointUrl ?: managedServerUrl ?: if (SettingsRepository.isLlamaSwapBackend(backend)) {
                 settingsRepo.agentLlamaSwapUrl.value
             } else {
                 settingsRepo.llamaServerUrl.value
-            }).trim()
-            if (baseUrl.isBlank()) {
+            }
+            )
+            if (baseUrl == null) {
                 val label = if (SettingsRepository.isLlamaSwapBackend(backend)) "llama-swap" else "llama-server"
-                return Result.failure(IllegalStateException("Missing $label URL"))
+                return Result.failure(
+                    IllegalStateException(
+                        context.getString(R.string.agent_runtime_backend_url_invalid, label)
+                    )
+                )
             }
             llamaServerChatService.chatWithToolsStreaming(
                 baseUrl = baseUrl,
@@ -17279,7 +17715,7 @@ sys.exit(proc.returncode)
                         ?: runtimeProfile?.model
                         ?: settingsRepo.agentLlamaServerModelLabel.value
                 },
-                thinkingEnabled = false,
+                thinkingEnabled = dispatchSettings.thinkingEnabled,
                 maxTokens = summaryOutputTokens,
                 requestOptions = LlamaServerRequestOptions(cachePrompt = settingsRepo.serverCachePrompt.value)
             ) { _, _ -> }
@@ -17288,7 +17724,7 @@ sys.exit(proc.returncode)
                 model = effectiveSummarizerModel,
                 messages = summaryMessages,
                 tools = emptyList(),
-                numCtxOverride = summarizerCtx,
+                numCtxOverride = dispatchSettings.contextSize,
                 maxOutputTokens = summaryOutputTokens,
                 baseUrlOverride = namedEndpointUrl
             ) { _, _ -> }

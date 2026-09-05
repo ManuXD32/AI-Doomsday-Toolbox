@@ -73,6 +73,7 @@ class ProcessControllerTest {
                 isEmbedding = true,
                 batchSize = 1024,
                 physicalBatchSize = 1024,
+                threadsBatch = 3,
                 parallel = 1,
                 cacheRam = 0
             )
@@ -80,8 +81,76 @@ class ProcessControllerTest {
 
         assertArgValue(args, "-b", "1024")
         assertArgValue(args, "--ubatch-size", "1024")
+        assertArgValue(args, "--threads-batch", "3")
+        assertTrue(args.indexOf("--threads-batch") > args.indexOf("--ubatch-size"))
         assertArgValue(args, "--parallel", "1")
         assertArgValue(args, "--cache-ram", "0")
+    }
+
+    @Test
+    fun `command template exposes batch thread placeholder`() {
+        val args = ProcessController().renderCommandTemplate(
+            template = "{binary} --threads-batch {threads_batch}",
+            binaryPath = "/bin/llama-server",
+            config = LlamaConfig(
+                modelPath = "/models/main.gguf",
+                threads = 8,
+                threadsBatch = 3
+            )
+        )
+
+        assertEquals(
+            listOf("/bin/llama-server", "--threads-batch", "3", "--load-mode", "mmap"),
+            args
+        )
+    }
+
+    @Test
+    fun `command rendering safely quotes launch arguments`() {
+        val controller = ProcessController()
+        val original = listOf(
+            "/bin/llama-server",
+            "--model",
+            "/models/with spaces/model.gguf",
+            "O'Reilly"
+        )
+
+        val rendered = controller.buildCommandString(original)
+
+        assertEquals(original, controller.splitCommandLine(rendered))
+        assertTrue(rendered.contains("'/models/with spaces/model.gguf'"))
+        assertTrue(rendered.contains("'O'\"'\"'Reilly'"))
+    }
+
+    @Test
+    fun `legacy custom thread batch flag remains when typed setting is absent`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/legacy.gguf",
+                customFlags = "--threads-batch 7 --keep value"
+            )
+        )
+
+        assertArgValue(args, "--threads-batch", "7")
+        assertArgValue(args, "--keep", "value")
+        assertEquals(1, args.count { it == "--threads-batch" })
+    }
+
+    @Test
+    fun `typed thread batch setting overrides duplicate custom flag`() {
+        val args = ProcessController().getCommand(
+            "/bin/llama-server",
+            LlamaConfig(
+                modelPath = "/models/main.gguf",
+                threadsBatch = 3,
+                customFlags = "--threads-batch 7 --keep value"
+            )
+        )
+
+        assertArgValue(args, "--threads-batch", "3")
+        assertArgValue(args, "--keep", "value")
+        assertEquals(1, args.count { it == "--threads-batch" })
     }
 
     @Test

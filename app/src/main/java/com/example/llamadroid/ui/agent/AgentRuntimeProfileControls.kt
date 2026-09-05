@@ -10,8 +10,12 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -23,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -69,8 +74,20 @@ private data class AgentRuntimeModelRefreshState(
     val empty: Boolean = false
 )
 
+private enum class AgentRuntimeStatusTone {
+    POSITIVE,
+    WARNING,
+    ERROR
+}
+
 private const val GLOBAL_CONNECTION_KEY = "__global_connection__"
+private const val MANAGED_CONNECTION_KEY = "__managed_connection__"
 private const val MISSING_CONNECTION_KEY = "__missing_connection__"
+
+internal fun agentRuntimeDropdownIsReadOnly(
+    allowTextEntry: Boolean,
+    forceReadOnly: Boolean
+): Boolean = forceReadOnly || !allowTextEntry
 
 private fun agentRuntimeModelDiscoveryKey(
     backend: AgentRuntimeBackend,
@@ -129,22 +146,16 @@ fun AgentRuntimeProfileControls(
         AgentRuntimeBackend.LLAMA_SWAP -> globalLlamaSwapUrl
         AgentRuntimeBackend.LITERT -> ""
     }.trim().trimEnd('/')
-    val activeConnectionLabel = when {
-        selectedEndpoint != null -> "${selectedEndpoint.name} · ${selectedEndpoint.baseUrl}"
-        missingEndpoint -> stringResource(R.string.agent_runtime_connection_missing)
-        selectedServer != null -> "${selectedServer.displayName} · ${selectedServer.host}:${selectedServer.port}"
-        globalConnectionUrl.isNotBlank() -> "${stringResource(R.string.agent_runtime_connection_global)} · $globalConnectionUrl"
-        else -> stringResource(R.string.agent_runtime_connection_global)
-    }
     val connectionSelection = when {
         selectedEndpoint != null -> selectedEndpoint.id.toString()
         missingEndpoint -> MISSING_CONNECTION_KEY
+        normalizedProfile.managedLlamaServerId != null -> MANAGED_CONNECTION_KEY
         else -> GLOBAL_CONNECTION_KEY
     }
     val refreshBackend = selectedEndpoint?.normalizedBackend ?: backend
     val refreshBaseUrl = when {
         selectedEndpoint != null -> selectedEndpoint.baseUrl
-        !missingEndpoint && selectedServer == null && backend in AgentRuntimeBackend.remoteEndpointBackends -> {
+        connectionSelection == GLOBAL_CONNECTION_KEY && backend in AgentRuntimeBackend.remoteEndpointBackends -> {
             globalConnectionUrl
         }
         else -> ""
@@ -153,6 +164,83 @@ fun AgentRuntimeProfileControls(
         .takeIf { it.isNotBlank() }
         ?.let { agentRuntimeModelDiscoveryKey(refreshBackend, it) }
     val remoteDiscoveredModels = refreshKey?.let { discoveredModels[it] }.orEmpty()
+    val connectionOptions = buildList {
+        add(GLOBAL_CONNECTION_KEY)
+        if (backend == AgentRuntimeBackend.LLAMA_SERVER || backend == AgentRuntimeBackend.LLAMA_SWAP) {
+            add(MANAGED_CONNECTION_KEY)
+        }
+        addAll(endpointOptions.map { it.id.toString() })
+        if (missingEndpoint) add(MISSING_CONNECTION_KEY)
+    }
+    val usesManagedConnection = connectionSelection == MANAGED_CONNECTION_KEY
+    val activeModelLabel = when (backend) {
+        AgentRuntimeBackend.LITERT -> selectedLiteRt?.displayName
+        AgentRuntimeBackend.LLAMA_SERVER -> selectedServer?.modelName ?: normalizedProfile.model
+        else -> normalizedProfile.model
+    }?.trim()?.takeIf { it.isNotBlank() }
+        ?: stringResource(R.string.agent_runtime_model_missing)
+    val activeTargetLabel = when {
+        selectedEndpoint != null -> selectedEndpoint.name.trim()
+            .ifBlank { stringResource(R.string.agent_runtime_connection_label) }
+        usesManagedConnection -> selectedServer?.displayName?.trim()
+            ?.ifBlank { stringResource(R.string.agent_runtime_managed_server_label) }
+            ?: stringResource(R.string.agent_runtime_connection_managed)
+        backend == AgentRuntimeBackend.LITERT -> selectedLiteRt?.displayName
+            ?: stringResource(R.string.agent_runtime_litert_model_missing)
+        else -> stringResource(R.string.agent_runtime_connection_global)
+    }
+    val activeEndpointDetail = when {
+        selectedEndpoint != null -> selectedEndpoint.baseUrl
+        usesManagedConnection -> selectedServer?.let { "${it.host}:${it.port}" }
+            ?: stringResource(R.string.agent_runtime_connection_choose_managed)
+        backend == AgentRuntimeBackend.LITERT -> selectedLiteRt?.filename
+        globalConnectionUrl.isNotBlank() -> globalConnectionUrl
+        else -> stringResource(R.string.agent_runtime_connection_not_configured)
+    }?.trim()?.takeIf { it.isNotBlank() }
+    val activeStatus = when {
+        missingEndpoint -> R.string.agent_runtime_status_missing
+        backend == AgentRuntimeBackend.LITERT -> if (selectedLiteRt != null) {
+            R.string.agent_runtime_status_installed
+        } else {
+            R.string.agent_runtime_status_missing
+        }
+        (backend == AgentRuntimeBackend.OLLAMA || backend == AgentRuntimeBackend.LLAMA_SWAP) &&
+            normalizedProfile.model.isNullOrBlank() -> R.string.agent_runtime_status_needs_selection
+        selectedEndpoint != null -> R.string.agent_runtime_status_configured
+        usesManagedConnection && selectedServer != null -> when (selectedServer.state) {
+            ManagedLlamaServerState.RUNNING -> R.string.agent_runtime_status_ready
+            ManagedLlamaServerState.STARTING,
+            ManagedLlamaServerState.LOADING -> R.string.agent_runtime_status_starting
+            ManagedLlamaServerState.STOPPED -> R.string.agent_runtime_status_stopped
+            ManagedLlamaServerState.ERROR -> R.string.agent_runtime_status_error
+            ManagedLlamaServerState.MISSING -> R.string.agent_runtime_status_missing
+            ManagedLlamaServerState.UNKNOWN -> R.string.agent_runtime_status_unknown
+        }
+        usesManagedConnection ->
+            if (serverOptions.isEmpty()) {
+                R.string.agent_runtime_status_missing
+            } else {
+                R.string.agent_runtime_status_needs_selection
+            }
+        globalConnectionUrl.isNotBlank() ->
+            R.string.agent_runtime_status_configured
+        else -> R.string.agent_runtime_status_missing
+    }
+    val activeStatusTone = when {
+        activeStatus == R.string.agent_runtime_status_ready ||
+            activeStatus == R.string.agent_runtime_status_installed ||
+            activeStatus == R.string.agent_runtime_status_configured -> AgentRuntimeStatusTone.POSITIVE
+        activeStatus == R.string.agent_runtime_status_error -> AgentRuntimeStatusTone.ERROR
+        else -> AgentRuntimeStatusTone.WARNING
+    }
+    val selectedConnectionDescription = when {
+        selectedEndpoint != null -> selectedEndpoint.baseUrl
+        missingEndpoint -> stringResource(R.string.agent_runtime_connection_missing)
+        usesManagedConnection && selectedServer != null -> "${selectedServer.host}:${selectedServer.port}"
+        usesManagedConnection -> stringResource(R.string.agent_runtime_connection_choose_managed)
+        globalConnectionUrl.isNotBlank() -> globalConnectionUrl
+        else -> stringResource(R.string.agent_runtime_connection_not_configured)
+    }
 
     fun clearNamedEndpointSelection() {
         onProfileChange(
@@ -188,8 +276,17 @@ fun AgentRuntimeProfileControls(
                 text = stringResource(R.string.agent_runtime_profile_desc),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
+                maxLines = 4,
                 overflow = TextOverflow.Ellipsis
+            )
+
+            AgentRuntimeSelectionSummary(
+                backendLabel = runtimeBackendLabel(backend.id),
+                targetLabel = activeTargetLabel,
+                modelLabel = activeModelLabel,
+                endpointDetail = activeEndpointDetail,
+                statusLabel = stringResource(activeStatus),
+                statusTone = activeStatusTone
             )
 
             AgentRuntimeDropdown(
@@ -197,11 +294,10 @@ fun AgentRuntimeProfileControls(
                 selected = backend.id,
                 values = AgentRuntimeBackend.entries.map { it.id },
                 labelFor = { runtimeBackendLabel(it) },
+                descriptionFor = { runtimeBackendDescription(it) },
+                supportingText = stringResource(R.string.agent_runtime_engine_hint),
                 onSelected = { selected ->
                     val nextBackend = AgentRuntimeBackend.from(selected)
-                    val nextServer = managedLlamaServers.firstOrNull {
-                        normalizeAgentRuntimeBackend(it.backend) == nextBackend.id
-                    }
                     onProfileChange(
                         normalizedProfile.copy(
                             backend = nextBackend.id,
@@ -215,16 +311,16 @@ fun AgentRuntimeProfileControls(
                                     managedLlamaServers.any { server ->
                                         server.id == id && normalizeAgentRuntimeBackend(server.backend) == nextBackend.id
                                     }
-                                } ?: nextServer?.id
+                                }
                             } else {
                                 null
                             },
                             liteRtModelId = if (nextBackend == AgentRuntimeBackend.LITERT) {
                                 normalizedProfile.liteRtModelId?.takeIf { id -> liteRtModels.any { it.id == id } }
-                                    ?: liteRtModels.firstOrNull()?.id
                             } else {
                                 null
                             },
+                            model = normalizedProfile.model.takeIf { nextBackend == backend },
                             updatedAt = System.currentTimeMillis()
                         )
                     )
@@ -235,29 +331,65 @@ fun AgentRuntimeProfileControls(
                 AgentRuntimeDropdown(
                     label = stringResource(R.string.agent_runtime_connection_label),
                     selected = connectionSelection,
-                    values = endpointOptions.map { it.id.toString() },
+                    values = connectionOptions,
                     labelFor = { connectionId ->
                         when (connectionId) {
-                            GLOBAL_CONNECTION_KEY -> activeConnectionLabel
+                            GLOBAL_CONNECTION_KEY -> stringResource(R.string.agent_runtime_connection_global)
+                            MANAGED_CONNECTION_KEY -> stringResource(R.string.agent_runtime_connection_managed)
                             MISSING_CONNECTION_KEY -> stringResource(R.string.agent_runtime_connection_missing)
                             else -> endpointConfigs.firstOrNull { it.id.toString() == connectionId }?.let { endpoint ->
-                                "${endpoint.name} · ${endpoint.baseUrl}"
+                                endpoint.name
                             } ?: connectionId
                         }
                     },
+                    descriptionFor = { connectionId ->
+                        when (connectionId) {
+                            GLOBAL_CONNECTION_KEY -> if (globalConnectionUrl.isNotBlank()) {
+                                globalConnectionUrl
+                            } else {
+                                stringResource(R.string.agent_runtime_connection_not_configured)
+                            }
+                            MANAGED_CONNECTION_KEY -> selectedServer?.let {
+                                "${it.host}:${it.port}"
+                            } ?: stringResource(R.string.agent_runtime_connection_choose_managed)
+                            MISSING_CONNECTION_KEY -> stringResource(R.string.agent_runtime_connection_missing)
+                            else -> endpointConfigs.firstOrNull { it.id.toString() == connectionId }?.baseUrl
+                        }
+                    },
+                    supportingText = selectedConnectionDescription,
                     onSelected = { endpointId ->
-                        val endpoint = endpointConfigs.firstOrNull { it.id.toString() == endpointId }
-                        endpoint?.let {
+                        if (endpointId == GLOBAL_CONNECTION_KEY) {
                             onProfileChange(
                                 normalizedProfile.copy(
-                                    backend = it.normalizedBackend.id,
-                                    endpointConfigId = it.id,
-                                    model = normalizedProfile.model?.takeIf { model -> model.isNotBlank() }
-                                        ?: it.defaultModel,
+                                    endpointConfigId = null,
                                     managedLlamaServerId = null,
                                     updatedAt = System.currentTimeMillis()
                                 )
                             )
+                        } else if (endpointId == MANAGED_CONNECTION_KEY) {
+                            onProfileChange(
+                                normalizedProfile.copy(
+                                    endpointConfigId = null,
+                                    // Zero is a persisted, non-colliding marker for an explicitly
+                                    // selected managed target that still needs a concrete card.
+                                    managedLlamaServerId = selectedServer?.id ?: 0L,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        } else {
+                            val endpoint = endpointConfigs.firstOrNull { it.id.toString() == endpointId }
+                            endpoint?.let {
+                                onProfileChange(
+                                    normalizedProfile.copy(
+                                        backend = it.normalizedBackend.id,
+                                        endpointConfigId = it.id,
+                                        model = normalizedProfile.model?.takeIf { model -> model.isNotBlank() }
+                                            ?: it.defaultModel,
+                                        managedLlamaServerId = null,
+                                        updatedAt = System.currentTimeMillis()
+                                    )
+                                )
+                            }
                         }
                     }
                 )
@@ -389,6 +521,13 @@ fun AgentRuntimeProfileControls(
                         label = stringResource(R.string.agent_runtime_model_label),
                         selected = normalizedProfile.model.orEmpty(),
                         values = endpointSpecificModels,
+                        supportingText = stringResource(
+                            if (selectedEndpoint != null) {
+                                R.string.agent_runtime_model_endpoint_hint
+                            } else {
+                                R.string.agent_runtime_model_global_hint
+                            }
+                        ),
                         onSelected = { model ->
                             onProfileChange(normalizedProfile.copy(model = model, updatedAt = System.currentTimeMillis()))
                         },
@@ -409,6 +548,7 @@ fun AgentRuntimeProfileControls(
                             label = stringResource(R.string.agent_runtime_model_label),
                             selected = normalizedProfile.model.orEmpty(),
                             values = remoteDiscoveredModels,
+                            supportingText = stringResource(R.string.agent_runtime_model_endpoint_hint),
                             onSelected = { model ->
                                 onProfileChange(
                                     normalizedProfile.copy(
@@ -419,7 +559,7 @@ fun AgentRuntimeProfileControls(
                             },
                             allowTextEntry = true
                         )
-                    } else {
+                    } else if (usesManagedConnection) {
                         AgentRuntimeServerDropdown(
                             label = stringResource(R.string.agent_runtime_managed_server_label),
                             selectedServer = selectedServer,
@@ -434,8 +574,24 @@ fun AgentRuntimeProfileControls(
                                 )
                             }
                         )
+                    } else {
+                        AgentRuntimeDropdown(
+                            label = stringResource(R.string.agent_runtime_model_label),
+                            selected = normalizedProfile.model.orEmpty(),
+                            values = remoteDiscoveredModels,
+                            supportingText = stringResource(R.string.agent_runtime_model_global_hint),
+                            onSelected = { model ->
+                                onProfileChange(
+                                    normalizedProfile.copy(
+                                        model = model,
+                                        updatedAt = System.currentTimeMillis()
+                                    )
+                                )
+                            },
+                            allowTextEntry = true
+                        )
                     }
-                    if (selectedEndpoint == null && (normalizedProfile.managedLlamaServerId == null || selectedServer == null)) {
+                    if (usesManagedConnection && selectedServer == null) {
                         AgentRuntimeNeedsDirectionNotice(
                             text = stringResource(
                                 if (serverOptions.isEmpty()) {
@@ -450,7 +606,7 @@ fun AgentRuntimeProfileControls(
                             ),
                             onContinue = onContinue
                         )
-                    } else if (selectedEndpoint == null && selectedServer != null && !selectedServer.isReady) {
+                    } else if (usesManagedConnection && selectedServer != null && !selectedServer.isReady) {
                         AgentRuntimeNeedsDirectionNotice(
                             text = stringResource(
                                 if (selectedServer.state == ManagedLlamaServerState.STOPPED) {
@@ -469,7 +625,7 @@ fun AgentRuntimeProfileControls(
                 }
 
                 AgentRuntimeBackend.LLAMA_SWAP -> {
-                    if (selectedEndpoint == null && serverOptions.isNotEmpty()) {
+                    if (usesManagedConnection) {
                         AgentRuntimeServerDropdown(
                             label = stringResource(R.string.agent_runtime_managed_server_label),
                             selectedServer = selectedServer,
@@ -494,6 +650,13 @@ fun AgentRuntimeProfileControls(
                         } else {
                             llamaSwapModels
                         },
+                        supportingText = stringResource(
+                            if (selectedEndpoint != null) {
+                                R.string.agent_runtime_model_endpoint_hint
+                            } else {
+                                R.string.agent_runtime_model_global_hint
+                            }
+                        ),
                         onSelected = { model ->
                             onProfileChange(normalizedProfile.copy(model = model, updatedAt = System.currentTimeMillis()))
                         },
@@ -506,7 +669,7 @@ fun AgentRuntimeProfileControls(
                             onContinue = onContinue
                         )
                     }
-                    if (selectedEndpoint == null && normalizedProfile.managedLlamaServerId != null && selectedServer == null) {
+                    if (usesManagedConnection && selectedServer == null) {
                         AgentRuntimeNeedsDirectionNotice(
                             text = stringResource(R.string.agent_runtime_server_missing),
                             continueAction = AgentRuntimeContinueAction.openServer(
@@ -515,7 +678,7 @@ fun AgentRuntimeProfileControls(
                             ),
                             onContinue = onContinue
                         )
-                    } else if (selectedEndpoint == null && selectedServer != null && !selectedServer.isReady) {
+                    } else if (usesManagedConnection && selectedServer != null && !selectedServer.isReady) {
                         AgentRuntimeNeedsDirectionNotice(
                             text = stringResource(
                                 if (selectedServer.state == ManagedLlamaServerState.STOPPED) {
@@ -552,6 +715,7 @@ fun AgentRuntimeProfileControls(
                                 )
                             )
                         },
+                        supportingText = stringResource(R.string.agent_runtime_litert_model_hint),
                         readOnly = true
                     )
                     selectedLiteRt?.filename?.let { filename ->
@@ -622,6 +786,126 @@ fun AgentRuntimeProfileControls(
                     Text(stringResource(R.string.action_cancel))
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun AgentRuntimeSelectionSummary(
+    backendLabel: String,
+    targetLabel: String,
+    modelLabel: String,
+    endpointDetail: String?,
+    statusLabel: String,
+    statusTone: AgentRuntimeStatusTone
+) {
+    val statusColor = when (statusTone) {
+        AgentRuntimeStatusTone.POSITIVE -> MaterialTheme.colorScheme.primary
+        AgentRuntimeStatusTone.WARNING -> MaterialTheme.colorScheme.tertiary
+        AgentRuntimeStatusTone.ERROR -> MaterialTheme.colorScheme.error
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.78f),
+        tonalElevation = 1.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_runtime_effective_title),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = backendLabel,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            AgentRuntimeSelectionValue(
+                label = stringResource(R.string.agent_runtime_target_label),
+                value = targetLabel
+            )
+            AgentRuntimeSelectionValue(
+                label = stringResource(R.string.agent_runtime_model_label),
+                value = modelLabel
+            )
+            endpointDetail?.let { detail ->
+                AgentRuntimeSelectionValue(
+                    label = stringResource(R.string.agent_runtime_endpoint_detail_label),
+                    value = detail
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    imageVector = when (statusTone) {
+                        AgentRuntimeStatusTone.POSITIVE -> Icons.Default.CheckCircle
+                        AgentRuntimeStatusTone.WARNING -> Icons.Default.Warning
+                        AgentRuntimeStatusTone.ERROR -> Icons.Default.ErrorOutline
+                    },
+                    contentDescription = null,
+                    tint = statusColor,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.agent_runtime_status_label),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = statusLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = statusColor,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentRuntimeSelectionValue(
+    label: String,
+    value: String
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -804,6 +1088,8 @@ private fun AgentRuntimeDropdown(
     values: List<String>,
     onSelected: (String) -> Unit,
     labelFor: @Composable (String) -> String = { it },
+    descriptionFor: @Composable (String) -> String? = { null },
+    supportingText: String? = null,
     allowTextEntry: Boolean = false,
     readOnly: Boolean = false
 ) {
@@ -819,7 +1105,22 @@ private fun AgentRuntimeDropdown(
                 .fillMaxWidth()
                 .menuAnchor(),
             label = { Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
-            readOnly = readOnly,
+            supportingText = supportingText?.let { text ->
+                {
+                    Text(
+                        text,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            },
+            // Engine, connection, and installed-model selectors are pickers, not text inputs.
+            // Leaving these fields editable makes Android open the IME over the dependent
+            // controls even though onValueChange intentionally ignores typed text.
+            readOnly = agentRuntimeDropdownIsReadOnly(
+                allowTextEntry = allowTextEntry,
+                forceReadOnly = readOnly
+            ),
             enabled = allowTextEntry || values.isNotEmpty(),
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             singleLine = true
@@ -834,11 +1135,22 @@ private fun AgentRuntimeDropdown(
             values.forEach { value ->
                 DropdownMenuItem(
                     text = {
-                        Text(
-                            labelFor(value),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                            Text(
+                                labelFor(value),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            descriptionFor(value)?.let { description ->
+                                Text(
+                                    description,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     },
                     onClick = {
                         onSelected(value)
@@ -859,12 +1171,15 @@ private fun AgentRuntimeServerDropdown(
     onSelected: (ManagedLlamaServerDescriptor) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val selectedServerDetail = selectedServer?.let { server ->
+        "${server.host}:${server.port} · ${managedLlamaServerStatusLabel(server.state)}"
+    } ?: stringResource(R.string.agent_runtime_server_unassigned)
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded }
     ) {
         OutlinedTextField(
-            value = selectedServer?.compactLabel()
+            value = selectedServer?.displayName?.trim()?.takeIf { it.isNotBlank() }
                 ?: stringResource(R.string.agent_runtime_server_unassigned),
             onValueChange = {},
             modifier = Modifier
@@ -873,6 +1188,13 @@ private fun AgentRuntimeServerDropdown(
             readOnly = true,
             enabled = servers.isNotEmpty(),
             label = { Text(label, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            supportingText = {
+                Text(
+                    selectedServerDetail,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
             singleLine = true
         )
@@ -887,14 +1209,23 @@ private fun AgentRuntimeServerDropdown(
                 DropdownMenuItem(
                     text = {
                         Column {
-                            Text(server.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(server.displayName, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             Text(
-                                server.compactLabel(),
+                                "${server.host}:${server.port} · ${managedLlamaServerStatusLabel(server.state)}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
+                                maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            server.modelName?.trim()?.takeIf { it.isNotBlank() }?.let { model ->
+                                Text(
+                                    model,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     },
                     onClick = {
@@ -929,14 +1260,14 @@ private fun AgentRuntimeNeedsDirectionNotice(
                 text = stringResource(R.string.agent_runtime_needs_direction),
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.tertiary,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
                 text = text,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.tertiary,
-                maxLines = 3,
+                maxLines = 6,
                 overflow = TextOverflow.Ellipsis
             )
             if (onContinue != null && continueAction != null) {
@@ -944,7 +1275,11 @@ private fun AgentRuntimeNeedsDirectionNotice(
                     onClick = { onContinue(continueAction) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(stringResource(R.string.agent_runtime_continue), maxLines = 1)
+                    Text(
+                        stringResource(R.string.agent_runtime_continue),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
@@ -957,4 +1292,23 @@ private fun runtimeBackendLabel(backend: String): String = when (AgentRuntimeBac
     AgentRuntimeBackend.LLAMA_SERVER -> stringResource(R.string.agent_runtime_engine_llama_server)
     AgentRuntimeBackend.LLAMA_SWAP -> stringResource(R.string.agent_runtime_engine_llama_swap)
     AgentRuntimeBackend.LITERT -> stringResource(R.string.agent_runtime_engine_litert)
+}
+
+@Composable
+private fun runtimeBackendDescription(backend: String): String = when (AgentRuntimeBackend.from(backend)) {
+    AgentRuntimeBackend.OLLAMA -> stringResource(R.string.agent_runtime_engine_ollama_desc)
+    AgentRuntimeBackend.LLAMA_SERVER -> stringResource(R.string.agent_runtime_engine_llama_server_desc)
+    AgentRuntimeBackend.LLAMA_SWAP -> stringResource(R.string.agent_runtime_engine_llama_swap_desc)
+    AgentRuntimeBackend.LITERT -> stringResource(R.string.agent_runtime_engine_litert_desc)
+}
+
+@Composable
+private fun managedLlamaServerStatusLabel(state: ManagedLlamaServerState): String = when (state) {
+    ManagedLlamaServerState.RUNNING -> stringResource(R.string.agent_runtime_status_ready)
+    ManagedLlamaServerState.STARTING,
+    ManagedLlamaServerState.LOADING -> stringResource(R.string.agent_runtime_status_starting)
+    ManagedLlamaServerState.STOPPED -> stringResource(R.string.agent_runtime_status_stopped)
+    ManagedLlamaServerState.ERROR -> stringResource(R.string.agent_runtime_status_error)
+    ManagedLlamaServerState.MISSING -> stringResource(R.string.agent_runtime_status_missing)
+    ManagedLlamaServerState.UNKNOWN -> stringResource(R.string.agent_runtime_status_unknown)
 }
