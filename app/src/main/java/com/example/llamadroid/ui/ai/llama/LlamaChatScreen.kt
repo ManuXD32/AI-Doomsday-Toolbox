@@ -154,6 +154,7 @@ import kotlinx.coroutines.withContext
 private const val LITERT_CHAT_MIN_CONTEXT_TOKENS = 512
 private const val LITERT_CHAT_FALLBACK_CONTEXT_MAX = 4000
 private const val LITERT_CHAT_GPU_HIGH_CONTEXT_WARNING_TOKENS = 16_384
+private const val LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP = 48
 
 private fun formatLlamaChatString(template: String, vararg args: Any?): String =
     String.format(Locale.getDefault(), template, *args)
@@ -2806,7 +2807,7 @@ fun LlamaChatScreen(
                                 currentMatchIndex = if (currentMatchIndex > 0) currentMatchIndex - 1 else matchIndices.size - 1
                                 scope.launch { listState.animateScrollToItem(matchIndices[currentMatchIndex]) }
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(Icons.Default.ExpandLess, contentDescription = stringResource(R.string.action_previous), modifier = Modifier.size(20.dp))
                         }
@@ -2815,7 +2816,7 @@ fun LlamaChatScreen(
                                 currentMatchIndex = if (currentMatchIndex < matchIndices.size - 1) currentMatchIndex + 1 else 0
                                 scope.launch { listState.animateScrollToItem(matchIndices[currentMatchIndex]) }
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(Icons.Default.ExpandMore, contentDescription = stringResource(R.string.action_next), modifier = Modifier.size(20.dp))
                         }
@@ -5745,7 +5746,7 @@ fun LlamaMessageItem(
                     if (imageFile != null) {
                         IconButton(
                             onClick = { saveLlamaChatImageToGallery(context, imageFile) },
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
                         ) {
                             Icon(
                                 Icons.Default.Download,
@@ -5755,7 +5756,7 @@ fun LlamaMessageItem(
                             )
                         }
                     }
-                    IconButton(onClick = onRegenerate, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = onRegenerate, modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)) {
                         Icon(
                             Icons.Default.Refresh,
                             contentDescription = stringResource(R.string.llama_regenerate),
@@ -5763,7 +5764,7 @@ fun LlamaMessageItem(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = stringResource(R.string.action_delete),
@@ -5791,7 +5792,7 @@ fun LlamaMessageItem(
                             )
                         }
                     }
-                    IconButton(onClick = { copyMessageToClipboard() }, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = { copyMessageToClipboard() }, modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)) {
                         Icon(
                             Icons.Default.ContentCopy,
                             contentDescription = stringResource(R.string.action_copy),
@@ -5802,7 +5803,7 @@ fun LlamaMessageItem(
                     if (imageFile != null) {
                         IconButton(
                             onClick = { saveLlamaChatImageToGallery(context, imageFile) },
-                            modifier = Modifier.size(28.dp)
+                            modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
                         ) {
                             Icon(
                                 Icons.Default.Download,
@@ -5817,7 +5818,7 @@ fun LlamaMessageItem(
                             isEditing = true
                             editContent = message.content
                         },
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
                     ) {
                         Icon(
                             Icons.Default.Edit,
@@ -5826,7 +5827,7 @@ fun LlamaMessageItem(
                             modifier = Modifier.size(16.dp)
                         )
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
+                    IconButton(onClick = onDelete, modifier = Modifier.size(LLAMA_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)) {
                         Icon(
                             Icons.Default.Delete,
                             contentDescription = stringResource(R.string.action_delete),

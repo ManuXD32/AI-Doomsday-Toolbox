@@ -27,7 +27,6 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -52,7 +51,7 @@ import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
@@ -144,18 +143,13 @@ fun ModelManagerScreen(navController: NavController) {
             (it.value == DownloadProgressHolder.INDETERMINATE || it.value in 0f..0.999f)
     }
 
-    AppPageBackground {
+    AppScreenScaffold(title = stringResource(R.string.nav_models), onBack = { navController.popBackStack() }) {
         Column(modifier = Modifier.fillMaxSize()) {
             AppContentColumn(
                 modifier = Modifier.fillMaxWidth(),
                 bottomPadding = 8.dp,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                AppPageHeader(
-                    eyebrow = "MODELS",
-                    title = stringResource(R.string.nav_models),
-                    subtitle = stringResource(R.string.ai_hub_subtitle)
-                )
                 AppSectionCard {
                     AppScrollableTabRow(
                         selectedTabIndex = selectedTab,
@@ -824,15 +818,7 @@ private fun ModelStorageOverviewCard(snapshot: ModelStorageSnapshot) {
     ) {
         Column(
             modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f),
-                            MaterialTheme.colorScheme.surface,
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.24f)
-                        )
-                    )
-                )
+                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.20f))
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -871,25 +857,48 @@ private fun ModelStorageOverviewCard(snapshot: ModelStorageSnapshot) {
                 }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                StorageValuePill(
-                    label = stringResource(R.string.models_storage_total),
-                    value = totalText,
-                    modifier = Modifier.weight(1f)
-                )
-                StorageValuePill(
-                    label = stringResource(R.string.models_storage_free),
-                    value = freeText,
-                    modifier = Modifier.weight(1f)
-                )
-                StorageValuePill(
-                    label = stringResource(R.string.models_storage_models),
-                    value = modelsText,
-                    modifier = Modifier.weight(1f)
-                )
+            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StorageValuePill(
+                        label = stringResource(R.string.models_storage_total),
+                        value = totalText,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    StorageValuePill(
+                        label = stringResource(R.string.models_storage_free),
+                        value = freeText,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    StorageValuePill(
+                        label = stringResource(R.string.models_storage_models),
+                        value = modelsText,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    StorageValuePill(
+                        label = stringResource(R.string.models_storage_total),
+                        value = totalText,
+                        modifier = Modifier.weight(1f)
+                    )
+                    StorageValuePill(
+                        label = stringResource(R.string.models_storage_free),
+                        value = freeText,
+                        modifier = Modifier.weight(1f)
+                    )
+                    StorageValuePill(
+                        label = stringResource(R.string.models_storage_models),
+                        value = modelsText,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
 
             SegmentedStorageBar(
@@ -899,22 +908,41 @@ private fun ModelStorageOverviewCard(snapshot: ModelStorageSnapshot) {
                     .semantics { contentDescription = barDescription }
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StorageLegendItem(
-                    label = stringResource(R.string.models_storage_models),
-                    value = modelsText,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                StorageLegendItem(
-                    label = stringResource(R.string.models_storage_other),
-                    value = otherUsedText,
-                    color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
-                    modifier = Modifier.weight(1f)
-                )
+            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    StorageLegendItem(
+                        label = stringResource(R.string.models_storage_models),
+                        value = modelsText,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    StorageLegendItem(
+                        label = stringResource(R.string.models_storage_other),
+                        value = otherUsedText,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    StorageLegendItem(
+                        label = stringResource(R.string.models_storage_models),
+                        value = modelsText,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    StorageLegendItem(
+                        label = stringResource(R.string.models_storage_other),
+                        value = otherUsedText,
+                        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
     }
@@ -982,14 +1010,7 @@ private fun SegmentedStorageBar(
                     modifier = Modifier
                         .fillMaxHeight()
                         .weight(modelsFraction)
-                        .background(
-                            Brush.horizontalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.primary,
-                                    MaterialTheme.colorScheme.tertiary
-                                )
-                            )
-                        )
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.82f))
                 )
             }
             val freeFraction = (1f - otherUsedFraction - modelsFraction).coerceIn(0f, 1f)

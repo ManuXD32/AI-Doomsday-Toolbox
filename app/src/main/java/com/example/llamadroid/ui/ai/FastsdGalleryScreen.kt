@@ -5,6 +5,9 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -27,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import com.example.llamadroid.R
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -349,11 +353,12 @@ fun FastsdGalleryScreen(navController: NavController) {
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(32.dp),
+                            .verticalScroll(rememberScrollState())
+                            .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text("⚠️", fontSize = 48.sp)
+                        Icon(Icons.Default.ErrorOutline, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.error)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(errorMessage!!, textAlign = TextAlign.Center)
                         Spacer(modifier = Modifier.height(16.dp))
@@ -366,11 +371,12 @@ fun FastsdGalleryScreen(navController: NavController) {
                 images.isEmpty() -> {
                     Column(
                         modifier = Modifier.fillMaxSize()
-                            .padding(32.dp),
+                            .verticalScroll(rememberScrollState())
+                            .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Text("🖼️", fontSize = 64.sp)
+                        Icon(Icons.Default.Collections, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
                         Spacer(modifier = Modifier.height(16.dp))
                         Text(stringResource(R.string.fastsd_no_images), fontWeight = FontWeight.Bold, fontSize = 20.sp)
                         Spacer(modifier = Modifier.height(8.dp))
@@ -384,10 +390,10 @@ fun FastsdGalleryScreen(navController: NavController) {
                 
                 else -> {
                     LazyVerticalGrid(
-                        columns = GridCells.Adaptive(120.dp),
-                        contentPadding = PaddingValues(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        columns = if (LocalDensity.current.fontScale >= 1.3f) GridCells.Fixed(1) else GridCells.Adaptive(160.dp),
+                        contentPadding = PaddingValues(20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         items(images) { image ->
                             val isSelected = selectedImages.contains(image.filename)
@@ -619,7 +625,12 @@ fun FullImageDialog(
                     .heightIn(max = 600.dp),
                 shape = RoundedCornerShape(16.dp)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(
+                    modifier = Modifier
+                        .padding(16.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     // Header
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -638,7 +649,7 @@ fun FullImageDialog(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .weight(1f)
+                            .heightIn(min = 180.dp, max = 360.dp)
                             .clip(RoundedCornerShape(8.dp))
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
@@ -666,48 +677,49 @@ fun FullImageDialog(
                         }
                     }
                     
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
                     // Metadata
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Row {
-                                Text("📅 ", fontSize = 12.sp)
-                                Text(stringResource(R.string.fastsd_created_label), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                Text(image.modifiedTime, fontSize = 12.sp)
-                            }
-                            Row {
-                                Text("📁 ", fontSize = 12.sp)
-                                Text(stringResource(R.string.fastsd_size_label), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                Text(formatFileSize(image.size), fontSize = 12.sp)
-                            }
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FastsdMetadataRow(
+                                icon = Icons.Default.CalendarToday,
+                                label = stringResource(R.string.fastsd_created_label),
+                                value = image.modifiedTime
+                            )
+                            FastsdMetadataRow(
+                                icon = Icons.Default.Folder,
+                                label = stringResource(R.string.fastsd_size_label),
+                                value = formatFileSize(image.size)
+                            )
                             if (fullImageData != null) {
                                 val bitmap = remember(fullImageData) {
                                     BitmapFactory.decodeByteArray(fullImageData, 0, fullImageData!!.size)
                                 }
                                 bitmap?.let {
-                                    Row {
-                                        Text("📐 ", fontSize = 12.sp)
-                                        Text(stringResource(R.string.fastsd_resolution_label), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                        Text("${it.width} × ${it.height}", fontSize = 12.sp)
-                                    }
+                                    FastsdMetadataRow(
+                                        icon = Icons.Default.AspectRatio,
+                                        label = stringResource(R.string.fastsd_resolution_label),
+                                        value = "${it.width} × ${it.height}"
+                                    )
                                 }
                             }
                         }
                     }
-                    
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
+
                     // Actions
-                    Row(
+                    Column(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Button(
                             onClick = onShare,
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
                         ) {
                             Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
@@ -715,7 +727,9 @@ fun FullImageDialog(
                         }
                         Button(
                             onClick = { showDeleteConfirm = true },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                         ) {
                             Icon(Icons.Default.Delete, null, modifier = Modifier.size(16.dp))
@@ -725,6 +739,35 @@ fun FullImageDialog(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun FastsdMetadataRow(
+    icon: ImageVector,
+    label: String,
+    value: String
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelSmall)
+            Text(
+                value,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }

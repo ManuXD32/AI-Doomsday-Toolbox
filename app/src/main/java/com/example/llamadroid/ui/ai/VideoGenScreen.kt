@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -63,6 +64,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -84,6 +86,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +138,11 @@ import com.example.llamadroid.sd.toJsonArray
 import com.example.llamadroid.sd.toSdLoraSpecs
 import com.example.llamadroid.sd.validateSdLoras
 import com.example.llamadroid.ui.components.SdSchedulerPicker
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -146,7 +155,7 @@ import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VideoGenScreen(navController: NavController) {
+fun VideoGenScreen(navController: NavController, initialTab: String = "create") {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -171,7 +180,10 @@ fun VideoGenScreen(navController: NavController) {
     val availableVideoModels = remember(videoGenModels) {
         videoGenModels.filter { it.hasSdCapability(SD_CAPABILITY_VID_GEN) }
     }
-    var mainTab by remember { mutableIntStateOf(0) }
+    val mainTabStateHolder = rememberSaveableStateHolder()
+    var mainTab by rememberSaveable(initialTab) {
+        mutableIntStateOf(if (initialTab.equals("gallery", ignoreCase = true)) 1 else 0)
+    }
     var selectedMode by remember { mutableIntStateOf(restoredDraft?.optInt("mode", 0) ?: 0) }
     var galleryFilter by remember { mutableIntStateOf(0) }
 
@@ -561,37 +573,33 @@ fun VideoGenScreen(navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { navController.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
             }
             Text(
-                "🎥 " + stringResource(R.string.video_gen_title),
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold)
+                stringResource(R.string.video_gen_title),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            Spacer(modifier = Modifier.weight(1f))
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, contentDescription = stringResource(R.string.gen_help_open))
             }
         }
 
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp)
+            modifier = Modifier.padding(horizontal = 20.dp),
+            edgePadding = 12.dp
         ) {
             listOf(
                 stringResource(R.string.video_gen_tab_generate),
@@ -605,526 +613,660 @@ fun VideoGenScreen(navController: NavController) {
             }
         }
 
-        if (mainTab == 0) {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(bottom = 16.dp)
-            ) {
-                item(key = "mode") {
-                    val modes = listOf(
-                        stringResource(R.string.video_gen_mode_txt2vid),
-                        stringResource(R.string.video_gen_mode_img2vid)
-                    )
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        modes.forEachIndexed { index, label ->
-                            SegmentedButton(
-                                selected = selectedMode == index,
-                                onClick = { selectedMode = index },
-                                shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
-                            ) {
-                                Text(label)
+        mainTabStateHolder.SaveableStateProvider(mainTab) {
+            if (mainTab == 0) {
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    contentPadding = PaddingValues(bottom = 16.dp)
+                ) {
+                    item(key = "mode") {
+                        val modes = listOf(
+                            stringResource(R.string.video_gen_mode_txt2vid),
+                            stringResource(R.string.video_gen_mode_img2vid)
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            modes.forEachIndexed { index, label ->
+                                SegmentedButton(
+                                    selected = selectedMode == index,
+                                    onClick = { selectedMode = index },
+                                    shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size)
+                                ) {
+                                    Text(label)
+                                }
                             }
                         }
                     }
-                }
 
-                if (selectedMode == 1) {
-                    item(key = "input-image") {
+                    if (selectedMode == 1) {
+                        item(key = "input-image") {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    stringResource(R.string.video_gen_input_image_title),
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                if (selectedImagePath != null && imageResolution != null) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        val bitmap by rememberVideoPreviewBitmap(selectedImagePath)
+                                        bitmap?.let {
+                                            Image(
+                                                bitmap = it,
+                                                contentDescription = stringResource(
+                                                    R.string.soft_studio_input_image_description,
+                                                    File(selectedImagePath!!).name
+                                                ),
+                                                modifier = Modifier
+                                                    .size(80.dp)
+                                                    .clip(RoundedCornerShape(10.dp)),
+                                                contentScale = ContentScale.Crop
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                "${imageResolution!!.first} × ${imageResolution!!.second}",
+                                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
+                                            )
+                                            Text(
+                                                stringResource(R.string.video_gen_input_image_ready),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        IconButton(onClick = { imagePicker.launch("image/*") }) {
+                                            Icon(Icons.Default.Image, contentDescription = stringResource(R.string.action_change))
+                                        }
+                                    }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = { imagePicker.launch("image/*") },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(stringResource(R.string.video_gen_select_image))
+                                    }
+                                }
+                                }
+                            }
+                        }
+                    }
+
+                    item(key = "model") { Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                stringResource(R.string.video_gen_model_label),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            if (availableVideoModels.isEmpty()) {
+                                Text(
+                                    stringResource(R.string.video_gen_no_models_installed),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
+                                    Icon(Icons.Default.Add, contentDescription = null)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(stringResource(R.string.video_gen_get_models))
+                                }
+                            } else {
+                                ModelDropdown(
+                                    value = selectedVideoModelPath,
+                                    placeholder = stringResource(R.string.video_gen_select_model),
+                                    models = availableVideoModels,
+                                    onSelected = { selectedVideoModelPath = it.path }
+                                )
+                            }
+                        }
+                    } }
+
+                    item(key = "vae") { OptionalModelCard(
+                        title = stringResource(R.string.video_gen_vae_toggle_label),
+                        enabled = useVae,
+                        onEnabledChange = { enabled ->
+                            useVae = enabled
+                            if (!enabled) {
+                                selectedVaePath = null
+                            }
+                        },
+                        models = vaeModels,
+                        selectedPath = selectedVaePath,
+                        emptyText = stringResource(R.string.video_gen_no_vae_installed),
+                        placeholder = stringResource(R.string.video_gen_select_vae),
+                        onSelected = { selectedVaePath = it.path },
+                        onGetModels = { navController.navigate(Screen.SDModels.route) }
+                    ) }
+
+                    item(key = "t5") { OptionalModelCard(
+                        title = stringResource(R.string.video_gen_t5_toggle_label),
+                        enabled = useT5xxl,
+                        onEnabledChange = { enabled ->
+                            useT5xxl = enabled
+                            if (!enabled) {
+                                selectedT5xxlPath = null
+                            }
+                        },
+                        models = t5xxlModels,
+                        selectedPath = selectedT5xxlPath,
+                        emptyText = stringResource(R.string.video_gen_no_t5xxl_installed),
+                        placeholder = stringResource(R.string.video_gen_select_t5xxl),
+                        onSelected = { selectedT5xxlPath = it.path },
+                        onGetModels = { navController.navigate(Screen.SDModels.route) }
+                    ) }
+
+                    item(key = "prompts") { Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                stringResource(R.string.video_gen_prompt_label),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = prompt,
+                                onValueChange = { prompt = it },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(120.dp),
+                                placeholder = { Text(stringResource(R.string.video_gen_prompt_placeholder)) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = negativePrompt,
+                                onValueChange = { negativePrompt = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text(stringResource(R.string.video_gen_negative_prompt_label)) },
+                                placeholder = { Text(stringResource(R.string.video_gen_negative_prompt_placeholder)) },
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                        }
+                    } }
+
+                    item(key = "loras") {
+                        VideoLoraStackCard(
+                            models = compatibleVideoLoraModels,
+                            loras = videoLoras,
+                            highNoiseLoras = videoHighNoiseLoras,
+                            applyMode = videoLoraApplyMode,
+                            onLorasChange = { videoLoras = it },
+                            onHighNoiseLorasChange = { videoHighNoiseLoras = it },
+                            onApplyModeChange = { videoLoraApplyMode = it }
+                        )
+                    }
+
+                    item(key = "parameters") { Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Text(
+                                stringResource(R.string.video_gen_parameters_title),
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_frames_label),
+                                    value = videoFramesText,
+                                    onValueChange = { videoFramesText = it }
+                                )
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_fps_label),
+                                    value = fpsText,
+                                    onValueChange = { fpsText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_width_label),
+                                    value = widthText,
+                                    onValueChange = { widthText = it }
+                                )
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_height_label),
+                                    value = heightText,
+                                    onValueChange = { heightText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoNumberField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_steps_label),
+                                    value = stepsText,
+                                    onValueChange = { stepsText = it }
+                                )
+                                VideoTextField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_cfg_scale_label),
+                                    value = cfgScaleText,
+                                    keyboardType = KeyboardType.Decimal,
+                                    onValueChange = { cfgScaleText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                VideoTextField(
+                                    modifier = Modifier.weight(1f),
+                                    label = stringResource(R.string.video_gen_threads_label),
+                                    value = threadsText,
+                                    keyboardType = KeyboardType.Number,
+                                    onValueChange = { threadsText = it }
+                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = flowShiftEnabled,
+                                            onCheckedChange = {
+                                                flowShiftEnabled = it
+                                                if (!it) {
+                                                    flowShiftText = ""
+                                                }
+                                            }
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(stringResource(R.string.video_gen_flow_shift_toggle_label))
+                                    }
+                                }
+                            }
+                            if (flowShiftEnabled) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                VideoTextField(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = stringResource(R.string.video_gen_flow_shift_label),
+                                    value = flowShiftText,
+                                    keyboardType = KeyboardType.Decimal,
+                                    onValueChange = { flowShiftText = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                stringResource(R.string.video_gen_sampler_label),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            var samplerExpanded by remember { mutableStateOf(false) }
+                            ExposedDropdownMenuBox(
+                                expanded = samplerExpanded,
+                                onExpandedChange = { samplerExpanded = !samplerExpanded }
+                            ) {
+                                OutlinedTextField(
+                                    value = selectedSampler.cliName,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    trailingIcon = {
+                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerExpanded)
+                                    },
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = samplerExpanded,
+                                    onDismissRequest = { samplerExpanded = false }
+                                ) {
+                                    SamplingMethod.entries.forEach { sampler ->
+                                        DropdownMenuItem(
+                                            text = { Text(sampler.cliName) },
+                                            onClick = {
+                                                selectedSampler = sampler
+                                                samplerExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            SdSchedulerPicker(
+                                value = selectedScheduler,
+                                onValueChange = { selectedScheduler = it }
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = vaeTiling,
+                                    onCheckedChange = { vaeTiling = it }
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(stringResource(R.string.video_gen_vae_tiling_label))
+                            }
+                            if (vaeTiling) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                VideoTextField(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = stringResource(R.string.video_gen_vae_tile_size_label),
+                                    value = vaeTileSize,
+                                    onValueChange = { vaeTileSize = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = diffusionFa,
+                                    onClick = { diffusionFa = !diffusionFa },
+                                    label = { Text(stringResource(R.string.video_gen_diffusion_fa_label)) }
+                                )
+                                FilterChip(
+                                    selected = mmap,
+                                    onClick = { mmap = !mmap },
+                                    label = { Text(stringResource(R.string.video_gen_mmap_label)) }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                FilterChip(
+                                    selected = diffusionConvDirect,
+                                    onClick = { diffusionConvDirect = !diffusionConvDirect },
+                                    label = { Text(stringResource(R.string.imagegen_diffusion_conv_direct_label)) }
+                                )
+                                FilterChip(
+                                    selected = vaeConvDirect,
+                                    onClick = { vaeConvDirect = !vaeConvDirect },
+                                    label = { Text(stringResource(R.string.imagegen_vae_conv_direct_label)) }
+                                )
+                            }
+                            acceleratorPlacement?.let { accelerator ->
+                                Spacer(modifier = Modifier.height(12.dp))
+                                SdBackendPlacementControls(
+                                    accelerator = accelerator,
+                                    textEncoder = textEncoderPlacement,
+                                    diffusion = diffusionPlacement,
+                                    vae = vaePlacement,
+                                    onTextEncoderChange = { textEncoderPlacement = it },
+                                    onDiffusionChange = { diffusionPlacement = it },
+                                    onVaeChange = { vaePlacement = it }
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            VideoLocalSdCliMemoryControls(
+                                selectedModel = selectedVideoModel,
+                                maxRamEnabled = sdMaxCpuRamEnabled,
+                                maxRamGiB = sdMaxCpuRamGiB,
+                                onParamsBackendChange = { mode ->
+                                    selectedVideoModel?.let { model ->
+                                        scope.launch {
+                                            db.modelDao().insertModel(
+                                                model.copy(sdParamsBackendMode = mode.storedValue)
+                                            )
+                                        }
+                                    }
+                                },
+                                onRuntimeBackendChange = { mode ->
+                                    selectedVideoModel?.let { model ->
+                                        scope.launch {
+                                            db.modelDao().insertModel(
+                                                model.copy(sdRuntimeBackendMode = mode.storedValue)
+                                            )
+                                        }
+                                    }
+                                },
+                                onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
+                                onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
+                            )
+                        }
+                    } }
+
+                    item(key = "cache") { GenerationCachingCard(
+                        title = stringResource(R.string.gen_cache_title),
+                        cacheMode = cacheMode,
+                        onCacheModeChange = { cacheMode = it },
+                        cacheOption = cacheOption,
+                        onCacheOptionChange = { cacheOption = it },
+                        scmPolicy = scmPolicy,
+                        onScmPolicyChange = { scmPolicy = it },
+                        scmMask = scmMask,
+                        onScmMaskChange = { scmMask = it },
+                        guidanceFamily = GenerationCacheGuidanceFamily.VIDEO_DIT,
+                        enabled = true,
+                        disabledMessage = null
+                    ) }
+
+                    item(key = "manual-flags") {
+                        AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            ) {
+                                Column(modifier = Modifier.padding(16.dp)) {
+                                    Text(
+                                        stringResource(R.string.sd_manual_flags_label),
+                                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                    )
+                                    Text(
+                                        stringResource(R.string.sd_manual_flags_desc),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(modifier = Modifier.height(12.dp))
+                                    OutlinedTextField(
+                                        value = manualCommandFlags,
+                                        onValueChange = { manualCommandFlags = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text(stringResource(R.string.sd_manual_flags_label)) },
+                                        placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
+                                        minLines = 2,
+                                        shape = RoundedCornerShape(12.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    item(key = "run-state") { if (isBusy) {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                         ) {
-                            Column(modifier = Modifier.padding(16.dp)) {
-                            Text(
-                                stringResource(R.string.video_gen_input_image_title),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            if (selectedImagePath != null && imageResolution != null) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    val bitmap by rememberVideoPreviewBitmap(selectedImagePath)
-                                    bitmap?.let {
-                                        Image(
-                                            bitmap = it,
-                                            contentDescription = null,
-                                            modifier = Modifier
-                                                .size(80.dp)
-                                                .clip(RoundedCornerShape(10.dp)),
-                                            contentScale = ContentScale.Crop
-                                        )
-                                    }
-                                    Spacer(modifier = Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            "${imageResolution!!.first} × ${imageResolution!!.second}",
-                                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
-                                        )
-                                        Text(
-                                            stringResource(R.string.video_gen_input_image_ready),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    IconButton(onClick = { imagePicker.launch("image/*") }) {
-                                        Icon(Icons.Default.Image, contentDescription = stringResource(R.string.action_change))
-                                    }
-                                }
-                            } else {
-                                OutlinedButton(
-                                    onClick = { imagePicker.launch("image/*") },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = null)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.video_gen_select_image))
-                                }
-                            }
-                            }
-                        }
-                    }
-                }
-
-                item(key = "model") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.video_gen_model_label),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        if (availableVideoModels.isEmpty()) {
-                            Text(
-                                stringResource(R.string.video_gen_no_models_installed),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            OutlinedButton(onClick = { navController.navigate(Screen.SDModels.route) }) {
-                                Icon(Icons.Default.Add, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.video_gen_get_models))
-                            }
-                        } else {
-                            ModelDropdown(
-                                value = selectedVideoModelPath,
-                                placeholder = stringResource(R.string.video_gen_select_model),
-                                models = availableVideoModels,
-                                onSelected = { selectedVideoModelPath = it.path }
-                            )
-                        }
-                    }
-                } }
-
-                item(key = "vae") { OptionalModelCard(
-                    title = stringResource(R.string.video_gen_vae_toggle_label),
-                    enabled = useVae,
-                    onEnabledChange = { enabled ->
-                        useVae = enabled
-                        if (!enabled) {
-                            selectedVaePath = null
-                        }
-                    },
-                    models = vaeModels,
-                    selectedPath = selectedVaePath,
-                    emptyText = stringResource(R.string.video_gen_no_vae_installed),
-                    placeholder = stringResource(R.string.video_gen_select_vae),
-                    onSelected = { selectedVaePath = it.path },
-                    onGetModels = { navController.navigate(Screen.SDModels.route) }
-                ) }
-
-                item(key = "t5") { OptionalModelCard(
-                    title = stringResource(R.string.video_gen_t5_toggle_label),
-                    enabled = useT5xxl,
-                    onEnabledChange = { enabled ->
-                        useT5xxl = enabled
-                        if (!enabled) {
-                            selectedT5xxlPath = null
-                        }
-                    },
-                    models = t5xxlModels,
-                    selectedPath = selectedT5xxlPath,
-                    emptyText = stringResource(R.string.video_gen_no_t5xxl_installed),
-                    placeholder = stringResource(R.string.video_gen_select_t5xxl),
-                    onSelected = { selectedT5xxlPath = it.path },
-                    onGetModels = { navController.navigate(Screen.SDModels.route) }
-                ) }
-
-                item(key = "prompts") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.video_gen_prompt_label),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = prompt,
-                            onValueChange = { prompt = it },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(120.dp),
-                            placeholder = { Text(stringResource(R.string.video_gen_prompt_placeholder)) },
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = negativePrompt,
-                            onValueChange = { negativePrompt = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(stringResource(R.string.video_gen_negative_prompt_label)) },
-                            placeholder = { Text(stringResource(R.string.video_gen_negative_prompt_placeholder)) },
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                    }
-                } }
-
-                item(key = "loras") {
-                    VideoLoraStackCard(
-                        models = compatibleVideoLoraModels,
-                        loras = videoLoras,
-                        highNoiseLoras = videoHighNoiseLoras,
-                        applyMode = videoLoraApplyMode,
-                        onLorasChange = { videoLoras = it },
-                        onHighNoiseLorasChange = { videoHighNoiseLoras = it },
-                        onApplyModeChange = { videoLoraApplyMode = it }
-                    )
-                }
-
-                item(key = "parameters") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.video_gen_parameters_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_frames_label),
-                                value = videoFramesText,
-                                onValueChange = { videoFramesText = it }
-                            )
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_fps_label),
-                                value = fpsText,
-                                onValueChange = { fpsText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_width_label),
-                                value = widthText,
-                                onValueChange = { widthText = it }
-                            )
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_height_label),
-                                value = heightText,
-                                onValueChange = { heightText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoNumberField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_steps_label),
-                                value = stepsText,
-                                onValueChange = { stepsText = it }
-                            )
-                            VideoTextField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_cfg_scale_label),
-                                value = cfgScaleText,
-                                keyboardType = KeyboardType.Decimal,
-                                onValueChange = { cfgScaleText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            VideoTextField(
-                                modifier = Modifier.weight(1f),
-                                label = stringResource(R.string.video_gen_threads_label),
-                                value = threadsText,
-                                keyboardType = KeyboardType.Number,
-                                onValueChange = { threadsText = it }
-                            )
                             Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.Center
+                                modifier = Modifier.padding(16.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(
-                                        checked = flowShiftEnabled,
-                                        onCheckedChange = {
-                                            flowShiftEnabled = it
-                                            if (!it) {
-                                                flowShiftText = ""
-                                            }
-                                        }
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(stringResource(R.string.video_gen_flow_shift_toggle_label))
-                                }
+                                Text(
+                                    stringResource(R.string.video_gen_running_title),
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(status.ifBlank { stringResource(R.string.video_gen_status_starting) })
+                                Spacer(modifier = Modifier.height(8.dp))
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { progress.coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             }
                         }
-                        if (flowShiftEnabled) {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            VideoTextField(
-                                modifier = Modifier.fillMaxWidth(),
-                                label = stringResource(R.string.video_gen_flow_shift_label),
-                                value = flowShiftText,
-                                keyboardType = KeyboardType.Decimal,
-                                onValueChange = { flowShiftText = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            stringResource(R.string.video_gen_sampler_label),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        var samplerExpanded by remember { mutableStateOf(false) }
-                        ExposedDropdownMenuBox(
-                            expanded = samplerExpanded,
-                            onExpandedChange = { samplerExpanded = !samplerExpanded }
-                        ) {
-                            OutlinedTextField(
-                                value = selectedSampler.cliName,
-                                onValueChange = {},
-                                readOnly = true,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                trailingIcon = {
-                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = samplerExpanded)
-                                },
-                                shape = RoundedCornerShape(12.dp)
-                            )
-                            ExposedDropdownMenu(
-                                expanded = samplerExpanded,
-                                onDismissRequest = { samplerExpanded = false }
-                            ) {
-                                SamplingMethod.entries.forEach { sampler ->
-                                    DropdownMenuItem(
-                                        text = { Text(sampler.cliName) },
-                                        onClick = {
-                                            selectedSampler = sampler
-                                            samplerExpanded = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        SdSchedulerPicker(
-                            value = selectedScheduler,
-                            onValueChange = { selectedScheduler = it }
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = vaeTiling,
-                                onCheckedChange = { vaeTiling = it }
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(stringResource(R.string.video_gen_vae_tiling_label))
-                        }
-                        if (vaeTiling) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            VideoTextField(
-                                modifier = Modifier.fillMaxWidth(),
-                                label = stringResource(R.string.video_gen_vae_tile_size_label),
-                                value = vaeTileSize,
-                                onValueChange = { vaeTileSize = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = diffusionFa,
-                                onClick = { diffusionFa = !diffusionFa },
-                                label = { Text(stringResource(R.string.video_gen_diffusion_fa_label)) }
-                            )
-                            FilterChip(
-                                selected = mmap,
-                                onClick = { mmap = !mmap },
-                                label = { Text(stringResource(R.string.video_gen_mmap_label)) }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            FilterChip(
-                                selected = diffusionConvDirect,
-                                onClick = { diffusionConvDirect = !diffusionConvDirect },
-                                label = { Text(stringResource(R.string.imagegen_diffusion_conv_direct_label)) }
-                            )
-                            FilterChip(
-                                selected = vaeConvDirect,
-                                onClick = { vaeConvDirect = !vaeConvDirect },
-                                label = { Text(stringResource(R.string.imagegen_vae_conv_direct_label)) }
-                            )
-                        }
-                        acceleratorPlacement?.let { accelerator ->
-                            Spacer(modifier = Modifier.height(12.dp))
-                            SdBackendPlacementControls(
-                                accelerator = accelerator,
-                                textEncoder = textEncoderPlacement,
-                                diffusion = diffusionPlacement,
-                                vae = vaePlacement,
-                                onTextEncoderChange = { textEncoderPlacement = it },
-                                onDiffusionChange = { diffusionPlacement = it },
-                                onVaeChange = { vaePlacement = it }
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(16.dp))
-                        VideoLocalSdCliMemoryControls(
-                            selectedModel = selectedVideoModel,
-                            maxRamEnabled = sdMaxCpuRamEnabled,
-                            maxRamGiB = sdMaxCpuRamGiB,
-                            onParamsBackendChange = { mode ->
-                                selectedVideoModel?.let { model ->
-                                    scope.launch {
-                                        db.modelDao().insertModel(
-                                            model.copy(sdParamsBackendMode = mode.storedValue)
-                                        )
-                                    }
-                                }
-                            },
-                            onRuntimeBackendChange = { mode ->
-                                selectedVideoModel?.let { model ->
-                                    scope.launch {
-                                        db.modelDao().insertModel(
-                                            model.copy(sdRuntimeBackendMode = mode.storedValue)
-                                        )
-                                    }
-                                }
-                            },
-                            onMaxRamEnabledChange = { settingsRepo.setSdMaxCpuRamEnabled(it) },
-                            onMaxRamGiBChange = { settingsRepo.setSdMaxCpuRamGiB(it) }
-                        )
-                    }
-                } }
+                    } else {
+                    } }
 
-                item(key = "cache") { GenerationCachingCard(
-                    title = stringResource(R.string.gen_cache_title),
-                    cacheMode = cacheMode,
-                    onCacheModeChange = { cacheMode = it },
-                    cacheOption = cacheOption,
-                    onCacheOptionChange = { cacheOption = it },
-                    scmPolicy = scmPolicy,
-                    onScmPolicyChange = { scmPolicy = it },
-                    scmMask = scmMask,
-                    onScmMaskChange = { scmMask = it },
-                    guidanceFamily = GenerationCacheGuidanceFamily.VIDEO_DIT,
-                    enabled = true,
-                    disabledMessage = null
-                ) }
-
-                item(key = "manual-flags") { Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            stringResource(R.string.sd_manual_flags_label),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Text(
-                            stringResource(R.string.sd_manual_flags_desc),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = manualCommandFlags,
-                            onValueChange = { manualCommandFlags = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(stringResource(R.string.sd_manual_flags_label)) },
-                            placeholder = { Text(stringResource(R.string.sd_manual_flags_hint)) },
-                            minLines = 2,
+                    warningMessage?.let { warning ->
+                        item(key = "warning") { Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
+                            ),
                             shape = RoundedCornerShape(12.dp)
-                        )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Warning, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(warning, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            }
+                        } }
                     }
-                } }
 
-                item(key = "run-state") { if (isBusy) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                    errorMessage?.let { error ->
+                        item(key = "error") { Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(
-                                stringResource(R.string.video_gen_running_title),
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                                error,
+                                modifier = Modifier.padding(12.dp),
+                                color = MaterialTheme.colorScheme.onErrorContainer
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(status.ifBlank { stringResource(R.string.video_gen_status_starting) })
-                            Spacer(modifier = Modifier.height(8.dp))
-                            androidx.compose.material3.LinearProgressIndicator(
-                                progress = { progress.coerceIn(0f, 1f) },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            OutlinedButton(
-                                onClick = cancelVideo,
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        } }
+                    }
+
+                    if (generationState is VideoGenerationState.Complete) {
+                        item(key = "complete") { Card(
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Close, contentDescription = null)
+                                Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.action_cancel))
+                                Text(
+                                    stringResource(R.string.video_gen_success),
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        } }
+                    }
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp)
+                ) {
+                    val filters = listOf(
+                        stringResource(R.string.video_gen_gallery_all),
+                        stringResource(R.string.video_gen_mode_txt2vid),
+                        stringResource(R.string.video_gen_mode_img2vid)
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(filters.size) { index ->
+                            FilterChip(selected = galleryFilter == index,
+                                onClick = { galleryFilter = index },
+                                label = { Text(filters[index], maxLines = 1) },
+                                modifier = Modifier.heightIn(min = 48.dp))
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (filteredGalleryVideos.isEmpty()) {
+                        AppStatePanel(
+                            kind = AppStateKind.Empty,
+                            title = stringResource(R.string.soft_studio_empty_title),
+                            message = if (galleryFilter == 0) {
+                                stringResource(R.string.video_gen_gallery_empty)
+                            } else {
+                                stringResource(R.string.video_gen_gallery_empty_filter, filters[galleryFilter])
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(filteredGalleryVideos, key = { it.mp4Path }) { video ->
+                                VideoGalleryCard(
+                                    metadata = video,
+                                    onClick = { selectedGalleryVideo = video }
+                                )
                             }
                         }
+                    }
+                }
+            }
+        }
+        if (mainTab == 0 || isBusy) {
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isBusy) {
+                    Text(
+                        text = status.ifBlank { stringResource(R.string.video_gen_status_starting) },
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = cancelVideo,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
                     }
                 } else {
                     Button(
                         onClick = generateVideo,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(56.dp),
-                        shape = RoundedCornerShape(16.dp),
+                            .heightIn(min = 52.dp),
+                        shape = RoundedCornerShape(14.dp),
                         enabled = selectedVideoModelPath != null &&
                             prompt.isNotBlank() &&
                             (selectedMode == 0 || selectedImagePath != null)
@@ -1139,113 +1281,6 @@ fun VideoGenScreen(navController: NavController) {
                             },
                             fontWeight = FontWeight.Bold
                         )
-                    }
-                } }
-
-                warningMessage?.let { warning ->
-                    item(key = "warning") { Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.75f)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Warning, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(warning, color = MaterialTheme.colorScheme.onTertiaryContainer)
-                        }
-                    } }
-                }
-
-                errorMessage?.let { error ->
-                    item(key = "error") { Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            error,
-                            modifier = Modifier.padding(12.dp),
-                            color = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    } }
-                }
-
-                if (generationState is VideoGenerationState.Complete) {
-                    item(key = "complete") { Card(
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                stringResource(R.string.video_gen_success),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    } }
-                }
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-            ) {
-                val filters = listOf(
-                    stringResource(R.string.video_gen_gallery_all),
-                    stringResource(R.string.video_gen_mode_txt2vid),
-                    stringResource(R.string.video_gen_mode_img2vid)
-                )
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    filters.forEachIndexed { index, label ->
-                        SegmentedButton(
-                            selected = galleryFilter == index,
-                            onClick = { galleryFilter = index },
-                            shape = SegmentedButtonDefaults.itemShape(index = index, count = filters.size)
-                        ) {
-                            Text(label, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                if (filteredGalleryVideos.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("🎞️", style = MaterialTheme.typography.displayLarge)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                if (galleryFilter == 0) {
-                                    stringResource(R.string.video_gen_gallery_empty)
-                                } else {
-                                    stringResource(R.string.video_gen_gallery_empty_filter, filters[galleryFilter])
-                                },
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filteredGalleryVideos, key = { it.mp4Path }) { video ->
-                            VideoGalleryCard(
-                                metadata = video,
-                                onClick = { selectedGalleryVideo = video }
-                            )
-                        }
                     }
                 }
             }
@@ -1816,7 +1851,10 @@ private fun VideoGalleryCard(
                 if (thumbnail != null) {
                     Image(
                         bitmap = thumbnail!!,
-                        contentDescription = null,
+                        contentDescription = stringResource(
+                            R.string.soft_studio_generated_video_description,
+                            File(metadata.mp4Path).name
+                        ),
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop
                     )

@@ -25,8 +25,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -47,6 +45,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.service.*
 import com.example.llamadroid.ui.components.IntInputField
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.util.DocumentUriDisplayName
@@ -242,7 +241,7 @@ fun PDFToolboxScreen(navController: NavController) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(16.dp),
+                    .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
@@ -303,117 +302,81 @@ fun PDFToolboxScreen(navController: NavController) {
                 
                 item {
                     PDFToolCard(
-                        icon = "🔗",
+                        icon = Icons.Default.MergeType,
                         title = stringResource(R.string.pdf_merge),
                         description = stringResource(R.string.pdf_merge_desc),
-                        gradientColors = listOf(
-                            Color(0xFF4CAF50).copy(alpha = 0.15f),
-                            Color(0xFF388E3C).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "merge" }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "✂️",
+                        icon = Icons.Default.ContentCut,
                         title = stringResource(R.string.pdf_split),
                         description = stringResource(R.string.pdf_split_desc),
-                        gradientColors = listOf(
-                            Color(0xFF2196F3).copy(alpha = 0.15f),
-                            Color(0xFF1976D2).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "split" }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "📝",
+                        icon = Icons.Default.Description,
                         title = stringResource(R.string.pdf_extract_text),
                         description = stringResource(R.string.pdf_extract_text_desc),
-                        gradientColors = listOf(
-                            Color(0xFF9C27B0).copy(alpha = 0.15f),
-                            Color(0xFF7B1FA2).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "extract" }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "🤖",
+                        icon = Icons.Default.AutoAwesome,
                         title = stringResource(R.string.pdf_ai_summary),
                         description = stringResource(R.string.pdf_ai_summary_desc),
-                        gradientColors = listOf(
-                            Color(0xFFFF9800).copy(alpha = 0.15f),
-                            Color(0xFFF57C00).copy(alpha = 0.3f)
-                        ),
                         onClick = { navController.navigate(Screen.PDFSummary.route) }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "🔍",
+                        icon = Icons.Default.DocumentScanner,
                         title = stringResource(R.string.pdf_ocr_full),
                         description = stringResource(R.string.pdf_ocr_desc),
-                        gradientColors = listOf(
-                            Color(0xFF00BCD4).copy(alpha = 0.15f),
-                            Color(0xFF0097A7).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "ocr" }
                     )
                 }
 
                 item {
                     PDFToolCard(
-                        icon = "🌐",
+                        icon = Icons.Default.Translate,
                         title = stringResource(R.string.pdf_translate_ocr_pdf),
                         description = stringResource(R.string.pdf_translate_ocr_pdf_desc),
-                        gradientColors = listOf(
-                            Color(0xFF3F51B5).copy(alpha = 0.15f),
-                            Color(0xFF303F9F).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "translate_ocr_pdf" }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "🖼️",
+                        icon = Icons.Default.Image,
                         title = stringResource(R.string.pdf_images_to_pdf),
                         description = stringResource(R.string.pdf_images_to_pdf_desc),
-                        gradientColors = listOf(
-                            Color(0xFF673AB7).copy(alpha = 0.15f),
-                            Color(0xFF512DA8).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "images_to_pdf" }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "📦",
+                        icon = Icons.Default.Compress,
                         title = stringResource(R.string.pdf_compress),
                         description = stringResource(R.string.pdf_compress_desc),
-                        gradientColors = listOf(
-                            Color(0xFF607D8B).copy(alpha = 0.15f),
-                            Color(0xFF455A64).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "compress" }
                     )
                 }
                 
                 item {
                     PDFToolCard(
-                        icon = "📐",
+                        icon = Icons.Default.Straighten,
                         title = stringResource(R.string.pdf_split_size),
                         description = stringResource(R.string.pdf_split_size_desc),
-                        gradientColors = listOf(
-                            Color(0xFF795548).copy(alpha = 0.15f),
-                            Color(0xFF5D4037).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedTool = "split_size" }
                     )
                 }
@@ -452,13 +415,14 @@ fun PDFToolboxScreen(navController: NavController) {
         } else {
             // Tool interface
             val toolScrollState = rememberScrollState()
+            val toolUsesNestedList = selectedTool == "merge" || selectedTool == "images_to_pdf"
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .padding(16.dp)
                     .then(
-                        if (selectedTool == "translate_ocr_pdf") {
+                        if (!toolUsesNestedList) {
                             Modifier.verticalScroll(toolScrollState)
                         } else {
                             Modifier
@@ -507,7 +471,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                             modifier = Modifier.padding(12.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("📄", style = MaterialTheme.typography.titleMedium)
+                                            Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(24.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 "${index + 1}. ${DocumentUriDisplayName.resolve(context, uri, stringResource(R.string.pdf_selected_file))}",
@@ -518,7 +482,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                 onClick = { 
                                                     selectedPdfStrings = selectedPdfStrings.toMutableList().apply { removeAt(index) }
                                                 },
-                                                modifier = Modifier.size(32.dp)
+                                                modifier = Modifier.size(48.dp)
                                             ) {
                                                 Icon(Icons.Default.Close, stringResource(R.string.action_remove), modifier = Modifier.size(18.dp))
                                             }
@@ -593,7 +557,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                     modifier = Modifier.padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("📄", style = MaterialTheme.typography.headlineSmall)
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(28.dp))
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
                                         DocumentUriDisplayName.resolve(
@@ -694,7 +658,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                     modifier = Modifier.padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("📄", style = MaterialTheme.typography.headlineSmall)
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(28.dp))
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
                                         DocumentUriDisplayName.resolve(
@@ -825,7 +789,11 @@ fun PDFToolboxScreen(navController: NavController) {
                                     modifier = Modifier.padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(if (hasOcrPdf) "📄" else "🖼️", style = MaterialTheme.typography.headlineSmall)
+                                    Icon(
+                                        imageVector = if (hasOcrPdf) Icons.Default.PictureAsPdf else Icons.Default.Image,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(28.dp)
+                                    )
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
                                         sourceLabel,
@@ -1116,7 +1084,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                         modifier = Modifier.padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text("📄", style = MaterialTheme.typography.titleMedium)
+                                        Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(24.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
                                             "${index + 1}. ${DocumentUriDisplayName.resolve(context, uri, stringResource(R.string.pdf_selected_file))}",
@@ -1128,7 +1096,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                 selectedPdfStrings = selectedPdfStrings.toMutableList().apply { removeAt(index) }
                                                 if (selectedPdfStrings.isEmpty()) ocrProgressMessage = ""
                                             },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(48.dp)
                                         ) {
                                             Icon(Icons.Default.Close, stringResource(R.string.action_remove), modifier = Modifier.size(18.dp))
                                         }
@@ -1210,7 +1178,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                             modifier = Modifier.padding(12.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
-                                            Text("🖼️", style = MaterialTheme.typography.titleMedium)
+                                            Icon(Icons.Default.Image, contentDescription = null, modifier = Modifier.size(24.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
                                             Text(
                                                 "${index + 1}. ${DocumentUriDisplayName.resolve(context, uri, stringResource(R.string.pdf_selected_image))}",
@@ -1221,7 +1189,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                                 onClick = { 
                                                     selectedImageStrings = selectedImageStrings.toMutableList().apply { removeAt(index) }
                                                 },
-                                                modifier = Modifier.size(32.dp)
+                                                modifier = Modifier.size(48.dp)
                                             ) {
                                                 Icon(Icons.Default.Close, stringResource(R.string.action_remove), modifier = Modifier.size(18.dp))
                                             }
@@ -1298,7 +1266,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                     modifier = Modifier.padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("📄", style = MaterialTheme.typography.titleLarge)
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(28.dp))
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
                                         DocumentUriDisplayName.resolve(
@@ -1430,7 +1398,7 @@ fun PDFToolboxScreen(navController: NavController) {
                                     modifier = Modifier.padding(16.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("📄", style = MaterialTheme.typography.titleLarge)
+                                    Icon(Icons.Default.PictureAsPdf, contentDescription = null, modifier = Modifier.size(28.dp))
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
                                         DocumentUriDisplayName.resolve(
@@ -1787,10 +1755,10 @@ private fun GuidedPdfOcrTool(
                 item { Text(progressText, style = MaterialTheme.typography.bodySmall) }
             }
         }
-        Surface(
-            tonalElevation = 3.dp,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
+        AppTaskActionFooter(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
         ) {
             if (running) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2001,10 +1969,10 @@ private fun GuidedSearchablePdfTranslationTool(
                 item(key = uri.toString()) { PdfOutputActions(uri) }
             }
         }
-        Surface(
-            tonalElevation = 3.dp,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
+        AppTaskActionFooter(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
         ) {
             if (running) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2357,10 +2325,9 @@ private fun PdfTranslationStatusCard(
 
 @Composable
 private fun PDFToolCard(
-    icon: String,
+    icon: ImageVector,
     title: String,
     description: String,
-    gradientColors: List<Color>,
     onClick: () -> Unit
 ) {
     Card(
@@ -2368,12 +2335,12 @@ private fun PDFToolCard(
             .fillMaxWidth()
             .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(brush = Brush.horizontalGradient(gradientColors))
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2384,7 +2351,7 @@ private fun PDFToolCard(
                     .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)),
                 contentAlignment = Alignment.Center
             ) {
-                Text(icon, style = MaterialTheme.typography.headlineMedium)
+                Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
             }
             
             Spacer(modifier = Modifier.width(16.dp))

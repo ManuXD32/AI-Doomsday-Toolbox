@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_subtitle_color_white">Blanco</string>
+    <string name="studio_subtitle_color_yellow">Amarillo</string>
+    <string name="studio_subtitle_color_cyan">Cian</string>
+    <string name="studio_subtitle_color_green">Verde</string>
+    <string name="studio_subtitle_color_magenta">Magenta</string>
+    <string name="studio_subtitle_color_coral">Coral</string>
+    <string name="studio_subtitle_color_teal">Verde azulado</string>
+    <string name="studio_subtitle_color_gold">Dorado</string>
+    <string name="studio_subtitle_alignment_1">Abajo a la izquierda</string>
+    <string name="studio_subtitle_alignment_2">Abajo en el centro</string>
+    <string name="studio_subtitle_alignment_3">Abajo a la derecha</string>
+    <string name="studio_subtitle_alignment_4">Centro a la izquierda</string>
+    <string name="studio_subtitle_alignment_5">Centro</string>
+    <string name="studio_subtitle_alignment_6">Centro a la derecha</string>
+    <string name="studio_subtitle_alignment_7">Arriba a la izquierda</string>
+    <string name="studio_subtitle_alignment_8">Arriba en el centro</string>
+    <string name="studio_subtitle_alignment_9">Arriba a la derecha</string>
+</resources>

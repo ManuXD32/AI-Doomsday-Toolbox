@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.settings
 
+import android.os.Build
 import android.content.Intent
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -14,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,6 +30,7 @@ import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.data.AppThemeMode
 import com.example.llamadroid.data.backup.NativeChatNotesBackupManager
 import com.example.llamadroid.data.binary.BinaryAvailability
 import com.example.llamadroid.data.binary.BinaryRepository
@@ -35,6 +38,7 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.DatabaseBackupManager
 import com.example.llamadroid.quadtrix.QuadtrixWorkspaceManager
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.CpuFeatures
 import com.example.llamadroid.util.CustomBinaryFamily
@@ -232,36 +236,105 @@ fun GeneralSettingsScreen(navController: NavController) {
                 }
             }
             
-            // Theme (placeholder for future)
+            // Soft Studio appearance
             item {
+                val themeMode by settingsRepo.themeMode.collectAsState()
+                val dynamicColor by settingsRepo.dynamicColor.collectAsState()
+                var themeMenuExpanded by remember { mutableStateOf(false) }
+                val themeOptions = listOf(
+                    AppThemeMode.SYSTEM to stringResource(R.string.soft_studio_theme_system),
+                    AppThemeMode.LIGHT to stringResource(R.string.soft_studio_theme_light),
+                    AppThemeMode.DARK to stringResource(R.string.soft_studio_theme_dark)
+                )
+                val selectedThemeLabel = themeOptions
+                    .firstOrNull { it.first == themeMode }
+                    ?.second
+                    ?: stringResource(R.string.soft_studio_theme_system)
+
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = AppChromeDefaults.CardShape,
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        containerColor = MaterialTheme.colorScheme.surface
                     )
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("🎨", style = MaterialTheme.typography.headlineSmall)
+                            Icon(
+                                imageVector = Icons.Default.Palette,
+                                contentDescription = stringResource(R.string.soft_studio_appearance_icon_desc),
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(28.dp)
+                            )
                             Spacer(modifier = Modifier.width(12.dp))
-                            Text(
-                                stringResource(R.string.general_theme),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.soft_studio_appearance_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    stringResource(R.string.soft_studio_appearance_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Box {
+                            OutlinedButton(
+                                onClick = { themeMenuExpanded = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = selectedThemeLabel,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = null
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = themeMenuExpanded,
+                                onDismissRequest = { themeMenuExpanded = false }
+                            ) {
+                                themeOptions.forEach { (mode, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            settingsRepo.setThemeMode(mode)
+                                            themeMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.soft_studio_dynamic_color_title),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    stringResource(R.string.soft_studio_dynamic_color_desc),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = dynamicColor,
+                                onCheckedChange = settingsRepo::setDynamicColor,
+                                enabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            stringResource(R.string.general_theme_system),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(R.string.general_theme_soon),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
                     }
                 }
             }

@@ -27,6 +27,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -49,6 +50,8 @@ import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.ResponsiveAction
 import com.example.llamadroid.ui.components.ResponsiveActionGroup
 import com.example.llamadroid.ui.components.ResponsiveActionStyle
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.AppAdvancedSection
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -412,11 +415,81 @@ fun AudioTranscriptionScreen(navController: NavController) {
             }
         }
     }
+
+    fun startTranscription() {
+        if (selectedModelPath == null) {
+            transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
+                resources.getString(R.string.whisper_error_no_model)
+            )
+            return
+        }
+        if (selectedAudioPath == null) {
+            transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
+                resources.getString(R.string.whisper_error_no_audio)
+            )
+            return
+        }
+
+        val formats = mutableSetOf<WhisperOutputFormat>()
+        if (outputTxt) formats.add(WhisperOutputFormat.TXT)
+        if (outputSrt) formats.add(WhisperOutputFormat.SRT)
+        if (outputVtt) formats.add(WhisperOutputFormat.VTT)
+        if (outputJson) formats.add(WhisperOutputFormat.JSON)
+        if (formats.isEmpty()) formats.add(WhisperOutputFormat.TXT)
+
+        val whisperVad = settingsRepo.whisperVadConfigSnapshot()
+        if (whisperVad.enabled && whisperVad.modelPath.isNullOrBlank()) {
+            transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
+                resources.getString(R.string.whisper_error_vad_model_missing)
+            )
+            return
+        }
+        transcriptionUiState = transcriptionUiState.onTranscriptionStarted()
+        settingsRepo.setWhisperLastModelPath(selectedModelPath)
+        settingsRepo.setWhisperLastLanguage(selectedLanguage)
+        settingsRepo.setWhisperLastTranslate(translateToEnglish)
+        settingsRepo.setWhisperLastOutputFormats(formats)
+
+        val config = WhisperConfig(
+            modelPath = selectedModelPath!!,
+            audioPath = selectedAudioPath!!,
+            language = selectedLanguage,
+            translate = translateToEnglish,
+            outputFormats = formats,
+            threads = threads,
+            purpose = WhisperInvocationPurpose.BATCH_TRANSCRIPTION,
+            vad = whisperVad
+        )
+
+        scope.launch {
+            val service = whisperService
+            if (service == null) {
+                transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
+                    resources.getString(R.string.whisper_error_no_service)
+                )
+                return@launch
+            }
+            service.transcribe(config).fold(
+                onSuccess = {
+                    transcriptionUiState = transcriptionUiState.onTranscriptionSucceeded(it.text)
+                },
+                onFailure = { error ->
+                    transcriptionUiState = if (error is kotlinx.coroutines.CancellationException) {
+                        transcriptionUiState.onTranscriptionCancelled()
+                    } else {
+                        transcriptionUiState.onTranscriptionFailed(
+                            error.message ?: resources.getString(R.string.error_generic)
+                        )
+                    }
+                }
+            )
+        }
+    }
     
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.whisper_title)) },
+                title = { Text(stringResource(R.string.whisper_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
@@ -437,8 +510,13 @@ fun AudioTranscriptionScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp)
+                .padding(20.dp)
         ) {
             // Model Selection
             Card(
@@ -468,9 +546,9 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(16.dp))
-            
+
             // Audio Selection
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -533,10 +611,11 @@ fun AudioTranscriptionScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(16.dp))
             
             // Settings
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp)
-            ) {
+            AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(stringResource(R.string.whisper_settings_label), style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(12.dp))
@@ -637,90 +716,82 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         }
                     )
                 }
+                }
             }
             
             Spacer(modifier = Modifier.height(24.dp))
             
-            // Transcribe Button Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = {
-                        if (selectedModelPath == null) {
-                            transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                resources.getString(R.string.whisper_error_no_model)
-                            )
-                            return@Button
-                        }
-                        if (selectedAudioPath == null) {
-                            transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                resources.getString(R.string.whisper_error_no_audio)
-                            )
-                            return@Button
-                        }
-                        
-                        val formats = mutableSetOf<WhisperOutputFormat>()
-                        if (outputTxt) formats.add(WhisperOutputFormat.TXT)
-                        if (outputSrt) formats.add(WhisperOutputFormat.SRT)
-                        if (outputVtt) formats.add(WhisperOutputFormat.VTT)
-                        if (outputJson) formats.add(WhisperOutputFormat.JSON)
-                        if (formats.isEmpty()) formats.add(WhisperOutputFormat.TXT)
+            // Progress
+            if (whisperProgress.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    whisperProgress,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
-                        val whisperVad = settingsRepo.whisperVadConfigSnapshot()
-                        if (whisperVad.enabled && whisperVad.modelPath.isNullOrBlank()) {
-                            transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                resources.getString(R.string.whisper_error_vad_model_missing)
-                            )
-                            return@Button
-                        }
-                        transcriptionUiState = transcriptionUiState.onTranscriptionStarted()
-                        settingsRepo.setWhisperLastModelPath(selectedModelPath)
-                        settingsRepo.setWhisperLastLanguage(selectedLanguage)
-                        settingsRepo.setWhisperLastTranslate(translateToEnglish)
-                        settingsRepo.setWhisperLastOutputFormats(formats)
+            // Error
+            errorMessage?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
 
-                        val config = WhisperConfig(
-                            modelPath = selectedModelPath!!,
-                            audioPath = selectedAudioPath!!,
-                            language = selectedLanguage,
-                            translate = translateToEnglish,
-                            outputFormats = formats,
-                            threads = threads,
-                            purpose = WhisperInvocationPurpose.BATCH_TRANSCRIPTION,
-                            vad = whisperVad
-                        )
-                        
-                        scope.launch {
-                            val service = whisperService
-                            if (service == null) {
-                                transcriptionUiState = transcriptionUiState.onTranscriptionFailed(
-                                    resources.getString(R.string.whisper_error_no_service)
-                                )
-                                return@launch
+            statusMessage?.let {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.primary)
+            }
+
+            // Result
+            transcriptionResult?.let {
+                Spacer(modifier = Modifier.height(16.dp))
+                TranscriptionResultCard(result = it)
+            }
+        }
+        AppTaskActionFooter(
+            modifier = Modifier
+                .fillMaxWidth()
+        ) {
+            if (whisperState is WhisperState.Converting || whisperState is WhisperState.Transcribing) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(
+                    text = whisperProgress.ifBlank {
+                        stringResource(
+                            if (whisperState is WhisperState.Converting) {
+                                R.string.whisper_status_converting
+                            } else {
+                                R.string.whisper_status_transcribing
                             }
-                            service.transcribe(config).fold(
-                                onSuccess = {
-                                    transcriptionUiState = transcriptionUiState
-                                        .onTranscriptionSucceeded(it.text)
-                                },
-                                onFailure = { error ->
-                                    transcriptionUiState = if (
-                                        error is kotlinx.coroutines.CancellationException
-                                    ) {
-                                        transcriptionUiState.onTranscriptionCancelled()
-                                    } else {
-                                        transcriptionUiState.onTranscriptionFailed(
-                                            error.message
-                                                ?: resources.getString(R.string.error_generic)
-                                        )
-                                    }
-                                }
-                            )
-                        }
+                        )
                     },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(
+                    onClick = {
+                        whisperService?.cancel()
+                        transcriptionUiState = transcriptionUiState.onTranscriptionCancelled()
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(stringResource(R.string.soft_studio_cancel))
+                }
+            } else {
+                Button(
+                    onClick = ::startTranscription,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp),
                     enabled = !transcriptionUiState.isRunning && (
                         whisperState == WhisperState.Idle ||
                             whisperState == WhisperState.Completed ||
@@ -746,50 +817,6 @@ fun AudioTranscriptionScreen(navController: NavController) {
                         }
                     }
                 }
-                
-                // Cancel button - visible when transcribing or converting
-                if (whisperState is WhisperState.Converting || whisperState is WhisperState.Transcribing) {
-                    OutlinedButton(
-                        onClick = {
-                            whisperService?.cancel()
-                            transcriptionUiState = transcriptionUiState.onTranscriptionCancelled()
-                        },
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        )
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = null)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(stringResource(R.string.action_cancel))
-                    }
-                }
-            }
-            
-            // Progress
-            if (whisperProgress.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    whisperProgress,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            
-            // Error
-            errorMessage?.let {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colorScheme.error)
-            }
-
-            statusMessage?.let {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(it, color = MaterialTheme.colorScheme.primary)
-            }
-            
-            // Result
-            transcriptionResult?.let {
-                Spacer(modifier = Modifier.height(16.dp))
-                TranscriptionResultCard(result = it)
             }
         }
     }
@@ -1007,6 +1034,8 @@ fun AudioTranscriptionScreen(navController: NavController) {
             }
         )
     }
+}
+
 }
 
 @Composable

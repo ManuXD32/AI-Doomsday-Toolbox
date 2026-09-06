@@ -80,7 +80,22 @@ fun StoreScreen(
         containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(R.string.tama_farm_store_title)) },
+                title = {
+                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                        Text(
+                            stringResource(R.string.tama_farm_store_title),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            stringResource(R.string.soft_studio_tama_store_subtitle),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
@@ -116,7 +131,11 @@ fun StoreScreen(
                     .matchParentSize()
                     .background(Color.Black.copy(alpha = 0.34f))
             )
-            Column(modifier = Modifier.padding(padding)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+            ) {
                 Surface(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -144,13 +163,19 @@ fun StoreScreen(
                     }
                 }
 
-                when (selectedTab) {
-                    0 -> SeedList(onBuy)
-                    1 -> ToolList(pet.inventory, onBuy, onBuyDrone)
-                    2 -> MaterialList(onBuy)
-                    3 -> UpgradeList(pet.money, upgrades, farmRepository, onBuyUpgrade)
-                    4 -> LivestockList(livestock, onBuyLivestock)
-                    5 -> SellList(pet.inventory, onSell)
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    when (selectedTab) {
+                        0 -> SeedList(onBuy)
+                        1 -> ToolList(pet.inventory, onBuy, onBuyDrone)
+                        2 -> MaterialList(onBuy)
+                        3 -> UpgradeList(pet.money, upgrades, farmRepository, onBuyUpgrade)
+                        4 -> LivestockList(livestock, onBuyLivestock)
+                        5 -> SellList(pet.inventory, onSell)
+                    }
                 }
             }
         }
@@ -444,6 +469,7 @@ fun SellList(inventory: List<InventoryItem>, onSell: suspend (InventoryItem, Int
     }
 }
 
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun StoreItemRow(
     name: String,
@@ -482,7 +508,11 @@ fun StoreItemRow(
             .padding(horizontal = 12.dp, vertical = 6.dp),
         shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
-        tonalElevation = 2.dp
+        tonalElevation = 0.dp,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f)
+        )
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
@@ -508,17 +538,14 @@ fun StoreItemRow(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text(
-                        text = name,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    TamaSoftLabel(text = name)
                     if (description.isNotBlank()) {
                         Text(
                             text = description,
                             fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -538,22 +565,22 @@ fun StoreItemRow(
                 TamaUiIcon("🪙", fontSize = 14.sp)
             }
 
-            Row(
+            androidx.compose.foundation.layout.FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (showQuantityControls) {
                     IconButton(
                         onClick = { decrementRepeatState.handleClick { decrementQuantity() } },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(48.dp)
                             .pressAndHoldRepeat(
                                 state = decrementRepeatState,
                                 enabled = qty > 1
                             ) { decrementQuantity() }
                     ) {
-                        Icon(Icons.Default.Remove, null)
+                        Icon(Icons.Default.Remove, stringResource(R.string.soft_studio_quantity_decrease))
                     }
                     Column(
                         modifier = Modifier.widthIn(min = 48.dp),
@@ -575,13 +602,13 @@ fun StoreItemRow(
                     IconButton(
                         onClick = { incrementRepeatState.handleClick { incrementQuantity() } },
                         modifier = Modifier
-                            .size(36.dp)
+                            .size(48.dp)
                             .pressAndHoldRepeat(
                                 state = incrementRepeatState,
                                 enabled = qty < maxQty
                             ) { incrementQuantity() }
                     ) {
-                        Icon(Icons.Default.Add, null)
+                        Icon(Icons.Default.Add, stringResource(R.string.soft_studio_quantity_increase))
                     }
                 }
                 Button(
@@ -596,7 +623,7 @@ fun StoreItemRow(
                     },
                     enabled = actionEnabled,
                     modifier = Modifier
-                        .heightIn(min = 36.dp)
+                        .heightIn(min = 48.dp)
                         .widthIn(min = 104.dp)
                         .padding(start = if (showQuantityControls) 8.dp else 0.dp),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
@@ -606,9 +633,7 @@ fun StoreItemRow(
                 ) {
                     Text(
                         if (isSelling) stringResource(R.string.tama_farm_store_sell) else stringResource(R.string.tama_farm_store_buy),
-                        fontSize = 14.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        fontSize = 14.sp
                     )
                 }
             }

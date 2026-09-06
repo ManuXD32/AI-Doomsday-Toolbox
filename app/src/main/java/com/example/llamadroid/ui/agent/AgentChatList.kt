@@ -418,7 +418,7 @@ private fun DelegationCard(
 ) {
     val fallbackName = listOfNotNull(message?.toolArgs?.get("agent"), message?.toolArgs?.get("name"))
         .joinToString(" - ")
-        .ifBlank { message?.toolArgs?.get("agent") ?: "Agent" }
+        .ifBlank { message?.toolArgs?.get("agent") ?: stringResource(R.string.agent_title) }
     val isTerminal = info?.status?.let { it != "RUNNING" } ?: (result != null)
     val startedAt = info?.startedAt?.takeIf { it > 0L } ?: message?.timestamp ?: System.currentTimeMillis()
     val timestamp = remember(startedAt) { formatAgentMessageTimestamp(startedAt) }
@@ -427,7 +427,9 @@ private fun DelegationCard(
             .fillMaxWidth()
             .padding(horizontal = 4.dp, vertical = 4.dp)
             .clickable(enabled = info != null, onClick = onOpen),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9800).copy(alpha = 0.24f)),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer
+        ),
         border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
     ) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -633,6 +635,7 @@ private fun ToolCallGroupRow(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = AGENT_MESSAGE_ACTION_TOUCH_TARGET_DP.dp)
                     .clickable {
                         if (useLocalOutputExpansion) {
                             locallyExpanded = !locallyExpanded
@@ -691,7 +694,10 @@ private fun ToolCallGroupRow(
                                 fontSize = 11.sp,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.04f), RoundedCornerShape(8.dp))
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceContainerHighest,
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .padding(8.dp)
                             )
                         }
@@ -707,7 +713,10 @@ private fun ToolCallGroupRow(
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .background(Color.Black.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        RoundedCornerShape(8.dp)
+                                    )
                                     .padding(8.dp)
                             )
                         }
@@ -797,7 +806,7 @@ fun ChatMessageBubble(
             colors = CardDefaults.cardColors(
                 containerColor = when {
                     isUser -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f)
-                    isCompactionStatus -> Color(0xFF2E7D32).copy(alpha = 0.92f)
+                    isCompactionStatus -> MaterialTheme.colorScheme.secondaryContainer
                     isRetryableNeedsDirection -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.92f)
                     else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
                 }
@@ -835,7 +844,10 @@ fun ChatMessageBubble(
                         "write_file" -> stringResource(R.string.agent_approve_file_title)
                         "run_command" -> stringResource(R.string.agent_approve_cmd_title)
                         "edit_lines" -> stringResource(R.string.agent_approve_edit_title)
-                        else -> stringResource(R.string.agent_approve_generic_title, message.toolName ?: "Tool")
+                        else -> stringResource(
+                            R.string.agent_approve_generic_title,
+                            message.toolName ?: stringResource(R.string.soft_studio_conversations_tool_fallback)
+                        )
                     }
                     Text(text = title, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     if (message.content.isNotBlank()) {
@@ -908,11 +920,18 @@ fun ChatMessageBubble(
                         }
                         Button(
                             onClick = onApprove, 
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)), 
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ),
                             modifier = Modifier.weight(1f),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text(stringResource(R.string.action_allow), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+                            Text(
+                                stringResource(R.string.action_allow),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
                     }
                 } else if (isRetryableNeedsDirection) {
@@ -1126,7 +1145,10 @@ fun ChatMessageBubble(
         if (!message.isStreaming) {
             val roleLabel = when {
                 isUser -> stringResource(R.string.agent_user_label)
-                isTool -> stringResource(R.string.agent_tool_label, message.toolName ?: "Tool")
+                isTool -> stringResource(
+                    R.string.agent_tool_label,
+                    message.toolName ?: stringResource(R.string.soft_studio_conversations_tool_fallback)
+                )
                 isSystem -> stringResource(R.string.agent_system_label)
                 message.customAgentName != null -> stringResource(R.string.agent_custom_agent_label, message.customAgentName)
                 message.agentRole != null -> stringResource(R.string.agent_role_label, agentRoleLabel(message.agentRole))
@@ -1297,7 +1319,8 @@ private fun AgentPlanDecisionButtons(
                 onClick = onApprove,
                 enabled = !isResolving,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4CAF50)
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 ),
                 modifier = Modifier
                     .weight(1f)
@@ -1308,14 +1331,14 @@ private fun AgentPlanDecisionButtons(
                     CircularProgressIndicator(
                         modifier = Modifier.size(18.dp),
                         strokeWidth = 2.dp,
-                        color = Color.White
+                        color = MaterialTheme.colorScheme.onPrimary
                     )
                 } else {
                     Icon(
                         Icons.Default.Check,
                         null,
                         modifier = Modifier.size(18.dp),
-                        tint = Color.White
+                        tint = MaterialTheme.colorScheme.onPrimary
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
@@ -1326,7 +1349,7 @@ private fun AgentPlanDecisionButtons(
                     ),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onPrimary,
                     maxLines = 1
                 )
             }

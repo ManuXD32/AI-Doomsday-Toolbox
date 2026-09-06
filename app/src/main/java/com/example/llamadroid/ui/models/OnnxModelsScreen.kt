@@ -5,6 +5,8 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,7 +61,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalResources
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import androidx.navigation.NavController
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -78,6 +80,7 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.ui.components.DownloadTaskSection
+import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TTS
@@ -197,25 +200,15 @@ fun OnnxModelsScreen(navController: NavController) {
     }
 
     Scaffold(
+        containerColor = Color.Transparent,
         floatingActionButton = {
             FloatingActionButton(onClick = { treePicker.launch(null) }) {
                 Icon(Icons.Default.Add, contentDescription = stringResource(R.string.onnx_models_import_bundle))
             }
         }
     ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-                .background(
-                    brush = Brush.verticalGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.surface,
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
-                        )
-                    )
-                )
-        ) {
+        AppPageBackground(modifier = Modifier.padding(innerPadding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -243,7 +236,7 @@ fun OnnxModelsScreen(navController: NavController) {
             }
 
 
-            TabRow(selectedTabIndex = selectedTab) {
+            AppScrollableTabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
@@ -324,6 +317,7 @@ fun OnnxModelsScreen(navController: NavController) {
                     }
                 }
             }
+            }
         }
     }
 
@@ -360,7 +354,9 @@ private fun InstalledOnnxModelsTab(
     onDeleteRequest: (ModelEntity) -> Unit
 ) {
     if (models.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 96.dp),
+            contentAlignment = Alignment.Center) {
             Text(
                 stringResource(R.string.onnx_models_empty),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -855,14 +851,7 @@ private fun OnnxManagerCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            accentColor.copy(alpha = 0.10f),
-                            MaterialTheme.colorScheme.surface.copy(alpha = 0.0f)
-                        )
-                    )
-                )
+                .background(accentColor.copy(alpha = 0.06f))
         ) {
             content()
         }

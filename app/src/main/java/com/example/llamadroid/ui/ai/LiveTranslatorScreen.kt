@@ -90,7 +90,13 @@ import com.example.llamadroid.service.LiveTranslatorSamplePhase
 import com.example.llamadroid.service.LiveTranslatorService
 import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.RemoteSummaryMetadata
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.util.AIConstants
 import kotlinx.coroutines.launch
@@ -333,17 +339,40 @@ fun LiveTranslatorScreen(navController: NavController) {
 
     AppScreenScaffold(
         title = stringResource(R.string.live_translator_title),
-        subtitle = stringResource(R.string.live_translator_subtitle),
-        onBack = { navController.popBackStack() }
+        onBack = { navController.popBackStack() },
+        bottomBar = {
+            AppTaskActionFooter {
+                if (serviceState.isActive) {
+                    Button(onClick = { context.startService(LiveTranslatorService.stopIntent(context)) }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Stop, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_stop))
+                    }
+                } else {
+                    Button(onClick = ::startTranslator, enabled = !whisperModelPath.isNullOrBlank() && !ttsModelPath.isNullOrBlank(), modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Mic, null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.action_start))
+                    }
+                }
+            }
+        }
     ) {
         LazyColumn(
             modifier = Modifier
-                .fillMaxSize()
-                .imePadding(),
+                .fillMaxSize(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            item {
+            if (whisperModelPath.isNullOrBlank() || ttsModelPath.isNullOrBlank()) {
+                item {
+                    AppStatePanel(AppStateKind.Blocked, stringResource(R.string.studio_voice_setup_title),
+                        message = stringResource(R.string.studio_voice_setup_message), actionLabel = stringResource(R.string.models_hub),
+                        onAction = { navController.navigate(Screen.ModelHub.route) })
+                }
+            }
+            if (serviceState.phase != LiveTranslatorPhase.IDLE || serviceState.status.isNotBlank() ||
+                (!whisperModelPath.isNullOrBlank() && !ttsModelPath.isNullOrBlank())) item {
                 LiveTranslatorStatusCard(
                     state = serviceState,
                     onStop = { context.startService(LiveTranslatorService.stopIntent(context)) },
@@ -475,9 +504,7 @@ fun LiveTranslatorScreen(navController: NavController) {
                     startSpeakingTimeout = startSpeakingTimeout,
                     onStartSpeakingTimeoutChange = { startSpeakingTimeout = it },
                     finishedTalkingTimeout = finishedTalkingTimeout,
-                    onFinishedTalkingTimeoutChange = { finishedTalkingTimeout = it },
-                    onStart = ::startTranslator,
-                    canStart = !serviceState.isActive && !whisperModelPath.isNullOrBlank() && !ttsModelPath.isNullOrBlank()
+                    onFinishedTalkingTimeoutChange = { finishedTalkingTimeout = it }
                 )
             }
             item {
@@ -610,7 +637,7 @@ private fun LiveTranslatorTemplateCard(
     onUpdateSelected: () -> Unit,
     onDelete: () -> Unit
 ) {
-    SectionCard(title = stringResource(R.string.live_translator_templates)) {
+    AppAdvancedSection(title = stringResource(R.string.live_translator_templates)) {
         DropdownField(
             label = stringResource(R.string.live_translator_template_picker),
             selected = templates.firstOrNull { it.id == selectedTemplateId }?.name ?: stringResource(R.string.live_translator_no_template),
@@ -650,7 +677,7 @@ private fun LiveTranslatorTemplateCard(
                 enabled = selectedTemplateId > 0L,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
             ) {
-                Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Delete, stringResource(R.string.action_delete), modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text(stringResource(R.string.action_delete), maxLines = 2)
             }
@@ -1072,13 +1099,15 @@ internal fun LiveTranslatorBackendCard(
                 }
             )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(value = contextSize, onValueChange = onContextSizeChange, label = { Text(stringResource(R.string.label_context)) }, modifier = Modifier.weight(1f), singleLine = true)
-            OutlinedTextField(value = maxTokens, onValueChange = onMaxTokensChange, label = { Text(stringResource(R.string.label_max_tokens)) }, modifier = Modifier.weight(1f), singleLine = true)
+        AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(value = contextSize, onValueChange = onContextSizeChange, label = { Text(stringResource(R.string.label_context)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+            OutlinedTextField(value = maxTokens, onValueChange = onMaxTokensChange, label = { Text(stringResource(R.string.label_max_tokens)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         }
         OutlinedTextField(value = timeoutSeconds, onValueChange = onTimeoutSecondsChange, label = { Text(stringResource(R.string.live_translator_timeout_seconds)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         Text(stringResource(R.string.live_translator_temperature_value, temperature), style = MaterialTheme.typography.bodySmall)
         Slider(value = temperature, onValueChange = onTemperatureChange, valueRange = 0f..1f)
+        }
     }
 }
 
@@ -1131,18 +1160,11 @@ private fun LiveTranslatorTimingCard(
     startSpeakingTimeout: String,
     onStartSpeakingTimeoutChange: (String) -> Unit,
     finishedTalkingTimeout: String,
-    onFinishedTalkingTimeoutChange: (String) -> Unit,
-    onStart: () -> Unit,
-    canStart: Boolean
+    onFinishedTalkingTimeoutChange: (String) -> Unit
 ) {
-    SectionCard(title = stringResource(R.string.live_translator_timing)) {
+    AppAdvancedSection(title = stringResource(R.string.live_translator_timing)) {
         OutlinedTextField(value = startSpeakingTimeout, onValueChange = onStartSpeakingTimeoutChange, label = { Text(stringResource(R.string.live_translator_start_speaking_timeout)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
         OutlinedTextField(value = finishedTalkingTimeout, onValueChange = onFinishedTalkingTimeoutChange, label = { Text(stringResource(R.string.live_translator_finished_talking_timeout)) }, modifier = Modifier.fillMaxWidth(), singleLine = true)
-        Button(onClick = onStart, enabled = canStart, modifier = Modifier.fillMaxWidth()) {
-            Icon(Icons.Default.Mic, null)
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.live_translator_start))
-        }
     }
 }
 
@@ -1159,8 +1181,8 @@ private fun LiveTranslatorSessionsCard(
             var title by remember(session.id, session.title) { mutableStateOf(session.title) }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(value = title, onValueChange = { title = it }, modifier = Modifier.weight(1f), singleLine = true)
-                IconButton(onClick = { onRename(session, title) }) { Icon(Icons.Default.Save, null) }
-                IconButton(onClick = { onDelete(session) }) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                IconButton(onClick = { onRename(session, title) }) { Icon(Icons.Default.Save, stringResource(R.string.action_save)) }
+                IconButton(onClick = { onDelete(session) }) { Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error) }
             }
             OutlinedButton(onClick = { onSelect(session.id) }, modifier = Modifier.fillMaxWidth()) {
                 Text(
@@ -1191,7 +1213,7 @@ private fun LiveTranslatorTurnCard(turn: LiveTranslatorTurnEntity, onDelete: (()
                     fontWeight = FontWeight.Bold
                 )
                 if (onDelete != null) {
-                    IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp)) }
+                    IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, stringResource(R.string.action_delete), modifier = Modifier.size(18.dp)) }
                 }
             }
             if (turn.isError) {
@@ -1212,8 +1234,8 @@ private fun LiveTranslatorTurnCard(turn: LiveTranslatorTurnEntity, onDelete: (()
 
 @Composable
 private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    AppSectionCard {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             content()
         }

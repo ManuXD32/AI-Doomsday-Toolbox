@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_tama_room">Pet room</string>
+    <string name="soft_studio_tama_map">World map</string>
+    <string name="soft_studio_farm_plot">Plot %1$d: %2$s</string>
+    <string name="soft_studio_farm_soil">Soil, ready to till</string>
+    <string name="soft_studio_farm_tilled">Tilled, needs water before planting</string>
+    <string name="soft_studio_farm_watered">Watered, ready to plant</string>
+    <string name="soft_studio_farm_crop">%1$s, growth stage %2$d of 4</string>
+    <string name="soft_studio_farm_decayed">%1$s, decayed</string>
+    <string name="soft_studio_farm_inspect">Inspect crop</string>
+    <string name="soft_studio_farm_tool">%1$s, durability %2$d of %3$d</string>
+    <string name="soft_studio_farm_supply">%1$s, quantity %2$d</string>
+    <string name="soft_studio_tama_store_subtitle">Supplies, upgrades, livestock, and selling</string>
+    <string name="soft_studio_tama_actions_hint">Swipe for more Tama actions</string>
+</resources>

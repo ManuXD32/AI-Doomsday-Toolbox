@@ -388,10 +388,10 @@ private fun LlamaServerCard(
                 Surface(
                     modifier = Modifier.padding(top = 4.dp).size(10.dp),
                     color = when (status) {
-                        LlamaServerSessionStatus.RUNNING -> Color(0xFF2E7D32)
+                        LlamaServerSessionStatus.RUNNING -> MaterialTheme.colorScheme.primary
                         LlamaServerSessionStatus.ERROR -> MaterialTheme.colorScheme.error
                         LlamaServerSessionStatus.STARTING,
-                        LlamaServerSessionStatus.LOADING -> Color(0xFFFFA000)
+                        LlamaServerSessionStatus.LOADING -> MaterialTheme.colorScheme.tertiary
                         LlamaServerSessionStatus.STOPPED -> MaterialTheme.colorScheme.outline
                     },
                     shape = androidx.compose.foundation.shape.CircleShape

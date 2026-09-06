@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_appearance_icon_desc">Appearance</string>
+    <string name="soft_studio_appearance_title">Appearance</string>
+    <string name="soft_studio_appearance_desc">Choose the app theme and optional Android wallpaper colors.</string>
+    <string name="soft_studio_theme_system">System</string>
+    <string name="soft_studio_theme_light">Light</string>
+    <string name="soft_studio_theme_dark">Dark</string>
+    <string name="soft_studio_dynamic_color_title">Use dynamic colors</string>
+    <string name="soft_studio_dynamic_color_desc">Use colors from the device wallpaper on Android 12 and newer.</string>
+    <string name="soft_studio_advanced_expanded">Expanded</string>
+    <string name="soft_studio_advanced_collapsed">Collapsed</string>
+</resources>

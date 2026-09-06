@@ -24,6 +24,12 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -31,6 +37,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -512,11 +519,10 @@ fun TamaScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(TamaBackground)
-    ) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize().background(TamaBackground)) {
+        // Reserve the pet header before sizing the scene on short tablet windows.
+        val roomMaxSize = minOf(560.dp, (maxHeight - 64.dp).coerceAtLeast(240.dp))
+        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         // Header with view toggle
         Row(
             modifier = Modifier
@@ -546,18 +552,28 @@ fun TamaScreen(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // View toggle buttons
-                    TextButton(onClick = { showMap = false }) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TamaEmojiIcon(TAMA_PET_VIEW_EMOJI, fontSize = 16.sp)
-                            if (!showMap) TamaEmojiIcon("✓", fontSize = 14.sp)
+                    val roomLabel = stringResource(R.string.soft_studio_tama_room)
+                    val mapLabel = stringResource(R.string.soft_studio_tama_map)
+                    IconButton(
+                        onClick = { showMap = false },
+                        modifier = Modifier.size(48.dp).semantics {
+                            contentDescription = roomLabel
+                            selected = !showMap
                         }
+                    ) {
+                        TamaEmojiIcon(TAMA_PET_VIEW_EMOJI, fontSize = 16.sp)
                     }
-                    TextButton(onClick = { showMap = true }) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TamaEmojiIcon(TAMA_MAP_VIEW_EMOJI, fontSize = 16.sp)
-                            if (showMap) TamaEmojiIcon("✓", fontSize = 14.sp)
+                    IconButton(
+                        onClick = { showMap = true },
+                        modifier = Modifier.size(48.dp).semantics {
+                            contentDescription = mapLabel
+                            selected = showMap
                         }
+                    ) {
+                        TamaEmojiIcon(TAMA_MAP_VIEW_EMOJI, fontSize = 16.sp)
+                    }
+                    IconButton(onClick = { showMenu = true }, modifier = Modifier.size(48.dp)) {
+                        Icon(Icons.Default.MoreVert, stringResource(R.string.tama_btn_menu), tint = TamaLight)
                     }
                 }
             } else {
@@ -571,12 +587,15 @@ fun TamaScreen(
             }
         }
 
-        // Main display area (LCD screen style)
+        // Keep the original square room proportions; surrounding chrome must not crop the art.
         Box(
             modifier = Modifier
+                .widthIn(max = roomMaxSize)
                 .fillMaxWidth()
-                .weight(1f)
+                .align(Alignment.CenterHorizontally)
+                .aspectRatio(1f)
                 .padding(16.dp)
+                .testTag("soft_studio_tama_room_viewport")
                 .clip(RoundedCornerShape(8.dp))
                 .background(TamaLight)
                 .border(4.dp, TamaDark, RoundedCornerShape(8.dp))
@@ -769,6 +788,7 @@ fun TamaScreen(
 
         // Event log
         TamaEventLog(events = events.take(5))
+        }
     }
 
     // Name dialog for new pet
@@ -804,6 +824,10 @@ fun TamaScreen(
             onGallery = {
                 showMenu = false
                 navController.navigate(Screen.TamaGallery.route)
+            },
+            onStore = {
+                showMenu = false
+                navController.navigate(Screen.Store.route)
             },
             onExport = {
                 val petName = pet?.name ?: "tama"
@@ -3571,12 +3595,16 @@ fun TamaPopupDialog(
     bodyContent: @Composable ColumnScope.() -> Unit,
     footerContent: @Composable RowScope.() -> Unit
 ) {
-    Dialog(onDismissRequest = onDismissRequest) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         BoxWithConstraints {
             val dialogMaxHeight = if (compact) maxHeight * 0.72f else maxHeight * 0.9f
             val compactBodyMaxHeight = maxHeight * 0.46f
             Card(
                 modifier = modifier
+                    .widthIn(max = 560.dp)
                     .fillMaxWidth(0.96f)
                     .heightIn(max = dialogMaxHeight),
                 shape = RoundedCornerShape(24.dp),
@@ -3587,7 +3615,7 @@ fun TamaPopupDialog(
                     AsyncImage(
                         model = "file:///android_asset/$backgroundAsset",
                         contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier.matchParentSize(),
                         contentScale = ContentScale.Crop,
                         filterQuality = FilterQuality.None
                     )
@@ -3625,7 +3653,7 @@ fun TamaPopupDialog(
                                     if (compact) {
                                         Modifier.heightIn(max = compactBodyMaxHeight)
                                     } else {
-                                        Modifier.weight(1f)
+                                        Modifier.weight(1f, fill = false)
                                     }
                                 ),
                             shape = RoundedCornerShape(18.dp),
@@ -3662,6 +3690,7 @@ fun TamaPopupDialog(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
                                             .padding(horizontal = 6.dp, vertical = 4.dp),
                                         horizontalArrangement = Arrangement.End,
                                         verticalAlignment = Alignment.CenterVertically
@@ -5592,42 +5621,32 @@ private fun SleepyFairyOverlay(
 
 @Composable
 fun TamaStatsBar(pet: TamaPet) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(TamaDark)
-            .padding(8.dp)
+    Row(
+        modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            StatIndicator(TAMA_HUNGER_EMOJI, pet.stats.hunger)
-            StatIndicator(TAMA_HAPPINESS_EMOJI, pet.stats.happiness)
-            StatIndicator(TAMA_HEALTH_EMOJI, pet.stats.health)
-            StatIndicator(TAMA_ENERGY_EMOJI, pet.stats.energy)
-            StatIndicator(TAMA_HYGIENE_EMOJI, pet.stats.hygiene)
-        }
+        StatIndicator(TAMA_HUNGER_EMOJI, stringResource(R.string.tama_status_hunger), pet.stats.hunger, Modifier.weight(1f))
+        StatIndicator(TAMA_HAPPINESS_EMOJI, stringResource(R.string.tama_status_happy), pet.stats.happiness, Modifier.weight(1f))
+        StatIndicator(TAMA_HEALTH_EMOJI, stringResource(R.string.tama_status_health), pet.stats.health, Modifier.weight(1f))
+        StatIndicator(TAMA_ENERGY_EMOJI, stringResource(R.string.tama_status_energy), pet.stats.energy, Modifier.weight(1f))
+        StatIndicator(TAMA_HYGIENE_EMOJI, stringResource(R.string.tama_status_hygiene), pet.stats.hygiene, Modifier.weight(1f))
     }
 }
 
 @Composable
-fun StatIndicator(icon: String, value: Float) {
-    val intValue = value.toInt()
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        TamaEmojiIcon(icon, fontSize = 18.sp)
-        // ASCII-style bar
-        val filled = (intValue / 20).coerceIn(0, 5)
-        val bar = "▓".repeat(filled) + "░".repeat(5 - filled)
-        Text(
-            text = bar,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 10.sp,
-            color = when {
-                intValue < 20 -> Color.Red
-                intValue < 50 -> Color.Yellow
-                else -> TamaLight
-            }
+private fun StatIndicator(icon: String, label: String, value: Float, modifier: Modifier = Modifier) {
+    val description = stringResource(R.string.soft_studio_tama_stat_value, label, value.toInt())
+    Column(
+        modifier = modifier.heightIn(min = 48.dp).clearAndSetSemantics { contentDescription = description },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        TamaEmojiIcon(icon, modifier = Modifier.size(28.dp), fontSize = 18.sp)
+        LinearProgressIndicator(
+            progress = { (value / 100f).coerceIn(0f, 1f) },
+            modifier = Modifier.fillMaxWidth().height(6.dp),
+            color = if (value < 20f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.secondary,
+            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
         )
     }
 }
@@ -5753,22 +5772,32 @@ fun TamaControls(
         add(TamaControlConfig(icon = TAMA_MENU_EMOJI, label = stringResource(R.string.tama_btn_menu), enabled = true, onClick = onMenu))
     }
 
-    LazyRow(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        contentPadding = PaddingValues(end = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        items(actions.size) { index ->
-            val action = actions[index]
-            TamaButton(
-                icon = action.icon,
-                assetPath = action.assetPath,
-                label = action.label,
-                enabled = action.enabled,
-                onClick = action.onClick
-            )
+    Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+        Text(
+            text = stringResource(R.string.soft_studio_tama_actions_hint),
+            modifier = Modifier.padding(start = 12.dp, top = 4.dp, end = 12.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            contentPadding = PaddingValues(end = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(actions.size) { index ->
+                val action = actions[index]
+                TamaButton(
+                    icon = action.icon,
+                    assetPath = action.assetPath,
+                    label = action.label,
+                    enabled = action.enabled,
+                    onClick = action.onClick
+                )
+            }
         }
     }
 }
@@ -5781,35 +5810,47 @@ fun TamaButton(
     enabled: Boolean,
     onClick: () -> Unit
 ) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Surface(
         modifier = Modifier
-            .width(108.dp)
-            .height(106.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(if (enabled) TamaDark else TamaAccent)
+            .width(if (LocalDensity.current.fontScale >= 1.3f) 144.dp else 100.dp)
+            .heightIn(min = 76.dp)
             .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 8.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        if (assetPath != null) {
-            TamaActionAsset(assetPath = assetPath, size = 30.dp)
+        shape = RoundedCornerShape(12.dp),
+        color = if (enabled) {
+            MaterialTheme.colorScheme.primaryContainer
         } else {
-            TamaEmojiIcon(icon.orEmpty(), fontSize = 22.sp)
+            MaterialTheme.colorScheme.surfaceVariant
+        },
+        contentColor = if (enabled) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        tonalElevation = 0.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            if (assetPath != null) {
+                TamaActionAsset(assetPath = assetPath, size = 30.dp)
+            } else {
+                TamaEmojiIcon(icon.orEmpty(), fontSize = 22.sp)
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                label,
+                color = LocalContentColor.current,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 11.sp,
+                lineHeight = 13.sp,
+                textAlign = TextAlign.Center,
+                softWrap = true,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            label,
-            color = TamaLight,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.sp,
-            lineHeight = 13.sp,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            softWrap = true,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
@@ -6523,13 +6564,13 @@ fun TamaEventLog(events: List<TamaEvent>) {
         modifier = Modifier
             .fillMaxWidth()
             .height(100.dp)
-            .background(TamaDark.copy(alpha = 0.8f))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
             .padding(8.dp)
             .verticalScroll(rememberScrollState())
     ) {
         Text(
             stringResource(R.string.tama_recent_events),
-            color = TamaLight,
+            color = MaterialTheme.colorScheme.onSurface,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             fontSize = 12.sp
@@ -6538,7 +6579,7 @@ fun TamaEventLog(events: List<TamaEvent>) {
         events.forEach { event ->
             Text(
                 text = event.toLogString(),
-                color = TamaLight.copy(alpha = 0.8f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp
             )
@@ -6547,7 +6588,7 @@ fun TamaEventLog(events: List<TamaEvent>) {
         if (events.isEmpty()) {
             Text(
                 stringResource(R.string.tama_no_events_yet),
-                color = TamaAccent,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp
             )
@@ -6660,6 +6701,7 @@ fun TamaMenuDialog(
     onStatus: () -> Unit,
     onSettings: () -> Unit,
     onGallery: () -> Unit,
+    onStore: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
     onReset: () -> Unit
@@ -6678,6 +6720,9 @@ fun TamaMenuDialog(
                 }
                 TextButton(onClick = onGallery, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_gallery))
+                }
+                TextButton(onClick = onStore, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.tama_btn_store))
                 }
                 TextButton(onClick = onExport, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.tama_menu_export))

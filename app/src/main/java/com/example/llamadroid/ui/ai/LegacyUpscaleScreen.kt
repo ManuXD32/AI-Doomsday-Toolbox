@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.compose.foundation.layout.heightIn
+
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -40,6 +42,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Create
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Warning
@@ -56,7 +59,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -84,6 +86,9 @@ import com.example.llamadroid.service.sdLaunchIssueMessage
 import com.example.llamadroid.service.validateSdLaunchInputs
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 import java.io.FileOutputStream
@@ -315,40 +320,33 @@ fun LegacyUpscaleScreen(navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { navController.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
             Text(
-                "🎨 " + stringResource(R.string.imagegen_title),
+                stringResource(R.string.imagegen_title),
                 modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
         }
 
         val mainTabs = listOf(
-            "🎨 " + stringResource(R.string.imagegen_tab_generate),
-            "📂 " + stringResource(R.string.imagegen_tab_gallery)
+            stringResource(R.string.imagegen_tab_generate),
+            stringResource(R.string.imagegen_tab_gallery)
         )
         AppScrollableTabRow(
             selectedTabIndex = mainTab,
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = 20.dp),
             edgePadding = 12.dp,
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             contentColor = MaterialTheme.colorScheme.primary
@@ -366,7 +364,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = 20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 val modes = listOf(
@@ -421,7 +419,10 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 bitmap?.let {
                                     androidx.compose.foundation.Image(
                                         bitmap = it,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(
+                                            R.string.soft_studio_input_image_description,
+                                            File(selectedImagePath!!).name
+                                        ),
                                         modifier = Modifier
                                             .size(80.dp)
                                             .clip(RoundedCornerShape(8.dp)),
@@ -670,35 +671,9 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                     .height(8.dp)
                                     .clip(RoundedCornerShape(4.dp))
                             )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            OutlinedButton(
-                                onClick = cancelGeneration,
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = MaterialTheme.colorScheme.error
-                                )
-                            ) {
-                                Icon(Icons.Default.Close, null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(stringResource(R.string.action_cancel))
-                            }
                         }
                     }
                 } else {
-                    Button(
-                        onClick = generate,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp),
-                        enabled = selectedUpscalerModelPath != null && selectedImagePath != null,
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Icon(Icons.Default.Create, null)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            stringResource(R.string.imagegen_upscale_btn),
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
                 }
 
                 errorMessage?.let { error ->
@@ -741,28 +716,80 @@ fun LegacyUpscaleScreen(navController: NavController) {
 
                 Spacer(modifier = Modifier.height(16.dp))
             }
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isGenerating) {
+                    if (generationStatus.isNotBlank()) {
+                        Text(
+                            text = generationStatus,
+                            modifier = Modifier.fillMaxWidth(),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            R.string.imagegen_step_progress,
+                            currentStep,
+                            totalSteps,
+                            (progress.coerceIn(0f, 1f) * 100f).toInt()
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = cancelGeneration,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
+                    }
+                } else {
+                    Button(
+                        onClick = generate,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp),
+                        enabled = selectedUpscalerModelPath != null && selectedImagePath != null,
+                        shape = RoundedCornerShape(14.dp)
+                    ) {
+                        Icon(Icons.Default.Create, contentDescription = null)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(stringResource(R.string.imagegen_upscale_btn), fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         } else {
             Column(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = 20.dp)
             ) {
                 Spacer(modifier = Modifier.height(12.dp))
                 if (galleryImages.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("📷", style = MaterialTheme.typography.displayLarge)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                stringResource(R.string.imagegen_gallery_empty_filter, stringResource(R.string.imagegen_mode_upscale)),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
+                    AppStatePanel(
+                        kind = AppStateKind.Empty,
+                        title = stringResource(R.string.soft_studio_empty_title),
+                        message = stringResource(
+                            R.string.imagegen_gallery_empty_filter,
+                            stringResource(R.string.imagegen_mode_upscale)
+                        ),
+                        modifier = Modifier.fillMaxSize()
+                    )
                 } else {
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(2),
@@ -781,7 +808,10 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                 if (bitmap != null) {
                                     androidx.compose.foundation.Image(
                                         bitmap = bitmap!!,
-                                        contentDescription = null,
+                                        contentDescription = stringResource(
+                                            R.string.soft_studio_generated_image_description,
+                                            imageFile.name
+                                        ),
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop
                                     )
@@ -805,10 +835,11 @@ fun LegacyUpscaleScreen(navController: NavController) {
                                     shape = RoundedCornerShape(6.dp),
                                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
                                 ) {
-                                    Text(
-                                        "⬆️",
+                                    Icon(
+                                        imageVector = Icons.Default.KeyboardArrowUp,
+                                        contentDescription = null,
                                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
-                                        style = MaterialTheme.typography.labelSmall
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }

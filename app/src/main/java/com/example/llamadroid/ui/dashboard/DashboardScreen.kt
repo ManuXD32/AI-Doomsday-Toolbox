@@ -1,1148 +1,527 @@
 package com.example.llamadroid.ui.dashboard
 
-import android.content.Context
-import android.graphics.Bitmap
-import androidx.compose.animation.*
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.lifecycle.repeatOnLifecycle
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import android.content.SharedPreferences
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.example.llamadroid.ui.ai.ToolCatalog
+import com.example.llamadroid.ui.ai.ChatServerPickerDialog
+import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.navigation.NavController
-import com.example.llamadroid.util.AIConstants
-import com.example.llamadroid.util.DebugLog
-import com.example.llamadroid.util.SystemMonitor
-import com.example.llamadroid.service.ServerState
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavController
 import com.example.llamadroid.R
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import android.content.ComponentName
-import android.content.ServiceConnection
-import android.os.IBinder
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import com.example.llamadroid.service.FileServerService
 import com.example.llamadroid.data.db.AppDatabase
+import com.example.llamadroid.data.model.LlamaChatEntity
+import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.KnowledgeBaseRepository
+import com.example.llamadroid.service.ServerState
+import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.AppSectionTitle
 import com.example.llamadroid.ui.navigation.Screen
-import kotlinx.coroutines.launch
+import com.example.llamadroid.util.SystemMonitor
 
 /**
- * A QR bitmap owns native pixel memory and must be released when its state entry leaves the
- * composition. Keying disposal by the bitmap keeps a replaced QR alive for the current frame,
- * then recycles it after Compose has detached the old image.
+ * Soft Studio Home. The page is intentionally a small set of live hand-offs:
+ * durable pins, recent project state, runtime status, and links to the owners
+ * of detailed model, knowledge, offline, and output workflows.
  */
 @Composable
-private fun RecycleBitmapOnDispose(bitmap: Bitmap?) {
-    bitmap ?: return
-    DisposableEffect(bitmap) {
-        onDispose {
-            if (!bitmap.isRecycled) bitmap.recycle()
-        }
-    }
-}
-
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun DashboardScreen(
-    navController: NavController,
-) {
+fun DashboardScreen(navController: NavController) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val database = remember { AppDatabase.getDatabase(context) }
+    val knowledgeRepository = remember { KnowledgeBaseRepository(context, database) }
     val systemMonitor = remember(context) { SystemMonitor(context) }
     val viewModel: DashboardViewModel = viewModel(
         factory = DashboardViewModelFactory(systemMonitor)
     )
-    val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
-    val appDatabase = remember { AppDatabase.getDatabase(context) }
-    val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, appDatabase) }
-    
-    val stats by viewModel.stats.collectAsStateWithLifecycle()
-    val selectedModelPath by settingsRepo.selectedModelPath.collectAsStateWithLifecycle()
-    val contextSize by settingsRepo.contextSize.collectAsStateWithLifecycle()
+
     val serverState by viewModel.serverState.collectAsStateWithLifecycle()
-    val knowledgeBases by knowledgeBaseRepository.observeKnowledgeBases()
+    val pinnedChats by database.llamaChatDao().getPinnedAiHubChats()
         .collectAsStateWithLifecycle(initialValue = emptyList())
-    val knowledgeSourceCount by knowledgeBaseRepository.observeSourceCount()
+    val servers by database.llamaServerDao().getAllServers()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val projects by database.agentChatDao().getAllConversations()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val knowledgeBases by knowledgeRepository.observeKnowledgeBases()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val knowledgeSources by knowledgeRepository.observeSourceCount()
         .collectAsStateWithLifecycle(initialValue = 0)
-    val knowledgeChunkCount by knowledgeBaseRepository.observeChunkCount()
+    val knowledgeChunks by knowledgeRepository.observeChunkCount()
         .collectAsStateWithLifecycle(initialValue = 0)
-    val knowledgeErrorCount by knowledgeBaseRepository.observeErrorSourceCount()
+    val organizerEvents by database.organizerDao().getAllEvents()
+        .collectAsStateWithLifecycle(initialValue = emptyList())
+    val noteCount by database.noteDao().getNoteCount()
         .collectAsStateWithLifecycle(initialValue = 0)
-    val knowledgePendingCount by knowledgeBaseRepository.observePendingSourceCount()
-        .collectAsStateWithLifecycle(initialValue = 0)
-    val embeddingModelPath by settingsRepo.selectedEmbeddingModelPath.collectAsStateWithLifecycle()
-    
-    val isRunning = serverState is ServerState.Running
-    val isStarting = serverState is ServerState.Starting
-    val isLoading = serverState is ServerState.Loading
-    
-    
+
+    val pinPrefs = remember(context) { context.getSharedPreferences("ai_tool_pins", android.content.Context.MODE_PRIVATE) }
+    var pinnedToolIds by remember { mutableStateOf(pinPrefs.getStringSet("pinned_tool_ids", emptySet()).orEmpty().toSet()) }
+    DisposableEffect(pinPrefs) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { prefs, key ->
+            if (key == "pinned_tool_ids") pinnedToolIds = prefs.getStringSet(key, emptySet()).orEmpty().toSet()
+        }
+        pinPrefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { pinPrefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
+    val runningChatServers = rememberRunningLlamaChatServers()
+    var showChatServerPicker by rememberSaveable { mutableStateOf(false) }
+    if (showChatServerPicker) {
+        ChatServerPickerDialog(runningChatServers, onDismiss = { showChatServerPicker = false }, onServerSelected = {
+            showChatServerPicker = false
+            navController.navigate("chat?port=${it.port}")
+        })
+    }
     val scrollState = rememberScrollState()
-    
     AppPageBackground {
         AppContentColumn(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState),
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-        AppPageHeader(
-            eyebrow = stringResource(R.string.nav_home),
-            title = stringResource(R.string.app_name),
-            subtitle = stringResource(R.string.ai_hub_subtitle)
-        )
+            AppPageHeader(
+                title = stringResource(R.string.soft_studio_home_title)
+            )
 
-        Card(
+            val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }
+            if (pinnedTools.isNotEmpty()) {
+                AppSectionCard {
+                    AppSectionTitle(title = stringResource(R.string.soft_studio_tools_pinned))
+                    pinnedTools.forEach { tool ->
+                        DashboardLinkRow(tool.icon, stringResource(tool.titleRes), stringResource(tool.descriptionRes)) {
+                            if (tool.id == "chat") {
+                                when (runningChatServers.size) {
+                                    0 -> navController.navigate(Screen.LlamaServers.route)
+                                    1 -> navController.navigate("chat?port=${runningChatServers.single().port}")
+                                    else -> showChatServerPicker = true
+                                }
+                            } else navController.navigate(tool.route)
+                        }
+                    }
+                }
+            }
+
+            if (pinnedTools.isEmpty()) DashboardQuickActions(navController)
+
+            if (pinnedChats.isNotEmpty()) DashboardPinnedChats(
+                chats = pinnedChats,
+                servers = servers,
+                onOpen = { chat ->
+                    val serverId = chat.pinnedServerId
+                    if (serverId == null || servers.none { it.id == serverId }) {
+                        navController.navigate(Screen.LlamaServers.route)
+                    } else {
+                        navController.navigate(Screen.LlamaChat.createRoute(chat.id, serverId))
+                    }
+                }
+            )
+
+            if (projects.isNotEmpty()) DashboardRecentProjects(
+                projects = projects,
+                onOpen = { projectId -> navController.navigate(Screen.Agent.createRoute(projectId)) }
+            )
+
+            DashboardDeviceStatus(viewModel, onOpen = { navController.navigate(Screen.Stats.route) })
+            DashboardServerCard(
+                state = serverState,
+                onOpen = { navController.navigate(Screen.LlamaServers.route) }
+            )
+
+            DashboardDomainState(
+                knowledgeBaseCount = knowledgeBases.size,
+                sourceCount = knowledgeSources,
+                chunkCount = knowledgeChunks,
+                organizerEventCount = organizerEvents.size,
+                noteCount = noteCount,
+                onKnowledge = { navController.navigate(Screen.KnowledgeBase.route) },
+                onOrganizer = { navController.navigate(Screen.NotesManager.route) }
+            )
+
+            AppAdvancedSection(title = stringResource(R.string.soft_studio_home_infrastructure)) {
+                DashboardFileServerCard()
+                DashboardInfrastructureLinks(navController)
+                DashboardKiwixCard(navController)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardDeviceStatus(viewModel: DashboardViewModel, onOpen: () -> Unit) {
+    val stats by viewModel.stats.collectAsStateWithLifecycle()
+    val numberFormat = remember { java.text.NumberFormat.getNumberInstance().apply { maximumFractionDigits = 1 } }
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onOpen),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerLow
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Icon(Icons.Default.Memory, null, tint = MaterialTheme.colorScheme.secondary)
+            Text(if (stats.totalRamGb > 0f) stringResource(R.string.studio_home_memory_available,
+                numberFormat.format(stats.freeRamGb), numberFormat.format(stats.totalRamGb))
+                else stringResource(R.string.dashboard_memory),
+                modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Icon(Icons.Default.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun DashboardServerCard(
+    state: ServerState,
+    onOpen: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    val statusText = when (state) {
+        ServerState.Stopped -> stringResource(R.string.soft_studio_home_status_stopped)
+        ServerState.Starting -> stringResource(R.string.soft_studio_home_status_starting)
+        is ServerState.Loading -> stringResource(R.string.soft_studio_home_status_loading)
+        is ServerState.Running -> stringResource(R.string.soft_studio_home_status_running, state.port)
+        is ServerState.Error -> stringResource(R.string.soft_studio_home_status_error)
+    }
+    val statusColor = when (state) {
+        ServerState.Stopped -> colors.onSurfaceVariant
+        ServerState.Starting, is ServerState.Loading -> colors.primary
+        is ServerState.Running -> colors.tertiary
+        is ServerState.Error -> colors.error
+    }
+
+    AppSectionCard(
+        modifier = Modifier.clickable(onClick = onOpen),
+        containerColor = colors.primaryContainer.copy(alpha = 0.52f)
+    ) {
+        Row(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.52f)
-            ),
-            onClick = { navController.navigate(Screen.LlamaServers.route) }
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = colors.primary.copy(alpha = 0.12f)
             ) {
                 Icon(
                     imageVector = Icons.Default.Terminal,
                     contentDescription = null,
+                    modifier = Modifier.padding(10.dp),
+                    tint = colors.primary
+                )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.soft_studio_home_server_title),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    color = statusColor
+                )
+            }
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colors.onPrimaryContainer
+            )
+        }
+    }
+}
+
+@Composable
+private fun DashboardPinnedChats(
+    chats: List<LlamaChatEntity>,
+    servers: List<LlamaServerEntity>,
+    onOpen: (LlamaChatEntity) -> Unit
+) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.soft_studio_home_pinned_title))
+        if (chats.isEmpty()) {
+            Text(
+                text = stringResource(R.string.soft_studio_home_pinned_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            chats.take(3).forEach { chat ->
+                val server = chat.pinnedServerId?.let { id -> servers.firstOrNull { it.id == id } }
+                val chatTitle = if (chat.title.isBlank()) {
+                    stringResource(R.string.ai_pinned_chat_label)
+                } else {
+                    chat.title
+                }
+                DashboardLinkRow(
+                    icon = Icons.Default.Chat,
+                    title = chatTitle,
+                    supporting = server?.name ?: stringResource(R.string.ai_pinned_chat_server_missing),
+                    onClick = { onOpen(chat) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardRecentProjects(
+    projects: List<com.example.llamadroid.data.db.AgentConversationEntity>,
+    onOpen: (Long) -> Unit
+) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.soft_studio_home_recent_projects))
+        if (projects.isEmpty()) {
+            Text(
+                text = stringResource(R.string.soft_studio_home_recent_empty),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            projects.take(3).forEach { project ->
+                DashboardLinkRow(
+                    icon = Icons.Default.AccountTree,
+                    title = project.title.ifBlank { project.projectFolder },
+                    supporting = project.projectFolder,
+                    onClick = { onOpen(project.id) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DashboardDomainState(
+    knowledgeBaseCount: Int,
+    sourceCount: Int,
+    chunkCount: Int,
+    organizerEventCount: Int,
+    noteCount: Int,
+    onKnowledge: () -> Unit,
+    onOrganizer: () -> Unit
+) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.soft_studio_home_knowledge_state))
+        DashboardLinkRow(
+            icon = Icons.Default.Search,
+            title = stringResource(R.string.soft_studio_home_knowledge),
+            supporting = stringResource(
+                R.string.soft_studio_home_knowledge_state_desc,
+                knowledgeBaseCount,
+                sourceCount,
+                chunkCount
+            ),
+            onClick = onKnowledge
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.CalendarMonth,
+            title = stringResource(R.string.soft_studio_home_organizer_state),
+            supporting = stringResource(
+                R.string.soft_studio_home_organizer_state_desc,
+                organizerEventCount,
+                noteCount
+            ),
+            onClick = onOrganizer
+        )
+    }
+}
+
+@Composable
+private fun DashboardQuickActions(navController: NavController) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.soft_studio_home_quick_actions))
+        DashboardLinkRow(
+            icon = Icons.Default.Chat,
+            title = stringResource(R.string.soft_studio_home_new_chat),
+            onClick = { navController.navigate(Screen.LlamaChatList.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Image,
+            title = stringResource(R.string.ai_image_gen),
+            onClick = { navController.navigate(Screen.ImageGen.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.AccountTree,
+            title = stringResource(R.string.soft_studio_home_agent),
+            onClick = { navController.navigate(Screen.Agent.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.CalendarMonth,
+            title = stringResource(R.string.soft_studio_home_organizer),
+            supporting = stringResource(R.string.soft_studio_home_notes),
+            onClick = { navController.navigate(Screen.NotesManager.route) }
+        )
+    }
+}
+
+@Composable
+private fun DashboardLibraryLinks(navController: NavController) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.soft_studio_home_library))
+        DashboardLinkRow(
+            icon = Icons.Default.Storage,
+            title = stringResource(R.string.soft_studio_home_models),
+            onClick = { navController.navigate(Screen.ModelHub.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Search,
+            title = stringResource(R.string.soft_studio_home_knowledge),
+            onClick = { navController.navigate(Screen.KnowledgeBase.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Folder,
+            title = stringResource(R.string.soft_studio_home_offline),
+            onClick = { navController.navigate(Screen.ZimManager.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Image,
+            title = stringResource(R.string.soft_studio_home_outputs),
+            supporting = stringResource(R.string.soft_studio_library_open_images),
+            onClick = { navController.navigate(Screen.ImageGen.createRoute(startMode = 0, tab = "gallery")) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Movie,
+            title = stringResource(R.string.soft_studio_library_open_videos),
+            onClick = { navController.navigate(Screen.VideoGen.createRoute(tab = "gallery")) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Description,
+            title = stringResource(R.string.soft_studio_library_open_notes),
+            onClick = { navController.navigate(Screen.NotesManager.route) }
+        )
+    }
+}
+
+@Composable
+private fun DashboardInfrastructureLinks(navController: NavController) {
+    AppSectionCard {
+        AppSectionTitle(
+            title = stringResource(R.string.soft_studio_home_infrastructure),
+            supporting = stringResource(R.string.soft_studio_home_infrastructure_desc)
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.SmartToy,
+            title = stringResource(R.string.soft_studio_home_tools),
+            onClick = { navController.navigate(Screen.AIHub.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Share,
+            title = stringResource(R.string.soft_studio_home_distributed_llm),
+            supporting = stringResource(R.string.dashboard_setup_distributed_desc),
+            onClick = { navController.navigate(Screen.DistributedHub.route) }
+        )
+        DashboardLinkRow(
+            icon = Icons.Default.Hub,
+            title = stringResource(R.string.soft_studio_home_distributed_media),
+            supporting = stringResource(R.string.dashboard_sd_distributed_desc),
+            onClick = { navController.navigate(Screen.SdDistributedHub.route) }
+        )
+    }
+}
+
+@Composable
+private fun DashboardLinkRow(
+    icon: ImageVector,
+    title: String,
+    supporting: String? = null,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = AppChromeDefaults.InnerCardShape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Surface(
+                modifier = Modifier.size(36.dp),
+                shape = RoundedCornerShape(11.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.padding(8.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Column(modifier = Modifier.weight(1f)) {
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (!supporting.isNullOrBlank()) {
                     Text(
-                        text = stringResource(R.string.llama_cards_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = stringResource(R.string.llama_cards_subtitle),
+                        text = supporting,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.76f),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
             }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
-            ),
-            onClick = { navController.navigate(Screen.KnowledgeBase.route) }
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            stringResource(R.string.kb_dashboard_title),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                        Text(
-                            stringResource(
-                                R.string.kb_dashboard_summary,
-                                knowledgeBases.size,
-                                knowledgeSourceCount,
-                                knowledgeChunkCount
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.72f)
-                        )
-                    }
-                    Icon(Icons.Default.KeyboardArrowRight, contentDescription = null)
-                }
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    AssistChip(
-                        onClick = { navController.navigate(Screen.KnowledgeBase.route) },
-                        label = { Text(stringResource(R.string.kb_pending_count, knowledgePendingCount)) }
-                    )
-                    AssistChip(
-                        onClick = { navController.navigate(Screen.KnowledgeBase.route) },
-                        modifier = Modifier.widthIn(max = 240.dp),
-                        label = {
-                            Text(
-                                if (knowledgeErrorCount > 0) {
-                                    stringResource(R.string.kb_errors_count, knowledgeErrorCount)
-                                } else {
-                                    stringResource(R.string.kb_no_errors)
-                                }
-                            )
-                        }
-                    )
-                    AssistChip(
-                        onClick = { navController.navigate(Screen.KnowledgeBase.route) },
-                        label = {
-                            Text(
-                                embeddingModelPath?.substringAfterLast("/")
-                                    ?: stringResource(R.string.kb_embedding_model_none),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    )
-                }
-            }
-        }
-
-        // QR Code Section (when server is running with LAN access enabled)
-        val remoteAccess by settingsRepo.remoteAccess.collectAsStateWithLifecycle()
-        if (isRunning && remoteAccess) {
-            val interfaces = remember { getDeviceIPs(context) }
-            if (interfaces.isNotEmpty()) {
-                val port = (serverState as ServerState.Running).port
-                var expanded by remember { mutableStateOf(true) }  // Show QR codes by default
-                var qrBitmaps by remember { mutableStateOf<Map<String, Bitmap?>>(emptyMap()) }
-
-                // Register every generated bitmap, including collapsed entries, for disposal.
-                qrBitmaps.values.forEach { bitmap -> RecycleBitmapOnDispose(bitmap) }
-                
-                LaunchedEffect(interfaces, port) {
-                    withContext(Dispatchers.Default) {
-                        val bitmaps = interfaces.associate { (ifName, ip) ->
-                            val url = "http://$ip:$port"
-                            ip to generateQrCode(url, 200)
-                        }
-                        qrBitmaps = bitmaps
-                    }
-                }
-                
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(
-                                modifier = Modifier.weight(1f),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Share, null, tint = MaterialTheme.colorScheme.primary)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    stringResource(R.string.dashboard_qr_connect),
-                                    modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            IconButton(onClick = { expanded = !expanded }) {
-                                Icon(
-                                    if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                    contentDescription = if (expanded) stringResource(R.string.dashboard_qr_collapse) else stringResource(R.string.dashboard_qr_expand)
-                                )
-                            }
-                        }
-                        
-                        AnimatedVisibility(visible = expanded) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
-                                    .padding(top = 12.dp),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
-                            ) {
-                                interfaces.forEach { (ifName, ip) ->
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier.width(140.dp)
-                                    ) {
-                                        Card(
-                                            colors = CardDefaults.cardColors(containerColor = Color.White),
-                                            shape = RoundedCornerShape(12.dp)
-                                        ) {
-                                            qrBitmaps[ip]?.let { bitmap ->
-                                                Image(
-                                                    bitmap = bitmap.asImageBitmap(),
-                                                    contentDescription = stringResource(R.string.dashboard_qr_for, ip),
-                                                    modifier = Modifier.size(120.dp).padding(8.dp)
-                                                )
-                                            } ?: Box(
-                                                modifier = Modifier.size(120.dp),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(ifName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
-                                        Text(ip, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // File Server Card
-        val scope = rememberCoroutineScope()
-        var fileServerRunning by remember { mutableStateOf(false) }
-        var fileServerUrls by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-        var fileServerFolderUri by remember { mutableStateOf<android.net.Uri?>(null) }
-        var fileServerService by remember { mutableStateOf<FileServerService?>(null) }
-        var fileServerBound by remember { mutableStateOf(false) }
-        var fileServerQrExpanded by remember { mutableStateOf(false) }
-        var fileServerQrBitmaps by remember { mutableStateOf<Map<String, Bitmap?>>(emptyMap()) }
-        
-        val fileServerConnection = remember {
-            object : ServiceConnection {
-                override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-                    val binder = service as? FileServerService.LocalBinder ?: return
-                    fileServerService = binder.getService()
-                    fileServerBound = true
-                }
-                override fun onServiceDisconnected(name: ComponentName?) {
-                    fileServerService = null
-                    fileServerBound = false
-                }
-            }
-        }
-
-        fun bindFileServerIfNeeded() {
-            if (fileServerBound) return
-            val intent = Intent(context, FileServerService::class.java)
-            fileServerBound = runCatching {
-                // Observe an explicitly running service only. Binding must not create a
-                // dormant foreground service while the dashboard is merely being viewed.
-                context.bindService(intent, fileServerConnection, 0)
-            }.getOrDefault(false)
-        }
-
-        fun unbindFileServer() {
-            if (fileServerBound) {
-                runCatching { context.unbindService(fileServerConnection) }
-            }
-            fileServerBound = false
-            fileServerService = null
-            fileServerRunning = false
-            fileServerUrls = emptyList()
-            fileServerQrBitmaps = emptyMap()
-        }
-
-        DisposableEffect(context, lifecycleOwner) {
-            val observer = LifecycleEventObserver { _, event ->
-                when (event) {
-                    Lifecycle.Event.ON_START -> bindFileServerIfNeeded()
-                    Lifecycle.Event.ON_STOP -> unbindFileServer()
-                    else -> Unit
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                bindFileServerIfNeeded()
-            }
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(observer)
-                unbindFileServer()
-            }
-        }
-
-        LaunchedEffect(fileServerService, lifecycleOwner) {
-            lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-                fileServerService?.let { service ->
-                    launch {
-                        service.isRunning.collect { fileServerRunning = it }
-                    }
-                    launch {
-                        service.serverUrls.collect { urls ->
-                            fileServerUrls = urls
-                            // Generate QR codes
-                            withContext(Dispatchers.Default) {
-                                val bitmaps = urls.associate { (ifName, url) ->
-                                    val ip = url.substringAfter("://").substringBefore(":")
-                                    ip to generateQrCode(url, 200)
-                                }
-                                fileServerQrBitmaps = bitmaps
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Register every generated bitmap, including collapsed entries, for disposal.
-        fileServerQrBitmaps.values.forEach { bitmap -> RecycleBitmapOnDispose(bitmap) }
-        
-        val folderPicker = rememberLauncherForActivityResult(
-            contract = ActivityResultContracts.OpenDocumentTree()
-        ) { uri ->
-            uri?.let {
-                context.contentResolver.takePersistableUriPermission(
-                    it,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-                fileServerFolderUri = it
-            }
-        }
-        
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = if (fileServerRunning) 
-                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.7f)
-                else 
-                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(stringResource(R.string.dashboard_file_server), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    if (fileServerRunning) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF4CAF50))
-                        )
-                    }
-                }
-                
-                // Folder selection
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(stringResource(R.string.dashboard_shared_folder), style = MaterialTheme.typography.labelMedium)
-                        Text(
-                            fileServerFolderUri?.lastPathSegment ?: stringResource(R.string.file_server_not_selected),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = { folderPicker.launch(null) },
-                        enabled = !fileServerRunning
-                    ) {
-                        Text(stringResource(R.string.file_server_browse))
-                    }
-                }
-                
-                // Start/Stop Button
-                Button(
-                    onClick = {
-                        if (fileServerRunning) {
-                            fileServerService?.stopServer()
-                        } else {
-                            fileServerFolderUri?.let { uri ->
-                                context.startForegroundService(Intent(context, FileServerService::class.java))
-                                scope.launch {
-                                    // The explicit start above is the only path allowed to
-                                    // create the service. Retry a non-auto-create bind briefly
-                                    // while Android delivers onStartCommand/onBind.
-                                    repeat(8) {
-                                        if (!lifecycleOwner.lifecycle.currentState
-                                                .isAtLeast(Lifecycle.State.STARTED)
-                                        ) return@launch
-                                        bindFileServerIfNeeded()
-                                        fileServerService?.let { service ->
-                                            service.startServer(uri, FileServerService.DEFAULT_PORT)
-                                            return@launch
-                                        }
-                                        kotlinx.coroutines.delay(250L)
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    enabled = fileServerFolderUri != null || fileServerRunning,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = if (fileServerRunning) 
-                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    else 
-                        ButtonDefaults.buttonColors()
-                ) {
-                    Icon(
-                        if (fileServerRunning) Icons.Default.Close else Icons.Default.PlayArrow,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (fileServerRunning) stringResource(R.string.dashboard_stop_server_btn) else stringResource(R.string.dashboard_start_server_port, AIConstants.Ports.FILE_SERVER))
-                }
-                
-                // QR codes when running
-                if (fileServerRunning && fileServerUrls.isNotEmpty()) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(stringResource(R.string.dashboard_scan_access_files), fontWeight = FontWeight.Medium)
-                            Text(
-                                fileServerUrls.firstOrNull()?.second ?: "",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        IconButton(onClick = { fileServerQrExpanded = !fileServerQrExpanded }) {
-                            Icon(
-                                if (fileServerQrExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = null
-                            )
-                        }
-                    }
-                    
-                    AnimatedVisibility(visible = fileServerQrExpanded) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            fileServerUrls.forEach { (ifName, url) ->
-                                val ip = url.substringAfter("://").substringBefore(":")
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.width(140.dp)
-                                ) {
-                                    Card(
-                                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        fileServerQrBitmaps[ip]?.let { bitmap ->
-                                            Image(
-                                                bitmap = bitmap.asImageBitmap(),
-                                                contentDescription = stringResource(R.string.dashboard_qr_for, ip),
-                                                modifier = Modifier.size(120.dp).padding(8.dp)
-                                            )
-                                        } ?: Box(
-                                            modifier = Modifier.size(120.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(ifName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
-                                    Text(ip, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Kiwix Server Card
-        var kiwixService by remember { mutableStateOf<com.example.llamadroid.service.KiwixService?>(null) }
-        var kiwixBound by remember { mutableStateOf(false) }
-        val kiwixConnection = remember {
-            object : ServiceConnection {
-                override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-                    kiwixService = (binder as? com.example.llamadroid.service.KiwixService.LocalBinder)?.getService()
-                    kiwixBound = true
-                }
-                override fun onServiceDisconnected(name: ComponentName?) {
-                    kiwixService = null
-                    kiwixBound = false
-                }
-            }
-        }
-
-        fun bindKiwixIfNeeded() {
-            if (kiwixBound) return
-            val intent = Intent(context, com.example.llamadroid.service.KiwixService::class.java)
-            kiwixBound = runCatching {
-                // Do not auto-create Kiwix just because the dashboard is visible.
-                context.bindService(intent, kiwixConnection, 0)
-            }.getOrDefault(false)
-        }
-
-        fun unbindKiwix() {
-            if (kiwixBound) {
-                runCatching { context.unbindService(kiwixConnection) }
-            }
-            kiwixBound = false
-            kiwixService = null
-        }
-
-        DisposableEffect(context, lifecycleOwner) {
-            val observer = LifecycleEventObserver { _, event ->
-                when (event) {
-                    Lifecycle.Event.ON_START -> bindKiwixIfNeeded()
-                    Lifecycle.Event.ON_STOP -> unbindKiwix()
-                    else -> Unit
-                }
-            }
-            lifecycleOwner.lifecycle.addObserver(observer)
-            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                bindKiwixIfNeeded()
-            }
-            onDispose {
-                lifecycleOwner.lifecycle.removeObserver(observer)
-                unbindKiwix()
-            }
-        }
-        
-        val kiwixRunning by kiwixService?.isRunning?.collectAsStateWithLifecycle()
-            ?: remember { mutableStateOf(false) }
-        val installedZims by appDatabase.zimDao().getAllZims()
-            .collectAsStateWithLifecycle(initialValue = emptyList())
-        var kiwixQrExpanded by remember { mutableStateOf(false) }
-        var kiwixQrBitmaps by remember { mutableStateOf<Map<String, Bitmap?>>(emptyMap()) }
-        val kiwixInterfaces = remember { getDeviceIPs(context) }
-
-        // Register every generated bitmap, including collapsed entries, for disposal.
-        kiwixQrBitmaps.values.forEach { bitmap -> RecycleBitmapOnDispose(bitmap) }
-        
-        LaunchedEffect(kiwixRunning) {
-            if (kiwixRunning) {
-                withContext(Dispatchers.Default) {
-                    val bitmaps = kiwixInterfaces.associate { (ifName, ip) ->
-                        val url = "http://$ip:${AIConstants.Ports.KIWIX}"
-                        ip to generateQrCode(url, 200)
-                    }
-                    kiwixQrBitmaps = bitmaps
-                }
-            } else {
-                // Drop native QR pixel buffers as soon as the service stops; the
-                // keyed disposal effects release the previous map after its last frame.
-                kiwixQrBitmaps = emptyMap()
-            }
-        }
-        
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.3f)
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Star,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
-                    Text(
-                        stringResource(R.string.kiwix_server),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Spacer(modifier = Modifier.weight(1f))
-                    if (kiwixRunning) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF4CAF50))
-                        )
-                    }
-                }
-                
-                Text(
-                    stringResource(R.string.dashboard_zim_installed, installedZims.size),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                // Start/Stop Button
-                Button(
-                    onClick = {
-                        if (kiwixRunning) {
-                            kiwixService?.stopServer()
-                        } else {
-                            context.startForegroundService(Intent(context, com.example.llamadroid.service.KiwixService::class.java))
-                            scope.launch {
-                                // Bind only after the explicit user start. A short retry is
-                                // needed because Android may deliver onStartCommand after the
-                                // first bind attempt.
-                                repeat(8) {
-                                    if (!lifecycleOwner.lifecycle.currentState
-                                            .isAtLeast(Lifecycle.State.STARTED)
-                                    ) return@launch
-                                    bindKiwixIfNeeded()
-                                    kiwixService?.let { service ->
-                                        service.startServer(installedZims.map { it.path })
-                                        return@launch
-                                    }
-                                    kotlinx.coroutines.delay(250L)
-                                }
-                            }
-                        }
-                    },
-                    enabled = installedZims.isNotEmpty() || kiwixRunning,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = if (kiwixRunning) 
-                        ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    else 
-                        ButtonDefaults.buttonColors()
-                ) {
-                    Icon(
-                        if (kiwixRunning) Icons.Default.Close else Icons.Default.PlayArrow,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (kiwixRunning) stringResource(R.string.kiwix_stop) else stringResource(R.string.kiwix_start))
-                }
-                
-                // QR codes when running (always show - LAN always enabled)
-                if (kiwixRunning && kiwixInterfaces.isNotEmpty()) {
-                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                    
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(stringResource(R.string.dashboard_connect_qr), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Medium)
-                        IconButton(onClick = { kiwixQrExpanded = !kiwixQrExpanded }) {
-                            Icon(
-                                if (kiwixQrExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                contentDescription = if (kiwixQrExpanded) stringResource(R.string.dashboard_qr_collapse) else stringResource(R.string.dashboard_qr_expand)
-                            )
-                        }
-                    }
-                    
-                    AnimatedVisibility(visible = kiwixQrExpanded) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            kiwixInterfaces.forEach { (ifName, ip) ->
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.width(140.dp)
-                                ) {
-                                    Card(
-                                        colors = CardDefaults.cardColors(containerColor = Color.White),
-                                        shape = RoundedCornerShape(12.dp)
-                                    ) {
-                                        kiwixQrBitmaps[ip]?.let { bitmap ->
-                                            Image(
-                                                bitmap = bitmap.asImageBitmap(),
-                                                contentDescription = stringResource(R.string.dashboard_qr_for, ip),
-                                                modifier = Modifier.size(120.dp).padding(8.dp)
-                                            )
-                                        } ?: Box(
-                                            modifier = Modifier.size(120.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(ifName, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Medium, textAlign = TextAlign.Center)
-                                    Text("$ip:${AIConstants.Ports.KIWIX}", style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
-        
-        // Distributed Inference Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        stringResource(R.string.dashboard_distributed_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                }
-                
-                Text(
-                    stringResource(R.string.dashboard_setup_distributed_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                Button(
-                    onClick = { navController.navigate(com.example.llamadroid.ui.navigation.Screen.DistributedHub.route) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Share, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.dashboard_setup_distributed))
-                }
-            }
-        }
-
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.34f)
-            )
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(Icons.Default.Image, contentDescription = null, tint = MaterialTheme.colorScheme.tertiary)
-                    Text(
-                        stringResource(R.string.dashboard_sd_distributed_title),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                }
-
-                Text(
-                    stringResource(R.string.dashboard_sd_distributed_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Button(
-                    onClick = { navController.navigate(Screen.SdDistributedHub.route) },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Icon(Icons.Default.Settings, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.dashboard_sd_distributed_action))
-                }
-            }
-        }
-        
-        // Memory Stats Card
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        stringResource(R.string.dashboard_memory),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                }
-                
-                LinearProgressIndicator(
-                    progress = { stats.ramUsagePercent / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = when {
-                        stats.ramUsagePercent > 80 -> MaterialTheme.colorScheme.error
-                        stats.ramUsagePercent > 60 -> Color(0xFFFFA726)
-                        else -> MaterialTheme.colorScheme.primary
-                    },
-                    trackColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text(
-                            stringResource(R.string.dashboard_ram_unit, String.format(java.util.Locale.getDefault(), "%.1f", stats.totalRamGb - stats.freeRamGb)),
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Text(
-                            stringResource(R.string.dashboard_ram_used),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            stringResource(R.string.dashboard_ram_unit, String.format(java.util.Locale.getDefault(), "%.1f", stats.freeRamGb)),
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            stringResource(R.string.dashboard_ram_free),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            stringResource(R.string.dashboard_ram_unit, String.format(java.util.Locale.getDefault(), "%.1f", stats.totalRamGb)),
-                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
-                        )
-                        Text(
-                            stringResource(R.string.dashboard_ram_total),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
-        
-        // Kiwix Offline Library Card
-        
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.6f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            onClick = { navController.navigate("zim_manager") }
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Icon
-                Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("📚", style = MaterialTheme.typography.headlineSmall)
-                }
-                
-                // Content
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.dashboard_kiwix_library),
-                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                    )
-                    Text(
-                        if (installedZims.isEmpty()) stringResource(R.string.dashboard_offline_wikipedia)
-                        else stringResource(R.string.dashboard_zim_installed, installedZims.size),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-                    )
-                }
-                
-                // Action icons
-                Row {
-                    if (installedZims.isNotEmpty()) {
-                        IconButton(onClick = { navController.navigate("kiwix_viewer") }) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = stringResource(R.string.action_view),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                    Icon(
-                        Icons.Default.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f)
-                    )
-                }
-            }
-        }
-        
-        Spacer(modifier = Modifier.height(16.dp))
-        
-        // Quick tip
-        if (selectedModelPath == null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.tertiary
-                    )
-                    Column {
-                        Text(
-                            stringResource(R.string.dashboard_no_model),
-                            style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                        Text(
-                            stringResource(R.string.dashboard_select_model),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.8f)
-                        )
-                    }
-                }
-            }
-        }
-        }
-    }
-}
-
-/**
- * Get all IPv4 addresses from all network interfaces.
- * Returns list of (friendlyName, ipAddress) pairs.
- */
-private fun getDeviceIPs(context: android.content.Context): List<Pair<String, String>> {
-    val ips = mutableListOf<Pair<String, String>>()
-    try {
-        val interfaces = java.net.NetworkInterface.getNetworkInterfaces()
-        while (interfaces.hasMoreElements()) {
-            val iface = interfaces.nextElement()
-            if (!iface.isUp || iface.isLoopback) continue
-            
-            val addresses = iface.inetAddresses
-            while (addresses.hasMoreElements()) {
-                val addr = addresses.nextElement()
-                if (addr is java.net.Inet4Address && !addr.isLoopbackAddress) {
-                    addr.hostAddress?.let { ip ->
-                        // Skip link-local addresses (169.254.x.x)
-                        if (!ip.startsWith("169.254")) {
-                            val friendlyName = when {
-                                iface.name.startsWith("wlan") -> context.getString(R.string.net_type_wifi)
-                                iface.name.startsWith("eth") -> context.getString(R.string.net_type_ethernet)
-                                iface.name.startsWith("tun") -> context.getString(R.string.net_type_vpn)
-                                iface.name.startsWith("rmnet") -> context.getString(R.string.net_type_mobile)
-                                else -> iface.name
-                            }
-                            ips.add(Pair(friendlyName, ip))
-                        }
-                    }
-                }
-            }
-        }
-    } catch (e: Exception) {
-        // Ignore network enumeration errors
-    }
-    return ips
-}
-
-/**
- * Generate a QR code bitmap from a URL string.
- */
-private fun generateQrCode(content: String, size: Int): Bitmap? {
-    return try {
-        val writer = QRCodeWriter()
-        val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
-        for (x in 0 until size) {
-            for (y in 0 until size) {
-                bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
-            }
-        }
-        bitmap
-    } catch (e: Exception) {
-        null
     }
 }

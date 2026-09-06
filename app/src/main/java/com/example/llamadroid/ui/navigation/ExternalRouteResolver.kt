@@ -24,11 +24,13 @@ object ExternalRouteResolver {
 
     private val staticRoutes = setOf(
         Screen.Dashboard.route,
+        Screen.Library.route,
         Screen.Settings.route,
         Screen.Stats.route,
         Screen.Logs.route,
         Screen.AIHub.route,
         Screen.AiServersHub.route,
+        Screen.FileServer.route,
         Screen.LlamaServers.route,
         Screen.ImageGen.route,
         Screen.ImageGenUpscale.route,
@@ -104,7 +106,7 @@ object ExternalRouteResolver {
 
     private val chatWithPortPattern = Regex("^${Regex.escape(Screen.Chat.route)}\\?port=[1-9][0-9]{0,4}$")
     private val imageGenWithModePattern = Regex(
-        "^${Regex.escape(Screen.ImageGen.route)}\\?startMode=[0-4]$"
+        "^${Regex.escape(Screen.ImageGen.route)}\\?startMode=[0-4](?:&tab=(?:create|gallery))?$"
     )
     private val adventureRoutes = DungeonType.entries
         .map { Screen.Adventure.createRoute(it.name) }
@@ -132,6 +134,10 @@ object ExternalRouteResolver {
             chatWithPortPattern.matches(canonical) &&
                 canonical.substringAfter("port=").toIntOrNull() in 1..65535 -> canonical
             imageGenWithModePattern.matches(canonical) -> canonical
+            canonical.startsWith("agent?conversationId=") &&
+                canonical.removePrefix("agent?conversationId=").toLongOrNull()?.let { it > 0L } == true -> canonical
+            canonical in setOf("image_gen?tab=gallery", "image_gen?tab=create",
+                "video_gen?tab=gallery", "video_gen?tab=create") -> canonical
             hasPositiveLongSuffix(canonical, "dataset_project/") -> canonical
             hasPositiveLongSuffix(canonical, "llama_chat_list/folder/") -> canonical
             isValidLlamaChatRoute(canonical) -> canonical

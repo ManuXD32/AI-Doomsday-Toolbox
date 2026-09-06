@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Texto de listas y del gestor de modelos mantenido separado del catálogo antiguo. -->
-    <string name="models_hub_eyebrow">Modelos</string>
     <string name="models_hub_subtitle">Descarga, importa y organiza modelos de IA en el dispositivo.</string>
-    <string name="responsive_logs_eyebrow">Depuración</string>
     <string name="responsive_models_mmproj_file">archivo mmproj</string>
 </resources>

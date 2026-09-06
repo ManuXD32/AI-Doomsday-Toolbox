@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
@@ -2452,7 +2453,7 @@ fun LLMSettingsScreen(navController: NavController) {
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        stringResource(R.string.llm_lora_stack_selected_count, loraDialogDraft.size),
+                        pluralStringResource(R.plurals.llm_lora_stack_selected_count, loraDialogDraft.size, loraDialogDraft.size),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

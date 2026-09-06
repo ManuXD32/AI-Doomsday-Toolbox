@@ -281,7 +281,8 @@ private fun CodeBlockView(block: MdBlock.CodeBlock) {
                         clipboardManager.setText(AnnotatedString(block.code))
                         Toast.makeText(context, codeCopiedText, Toast.LENGTH_SHORT).show()
                     },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                    modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Row(
                     verticalAlignment = Alignment.CenterVertically,

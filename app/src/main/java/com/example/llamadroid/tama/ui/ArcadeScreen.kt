@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -259,18 +260,22 @@ fun ArcadeScreen(
                         .padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text(
-                        text = stringResource(R.string.tama_arcade_subtitle),
-                        fontFamily = FontFamily.Monospace,
-                        color = TamaLight,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = stringResource(R.string.tama_arcade_reward_hint),
-                        fontFamily = FontFamily.Monospace,
-                        color = TamaLight,
-                        fontSize = 11.sp
-                    )
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(TamaDark).padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.tama_arcade_subtitle),
+                            fontFamily = FontFamily.Monospace,
+                            color = TamaLight,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = stringResource(R.string.tama_arcade_reward_hint),
+                            fontFamily = FontFamily.Monospace,
+                            color = TamaLight,
+                            fontSize = 11.sp
+                        )
+                    }
 
                     ArcadeHub(
                         onPlayCatchGame = {
@@ -781,7 +786,12 @@ private fun ArcadeResultDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(title), fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 320.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(
                     stringResource(
                         R.string.tama_arcade_result_summary,

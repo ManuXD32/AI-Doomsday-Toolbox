@@ -99,8 +99,10 @@ fun TamaMapView(
         // Legend
         Spacer(modifier = Modifier.height(8.dp))
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             LegendItem(LocationType.HOME.mapIconAssetPath, stringResource(R.string.tama_location_home))
             LegendItem(LocationType.SHOP.mapIconAssetPath, stringResource(R.string.tama_location_shop))
@@ -307,16 +309,17 @@ fun LocationDetailsDialog(
             if (!isCurrentLocation) {
                 TextButton(
                     onClick = onTravel,
+                    modifier = Modifier.heightIn(min = 48.dp),
                     enabled = petEnergy >= travelCost
                 ) {
                     Text(stringResource(R.string.tama_travel_here))
                 }
             } else if (location.type == LocationType.ARCADE) {
-                TextButton(onClick = onArcade) {
+                TextButton(onClick = onArcade, modifier = Modifier.heightIn(min = 48.dp)) {
                     Text(stringResource(R.string.tama_btn_arcade))
                 }
             }
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(stringResource(R.string.action_close))
             }
         }

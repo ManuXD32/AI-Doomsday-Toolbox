@@ -1,5 +1,7 @@
 package com.example.llamadroid.data
 
+import android.annotation.SuppressLint
+import androidx.core.content.edit
 import android.content.Context
 import android.content.SharedPreferences
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
@@ -30,6 +32,24 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+
+/**
+ * The app-level appearance mode. The stored value is intentionally stable so
+ * future settings migrations can add modes without changing the public API.
+ */
+enum class AppThemeMode(val storageValue: String) {
+    SYSTEM("system"),
+    LIGHT("light"),
+    DARK("dark");
+
+    companion object {
+        fun fromStorage(value: String?): AppThemeMode = when (value?.trim()?.lowercase(Locale.ROOT)) {
+            LIGHT.storageValue -> LIGHT
+            DARK.storageValue -> DARK
+            else -> SYSTEM
+        }
+    }
+}
 
 data class RemoteSummarySettingsSnapshot(
     val backend: String,
@@ -226,6 +246,13 @@ class SettingsRepository(private val context: Context) {
         if (prefs.contains("model_storage_uri")) {
             prefs.edit().remove("model_storage_uri").apply()
         }
+        // Appearance is process-wide because the activity and settings pages
+        // each keep their own repository instance. The persisted values remain
+        // the source of truth when a fresh repository is created.
+        sharedThemeMode.value = AppThemeMode.fromStorage(
+            prefs.getString(PREF_THEME_MODE, null)
+        )
+        sharedDynamicColor.value = prefs.getBoolean(PREF_DYNAMIC_COLOR, false)
     }
 
     private inline fun <reified T : Enum<T>> enumPref(key: String, defaultValue: T): T {
@@ -1313,7 +1340,8 @@ class SettingsRepository(private val context: Context) {
 
     fun setServerPort(port: Int) {
         val normalized = port.coerceIn(1, 65535)
-        prefs.edit().putInt("server_port", normalized).commit()
+        // Persist before publishing the port to runtime observers.
+        prefs.edit(commit = true) { putInt("server_port", normalized) }
         _serverPort.value = normalized
     }
 
@@ -2262,6 +2290,33 @@ class SettingsRepository(private val context: Context) {
         if (!prefs.contains("pdf_translation_target_language")) {
             pdfTranslationSettings.setTargetLanguage(defaultPdfTranslationLanguage())
         }
+    }
+
+    // Appearance preferences shared by the activity theme and General Settings.
+    // Defaults intentionally keep the device theme and the app's own palette.
+    val themeMode: StateFlow<AppThemeMode> = sharedThemeMode.asStateFlow()
+    val dynamicColor: StateFlow<Boolean> = sharedDynamicColor.asStateFlow()
+
+    /** Claim once per local calendar day; callers must use an IO dispatcher for the durable write. */
+    @SuppressLint("ApplySharedPref") // Return durable commit success; callers dispatch this claim to IO.
+    fun claimDailySupportPrompt(todayEpochDay: Long): Boolean = synchronized(dailySupportPromptLock) {
+        if (prefs.contains(PREF_SUPPORT_LAST_SHOWN_DAY) &&
+            todayEpochDay <= prefs.getLong(PREF_SUPPORT_LAST_SHOWN_DAY, Long.MIN_VALUE)
+        ) {
+            false
+        } else {
+            prefs.edit().putLong(PREF_SUPPORT_LAST_SHOWN_DAY, todayEpochDay).commit()
+        }
+    }
+
+    fun setThemeMode(mode: AppThemeMode) {
+        prefs.edit().putString(PREF_THEME_MODE, mode.storageValue).apply()
+        sharedThemeMode.value = mode
+    }
+
+    fun setDynamicColor(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_DYNAMIC_COLOR, enabled).apply()
+        sharedDynamicColor.value = enabled
     }
     
     // Legacy model library folder URI (deprecated/no-op for Play-safe storage)
@@ -4612,6 +4667,13 @@ class SettingsRepository(private val context: Context) {
     // ========== AI Agent Per-Role System Prompts ==========
     
     companion object {
+        private const val PREF_SUPPORT_LAST_SHOWN_DAY = "support_last_shown_epoch_day"
+        private val dailySupportPromptLock = Any()
+        private const val PREF_THEME_MODE = "theme_mode"
+        private const val PREF_DYNAMIC_COLOR = "dynamic_color"
+        private val sharedThemeMode = MutableStateFlow(AppThemeMode.SYSTEM)
+        private val sharedDynamicColor = MutableStateFlow(false)
+
         private const val MANGA_TRANSLATION_CONFIG_KEY = "manga_translation_run_config_v4"
         private const val LLAMA_MANAGED_SCHEMA = 1
         private const val PREF_LLAMA_MANAGED_SCHEMA = "llama_managed_settings_schema"
@@ -5305,7 +5367,7 @@ Keep it brief but capture essential details."""
     private val _adventureOllamaThreads = MutableStateFlow(prefs.getInt("adventure_ollama_threads", 4))
     val adventureOllamaThreads = _adventureOllamaThreads.asStateFlow()
     fun setAdventureOllamaThreads(count: Int) {
-        prefs.edit().putInt("adventure_ollama_threads", count).apply()
+        prefs.edit { putInt("adventure_ollama_threads", count) }
         _adventureOllamaThreads.value = count
     }
 
@@ -5313,7 +5375,7 @@ Keep it brief but capture essential details."""
     private val _adventureOllamaNumCtx = MutableStateFlow(prefs.getInt("adventure_ollama_num_ctx", 16384))
     val adventureOllamaNumCtx = _adventureOllamaNumCtx.asStateFlow()
     fun setAdventureOllamaNumCtx(count: Int) {
-        prefs.edit().putInt("adventure_ollama_num_ctx", count).apply()
+        prefs.edit { putInt("adventure_ollama_num_ctx", count) }
         _adventureOllamaNumCtx.value = count
     }
 
@@ -5321,7 +5383,7 @@ Keep it brief but capture essential details."""
     private val _adventureLanguage = MutableStateFlow(prefs.getString("adventure_language", "English") ?: "English")
     val adventureLanguage = _adventureLanguage.asStateFlow()
     fun setAdventureLanguage(language: String) {
-        prefs.edit().putString("adventure_language", language).apply()
+        prefs.edit { putString("adventure_language", language) }
         _adventureLanguage.value = language
     }
 
@@ -5331,7 +5393,7 @@ Keep it brief but capture essential details."""
     val adventureBackend = _adventureBackend.asStateFlow()
     fun setAdventureBackend(backend: String) {
         val normalized = normalizeOllamaOrLlamaBackend(backend)
-        prefs.edit().putString("adventure_backend", normalized).apply()
+        prefs.edit { putString("adventure_backend", normalized) }
         _adventureBackend.value = normalized
     }
 
@@ -5340,7 +5402,7 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaServerUrl = _adventureLlamaServerUrl.asStateFlow()
     fun setAdventureLlamaServerUrl(url: String) {
-        prefs.edit().putString("adventure_llama_server_url", url).apply()
+        prefs.edit { putString("adventure_llama_server_url", url) }
         _adventureLlamaServerUrl.value = url
     }
 
@@ -5349,7 +5411,7 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaSwapUrl = _adventureLlamaSwapUrl.asStateFlow()
     fun setAdventureLlamaSwapUrl(url: String) {
-        prefs.edit().putString("adventure_llama_swap_url", url).apply()
+        prefs.edit { putString("adventure_llama_swap_url", url) }
         _adventureLlamaSwapUrl.value = url
     }
 
@@ -5358,7 +5420,7 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaServerModelLabel = _adventureLlamaServerModelLabel.asStateFlow()
     fun setAdventureLlamaServerModelLabel(label: String?) {
-        prefs.edit().putString("adventure_llama_server_model_label", label).apply()
+        prefs.edit { putString("adventure_llama_server_model_label", label) }
         _adventureLlamaServerModelLabel.value = label
     }
 
@@ -5368,7 +5430,7 @@ Keep it brief but capture essential details."""
     val adventureLlamaServerContextTokens = _adventureLlamaServerContextTokens.asStateFlow()
     fun setAdventureLlamaServerContextTokens(tokens: Int?) {
         val normalized = tokens ?: -1
-        prefs.edit().putInt("adventure_llama_server_context_tokens", normalized).apply()
+        prefs.edit { putInt("adventure_llama_server_context_tokens", normalized) }
         _adventureLlamaServerContextTokens.value = normalized
     }
 
@@ -5377,16 +5439,16 @@ Keep it brief but capture essential details."""
     )
     val adventureLlamaServerContextLabel = _adventureLlamaServerContextLabel.asStateFlow()
     fun setAdventureLlamaServerContextLabel(label: String?) {
-        prefs.edit().putString("adventure_llama_server_context_label", label).apply()
+        prefs.edit { putString("adventure_llama_server_context_label", label) }
         _adventureLlamaServerContextLabel.value = label
     }
 
     private val _adventureLiteRtModelId = MutableStateFlow(prefs.getLong("adventure_litert_model_id", -1L))
     val adventureLiteRtModelId = _adventureLiteRtModelId.asStateFlow()
     fun setAdventureLiteRtModelId(modelId: Long?) {
-        prefs.edit().apply {
+        prefs.edit {
             if (modelId == null || modelId <= 0L) remove("adventure_litert_model_id") else putLong("adventure_litert_model_id", modelId)
-        }.apply()
+        }
         _adventureLiteRtModelId.value = modelId?.takeIf { it > 0L } ?: -1L
     }
 
@@ -5394,14 +5456,14 @@ Keep it brief but capture essential details."""
     val adventureLiteRtBackend = _adventureLiteRtBackend.asStateFlow()
     fun setAdventureLiteRtBackend(backend: String) {
         val normalized = normalizeLiteRtBackend(backend)
-        prefs.edit().putString("adventure_litert_backend", normalized).apply()
+        prefs.edit { putString("adventure_litert_backend", normalized) }
         _adventureLiteRtBackend.value = normalized
     }
 
     private val _adventureLiteRtMtpEnabled = MutableStateFlow(prefs.getBoolean("adventure_litert_mtp_enabled", false))
     val adventureLiteRtMtpEnabled = _adventureLiteRtMtpEnabled.asStateFlow()
     fun setAdventureLiteRtMtpEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("adventure_litert_mtp_enabled", enabled).apply()
+        prefs.edit { putBoolean("adventure_litert_mtp_enabled", enabled) }
         _adventureLiteRtMtpEnabled.value = enabled
     }
 
@@ -5410,7 +5472,7 @@ Keep it brief but capture essential details."""
     )
     val adventureWorldImageEnabled = _adventureWorldImageEnabled.asStateFlow()
     fun setAdventureWorldImageEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("adventure_world_image_enabled", enabled).apply()
+        prefs.edit { putBoolean("adventure_world_image_enabled", enabled) }
         _adventureWorldImageEnabled.value = enabled
     }
 
@@ -5419,7 +5481,7 @@ Keep it brief but capture essential details."""
     )
     val adventureStageImagesEnabled = _adventureStageImagesEnabled.asStateFlow()
     fun setAdventureStageImagesEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("adventure_stage_images_enabled", enabled).apply()
+        prefs.edit { putBoolean("adventure_stage_images_enabled", enabled) }
         _adventureStageImagesEnabled.value = enabled
     }
 
@@ -5428,7 +5490,7 @@ Keep it brief but capture essential details."""
     )
     val adventureOnnxModelFilename = _adventureOnnxModelFilename.asStateFlow()
     fun setAdventureOnnxModelFilename(filename: String?) {
-        prefs.edit().putString("adventure_onnx_model_filename", filename).apply()
+        prefs.edit { putString("adventure_onnx_model_filename", filename) }
         _adventureOnnxModelFilename.value = filename
     }
 
@@ -5438,7 +5500,7 @@ Keep it brief but capture essential details."""
     val adventureOnnxSteps = _adventureOnnxSteps.asStateFlow()
     fun setAdventureOnnxSteps(steps: Int) {
         val normalized = steps.coerceAtLeast(1)
-        prefs.edit().putInt("adventure_onnx_steps", normalized).apply()
+        prefs.edit { putInt("adventure_onnx_steps", normalized) }
         _adventureOnnxSteps.value = normalized
     }
 
@@ -5448,7 +5510,7 @@ Keep it brief but capture essential details."""
     val adventureOnnxCfg = _adventureOnnxCfg.asStateFlow()
     fun setAdventureOnnxCfg(cfg: Float) {
         val normalized = cfg.coerceIn(1f, 20f)
-        prefs.edit().putFloat("adventure_onnx_cfg", normalized).apply()
+        prefs.edit { putFloat("adventure_onnx_cfg", normalized) }
         _adventureOnnxCfg.value = normalized
     }
 
@@ -5458,7 +5520,7 @@ Keep it brief but capture essential details."""
     val adventureOnnxResolution = _adventureOnnxResolution.asStateFlow()
     fun setAdventureOnnxResolution(resolution: Int) {
         val normalized = resolution.coerceAtLeast(256)
-        prefs.edit().putInt("adventure_onnx_resolution", normalized).apply()
+        prefs.edit { putInt("adventure_onnx_resolution", normalized) }
         _adventureOnnxResolution.value = normalized
     }
 
@@ -5478,7 +5540,7 @@ Keep it brief but capture essential details."""
         ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
 
     private fun saveJsonDraft(key: String, draft: JSONObject) {
-        prefs.edit().putString(key, draft.toString()).apply()
+        prefs.edit { putString(key, draft.toString()) }
     }
 
 }

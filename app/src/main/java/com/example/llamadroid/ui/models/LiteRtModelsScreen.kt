@@ -95,7 +95,7 @@ import com.example.llamadroid.service.LiteRtBackendDoctorStore
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
@@ -210,18 +210,13 @@ fun LiteRtModelsScreen(navController: NavController) {
         stringResource(R.string.models_tab_discover)
     )
 
-    AppPageBackground {
+    AppScreenScaffold(title = stringResource(R.string.litert_models_title), onBack = { navController.popBackStack() }) {
         Column(modifier = Modifier.fillMaxSize()) {
             AppContentColumn(
                 modifier = Modifier.fillMaxWidth(),
                 bottomPadding = 8.dp,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                AppPageHeader(
-                    eyebrow = "LITERT",
-                    title = stringResource(R.string.litert_models_title),
-                    subtitle = stringResource(R.string.litert_models_subtitle)
-                )
                 AppSectionCard {
                     AppScrollableTabRow(
                         selectedTabIndex = selectedTab,
@@ -1503,22 +1498,42 @@ private fun LiteRtStorageOverviewCard(snapshot: LiteRtStorageSnapshot) {
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                StorageMetric(
-                    label = stringResource(R.string.models_storage_total),
-                    value = totalText,
-                    modifier = Modifier.weight(1f)
-                )
-                StorageMetric(
-                    label = stringResource(R.string.models_storage_free),
-                    value = freeText,
-                    modifier = Modifier.weight(1f)
-                )
-                StorageMetric(
-                    label = stringResource(R.string.models_storage_models),
-                    value = modelsText,
-                    modifier = Modifier.weight(1f)
-                )
+            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    StorageMetric(
+                        label = stringResource(R.string.models_storage_total),
+                        value = totalText,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    StorageMetric(
+                        label = stringResource(R.string.models_storage_free),
+                        value = freeText,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    StorageMetric(
+                        label = stringResource(R.string.models_storage_models),
+                        value = modelsText,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    StorageMetric(
+                        label = stringResource(R.string.models_storage_total),
+                        value = totalText,
+                        modifier = Modifier.weight(1f)
+                    )
+                    StorageMetric(
+                        label = stringResource(R.string.models_storage_free),
+                        value = freeText,
+                        modifier = Modifier.weight(1f)
+                    )
+                    StorageMetric(
+                        label = stringResource(R.string.models_storage_models),
+                        value = modelsText,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
             LinearProgressIndicator(
                 progress = { usedFraction },
@@ -1529,25 +1544,48 @@ private fun LiteRtStorageOverviewCard(snapshot: LiteRtStorageSnapshot) {
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    stringResource(
-                        R.string.models_storage_legend_value,
-                        stringResource(R.string.models_storage_models),
-                        modelsText
-                    ),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    stringResource(
-                        R.string.models_storage_legend_value,
-                        stringResource(R.string.models_storage_other),
-                        otherText
-                    ),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.models_storage_legend_value,
+                            stringResource(R.string.models_storage_models),
+                            modelsText
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(
+                            R.string.models_storage_legend_value,
+                            stringResource(R.string.models_storage_other),
+                            otherText
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.models_storage_legend_value,
+                            stringResource(R.string.models_storage_models),
+                            modelsText
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(
+                            R.string.models_storage_legend_value,
+                            stringResource(R.string.models_storage_other),
+                            otherText
+                        ),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }

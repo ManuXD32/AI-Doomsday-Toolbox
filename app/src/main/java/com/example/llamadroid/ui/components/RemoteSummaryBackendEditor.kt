@@ -234,37 +234,37 @@ fun RemoteSummaryBackendEditor(
             )
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
                     onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_OLLAMA) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.pdf_backend_ollama))
                 }
                 OutlinedButton(
                     onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_LLAMA_SERVER) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.pdf_backend_llama_server))
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-            Row(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
                     onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_LLAMA_SWAP) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.pdf_backend_llama_swap))
                 }
                 OutlinedButton(
                     onClick = { onBackendChange(SettingsRepository.PDF_BACKEND_LITERT) },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(R.string.pdf_backend_litert))
                 }

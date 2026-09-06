@@ -75,6 +75,8 @@ import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.util.GGUFParser
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -613,25 +615,13 @@ fun MasterModeScreen(navController: NavController) {
         ProcessController().buildCommandString(launch.argv)
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.dist_master_mode)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            )
-        }
-    ) { padding ->
+    AppScreenScaffold(
+        title = stringResource(R.string.dist_master_mode),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp)

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.Alignment
@@ -43,6 +44,9 @@ import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.OllamaServerEntity
 import com.example.llamadroid.data.repository.OllamaRepository
 import com.example.llamadroid.service.SSHService
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
 
 private enum class ModelCreateMode {
     RemoteApi,
@@ -63,8 +67,8 @@ fun OllamaManagerScreen(
     
     val uiState by viewModel.uiState.collectAsState()
     val termuxSshConnected by SSHService.isConnected.collectAsState()
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var showAddServerDialog by remember { mutableStateOf(false) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var showAddServerDialog by rememberSaveable { mutableStateOf(false) }
     var serverToEdit by remember { mutableStateOf<OllamaServerEntity?>(null) }
     var showModelPullDialog by remember { mutableStateOf(false) }
 
@@ -94,36 +98,32 @@ fun OllamaManagerScreen(
         ModelCreateMode.LocalCli -> termuxSshConnected && !localBlocked
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.ollama_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_cancel))
-                    }
-                },
-                actions = {
-                    if (selectedTab == 0) {
-                        IconButton(onClick = { showAddServerDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.ollama_add_server))
-                        }
-                    } else {
-                        IconButton(
-                            onClick = { viewModel.refreshSelectedServerModels() },
-                            enabled = uiState.selectedServer != null
-                        ) {
-                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.ollama_refresh_models))
-                        }
-                        IconButton(onClick = { showModelPullDialog = true }) {
-                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.ollama_pull_model_title))
-                        }
-                    }
+    AppScreenScaffold(
+        title = stringResource(R.string.ollama_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            if (selectedTab == 0) {
+                IconButton(onClick = { showAddServerDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.ollama_add_server))
                 }
-            )
+            } else {
+                IconButton(
+                    onClick = { viewModel.refreshSelectedServerModels() },
+                    enabled = uiState.selectedServer != null
+                ) {
+                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.ollama_refresh_models))
+                }
+                IconButton(onClick = { showModelPullDialog = true }) {
+                    Icon(Icons.Default.Add, contentDescription = stringResource(R.string.ollama_pull_model_title))
+                }
+            }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
@@ -143,6 +143,7 @@ fun OllamaManagerScreen(
                     selectedServer = uiState.selectedServer,
                     onSelect = { viewModel.selectServer(it) },
                     onEdit = { serverToEdit = it },
+                    onAdd = { showAddServerDialog = true },
                     onDelete = { viewModel.deleteServer(it) }
                 )
                 1 -> ModelList(
@@ -176,21 +177,24 @@ fun OllamaManagerScreen(
 
     if (showAddServerDialog || serverToEdit != null) {
         val server = serverToEdit
-        var name by remember { mutableStateOf(server?.name ?: "") }
-        var url by remember { mutableStateOf(server?.url ?: "http://") }
+        var name by rememberSaveable(server?.id) { mutableStateOf(server?.name ?: "") }
+        var url by rememberSaveable(server?.id) { mutableStateOf(server?.url ?: "http://") }
         
         AlertDialog(
+            modifier = Modifier.safeDrawingPadding().imePadding(),
+            properties = DialogProperties(decorFitsSystemWindows = false),
             onDismissRequest = { 
                 showAddServerDialog = false
                 serverToEdit = null 
             },
             title = { Text(stringResource(if (server == null) R.string.ollama_add_server else R.string.ollama_edit_server)) },
             text = {
-                Column {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
                         label = { Text(stringResource(R.string.ollama_server_name)) },
+                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -198,6 +202,7 @@ fun OllamaManagerScreen(
                         value = url,
                         onValueChange = { url = it },
                         label = { Text(stringResource(R.string.ollama_server_url)) },
+                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -459,20 +464,30 @@ fun ServerList(
     selectedServer: OllamaServerEntity?,
     onSelect: (OllamaServerEntity) -> Unit,
     onEdit: (OllamaServerEntity) -> Unit,
+    onAdd: () -> Unit,
     onDelete: (OllamaServerEntity) -> Unit
 ) {
     LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-         items(servers) { server ->
+        if (servers.isEmpty()) {
+            item {
+                AppStatePanel(kind = AppStateKind.Empty,
+                    title = stringResource(R.string.llama_no_servers),
+                    actionLabel = stringResource(R.string.ollama_add_server),
+                    onAction = onAdd)
+            }
+        }
+         items(servers, key = { it.id }) { server ->
             val isSelected = server.id == selectedServer?.id
             
-            ElevatedCard(
-                colors = CardDefaults.elevatedCardColors(
+            Card(
+                colors = CardDefaults.cardColors(
                     containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
                 ),
-                elevation = CardDefaults.elevatedCardElevation(defaultElevation = if (isSelected) 8.dp else 2.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onSelect(server) }
@@ -483,7 +498,7 @@ fun ServerList(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                             if (isSelected) {
                                 Icon(
                                     Icons.Default.Check, 
@@ -495,16 +510,18 @@ fun ServerList(
                             }
                             Text(
                                 text = server.name,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                                 color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                             )
                         }
                         
                         Row {
-                            IconButton(onClick = { onEdit(server) }) {
+                            IconButton(onClick = { onEdit(server) }, modifier = Modifier.size(48.dp)) {
                                 Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.action_edit))
                             }
-                            IconButton(onClick = { onDelete(server) }) {
+                            IconButton(onClick = { onDelete(server) }, modifier = Modifier.size(48.dp)) {
                                 Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
                             }
                         }
@@ -514,6 +531,8 @@ fun ServerList(
                     
                     Text(
                         text = server.url,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = if (isSelected) 32.dp else 0.dp)
@@ -580,11 +599,11 @@ fun ModelList(
                         val status = downloadStatus[modelName] ?: ""
                         val isFailed = status.startsWith(failedPrefix, ignoreCase = true)
                         
-                        ElevatedCard(
-                            colors = CardDefaults.elevatedCardColors(
+                        Card(
+                            colors = CardDefaults.cardColors(
                                 containerColor = if (isFailed) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant
                             ),
-                            elevation = CardDefaults.elevatedCardElevation(defaultElevation = 4.dp),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
@@ -690,9 +709,9 @@ fun ModelCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
-    ElevatedCard(
-        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
-        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surface),
+    Card(
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {

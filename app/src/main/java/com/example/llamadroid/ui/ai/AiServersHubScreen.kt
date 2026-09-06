@@ -32,6 +32,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ExpandLess
@@ -202,13 +203,13 @@ fun AiServersHubScreen(navController: NavController) {
         subtitle = stringResource(R.string.ai_servers_hub_subtitle),
         onBack = { navController.popBackStack() },
         actions = {
-            TextButton(
+            IconButton(
                 onClick = {
                     AiServerType.entries.forEach { boundService?.stopServer(it.id) }
                     statusMessage = resources.getString(R.string.ai_servers_all_stopped)
                 }
             ) {
-                Text(stringResource(R.string.ai_servers_stop_all))
+                Icon(Icons.Default.Stop, contentDescription = stringResource(R.string.ai_servers_stop_all))
             }
         }
     ) {
@@ -231,7 +232,9 @@ fun AiServersHubScreen(navController: NavController) {
                             MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
                             MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f),
                             MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-                        )
+                        ),
+                        icon = Icons.Default.Cloud,
+                        iconContentDescription = stringResource(R.string.ai_servers_hub_title)
                     ) {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),

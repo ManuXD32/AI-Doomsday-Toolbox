@@ -24,7 +24,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.graphics.Color
 import com.example.llamadroid.R
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -37,6 +36,7 @@ import androidx.navigation.NavController
 import com.example.llamadroid.data.model.TermuxTool
 import com.example.llamadroid.data.model.TermuxTools
 import com.example.llamadroid.service.SSHService
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import java.io.File
 import java.io.InputStream
 import java.io.IOException
@@ -387,57 +387,49 @@ fun TermuxFileManagerScreen(navController: NavController) {
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.file_manager_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    // Sort button
-                    Box {
-                        IconButton(onClick = { showSortMenu = true }) {
-                            Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.action_sort))
-                        }
-                        DropdownMenu(
-                            expanded = showSortMenu,
-                            onDismissRequest = { showSortMenu = false }
-                        ) {
-                            SortOption.entries.forEach { option ->
-                                DropdownMenuItem(
-                                    text = { Text(stringResource(option.labelResId)) },
-                                    onClick = {
-                                        sortOption = option
-                                        showSortMenu = false
-                                    },
-                                    leadingIcon = {
-                                        if (sortOption == option) {
-                                            Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
-                                        }
-                                    }
-                                )
+    AppScreenScaffold(
+        title = stringResource(R.string.file_manager_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            // Sort button
+            Box {
+                IconButton(onClick = { showSortMenu = true }) {
+                    Icon(Icons.AutoMirrored.Filled.List, stringResource(R.string.action_sort))
+                }
+                DropdownMenu(
+                    expanded = showSortMenu,
+                    onDismissRequest = { showSortMenu = false }
+                ) {
+                    SortOption.entries.forEach { option ->
+                        DropdownMenuItem(
+                            text = { Text(stringResource(option.labelResId)) },
+                            onClick = {
+                                sortOption = option
+                                showSortMenu = false
+                            },
+                            leadingIcon = {
+                                if (sortOption == option) {
+                                    Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+                                }
                             }
-                        }
-                    }
-                    // Refresh button
-                    IconButton(onClick = {
-                        val expandedPath = expandRemotePath(currentPath)
-                        scope.launch {
-                            val result = sshService.executeCommand(
-                                "ls -la --time-style=long-iso ${shellQuote(expandedPath)} 2>/dev/null || ls -la ${shellQuote(expandedPath)} 2>/dev/null"
-                            )
-                            result.onSuccess { output ->
-                                files = parseLsOutputEnhanced(output)
-                            }
-                        }
-                    }) {
-                        Icon(Icons.Default.Refresh, stringResource(R.string.action_refresh))
+                        )
                     }
                 }
-            )
+            }
+            // Refresh button
+            IconButton(onClick = {
+                val expandedPath = expandRemotePath(currentPath)
+                scope.launch {
+                    val result = sshService.executeCommand(
+                        "ls -la --time-style=long-iso ${shellQuote(expandedPath)} 2>/dev/null || ls -la ${shellQuote(expandedPath)} 2>/dev/null"
+                    )
+                    result.onSuccess { output ->
+                        files = parseLsOutputEnhanced(output)
+                    }
+                }
+            }) {
+                Icon(Icons.Default.Refresh, stringResource(R.string.action_refresh))
+            }
         },
         bottomBar = {
             // Selection action bar
@@ -483,11 +475,10 @@ fun TermuxFileManagerScreen(navController: NavController) {
                 }
             }
         }
-    ) { padding ->
+    ) { _ ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(16.dp)
         ) {
             // Not connected warning
@@ -505,7 +496,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                         Text(stringResource(R.string.ssh_not_connected_error))
                     }
                 }
-                return@Scaffold
+                return@AppScreenScaffold
             }
             
             // Detecting tools
@@ -520,7 +511,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                         Text(stringResource(R.string.file_detecting_tools))
                     }
                 }
-                return@Scaffold
+                return@AppScreenScaffold
             }
             
             // No tools installed
@@ -533,7 +524,12 @@ fun TermuxFileManagerScreen(navController: NavController) {
                         modifier = Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("📭", fontSize = 48.sp)
+                        Icon(
+                            imageVector = Icons.Default.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(stringResource(R.string.file_no_tools_installed), fontWeight = FontWeight.Bold)
                         Text(
@@ -542,7 +538,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                         )
                     }
                 }
-                return@Scaffold
+                return@AppScreenScaffold
             }
             
             // Tool tabs
@@ -608,7 +604,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
             
             // Current path breadcrumb
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.inverseSurface),
                 shape = RoundedCornerShape(8.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -625,14 +621,14 @@ fun TermuxFileManagerScreen(navController: NavController) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
                                 stringResource(R.string.agent_parent_folder),
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.inverseOnSurface
                             )
                         }
                     }
                     
                     Text(
                         currentPath,
-                        color = Color(0xFF4CAF50),
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
                         fontSize = 12.sp,
                         modifier = Modifier.weight(1f),
                         maxLines = 1,
@@ -643,13 +639,13 @@ fun TermuxFileManagerScreen(navController: NavController) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             "${sortedFiles.size} items",
-                            color = Color.Gray,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 10.sp
                         )
                         if (isCalculatingSizes) {
                             Text(
                                 stringResource(R.string.file_calculating_sizes_status),
-                                color = Color(0xFFFFB74D),
+                                color = MaterialTheme.colorScheme.tertiary,
                                 fontSize = 8.sp
                             )
                         }
@@ -686,7 +682,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
                     enabled = !isDownloading && !isUploading
                 ) {
                     if (isDownloading) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.inverseOnSurface)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.action_downloading_status))
                     } else {
@@ -909,7 +905,7 @@ fun FileItemEnhanced(
         colors = CardDefaults.cardColors(
             containerColor = when {
                 isSelected -> MaterialTheme.colorScheme.primaryContainer
-                file.isDirectory -> Color(0xFF1565C0).copy(alpha = 0.2f)
+                file.isDirectory -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                 else -> MaterialTheme.colorScheme.surface
             }
         ),

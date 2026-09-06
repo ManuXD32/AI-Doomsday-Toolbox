@@ -9,6 +9,9 @@ import android.webkit.*
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -51,6 +54,7 @@ internal fun isAllowedChatWebViewUrl(candidate: String?, allowedOrigin: String):
         candidateUri.port == allowedUri.port
 }.getOrDefault(false)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun ChatScreen(
@@ -211,96 +215,76 @@ fun ChatScreen(
         }
     }
     
-    Box(modifier = Modifier.fillMaxSize()) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { webView },
-            update = { /* WebView is already configured */ }
-        )
-        
-        // Loading indicator
-        if (isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surface),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(stringResource(R.string.status_loading), style = MaterialTheme.typography.bodyMedium)
-                }
-            }
+    Scaffold(
+        topBar = {
+            TopAppBar(title = { Text(stringResource(R.string.chat_title)) },
+                navigationIcon = {
+                    IconButton(onClick = { navController.popBackStack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { loadChatUrl() }) {
+                        Icon(Icons.Default.Refresh, stringResource(R.string.chat_clear))
+                    }
+                })
         }
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { webView },
+                update = { /* WebView is already configured */ }
+            )
         
-        // Error state
-        if (hasError && !isLoading) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surface),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        stringResource(R.string.chat_no_model),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.chat_load_model),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = { 
-                        loadChatUrl()
-                    }) {
-                        Text(stringResource(R.string.action_retry))
+            // Loading indicator
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(stringResource(R.string.status_loading), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
-        }
         
-        // Dropdown menu button at top center (small arrow that expands to reload option)
-        var showDropdown by remember { mutableStateOf(false) }
-        
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = 4.dp)
-        ) {
-            // Small arrow button
-            IconButton(
-                onClick = { showDropdown = !showDropdown },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    if (showDropdown) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                    contentDescription = stringResource(R.string.action_more),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            
-            // Dropdown menu
-            DropdownMenu(
-                expanded = showDropdown,
-                onDismissRequest = { showDropdown = false }
-            ) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.chat_clear)) },
-                    onClick = {
-                        showDropdown = false
-                        loadChatUrl()
-                    },
-                    leadingIcon = {
-                        Icon(Icons.Default.Refresh, contentDescription = null)
+            // Error state
+            if (hasError && !isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            stringResource(R.string.chat_no_model),
+                            style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            stringResource(R.string.chat_load_model),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(onClick = {
+                            loadChatUrl()
+                        }) {
+                            Text(stringResource(R.string.action_retry))
+                        }
                     }
-                )
+                }
             }
+
         }
     }
 }

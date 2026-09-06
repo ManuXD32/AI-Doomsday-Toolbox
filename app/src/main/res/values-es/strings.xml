@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- App Name (keep English) -->
     <string name="app_name">AI Doomsday Toolbox</string>
     
     <!-- Navigation -->
-    <string name="nav_home">Inicio</string>
     <string name="nav_ai">IA</string>
     <string name="nav_notes">Organizador</string>
     <string name="nav_models">Modelos</string>
@@ -21,8 +20,6 @@
     <string name="llama_server_cleanup_port_busy">El servidor local se detuvo, pero el puerto %1$d sigue ocupado. Reintenta o recupera el entorno local registrado.</string>
     <string name="dashboard_starting">Iniciando…</string>
     <string name="dashboard_server_running">Puerto %d activo</string>
-    <string name="dashboard_no_model">Sin modelo</string>
-    <string name="dashboard_select_model">Ve a Modelos para descargar uno</string>
     <string name="dashboard_quick_actions">Acciones</string>
     <string name="dashboard_system_status">Sistema</string>
     <string name="dashboard_cpu">CPU</string>
@@ -62,22 +59,11 @@
     <string name="llama_card_allow_wear_start_hint">Solo un servidor puede iniciarse desde el reloj. Activarlo aqui lo desactiva en los demas.</string>
     
     <!-- AI Hub -->
-    <string name="ai_hub_title">Herramientas IA</string>
     <string name="ai_hub_subtitle">Inferencia IA en tu dispositivo</string>
-    <string name="ai_tools_eyebrow">HERRAMIENTAS</string>
     <string name="ai_tools_search_label">Buscar herramientas</string>
-    <string name="ai_tools_category_chat_agents">Chat y agentes</string>
-    <string name="ai_tools_category_generation">Generación</string>
-    <string name="ai_tools_category_onnx">Herramientas ONNX</string>
-    <string name="ai_tools_category_voice_media">Voz y multimedia</string>
-    <string name="ai_tools_category_documents_workflows">Documentos y flujos</string>
-    <string name="ai_tools_category_servers_utilities">Servidores y utilidades</string>
-    <string name="ai_tools_category_pinned">Herramientas fijadas</string>
     <string name="ai_tools_category_pinned_chats">Chats fijados</string>
     <string name="ai_pinned_chat_label">Chat</string>
     <string name="ai_pinned_chat_server_missing">El servidor recordado no está disponible</string>
-    <string name="ai_tools_no_results_title">Sin herramientas coincidentes</string>
-    <string name="ai_tools_no_results_desc">Prueba con otro término de búsqueda.</string>
     <string name="ai_tools_open_settings_cd">Abrir ajustes de %1$s</string>
     <string name="ai_tools_pin_cd">Fijar %1$s</string>
     <string name="ai_tools_unpin_cd">Desfijar %1$s</string>
@@ -119,7 +105,6 @@
     <string name="ai_video_interpolation">Interpolación de video</string>
     <string name="ai_video_interpolation_desc">Aumenta la suavidad del video con RIFE</string>
     <string name="live_translator_title">Traductor en vivo</string>
-    <string name="live_translator_subtitle">Traducción de voz bilingüe por turnos</string>
     <string name="live_translator_hub_desc">Traduce turnos hablados en voz alta</string>
     <string name="live_translator_default_template">Traductor en vivo</string>
     <string name="live_translator_template_travel">Viaje</string>
@@ -165,7 +150,6 @@
     <string name="live_translator_timing">Tiempos del turno</string>
     <string name="live_translator_start_speaking_timeout">Tiempo para empezar a hablar en segundos</string>
     <string name="live_translator_finished_talking_timeout">Silencio al terminar de hablar en segundos</string>
-    <string name="live_translator_start">Iniciar transcripción en vivo</string>
     <string name="live_translator_saved_transcriptions">Transcripciones guardadas</string>
     <string name="live_translator_selected_session">Seleccionada: %1$s</string>
     <string name="live_translator_transcript_title">Transcripción</string>
@@ -301,7 +285,6 @@
     <string name="imagegen_select_model">Seleccionar modelo</string>
     <string name="imagegen_no_model">Sin modelo SD</string>
     <string name="imagegen_no_vae_installed">No hay modelos VAE instalados</string>
-    <string name="imagegen_generate_btn">Generar imagen</string>
     <string name="imagegen_upscale_btn">Escalar imagen</string>
     <string name="imagegen_upscale_factor">Factor</string>
     <string name="imagegen_success">¡Imagen generada correctamente!</string>
@@ -958,9 +941,6 @@
     <string name="general_output_folder">Carpeta de Salida</string>
     <string name="general_output_default">Almacenamiento interno</string>
     <string name="general_output_hint">Para imágenes, transcripciones y videos</string>
-    <string name="general_theme">Tema</string>
-    <string name="general_theme_system">Sistema</string>
-    <string name="general_theme_soon">Próximamente</string>
     <string name="general_language">Idioma</string>
     <string name="general_language_system">Sistema</string>
     <string name="general_language_en">English</string>
@@ -1100,10 +1080,6 @@
     <string name="llm_draft_device_cpu">Borrador en CPU</string>
     <string name="llm_draft_device_hint">Úsalo para comparar ejecución del borrador en CPU y OpenCL. Automático deja que llama.cpp decida.</string>
     <string name="llm_flash_attention_opencl_hint">OpenCL puede caer a CPU en operaciones Flash Attention o de proyector de visión no soportadas. Mantén tu elección, pero compara activado/desactivado al medir aceleradores.</string>
-    <string name="llm_mmap_title">Desactivar mapeo de memoria (MMAP)</string>
-    <string name="llm_mmap_desc">Cargar el modelo completo en RAM</string>
-    <string name="llm_mmap_on">⚡ ACTIVADO: Inferencia más rápida, pero inicio más lento y usa más RAM. El modelo debe caber en memoria.</string>
-    <string name="llm_mmap_off">💾 DESACTIVADO (por defecto): El modelo se carga bajo demanda. Más lento pero permite modelos más grandes.</string>
     <string name="llm_vision_desc">Habilitar comprensión de imágenes</string>
     <string name="llm_vision_not_selected">No seleccionado</string>
     <string name="llm_vision_select_title">Seleccionar Proyector de Visión</string>
@@ -1258,7 +1234,6 @@
     <string name="organizer_tab_calendar">Calendario</string>
     <string name="organizer_tab_alarms">Alarmas</string>
     <string name="organizer_calendar_subtitle">Planifica eventos y alarmas opcionales del teléfono</string>
-    <string name="organizer_alarms_subtitle">Recordatorios únicos del teléfono con sonido</string>
     <string name="organizer_calendar_previous_month">Mes anterior</string>
     <string name="organizer_calendar_next_month">Mes siguiente</string>
     <string name="organizer_calendar_empty_day">No hay eventos para este día.</string>
@@ -2365,8 +2340,6 @@
     <!-- File Server -->
     <string name="file_server">Servidor de Archivos</string>
     <string name="file_server_shared_folder">Carpeta Compartida</string>
-    <string name="file_server_not_selected">No seleccionada</string>
-    <string name="file_server_browse">Explorar</string>
     <string name="file_server_start">Iniciar Servidor (Puerto 9111)</string>
     <string name="file_server_stop">Detener Servidor</string>
     <string name="file_server_download_zip">Descargar como ZIP</string>
@@ -2401,13 +2374,8 @@
     <string name="kiwix_active_downloads">%d descarga(s) activa(s)</string>
     
     <!-- Dashboard Additional -->
-    <string name="dashboard_connect_qr">Conectar vía QR</string>
     <string name="dashboard_file_server">Servidor de Archivos</string>
     <string name="dashboard_shared_folder">Carpeta Compartida</string>
-    <string name="dashboard_scan_access_files">Escanear para acceder a archivos</string>
-    <string name="dashboard_stop_server_btn">Detener Servidor</string>
-    <string name="dashboard_start_server_port">Iniciar Servidor (Puerto %d)</string>
-    
     <string name="hub_workflows">Flujos de trabajo</string>
     <string name="hub_workflows_desc">Encadena operaciones de IA</string>
     <string name="hub_benchmark">Benchmark</string>
@@ -2460,13 +2428,12 @@
     <string name="agent_deny_skip_reason">Omitir</string>
     <string name="agent_project_default_prefix">proyecto_</string>
     <string name="agent_ready_msg">🤖 Agente IA listo para el proyecto **%1$s** (/workspace/%2$s/).\n\nConéctate al espacio de trabajo del agente para empezar a programar.</string>
-    <string name="agent_new_project_title">📁 Nuevo Proyecto</string>
-    <string name="agent_new_project_desc">Introduce un nombre para tu proyecto.</string>
+    <string name="agent_new_project_title">Nuevo proyecto</string>
     <string name="agent_project_name_label">Nombre del proyecto</string>
-    <string name="agent_welcome_title">👋 ¡Bienvenido al Agente IA!</string>
+    <string name="agent_welcome_title">Te damos la bienvenida al Agente IA</string>
 
     <!-- Agent Workspace -->
-    <string name="agent_workspace_title">📁 Espacio de Trabajo</string>
+    <string name="agent_workspace_title">Espacio de trabajo</string>
     <string name="agent_workspace_terminal_title">Terminal del espacio de trabajo</string>
     <string name="agent_workspace_terminal_status_connecting">Conectando</string>
     <string name="agent_workspace_terminal_status_connected">Conectado</string>
@@ -2518,7 +2485,7 @@
     <string name="agent_request_python_dependency">La IA quiere instalar o registrar la dependencia Python: %1$s</string>
     <string name="agent_dashboard_title">Proyectos de agente</string>
     <string name="agent_dashboard_return">Volver al panel de proyectos</string>
-    <string name="agent_dashboard_subtitle">Elige un proyecto para abrirlo, o continua solo el trabajo sin terminar que selecciones explicitamente. Verde significa que una UI del proyecto esta ejecutandose; naranja significa que un LLM esta trabajando.</string>
+    <string name="agent_dashboard_subtitle">Abre un proyecto guardado o crea un espacio de trabajo.</string>
     <string name="agent_dashboard_empty">Aun no hay proyectos. Crea un proyecto o una carpeta para empezar.</string>
     <string name="agent_dashboard_running">Ejecutando</string>
     <string name="agent_dashboard_llm_working">LLM trabajando</string>
@@ -2541,7 +2508,7 @@
     <string name="agent_retry_debug_done">Reintento terminado. Si el aviso sigue, abre la consola de depuracion para ver el error del backend y el estado de conexion.</string>
     <string name="agent_status_needs_direction">Necesita direccion</string>
     <string name="agent_needs_direction_message">Pausado porque el agente podria estar en bucle: %1$s</string>
-    <string name="agent_needs_direction_interrupted_message">El agente se ha pausado y necesita tu atencion: %1$s</string>
+    <string name="agent_needs_direction_interrupted_message">El agente se ha pausado y necesita tu atención: %1$s</string>
     <string name="agent_loop_recovery_budget_reason">Demasiados intentos de recuperacion para la misma solicitud.</string>
     <string name="agent_loop_handoff_budget_reason">Demasiados traspasos entre agentes para la misma solicitud.</string>
     <string name="agent_loop_repeated_plan_reason">Se propuso el mismo plan repetidamente sin progreso.</string>
@@ -2997,10 +2964,10 @@
     <string name="agent_custom_agent_header">Agente personalizado: %s</string>
 
 
-    <string name="agent_welcome_desc">Antes de empezar a chatear con la IA:</string>
-    <string name="agent_welcome_step1">1️⃣ Configura Ollama y el entorno proot</string>
-    <string name="agent_welcome_step2">2️⃣ Crea un nuevo proyecto tocando el icono 📁 en la esquina superior izquierda</string>
-    <string name="agent_welcome_step3">3️⃣ ¡Selecciona un modelo y empieza a chatear!</string>
+    <string name="agent_welcome_desc">Empieza con un proyecto:</string>
+    <string name="agent_welcome_step1">1. Selecciona Nuevo proyecto y elige un espacio de trabajo local o remoto por SSH.</string>
+    <string name="agent_welcome_step2">2. Ponle un nombre para mantener juntos sus archivos y conversaciones.</string>
+    <string name="agent_welcome_step3">3. Abre los ajustes del modelo para elegir el motor y empieza a conversar.</string>
     <string name="agent_welcome_note">El proyecto le indica a la IA dónde están tus archivos.</string>
     <string name="agent_conversations_menu">Conversaciones</string>
     <string name="agent_new_project_btn">Nuevo Proyecto</string>
@@ -4043,7 +4010,7 @@
     <string name="dataset_move_down">Bajar tarea</string>
 
     <!-- Subtitle Burn Screen -->
-    <string name="subtitle_burn_title">🔤 Quemar Subtítulos</string>
+    <string name="subtitle_burn_title">Incrustar subtítulos</string>
     <string name="subtitle_toggle_info">Mostrar Información</string>
     <string name="subtitle_styling_guide_title">📖 Guía de Estilo</string>
     <string name="subtitle_guide_font_size">• Tamaño: Tamaño del texto en píxeles (16-48 recomendado)</string>
@@ -4055,7 +4022,7 @@
     <string name="subtitle_guide_margin_l">• MargenL: Margen izquierdo (píxeles)</string>
     <string name="subtitle_guide_color">• Color: Color del texto de los subtítulos</string>
     <string name="subtitle_guide_font">• Fuente: Familia de fuente para los subtítulos</string>
-    <string name="subtitle_files_title">📁 Archivos</string>
+    <string name="subtitle_files_title">Archivos</string>
     <string name="subtitle_select_video">Seleccionar Video</string>
     <string name="subtitle_select_subtitle">Seleccionar Subtítulo (.srt, .ass, .vtt)</string>
     <string name="subtitle_styling_title">🎨 Estilo</string>
@@ -4067,8 +4034,6 @@
     <string name="subtitle_font_label">Fuente</string>
     <string name="subtitle_burn_button">Quemar Subtítulos</string>
     <string name="subtitle_saved_path">Guardado: %s</string>
-    <string name="subtitle_error_message">Error: %s</string>
-
     <!-- FastSD Gallery -->
     <string name="fastsd_ssh_error">Sin conexión SSH. Conéctese primero.</string>
     <string name="fastsd_load_error">Error al cargar imágenes: %s</string>
@@ -4152,7 +4117,6 @@
     <string name="action_more">Más</string>
     <string name="action_hide">Ocultar</string>
     <string name="action_show">Mostrar</string>
-    <string name="action_connect">Conectar</string>
     <string name="agent_new">Nuevo</string>
     <string name="agent_refresh">Actualizar</string>
     <string name="error_unknown">Error desconocido</string>
@@ -4174,25 +4138,12 @@
     <string name="dashboard_active_downloads">%d descargas activas</string>
     <string name="dashboard_connect_from">Conectar desde:</string>
     <string name="dashboard_distributed_title">IA Distribuida</string>
-    <string name="dashboard_kiwix_library">Biblioteca Kiwix</string>
     <string name="dashboard_local_only">Solo local</string>
     <string name="dashboard_offline_wikipedia">Wikipedia Offline</string>
-    <string name="dashboard_qr_collapse">Contraer QR</string>
-    <string name="dashboard_qr_connect">Escanear para conectar</string>
-    <string name="dashboard_qr_expand">Ver QR</string>
     <string name="dashboard_qr_for">QR para %s</string>
-    <string name="dashboard_ram_free">Libre</string>
     <string name="dashboard_ram_needed">~%s GB RAM necesarios</string>
-    <string name="dashboard_ram_total">Total</string>
-    <string name="dashboard_ram_unit">%s GB</string>
-    <string name="net_type_wifi">WiFi</string>
-    <string name="net_type_ethernet">Ethernet</string>
-    <string name="net_type_vpn">VPN</string>
-    <string name="net_type_mobile">Móvil</string>
     <string name="net_type_unknown">Desconocido</string>
-    <string name="dashboard_ram_used">Usado</string>
     <string name="dashboard_running_port">Ejecutándose en puerto %d</string>
-    <string name="dashboard_setup_distributed">Configurar Distribuido</string>
     <string name="dashboard_setup_distributed_desc">Conecta varios teléfonos para ejecutar modelos grandes juntos</string>
     <string name="dashboard_zim_installed">%d archivos ZIM instalados</string>
     <string name="imagegen_clip_skip">CLIP Skip</string>
@@ -4595,8 +4546,6 @@
     <string name="agent_action_stop">Detener</string>
     <string name="agent_action_cancel">Cancelar</string>
     <string name="kiwix_loading_count">Cargando %d archivo(s) ZIM</string>
-    <string name="dist_header_title">🌐 Inferencia Distribuida</string>
-    <string name="dist_header_desc">¡Conecta varios teléfonos para ejecutar grandes modelos de IA juntos!\n\nCada dispositivo aporta RAM para cargar diferentes capas del modelo.</string>
     <string name="dist_role_master_title">Ser el MAESTRO</string>
     <string name="dist_role_master_desc">Aloja el archivo del modelo y coordina la inferencia entre los trabajadores conectados.</string>
     <string name="dist_role_master_btn">Configurar Maestro</string>
@@ -5197,8 +5146,7 @@
     <string name="action_ok">Aceptar</string>
 
     <!-- Network Visualization Screen -->
-    <string name="net_title">ESTADO_DE_RED</string>
-    <string name="net_back">Atrás</string>
+    <string name="net_title">Estado de la red</string>
     <string name="net_system_status">ESTADO DEL SISTEMA</string>
     <string name="net_inference_server">SERVIDOR_INFERENCIA:</string>
     <string name="net_status_online">[EN LÍNEA]</string>
@@ -7219,13 +7167,9 @@
     <string name="llama_tool_kb_auto_context_desc">Inyecta contexto temporal con citas desde las bases seleccionadas antes de responder.</string>
     <string name="llama_tool_kb_selected_count">%1$d bases de conocimiento seleccionadas</string>
     <string name="llama_tool_kb_max_results">Resultados KB</string>
-    <string name="kb_dashboard_eyebrow">Conocimiento</string>
-    <string name="kb_dashboard_title">Bases de conocimiento</string>
-    <string name="kb_dashboard_summary">%1$d carpetas • %2$d fuentes • %3$d vectores</string>
     <string name="kb_title">Bases de conocimiento</string>
     <string name="kb_subtitle">Crea índices separados para proyectos, notas y documentos, y elige cuáles puede usar cada chat o agente.</string>
     <string name="kb_folder_subtitle">Gestiona carpetas de recuperación, elige un motor de embeddings y abre una carpeta para subir documentos.</string>
-    <string name="kb_folder_detail_subtitle">Sube documentos, sigue el progreso de embeddings y prueba la recuperación dentro de esta carpeta.</string>
     <string name="kb_metric_bases">Bases</string>
     <string name="kb_metric_folders">Carpetas</string>
     <string name="kb_metric_sources">Fuentes</string>
@@ -7373,7 +7317,6 @@
     <string name="kb_copy_logs">Copiar logs</string>
     <string name="kb_logs_copied">Logs de bases de conocimiento copiados.</string>
     <string name="kb_logs_clip_label">Logs de bases de conocimiento</string>
-    <string name="kb_logs_subtitle">Servidor de embeddings, trabajos de indexación y escritura de vectores.</string>
     <string name="kb_logs_title">Logs de bases de conocimiento</string>
     <string name="kb_log_embedding_port_busy_cleanup">El puerto del servidor de embeddings %1$d está ocupado; limpiando procesos locales obsoletos de llama-server.</string>
     <string name="kb_log_embedding_port_retry_cleanup">El puerto del servidor de embeddings %1$d sigue ocupado tras la limpieza; reintentando la limpieza del mismo puerto antes de abandonar.</string>
@@ -7455,7 +7398,6 @@
     <string name="models_litert">Modelos LiteRT</string>
     <string name="models_litert_desc">Modelos de chat gestionados para LiteRT-LM con rutas de ejecución CPU y GPU experimental.</string>
     <string name="litert_models_title">Modelos LiteRT</string>
-    <string name="litert_models_subtitle">Descarga, importa, exporta, renombra y elimina modelos de chat LiteRT-LM separados de GGUF y Stable Diffusion.</string>
     <string name="litert_models_gpu_note_title">Compatibilidad GPU</string>
     <string name="litert_models_gpu_note_desc">El catálogo muestra archivos LiteRT-LM genéricos que pueden ejecutarse en CPU y, en dispositivos compatibles, con el backend GPU de LiteRT. La GPU se ejecuta en un proceso trabajador protegido para que los fallos del delegado no cierren la app principal.</string>
     <string name="litert_models_catalog_title">Descargas recomendadas</string>
@@ -7598,7 +7540,6 @@
     <string name="onnx_tts_text_label">Texto a leer</string>
     <string name="onnx_tts_speed_value">Velocidad: %1$.2f</string>
     <string name="onnx_tts_steps_value">Pasos de calidad: %1$d</string>
-    <string name="onnx_tts_generate">Generar voz</string>
     <string name="onnx_tts_latest_audio">Último audio</string>
     <string name="onnx_tts_history">Audio guardado</string>
     <string name="onnx_tts_generated_audio_title">Audio generado</string>
@@ -7681,7 +7622,6 @@
     <string name="bgr_mask_contrast">Contraste de máscara: %1$.2f</string>
     <string name="bgr_export_mask">Exportar vista de máscara</string>
     <string name="bgr_preserve_names">Conservar nombres de origen</string>
-    <string name="bgr_start">Quitar fondos</string>
     <string name="bgr_status_starting">Iniciando eliminación de fondo...</string>
     <string name="bgr_status_processing_item">Procesando %1$d/%2$d: %3$s</string>
     <string name="bgr_phase_decoding_image">Decodificando imagen</string>
@@ -7795,7 +7735,6 @@
     <string name="ai_servers_type_ai_hub_desc">Una sola URL lanzadora para los servidores de IA integrados que estan activos.</string>
     <string name="dashboard_sd_distributed_title">Generacion multimedia distribuida</string>
     <string name="dashboard_sd_distributed_desc">Divide trabajo de imagen, edicion, escalado y video de Stable Diffusion entre workers de una LAN de confianza.</string>
-    <string name="dashboard_sd_distributed_action">Abrir red multimedia</string>
     <string name="sd_dist_title">Generacion multimedia distribuida</string>
     <string name="sd_dist_subtitle">Ejecuta workers RPC de stable-diffusion.cpp, elige la colocacion del pipeline y aplica el plan a imagen y video.</string>
     <string name="sd_dist_hub_worker_title">Usar este dispositivo como worker multimedia</string>
@@ -8412,10 +8351,6 @@
     <string name="wear_quick_chat_modify_pinned_note">Modificar nota fijada</string>
     <string name="notes_pin_to_watch">Fijar en el reloj</string>
     <string name="notes_unpin_from_watch">Desfijar del reloj</string>
-    <string name="llm_lora_adapter">Adaptador LoRA</string>
-    <string name="llm_lora_adapter_desc">Aplica opcionalmente un adaptador GGUF compatible al iniciar llama.cpp.</string>
-    <string name="llm_no_lora_adapter">Ningún adaptador LoRA seleccionado</string>
-    <string name="llm_select_lora_adapter">Seleccionar adaptador LoRA</string>
     <string name="llm_lora_stack_title">Adaptadores LoRA</string>
     <string name="llm_lora_stack_desc">Aplica varios adaptadores GGUF compatibles en orden. Cada adaptador conserva su propia intensidad.</string>
     <string name="llm_lora_stack_empty">No hay adaptadores LoRA seleccionados.</string>
@@ -8423,7 +8358,11 @@
     <string name="llm_lora_stack_clear">Borrar todos los adaptadores</string>
     <string name="llm_lora_stack_select_title">Seleccionar adaptadores LoRA</string>
     <string name="llm_lora_stack_select_done">Aplicar selección</string>
-    <string name="llm_lora_stack_selected_count">%1$d adaptadores seleccionados</string>
+    <plurals name="llm_lora_stack_selected_count">
+        <item quantity="one">%1$d adaptador seleccionado</item>
+        <item quantity="many">%1$d adaptadores seleccionados</item>
+        <item quantity="other">%1$d adaptadores seleccionados</item>
+    </plurals>
     <string name="llm_lora_stack_no_installed">No se encontraron adaptadores LoRA de LLM instalados.</string>
     <string name="llm_lora_stack_item">Adaptador %1$d</string>
     <string name="llm_lora_stack_strength">Intensidad rápida</string>
@@ -8592,7 +8531,7 @@
     <string name="dist_speculative_gpu_layers_hint">all, auto o un número exacto</string>
     <string name="dist_speculative_worker_device_hint">El worker seleccionado proporciona el dispositivo draft de llama.cpp; sus capas GPU permanecen separadas de las capas del modelo objetivo.</string>
     <string name="llama_server_dspark_unsupported">%1$s no ofrece decodificación especulativa draft-dspark. Selecciona un binario llama-server con soporte DSpark.</string>
-    <string name="llama_server_fit_unsupported">%1$s no ofrece ajuste distribuido de llama.cpp (--fit/--fit-target). Selecciona un binario llama-server compatible.</string>
+    <string name="llama_server_fit_unsupported" tools:ignore="TypographyDashes">%1$s no ofrece ajuste distribuido de llama.cpp (--fit/--fit-target). Selecciona un binario llama-server compatible.</string>
     <string name="llama_local_distributed_args_rejected">Los argumentos RPC, de ajuste y tensor-split no están permitidos en un perfil de servidor local.</string>
     <string name="dist_memory_card_desc">Elige cuánta RAM queda disponible para el maestro mientras los workers cargan el modelo objetivo.</string>
     <string name="dist_model_settings_desc">Tiempo de ejecución, caché KV, muestreo, decodificación especulativa, herramientas y plantillas de este perfil distribuido.</string>
@@ -8992,7 +8931,7 @@
     <string name="sd_workflow_lora_stack_json_hint">Array JSON: [{&quot;path&quot;:&quot;…&quot;,&quot;strength&quot;:0.8}]</string>
     <string name="sd_workflow_esrgan_excluded">El escalado ESRGAN puro está separado de los flujos de difusión y no admite LoRA.</string>
     <string name="sd_workflow_preset_label">Preajuste de flujo</string>
-    <string name="sd_workflow_preset_help">Elige una pila propia fijada. El lanzamiento se bloquea si faltan archivos o comprobaciones nativas.</string>
+    <string name="sd_workflow_preset_help">Elige una configuración. Sus modelos y el motor deben estar listos antes de generar.</string>
     <string name="sd_workflow_preset_none">Sin preajuste</string>
     <string name="sd_workflow_hash_verifying">Comprobando los archivos del flujo en segundo plano…</string>
     <string name="sd_workflow_prompt_face_neutral_positive">expresión facial neutra, boca cerrada y relajada, ojos abiertos naturales, conservar identidad e iluminación</string>

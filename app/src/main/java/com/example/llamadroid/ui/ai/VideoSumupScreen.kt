@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.compose.foundation.layout.consumeWindowInsets
+
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -11,6 +13,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -52,6 +56,7 @@ import com.example.llamadroid.ui.components.WhisperVadInlineControl
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -142,7 +147,30 @@ fun VideoSumupScreen(navController: NavController) {
         }
     }
 
+    fun startSummary() {
+        val selectedUri = selectedVideoString?.let(Uri::parse) ?: return
+        val videoPath = context.contentResolver.openInputStream(selectedUri)?.use { input ->
+            val tempFile = File(context.cacheDir, "temp_video.mp4")
+            tempFile.outputStream().use { output -> input.copyTo(output) }
+            tempFile.absolutePath
+        }
+        if (videoPath != null && selectedWhisperPath != null && backendReady) {
+            VideoSumupService.startSummarization(
+                context = context,
+                videoPath = videoPath,
+                videoFileName = selectedVideoName ?: resources.getString(R.string.video_sumup_video_placeholder),
+                whisperModelPath = selectedWhisperPath!!,
+                language = whisperLanguage,
+                threads = whisperThreads,
+                vadConfig = settingsRepo.whisperVadConfigSnapshot(),
+                saveToNotes = true,
+                noteType = NoteType.VIDEO_SUMMARY
+            )
+        }
+    }
+
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.video_sumup_title)) },
@@ -158,7 +186,13 @@ fun VideoSumupScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
                 .padding(16.dp)
+                .weight(1f)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -395,40 +429,7 @@ fun VideoSumupScreen(navController: NavController) {
                             }
                         }
                     }
-                    OutlinedButton(
-                        onClick = { VideoSumupService.cancel() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(stringResource(R.string.action_cancel))
-                    }
                 } else {
-                    Button(
-                        onClick = {
-                            val selectedUri = Uri.parse(selectedVideoString)
-                            val videoPath = context.contentResolver.openInputStream(selectedUri)?.use { input ->
-                                val tempFile = File(context.cacheDir, "temp_video.mp4")
-                                tempFile.outputStream().use { output -> input.copyTo(output) }
-                                tempFile.absolutePath
-                            }
-                            if (videoPath != null && selectedWhisperPath != null && backendReady) {
-                                VideoSumupService.startSummarization(
-                                    context = context,
-                                    videoPath = videoPath,
-                                    videoFileName = selectedVideoName ?: resources.getString(R.string.video_sumup_video_placeholder),
-                                    whisperModelPath = selectedWhisperPath!!,
-                                    language = whisperLanguage,
-                                    threads = whisperThreads,
-                                    vadConfig = settingsRepo.whisperVadConfigSnapshot(),
-                                    saveToNotes = true,
-                                    noteType = NoteType.VIDEO_SUMMARY
-                                )
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = selectedWhisperPath != null && backendReady && (!whisperVad.enabled || effectiveWhisperVadPath != null)
-                    ) {
-                        Text(stringResource(R.string.video_sumup_btn))
-                    }
                 }
             }
 
@@ -478,6 +479,30 @@ fun VideoSumupScreen(navController: NavController) {
                     markdown = transcript
                 )
             }
+        }
+        AppTaskActionFooter(
+            modifier = Modifier
+                .fillMaxWidth()
+        ) {
+            if (isRunning) {
+                OutlinedButton(
+                    onClick = { VideoSumupService.cancel() },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(stringResource(R.string.soft_studio_cancel))
+                }
+            } else {
+                Button(
+                    onClick = ::startSummary,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selectedVideoString != null && selectedWhisperPath != null && backendReady &&
+                        (!whisperVad.enabled || effectiveWhisperVadPath != null)
+                ) {
+                    Text(stringResource(R.string.video_sumup_btn))
+                }
+            }
+        }
         }
     }
 }

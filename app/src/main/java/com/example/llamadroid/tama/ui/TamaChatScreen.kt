@@ -418,6 +418,23 @@ fun TamaChatScreen(
                     )
                 }
 
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp),
+                    placeholder = { Text(stringResource(R.string.tama_chat_placeholder), color = TamaMutedText, fontSize = 14.sp) },
+                    colors = tamaOutlinedFieldColors(containerColor = Color.Transparent),
+                    maxLines = 4,
+                    textStyle = TextStyle(
+                        fontFamily = FontFamily.Monospace,
+                        color = TamaDark,
+                        fontSize = 14.sp
+                    ),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
                 Row(
                     verticalAlignment = Alignment.Bottom,
                     modifier = Modifier.fillMaxWidth()
@@ -432,6 +449,7 @@ fun TamaChatScreen(
                         },
                         enabled = !isLoading && imageInputEnabled,
                         modifier = Modifier
+                            .size(48.dp)
                             .padding(bottom = 4.dp)
                     ) {
                         Icon(
@@ -451,6 +469,7 @@ fun TamaChatScreen(
                         },
                         enabled = !isLoading,
                         modifier = Modifier
+                            .size(48.dp)
                             .padding(bottom = 4.dp)
                     ) {
                         Icon(
@@ -460,22 +479,7 @@ fun TamaChatScreen(
                         )
                     }
 
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                        placeholder = { Text(stringResource(R.string.tama_chat_placeholder), color = TamaMutedText, fontSize = 14.sp) },
-                        colors = tamaOutlinedFieldColors(containerColor = Color.Transparent),
-                        maxLines = 4,
-                        textStyle = TextStyle(
-                            fontFamily = FontFamily.Monospace,
-                            color = TamaDark,
-                            fontSize = 14.sp
-                        ),
-                        shape = RoundedCornerShape(8.dp)
-                    )
+                    Spacer(Modifier.weight(1f))
 
                     IconButton(
                         onClick = {

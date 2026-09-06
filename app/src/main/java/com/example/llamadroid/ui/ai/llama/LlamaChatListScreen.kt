@@ -925,9 +925,11 @@ fun LlamaChatCard(
     val dateFormat = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
     var menuExpanded by remember { mutableStateOf(false) }
 
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onClick
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp).fillMaxWidth(),
@@ -1006,12 +1008,13 @@ fun LlamaChatCard(
 private fun LlamaSchedulerFolderCard(
     onClick: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1062,12 +1065,13 @@ private fun WearQuickChatSettingsEntryCard(
         .getSharedPreferences(WEAR_QUICK_CHAT_PREFS, Context.MODE_PRIVATE)
         .getLong(WEAR_QUICK_CHAT_SELECTED_SERVER_ID, -1L)
     val selectedServer = servers.firstOrNull { it.id == selectedServerId }
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
         onClick = onClick,
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.tertiaryContainer
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -1128,9 +1132,11 @@ private fun LlamaFolderCard(
     onShortcut: () -> Unit,
     onDelete: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = onClick
+        onClick = onClick,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier

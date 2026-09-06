@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -124,6 +126,7 @@ fun AdventureSettingsDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(max = 560.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -244,7 +247,10 @@ fun AdventureSettingsDialog(
                             readOnly = true,
                             label = { Text(stringResource(R.string.adventure_onnx_model_title)) },
                             trailingIcon = {
-                                IconButton(onClick = { showOnnxModelMenu = !showOnnxModelMenu }) {
+                                IconButton(
+                                    onClick = { showOnnxModelMenu = !showOnnxModelMenu },
+                                    modifier = Modifier.size(48.dp)
+                                ) {
                                     Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                                 }
                             }
@@ -255,7 +261,16 @@ fun AdventureSettingsDialog(
                         ) {
                             installedTxt2ImgModels.forEach { model ->
                                 DropdownMenuItem(
-                                    text = { Text(model.filename, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                                    text = {
+                                        Text(
+                                            model.filename,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 12.sp,
+                                            maxLines = 2,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                        )
+                                    },
+                                    modifier = Modifier.heightIn(min = 48.dp),
                                     onClick = {
                                         settingsRepository.setAdventureOnnxModelFilename(model.filename)
                                         showOnnxModelMenu = false
@@ -282,19 +297,34 @@ fun AdventureSettingsDialog(
                     )
                 }
 
-                TextButton(onClick = { showSystemPromptEditor = true }, modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = { showSystemPromptEditor = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                ) {
                     Text(stringResource(R.string.adventure_edit_system_prompt))
                 }
-                TextButton(onClick = { showSummarizerPromptEditor = true }, modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = { showSummarizerPromptEditor = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                ) {
                     Text(stringResource(R.string.adventure_edit_summarizer_prompt))
                 }
-                TextButton(onClick = { showDungeonThemesDialog = true }, modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = { showDungeonThemesDialog = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                ) {
                     Text(stringResource(R.string.adventure_view_dungeon_themes))
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(stringResource(R.string.action_close))
             }
         }
@@ -346,7 +376,10 @@ private fun AdventureModelDropdown(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             trailingIcon = {
-                IconButton(onClick = { onExpandChange(!expanded) }) {
+                IconButton(
+                    onClick = { onExpandChange(!expanded) },
+                    modifier = Modifier.size(48.dp)
+                ) {
                     Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                 }
             }
@@ -357,7 +390,16 @@ private fun AdventureModelDropdown(
         ) {
             availableModels.forEach { model ->
                 DropdownMenuItem(
-                    text = { Text(model, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    text = {
+                        Text(
+                            model,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            maxLines = 2,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                        )
+                    },
+                    modifier = Modifier.heightIn(min = 48.dp),
                     onClick = {
                         onModelSelect(model)
                         onExpandChange(false)
@@ -388,7 +430,10 @@ private fun AdventureLanguageSelector(
             readOnly = true,
             singleLine = true,
             trailingIcon = {
-                IconButton(onClick = { onExpandChange(!expanded) }) {
+                IconButton(
+                    onClick = { onExpandChange(!expanded) },
+                    modifier = Modifier.size(48.dp)
+                ) {
                     Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                 }
             }
@@ -397,6 +442,7 @@ private fun AdventureLanguageSelector(
             languages.forEach { language ->
                 DropdownMenuItem(
                     text = { Text(language, fontFamily = FontFamily.Monospace, fontSize = 12.sp) },
+                    modifier = Modifier.heightIn(min = 48.dp),
                     onClick = { onLanguageSelected(language) }
                 )
             }
@@ -412,7 +458,9 @@ private fun AdventureToggleRow(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -480,6 +528,7 @@ fun DungeonThemesDialog(
                     DungeonType.entries.forEach { dungeon ->
                         TextButton(
                             onClick = { selectedDungeon = dungeon },
+                            modifier = Modifier.heightIn(min = 48.dp),
                             colors = ButtonDefaults.textButtonColors(
                                 contentColor = if (dungeon == selectedDungeon) {
                                     MaterialTheme.colorScheme.primary
@@ -510,7 +559,7 @@ fun DungeonThemesDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(stringResource(R.string.action_close))
             }
         }
@@ -534,17 +583,17 @@ fun PromptEditorDialog(
                 onValueChange = { editedPrompt = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(300.dp),
+                    .heightIn(min = 200.dp, max = 420.dp),
                 textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace, fontSize = 12.sp)
             )
         },
         confirmButton = {
-            TextButton(onClick = { onSave(editedPrompt) }) {
+            TextButton(onClick = { onSave(editedPrompt) }, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(stringResource(R.string.action_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = 48.dp)) {
                 Text(stringResource(R.string.action_cancel))
             }
         }

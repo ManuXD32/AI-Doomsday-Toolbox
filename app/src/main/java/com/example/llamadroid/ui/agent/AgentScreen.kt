@@ -121,7 +121,10 @@ private fun formatAgentString(template: String, vararg args: Any?): String =
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentScreen(navController: NavController) {
+fun AgentScreen(
+    navController: NavController,
+    initialConversationId: Long? = null
+) {
     val context = LocalContext.current
     val attachImageFailedText = stringResource(R.string.agent_attach_image_failed)
     val skillImportSuccessFormat = stringResource(R.string.agent_skill_import_success)
@@ -147,6 +150,9 @@ fun AgentScreen(navController: NavController) {
     val retryDebugNoDetailText = stringResource(R.string.agent_retry_debug_no_detail)
     val retryDebugDoneText = stringResource(R.string.agent_retry_debug_done)
     val guidanceInterruptingText = stringResource(R.string.agent_guidance_interrupting)
+    val blankPlanText = stringResource(R.string.soft_studio_conversations_plan_blank)
+    val wrongPlanProjectText = stringResource(R.string.soft_studio_conversations_plan_wrong_project)
+    val defaultProjectName = stringResource(R.string.soft_studio_conversations_default_project)
     val scope = rememberCoroutineScope()
 
     // Services
@@ -367,6 +373,9 @@ fun AgentScreen(navController: NavController) {
     var isConversationRestoring by remember { mutableStateOf(false) }
     var hydratingConversationTitle by remember { mutableStateOf<String?>(null) }
     var initialConversationRestorePending by remember { mutableStateOf(false) }
+    var initialConversationRestoreRequested by rememberSaveable(initialConversationId) {
+        mutableStateOf(false)
+    }
     var showConversations by remember { mutableStateOf(false) }
     val conversationSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var restoreToken by remember { mutableIntStateOf(0) }
@@ -460,7 +469,7 @@ fun AgentScreen(navController: NavController) {
             settingsRepository.setShowExtraOutput(showAllOutput)
         }
     }
-    var showNewProjectDialog by remember { mutableStateOf(false) } // New project name dialog
+    var showNewProjectDialog by rememberSaveable { mutableStateOf(false) } // New project name dialog
     var showCustomTools by remember { mutableStateOf(false) } // Custom Tools screen
     var showCustomAgents by remember { mutableStateOf(false) } // Custom Agents screen
     var showSkillManager by remember { mutableStateOf(false) }
@@ -471,8 +480,8 @@ fun AgentScreen(navController: NavController) {
     var showDeleteConfirmation by remember { mutableStateOf<Long?>(null) } // Delete confirmation dialog
     var pendingDeleteFolder by remember { mutableStateOf<String?>(null) } // Folder to delete
     var pendingDeleteProject by remember { mutableStateOf<AgentConversationEntity?>(null) }
-    var newProjectName by remember { mutableStateOf("") }
-    var newProjectBackend by remember { mutableStateOf(AgentWorkspaceBackendType.REMOTE_SSH) }
+    var newProjectName by rememberSaveable { mutableStateOf("") }
+    var newProjectBackend by rememberSaveable { mutableStateOf(AgentWorkspaceBackendType.REMOTE_SSH) }
     var targetFolderForNewProject by rememberSaveable { mutableStateOf<Long?>(null) }
     var showNewFolderDialog by remember { mutableStateOf(false) }
     var newFolderName by remember { mutableStateOf("") }
@@ -913,8 +922,8 @@ fun AgentScreen(navController: NavController) {
     }
 
     suspend fun restoreConversation(conversationId: Long, dismissPicker: Boolean, token: Int) {
-        if (isConversationRestoring && runtimeConversationId == conversationId && selectedConversationId == conversationId) return
-
+        // beginConversationRestore already marks loading. Let the live-runtime attach path
+        // handle an already selected project and the finally block settle that loading state.
         isConversationRestoring = true
         val conv = db.agentChatDao().getConversation(conversationId)
         if (token != restoreToken) return
@@ -996,6 +1005,24 @@ fun AgentScreen(navController: NavController) {
         hydratingConversationTitle = conversations.firstOrNull { it.id == conversationId }?.title
         isConversationRestoring = true
         restoreConversation(conversationId, dismissPicker = dismissPicker, token = token)
+    }
+
+    // Home can open a saved project directly. Reuse the picker restore path so the Room
+    // conversation remains authoritative and the existing live-runtime/continuation guards
+    // still decide whether to attach or rehydrate the singleton service.
+    LaunchedEffect(initialConversationId) {
+        val conversationId = initialConversationId ?: return@LaunchedEffect
+        if (initialConversationRestoreRequested) return@LaunchedEffect
+        // Read the canonical row directly. Keying this effect to the observed list would
+        // cancel an in-flight restore whenever Room publishes updated project metadata.
+        if (db.agentChatDao().getConversation(conversationId) == null) {
+            initialConversationRestoreRequested = true
+            showConversations = true
+            return@LaunchedEffect
+        }
+        initialConversationRestorePending = true
+        beginConversationRestore(conversationId, dismissPicker = true)
+        initialConversationRestoreRequested = true
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -1345,7 +1372,7 @@ fun AgentScreen(navController: NavController) {
         if (modifiedPlan.isBlank()) {
             Toast.makeText(
                 context,
-                "The plan cannot be blank.",
+                blankPlanText,
                 Toast.LENGTH_LONG
             ).show()
             return
@@ -1358,7 +1385,7 @@ fun AgentScreen(navController: NavController) {
         ) {
             Toast.makeText(
                 context,
-                "This plan belongs to another project. Reopen it before saving.",
+                wrongPlanProjectText,
                 Toast.LENGTH_LONG
             ).show()
             cancelPlanEdit()
@@ -2281,66 +2308,13 @@ fun AgentScreen(navController: NavController) {
 
     // Dialogs
     planEditSession?.let { session ->
-        val savingPlan = resolvingPlanMessageId == session.messageId
-        AlertDialog(
-            onDismissRequest = {
-                if (!savingPlan) cancelPlanEdit()
-            },
-            title = { Text("Modify plan") },
-            text = {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Text(
-                        "Review the complete plan. Save approves the edited " +
-                            "version; Cancel discards the draft.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    OutlinedTextField(
-                        value = editingText,
-                        onValueChange = { editingText = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 280.dp, max = 520.dp),
-                        minLines = 12,
-                        maxLines = 24,
-                        enabled = !savingPlan,
-                        label = { Text("Implementation plan") }
-                    )
-                    if (editingText != session.originalPlan) {
-                        Text(
-                            "Edited draft",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { savePlanEdit() },
-                    enabled = !savingPlan && editingText.isNotBlank()
-                ) {
-                    if (savingPlan) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    Text(if (savingPlan) "Saving…" else "Save and approve")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = { cancelPlanEdit() },
-                    enabled = !savingPlan
-                ) {
-                    Text("Cancel")
-                }
-            }
+        AgentPlanEditorDialog(
+            text = editingText,
+            onTextChange = { editingText = it },
+            saving = resolvingPlanMessageId == session.messageId,
+            hasChanges = editingText != session.originalPlan,
+            onSave = { savePlanEdit() },
+            onDismiss = { cancelPlanEdit() }
         )
     }
 
@@ -2668,66 +2642,23 @@ fun AgentScreen(navController: NavController) {
     }
 
     if (showNewProjectDialog) {
-        AlertDialog(
-            onDismissRequest = {
+        AgentNewProjectDialog(
+            name = newProjectName,
+            onNameChange = { newProjectName = it },
+            backend = newProjectBackend,
+            onBackendChange = { newProjectBackend = it },
+            onCreate = {
+                createNewConversation(
+                    projectName = newProjectName.trim().ifBlank { defaultProjectName },
+                    backend = newProjectBackend,
+                    parentFolderId = targetFolderForNewProject
+                )
                 showNewProjectDialog = false
                 targetFolderForNewProject = null
             },
-            title = { Text(stringResource(R.string.agent_new_project_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(stringResource(R.string.agent_new_project_desc), fontSize = 12.sp)
-                    OutlinedTextField(
-                        value = newProjectName,
-                        onValueChange = { newProjectName = it },
-                        label = { Text(stringResource(R.string.agent_project_name_label)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(stringResource(R.string.agent_project_backend_label), fontWeight = FontWeight.SemiBold)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        FilterChip(
-                            selected = newProjectBackend == AgentWorkspaceBackendType.REMOTE_SSH,
-                            onClick = { newProjectBackend = AgentWorkspaceBackendType.REMOTE_SSH },
-                            label = { Text(stringResource(R.string.agent_project_backend_remote), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            leadingIcon = { Icon(Icons.Default.Terminal, null, modifier = Modifier.size(18.dp)) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        FilterChip(
-                            selected = newProjectBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX,
-                            onClick = { newProjectBackend = AgentWorkspaceBackendType.LOCAL_SANDBOX },
-                            label = { Text(stringResource(R.string.agent_project_backend_local), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            leadingIcon = { Icon(Icons.Default.Security, null, modifier = Modifier.size(18.dp)) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    Text(
-                        if (newProjectBackend == AgentWorkspaceBackendType.LOCAL_SANDBOX) {
-                            stringResource(R.string.agent_project_backend_local_desc)
-                        } else {
-                            stringResource(R.string.agent_project_backend_remote_desc)
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    createNewConversation(
-                        projectName = if (newProjectName.isNotBlank()) newProjectName else "project",
-                        backend = newProjectBackend,
-                        parentFolderId = targetFolderForNewProject
-                    )
-                    showNewProjectDialog = false
-                    targetFolderForNewProject = null
-                }) { Text(stringResource(R.string.action_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showNewProjectDialog = false
-                    targetFolderForNewProject = null
-                }) { Text(stringResource(R.string.action_cancel)) }
+            onDismiss = {
+                showNewProjectDialog = false
+                targetFolderForNewProject = null
             }
         )
     }
@@ -2826,7 +2757,7 @@ fun AgentScreen(navController: NavController) {
             onDismissRequest = { showFirstRunPopup = false },
             title = { Text(stringResource(R.string.agent_welcome_title)) },
             text = {
-                Column {
+                Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState())) {
                     Text(stringResource(R.string.agent_welcome_desc), style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(stringResource(R.string.agent_welcome_step1), style = MaterialTheme.typography.bodySmall)
@@ -3242,18 +3173,17 @@ private fun AgentProjectDashboard(
                         Text(stringResource(R.string.agent_folder_go_up), maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(onClick = { onCreateProject(currentFolderId) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
-                        Icon(Icons.Default.Add, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.agent_new_project_btn), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    OutlinedButton(onClick = { onCreateFolder(null) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)) {
-                        Icon(Icons.Default.CreateNewFolder, null)
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.agent_folder_create_short), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+                com.example.llamadroid.ui.components.ResponsiveActionGroup(actions = listOf(
+                    com.example.llamadroid.ui.components.ResponsiveAction(
+                        label = stringResource(R.string.agent_new_project_btn),
+                        onClick = { onCreateProject(currentFolderId) }
+                    ),
+                    com.example.llamadroid.ui.components.ResponsiveAction(
+                        label = stringResource(R.string.agent_folder_create_short),
+                        onClick = { onCreateFolder(null) },
+                        style = com.example.llamadroid.ui.components.ResponsiveActionStyle.Secondary
+                    )
+                ))
                 OutlinedButton(
                     onClick = {
                         selectionMode = !selectionMode
@@ -3500,7 +3430,9 @@ private fun AgentDashboardActionItem(
     ListItem(
         headlineContent = { Text(stringResource(labelRes)) },
         leadingContent = { Icon(icon, contentDescription = null, tint = tint) },
-        modifier = Modifier.clickable(onClick = onClick)
+        modifier = Modifier
+            .heightIn(min = 48.dp)
+            .clickable(onClick = onClick)
     )
 }
 
@@ -3511,11 +3443,13 @@ private fun AgentDashboardFolderRow(
     onOpen: () -> Unit,
     onLongPress: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = onOpen, onLongClick = onLongPress),
-        shape = RoundedCornerShape(8.dp)
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier
@@ -3572,8 +3506,8 @@ private fun AgentDashboardProjectRow(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (localRunning) AgentStatusPill(stringResource(R.string.agent_dashboard_running), Color(0xFF2E7D32))
-            if (llmWorking) AgentStatusPill(stringResource(R.string.agent_dashboard_llm_working), Color(0xFFF57C00))
+            if (localRunning) AgentStatusPill(stringResource(R.string.agent_dashboard_running), MaterialTheme.colorScheme.primary)
+            if (llmWorking) AgentStatusPill(stringResource(R.string.agent_dashboard_llm_working), MaterialTheme.colorScheme.tertiary)
             Icon(Icons.Default.MoreVert, stringResource(R.string.agent_dashboard_item_options), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
@@ -3662,10 +3596,11 @@ private fun AgentConversationStatePanel(
             .padding(20.dp),
         contentAlignment = Alignment.Center
     ) {
-        ElevatedCard(
-            colors = CardDefaults.elevatedCardColors(
+        Card(
+            colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(

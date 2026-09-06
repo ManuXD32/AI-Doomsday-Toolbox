@@ -1,25 +1,34 @@
 package com.example.llamadroid.ui.distributed
 
+import androidx.compose.material.icons.filled.Warning
+
+import androidx.compose.material.icons.filled.Info
+
+import androidx.compose.material.icons.filled.Link
+
+import androidx.compose.material.icons.filled.Star
+
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
@@ -36,56 +45,21 @@ import com.example.llamadroid.R
 fun DistributedScreen(navController: NavController) {
     val scrollState = rememberScrollState()
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.dist_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            )
-        }
-    ) { padding ->
+    AppScreenScaffold(
+        title = stringResource(R.string.dist_title),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .verticalScroll(scrollState)
-                .padding(24.dp),
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header
-            Icon(
-                imageVector = Icons.Default.Share,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            
-            Text(
-                text = stringResource(R.string.dist_header_title),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            
-            Text(
-                text = stringResource(R.string.dist_header_desc),
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
             // Master Mode Card
             RoleCard(
-                emoji = "👑",
+                icon = Icons.Default.Star,
                 title = stringResource(R.string.dist_role_master_title),
                 description = stringResource(R.string.dist_role_master_desc),
                 buttonText = stringResource(R.string.dist_role_master_btn),
@@ -94,7 +68,7 @@ fun DistributedScreen(navController: NavController) {
             
             // Worker Mode Card
             RoleCard(
-                emoji = "🔗",
+                icon = Icons.Default.Link,
                 title = stringResource(R.string.dist_role_worker_title),
                 description = stringResource(R.string.dist_role_worker_desc),
                 buttonText = stringResource(R.string.dist_role_worker_btn),
@@ -106,6 +80,7 @@ fun DistributedScreen(navController: NavController) {
             // Info footer
             Card(
                 modifier = Modifier.fillMaxWidth(),
+                shape = AppChromeDefaults.InnerCardShape,
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
                 )
@@ -114,9 +89,10 @@ fun DistributedScreen(navController: NavController) {
                     modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "ℹ️",
-                        style = MaterialTheme.typography.titleLarge
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
@@ -130,6 +106,7 @@ fun DistributedScreen(navController: NavController) {
             // Security warning
             Card(
                 modifier = Modifier.fillMaxWidth(),
+                shape = AppChromeDefaults.InnerCardShape,
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
                 )
@@ -138,9 +115,10 @@ fun DistributedScreen(navController: NavController) {
                     modifier = Modifier.padding(16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "⚠️",
-                        style = MaterialTheme.typography.titleLarge
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
@@ -156,7 +134,7 @@ fun DistributedScreen(navController: NavController) {
 
 @Composable
 private fun RoleCard(
-    emoji: String,
+    icon: ImageVector,
     title: String,
     description: String,
     buttonText: String,
@@ -164,10 +142,8 @@ private fun RoleCard(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+        shape = AppChromeDefaults.CardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
     ) {
         Column(
             modifier = Modifier
@@ -175,10 +151,17 @@ private fun RoleCard(
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(
-                text = emoji,
-                style = MaterialTheme.typography.displaySmall
-            )
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.padding(14.dp).size(32.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
             
             Spacer(modifier = Modifier.height(8.dp))
             

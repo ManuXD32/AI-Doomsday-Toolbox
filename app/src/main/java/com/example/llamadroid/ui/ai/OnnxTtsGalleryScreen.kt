@@ -288,7 +288,10 @@ fun OnnxTtsGalleryScreen(navController: NavController) {
 
 @Composable
 private fun OnnxTtsGalleryEmptyCard() {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -349,9 +352,10 @@ private fun OnnxTtsGalleryRow(
             containerColor = if (selected) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
-                MaterialTheme.colorScheme.surface
+                MaterialTheme.colorScheme.surfaceContainerLow
             }
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Row(
             modifier = Modifier

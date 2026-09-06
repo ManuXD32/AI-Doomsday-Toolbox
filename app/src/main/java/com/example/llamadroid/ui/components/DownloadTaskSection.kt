@@ -2,13 +2,15 @@ package com.example.llamadroid.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
@@ -62,6 +64,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DownloadTaskSection(
     modelTypes: List<ModelType>,
@@ -108,10 +111,9 @@ fun DownloadTaskSection(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
                 stringResource(R.string.download_recovery_title),
@@ -119,7 +121,10 @@ fun DownloadTaskSection(
                 fontWeight = FontWeight.SemiBold
             )
             if (staleTasks.isNotEmpty()) {
-                OutlinedButton(onClick = { confirmClean = true }) {
+                OutlinedButton(
+                    onClick = { confirmClean = true },
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
                     Icon(Icons.Default.Delete, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(stringResource(R.string.download_clean_stale))
@@ -278,16 +283,18 @@ private fun DownloadTaskCard(
                 LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             }
 
-            Row(
+            FlowRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp)
-                    .wrapContentWidth(Alignment.End),
+                    .padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (canResume) {
-                    Button(onClick = onResume) {
+                    Button(
+                        onClick = onResume,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(stringResource(R.string.action_resume))
@@ -302,12 +309,18 @@ private fun DownloadTaskCard(
                     }
                 }
                 if (!isLiveActive && task.status != DOWNLOAD_TASK_STATUS_STALE) {
-                    OutlinedButton(onClick = onDiscard) {
+                    OutlinedButton(
+                        onClick = onDiscard,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
                         Text(stringResource(R.string.action_discard))
                     }
                 }
                 if (isLiveActive) {
-                    OutlinedButton(onClick = onDiscard) {
+                    OutlinedButton(
+                        onClick = onDiscard,
+                        modifier = Modifier.heightIn(min = 48.dp)
+                    ) {
                         Text(stringResource(R.string.action_cancel))
                     }
                 }

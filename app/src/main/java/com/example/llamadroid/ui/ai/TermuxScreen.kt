@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import androidx.compose.ui.graphics.Color
+
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -25,7 +27,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontFamily
@@ -43,6 +44,7 @@ import com.example.llamadroid.data.model.ToolInfoCards
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.service.SSHService
 import com.example.llamadroid.service.SSHConfig
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.launch
 import java.net.Inet4Address
@@ -372,7 +374,7 @@ fun TermuxScreen(navController: NavController) {
                     Text(pendingCommandDescription, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.height(8.dp))
                     Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.inverseSurface)
                     ) {
                         ScrollableCommandText(
                             command = pendingCommand,
@@ -454,7 +456,7 @@ fun TermuxScreen(navController: NavController) {
                         pendingRunAllWarning?.let { warning ->
                             Text(
                                 warning,
-                                color = Color(0xFFFF9800),
+                                color = MaterialTheme.colorScheme.tertiary,
                                 fontWeight = FontWeight.Medium
                             )
                             Spacer(modifier = Modifier.height(8.dp))
@@ -522,30 +524,21 @@ fun TermuxScreen(navController: NavController) {
             }
         )
     }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.termux_title)) },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        // Removed disconnect() call to keep session alive across navigation
-                        navController.popBackStack()
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showSetupGuide = !showSetupGuide }) {
-                        Icon(Icons.Default.Info, stringResource(R.string.termux_setup_guide))
-                    }
-                }
-            )
+    AppScreenScaffold(
+        title = stringResource(R.string.termux_title),
+        onBack = {
+            // Keep the SSH session alive across navigation.
+            navController.popBackStack()
+        },
+        actions = {
+            IconButton(onClick = { showSetupGuide = !showSetupGuide }) {
+                Icon(Icons.Default.Info, stringResource(R.string.termux_setup_guide))
+            }
         }
-    ) { padding ->
+    ) { _ ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -620,13 +613,13 @@ fun TermuxScreen(navController: NavController) {
                         subtitle = stringResource(R.string.termux_miniconda_subtitle),
                         isExpanded = expandedCard == "miniconda",
                         onToggle = { expandedCard = if (expandedCard == "miniconda") null else "miniconda" },
-                        containerColor = Color(0xFFFF9800).copy(alpha = 0.15f)
+                        containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.15f)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
                                 stringResource(R.string.termux_miniconda_warning),
                                 fontWeight = FontWeight.Medium,
-                                color = Color(0xFFFF9800)
+                                color = MaterialTheme.colorScheme.tertiary
                             )
                             val minicondaName = stringResource(R.string.termux_miniconda_name)
 
@@ -634,7 +627,7 @@ fun TermuxScreen(navController: NavController) {
                             Button(
                                 onClick = { requestRunAll(minicondaName, TermuxTools.MINICONDA_INSTALL_COMMANDS) },
                                 modifier = Modifier.fillMaxWidth(),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF9800))
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
                             ) {
                                 Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -666,19 +659,19 @@ fun TermuxScreen(navController: NavController) {
                                 scope.launch { refreshInstalledToolsNow() }
                             }
                         },
-                        containerColor = Color(0xFF2E7D32).copy(alpha = 0.1f)
+                        containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             val installAllName = stringResource(R.string.termux_install_all_name)
                             val installAllWarning = stringResource(R.string.termux_install_all_warning)
                             Card(
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFC107).copy(alpha = 0.14f))
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.14f))
                             ) {
                                 Column(modifier = Modifier.padding(12.dp)) {
                                     Text(
                                         installAllWarning,
                                         fontWeight = FontWeight.Medium,
-                                        color = Color(0xFFFF9800)
+                                        color = MaterialTheme.colorScheme.tertiary
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Button(
@@ -690,7 +683,7 @@ fun TermuxScreen(navController: NavController) {
                                             )
                                         },
                                         modifier = Modifier.fillMaxWidth(),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
                                     ) {
                                         Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
@@ -727,7 +720,7 @@ fun TermuxScreen(navController: NavController) {
                         subtitle = stringResource(R.string.termux_remove_tools_subtitle),
                         isExpanded = expandedCard == "uninstall",
                         onToggle = { expandedCard = if (expandedCard == "uninstall") null else "uninstall" },
-                        containerColor = Color(0xFFC62828).copy(alpha = 0.1f)
+                        containerColor = MaterialTheme.colorScheme.error.copy(alpha = 0.1f)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             // Uninstall all
@@ -782,7 +775,7 @@ fun TermuxScreen(navController: NavController) {
                                 scope.launch { refreshInstalledToolsNow() }
                             }
                         },
-                        containerColor = Color(0xFF1565C0).copy(alpha = 0.1f)
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
                     ) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             TermuxTools.allTools.forEach { tool ->
@@ -878,7 +871,7 @@ fun TermuxScreen(navController: NavController) {
                             .fillMaxWidth()
                             .clickable { navController.navigate(Screen.TermuxFileManager.route) },
                         shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF1565C0).copy(alpha = 0.15f))
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -976,7 +969,7 @@ fun SetupGuideCard(onCopy: (String) -> Unit) {
             Text(
                 stringResource(R.string.termux_default_password),
                 style = MaterialTheme.typography.bodySmall,
-                color = Color.Gray
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -1007,7 +1000,7 @@ private fun CommandPreviewCard(
     fontSize: androidx.compose.ui.unit.TextUnit = 12.sp
 ) {
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.inverseSurface),
         modifier = modifier
     ) {
         Row(
@@ -1024,7 +1017,7 @@ private fun CommandPreviewCard(
                 label?.let {
                     Text(
                         text = it,
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
                         fontSize = fontSize,
                         fontWeight = FontWeight.Medium
                     )
@@ -1043,7 +1036,7 @@ private fun CommandPreviewCard(
                 Icon(
                     Icons.Default.Share,
                     stringResource(R.string.action_copy),
-                    tint = Color.White,
+                    tint = MaterialTheme.colorScheme.inverseOnSurface,
                     modifier = Modifier.size(16.dp)
                 )
             }
@@ -1070,7 +1063,7 @@ private fun ScrollableCommandText(
                 Text(
                     command,
                     fontFamily = FontFamily.Monospace,
-                    color = Color.Green,
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
                     fontSize = fontSize
                 )
             }
@@ -1122,7 +1115,11 @@ fun CommandRow(
 
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = if (isDanger) Color(0xFF5D1F1F) else Color(0xFF1E1E1E)
+            containerColor = if (isDanger) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.inverseSurface
+            }
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -1135,7 +1132,7 @@ fun CommandRow(
                 command.take(50) + if (command.length > 50) "..." else "",
                 modifier = Modifier.weight(1f),
                 fontFamily = FontFamily.Monospace,
-                color = Color.Green,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
                 fontSize = 11.sp,
                 maxLines = 1
             )
@@ -1144,7 +1141,7 @@ fun CommandRow(
                     Icon(
                         Icons.Default.Share,
                         stringResource(R.string.action_copy),
-                        tint = Color.White,
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -1155,7 +1152,7 @@ fun CommandRow(
                     Icon(
                         Icons.Default.Edit,
                         stringResource(R.string.action_edit),
-                        tint = Color.Yellow,
+                        tint = MaterialTheme.colorScheme.tertiary,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -1163,7 +1160,7 @@ fun CommandRow(
                     Icon(
                         Icons.Default.PlayArrow,
                         stringResource(R.string.termux_run_command),
-                        tint = Color.Green,
+                        tint = MaterialTheme.colorScheme.inverseOnSurface,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -1202,7 +1199,7 @@ fun ConnectionCard(
             ) {
                 Text(stringResource(R.string.termux_connection_title), fontWeight = FontWeight.Bold)
                 if (isConnected) {
-                    Text(stringResource(R.string.termux_connected), color = Color(0xFF4CAF50), fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.termux_connected), color = MaterialTheme.colorScheme.secondary, fontWeight = FontWeight.Medium)
                 }
             }
 
@@ -1268,7 +1265,22 @@ fun ConnectionCard(
 
             connectionError?.let { error ->
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("⚠️ $error", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -1346,12 +1358,12 @@ fun ToolsCard(
 private fun InstalledBadge() {
     Surface(
         shape = RoundedCornerShape(999.dp),
-        color = Color(0xFF1B5E20).copy(alpha = 0.2f)
+        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f)
     ) {
         Text(
             text = stringResource(R.string.termux_installed_badge),
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-            color = Color(0xFF4CAF50),
+            color = MaterialTheme.colorScheme.secondary,
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold
         )
@@ -1394,7 +1406,7 @@ fun ToolInstallItem(
                         }
                         Text(stringResource(tool.descriptionResId), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (tool.requiresMiniconda) {
-                            Text(stringResource(R.string.termux_miniconda_warning), style = MaterialTheme.typography.labelSmall, color = Color(0xFFFF9800))
+                            Text(stringResource(R.string.termux_miniconda_warning), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.tertiary)
                         }
                     }
                 }
@@ -1411,7 +1423,7 @@ fun ToolInstallItem(
                 Button(
                     onClick = onRunAll,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
                 ) {
                     Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
@@ -1480,7 +1492,7 @@ fun ToolRunItem(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isRunning) Color(0xFF1B5E20).copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface
+            containerColor = if (isRunning) MaterialTheme.colorScheme.secondary.copy(alpha = 0.3f) else MaterialTheme.colorScheme.surface
         )
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -1506,7 +1518,7 @@ fun ToolRunItem(
                     Text(
                         if (isRunning) stringResource(R.string.termux_status_running_label) else stringResource(R.string.termux_status_stopped),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (isRunning) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (isRunning) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1528,7 +1540,7 @@ fun ToolRunItem(
                     Icon(
                         if (showInfo) Icons.Default.KeyboardArrowUp else Icons.Default.Info,
                         stringResource(R.string.action_info),
-                        tint = if (showInfo) MaterialTheme.colorScheme.primary else Color.Gray,
+                        tint = if (showInfo) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
@@ -1549,7 +1561,7 @@ fun ToolRunItem(
                         Icon(
                             Icons.Default.AccountBox,
                             stringResource(R.string.fastsd_gallery_title),
-                            tint = Color(0xFF9C27B0),
+                            tint = MaterialTheme.colorScheme.tertiary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
@@ -1569,7 +1581,7 @@ fun ToolRunItem(
                         Icon(
                             Icons.Default.Home,
                             stringResource(R.string.termux_open_webui),
-                            tint = Color(0xFF2196F3),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
@@ -1594,7 +1606,7 @@ fun ToolRunItem(
                 } else {
                     Button(
                         onClick = onStart,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50)),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Default.PlayArrow, stringResource(R.string.action_start), modifier = Modifier.size(16.dp))
@@ -1616,7 +1628,7 @@ fun ToolRunItem(
                     Text(
                         if (isNetworkVisible) stringResource(R.string.termux_lan) else stringResource(R.string.termux_local),
                         fontSize = 12.sp,
-                        color = if (isNetworkVisible) Color(0xFF4CAF50) else Color.Gray,
+                        color = if (isNetworkVisible) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1646,10 +1658,10 @@ fun ToolRunItem(
                     onCheckedChange = onVisibilityChange,
                     modifier = Modifier.height(24.dp),
                     colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFF4CAF50),
-                        uncheckedThumbColor = Color.Gray,
-                        uncheckedTrackColor = Color.DarkGray
+                        checkedThumbColor = MaterialTheme.colorScheme.onSecondary,
+                        checkedTrackColor = MaterialTheme.colorScheme.secondary,
+                        uncheckedThumbColor = MaterialTheme.colorScheme.outline,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 )
             }
@@ -1663,7 +1675,7 @@ fun ToolRunItem(
                     Text("💾", fontSize = 14.sp)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(stringResource(R.string.termux_ram_requirement), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                    Text(toolInfo.ramRequirement, fontSize = 12.sp, color = Color(0xFF4CAF50))
+                    Text(toolInfo.ramRequirement, fontSize = 12.sp, color = MaterialTheme.colorScheme.secondary)
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1672,7 +1684,7 @@ fun ToolRunItem(
                 Text(stringResource(R.string.termux_low_ram_tips), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 toolInfo.lowRamTips.forEach { tip ->
                     Row(modifier = Modifier.padding(start = 16.dp, top = 2.dp)) {
-                        Text("•", fontSize = 12.sp, color = Color.Gray)
+                        Text("•", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(tip, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -1727,7 +1739,7 @@ fun OutputCard(output: String, isExecuting: Boolean, currentCommand: String, onC
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E))
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.inverseSurface)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -1736,26 +1748,38 @@ fun OutputCard(output: String, isExecuting: Boolean, currentCommand: String, onC
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column {
-                    Text(stringResource(R.string.termux_output_title), fontWeight = FontWeight.Bold, color = Color.White)
+                    Text(
+                        stringResource(R.string.termux_output_title),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.inverseOnSurface
+                    )
                     if (currentCommand.isNotBlank()) {
                         Text(
                             "$ ${currentCommand.take(40)}...",
                             style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray,
+                            color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.7f),
                             fontFamily = FontFamily.Monospace
                         )
                     }
                 }
                 Row {
                     if (isExecuting) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.Green)
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = MaterialTheme.colorScheme.inverseOnSurface)
                     }
                     if (output.isNotBlank()) {
                         IconButton(onClick = { onCopyAll(output) }) {
-                            Icon(Icons.Default.Share, stringResource(R.string.action_copy_all), tint = Color.White)
+                            Icon(
+                                Icons.Default.Share,
+                                stringResource(R.string.action_copy_all),
+                                tint = MaterialTheme.colorScheme.inverseOnSurface
+                            )
                         }
                         IconButton(onClick = onClear) {
-                            Icon(Icons.Default.Clear, stringResource(R.string.action_clear), tint = Color.White)
+                            Icon(
+                                Icons.Default.Clear,
+                                stringResource(R.string.action_clear),
+                                tint = MaterialTheme.colorScheme.inverseOnSurface
+                            )
                         }
                     }
                 }
@@ -1768,7 +1792,7 @@ fun OutputCard(output: String, isExecuting: Boolean, currentCommand: String, onC
                     text = if (output.isBlank() && isExecuting) "Running..." else output.ifBlank { "No output" },
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = Color(0xFF00FF00),
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 200.dp)
@@ -1803,7 +1827,9 @@ fun ToolOutputCard(
             .fillMaxWidth()
             .padding(start = 16.dp, top = 4.dp, bottom = 4.dp),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E).copy(alpha = 0.9f))
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.95f)
+        )
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
             // Header row - always visible
@@ -1818,7 +1844,7 @@ fun ToolOutputCard(
                     Icon(
                         if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
                         contentDescription = if (isExpanded) stringResource(R.string.action_collapse) else stringResource(R.string.action_expand),
-                        tint = Color.Gray,
+                        tint = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.72f),
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
@@ -1826,24 +1852,34 @@ fun ToolOutputCard(
                         stringResource(R.string.termux_output_title) + " " + toolName,
                         fontWeight = FontWeight.Medium,
                         fontSize = 12.sp,
-                        color = Color.White.copy(alpha = 0.8f)
+                        color = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.8f)
                     )
                     if (isExecuting) {
                         Spacer(modifier = Modifier.width(8.dp))
                         CircularProgressIndicator(
                             modifier = Modifier.size(14.dp),
                             strokeWidth = 2.dp,
-                            color = Color.Green
+                            color = MaterialTheme.colorScheme.inverseOnSurface
                         )
                     }
                 }
                 Row {
                     if (output.isNotBlank()) {
                         IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.Share, "Copy", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                            Icon(
+                                Icons.Default.Share,
+                                stringResource(R.string.action_copy),
+                                tint = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.72f),
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
                         IconButton(onClick = onClear, modifier = Modifier.size(28.dp)) {
-                            Icon(Icons.Default.Clear, stringResource(R.string.action_clear), tint = Color.Gray, modifier = Modifier.size(16.dp))
+                            Icon(
+                                Icons.Default.Clear,
+                                stringResource(R.string.action_clear),
+                                tint = MaterialTheme.colorScheme.inverseOnSurface.copy(alpha = 0.72f),
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
                     }
                 }
@@ -1858,7 +1894,7 @@ fun ToolOutputCard(
                             text = if (output.isBlank() && isExecuting) stringResource(R.string.termux_output_running) else output.ifBlank { stringResource(R.string.termux_output_none) },
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
-                            color = Color(0xFF00FF00),
+                            color = MaterialTheme.colorScheme.inverseOnSurface,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 150.dp)

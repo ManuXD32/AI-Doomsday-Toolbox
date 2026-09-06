@@ -183,6 +183,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
     val copySuccessFormat = stringResource(R.string.agent_copy_success)
     val installCommandLabel = stringResource(R.string.agent_install_cmd_label)
     val startCommandLabel = stringResource(R.string.agent_start_cmd_label)
+    val toolNameClipboardLabel = stringResource(R.string.soft_studio_conversations_tool_name_clipboard)
     
     // One-line install command - configures SSH on port 8023 (separate from Termux tools port 8025)
     val oneLineInstall = """pkg install proot-distro -y && proot-distro install ubuntu --override-alias ai-agent && proot-distro login ai-agent --isolated -- bash -c "apt update && apt install -y openssh-server git ripgrep python3 nodejs npm curl wget && mkdir -p /run/sshd && sed -i 's/#Port 22/Port 8023/' /etc/ssh/sshd_config && echo 'PermitRootLogin yes' >> /etc/ssh/sshd_config && echo 'root:agent' | chpasswd && mkdir -p /workspace""""
@@ -285,6 +286,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clickable { showTools = !showTools }
                         .padding(vertical = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -330,8 +332,8 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                                             color = MaterialTheme.colorScheme.primary
                                         )
                                         IconButton(
-                                            onClick = { copyToClipboard(tool.name, "Tool Name") },
-                                            modifier = Modifier.size(20.dp)
+                                            onClick = { copyToClipboard(tool.name, toolNameClipboardLabel) },
+                                            modifier = Modifier.size(48.dp)
                                         ) {
                                             Icon(
                                                 Icons.Default.ContentCopy, 
@@ -350,7 +352,10 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                                     if (tool.requiredParams.isNotEmpty()) {
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
-                                            "Params: ${tool.requiredParams.joinToString(", ")}",
+                                            stringResource(
+                                                R.string.soft_studio_conversations_required_params,
+                                                tool.requiredParams.joinToString(", ")
+                                            ),
                                             fontSize = 10.sp,
                                             color = MaterialTheme.colorScheme.secondary,
                                             fontFamily = FontFamily.Monospace
@@ -388,7 +393,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                         }
                         IconButton(
                             onClick = { copyToClipboard(oneLineInstall, installCommandLabel) },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
                                 Icons.Default.Share,
@@ -425,7 +430,7 @@ fun SetupInfoDialog(onDismiss: () -> Unit) {
                         }
                         IconButton(
                             onClick = { copyToClipboard(startCommand, startCommandLabel) },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
                                 Icons.Default.Share,
@@ -3848,7 +3853,7 @@ fun AgentConfigCard(
                             TextButton(
                                 onClick = onResetPrompt,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                modifier = Modifier.height(28.dp)
+                                modifier = Modifier.heightIn(min = 48.dp)
                             ) {
                                 Text(stringResource(R.string.agent_reset_default), fontSize = 11.sp)
                             }

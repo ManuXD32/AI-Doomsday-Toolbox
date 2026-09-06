@@ -286,12 +286,11 @@ private fun CompactStatusHeader(runtime: QuadtrixRuntimeState) {
     AppSectionCard(
         tonalAccent = statusColor(runtime).copy(alpha = 0.12f)
     ) {
-        Row(
+        Column(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = stringResource(R.string.quadtrix_eyebrow),
                     style = MaterialTheme.typography.labelLarge,

@@ -251,14 +251,14 @@ private fun CuratedModelBundleCard(
             .clickable(enabled = !isDownloading, onClick = onReview),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
         ),
         border = BorderStroke(
             1.dp,
             if (allInstalled) MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
             else MaterialTheme.colorScheme.outlineVariant
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -376,12 +376,18 @@ private fun CuratedModelBundleCard(
                         color = MaterialTheme.colorScheme.primary
                     )
                 }
-                installedCount < bundle.files.size -> Button(onClick = onReview, modifier = Modifier.fillMaxWidth()) {
+                installedCount < bundle.files.size -> Button(
+                    onClick = onReview,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                ) {
                     Icon(Icons.Default.CloudDownload, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.sd_bundle_review_download))
                 }
-                canUse -> OutlinedButton(onClick = onUse, modifier = Modifier.fillMaxWidth()) {
+                canUse -> OutlinedButton(
+                    onClick = onUse,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
                     Text(stringResource(R.string.phase_c_bundle_use))
@@ -435,7 +441,11 @@ private fun CuratedModelBundleDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onDownload, enabled = missingFiles.isNotEmpty()) {
+            Button(
+                onClick = onDownload,
+                enabled = missingFiles.isNotEmpty(),
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
                 Icon(Icons.Default.Download, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(

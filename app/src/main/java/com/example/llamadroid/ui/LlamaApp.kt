@@ -1,5 +1,19 @@
 package com.example.llamadroid.ui
 
+import androidx.navigation.NavType
+
+import androidx.navigation.navArgument
+
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import com.example.llamadroid.ui.navigation.AppRootDestination
+import com.example.llamadroid.ui.navigation.AppRoutePresentations
+import com.example.llamadroid.ui.navigation.SoftStudioAppScaffold
+import com.example.llamadroid.ui.library.LibraryScreen
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -9,6 +23,7 @@ import com.example.llamadroid.ui.models.ModelManagerScreen
 import com.example.llamadroid.ui.models.ModelHubScreen
 import com.example.llamadroid.ui.chat.ChatScreen
 import com.example.llamadroid.ui.chat.ChatWebViewHolder
+import com.example.llamadroid.ui.settings.DailySupportPrompt
 import com.example.llamadroid.ui.settings.SettingsHubScreen
 import com.example.llamadroid.ui.settings.GeneralSettingsScreen
 import com.example.llamadroid.ui.settings.LLMSettingsScreen
@@ -146,7 +161,8 @@ fun LlamaApp(
     sharedFileData: SharedFileData? = null,
     onSharedFileHandled: () -> Unit = {},
     pendingNavigationRoute: ExternalRouteResolution = ExternalRouteResolution.NoRoute,
-    onNavigationHandled: () -> Unit = {}
+    onNavigationHandled: () -> Unit = {},
+    allowDailySupportPrompt: Boolean = false
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -317,7 +333,7 @@ fun LlamaApp(
             },
             title = { Text(stringResource(R.string.action_open_with)) },
             text = {
-                Column {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                     shareOptions.forEach { destination ->
                         TextButton(
                             onClick = {
@@ -401,130 +417,29 @@ fun LlamaApp(
         }
     }
     
-    // Bottom navigation destinations. Keep route ownership here so the shared navigation
-    // component can remain independent of this app's very large Screen catalog.
-    val modelRoutes = remember {
-        setOf(
-            Screen.ModelManager.route,
-            Screen.ModelHub.route,
-            Screen.LLMModels.route,
-            Screen.SDModels.route,
-            Screen.OnnxModels.route,
-            Screen.WhisperModels.route,
-            Screen.LiteRtModels.route,
-            "model_share"
-        )
-    }
-    val tamaRoutes = remember {
-        setOf(
-            Screen.Tama.route,
-            Screen.TamaChat.route,
-            Screen.TamaGallery.route,
-            Screen.Arcade.route,
-            Screen.Farm.route,
-            Screen.Barn.route,
-            Screen.Coop.route,
-            Screen.Store.route,
-            Screen.Dungeon.route,
-            Screen.Adventure.route.substringBefore("/{"),
-            Screen.AdventureGate.route,
-            Screen.NightArena.route
-        )
-    }
-
-    fun isModelRoute(route: String?): Boolean = route != null && (
-        route in modelRoutes || route.startsWith("${Screen.ModelHub.route}/")
-    )
-    fun isSettingsRoute(route: String?): Boolean = route != null && (
-        route == Screen.Settings.route ||
-            route.startsWith("settings_") ||
-            route == "about"
-    )
-    fun isTamaRoute(route: String?): Boolean = route != null && (
-        route in tamaRoutes ||
-            route.startsWith("${Screen.Tama.route}/") ||
-            route.startsWith("${Screen.Adventure.route.substringBefore("/{")}/")
-    )
-
-    fun navigateFromAppNavigation(screen: Screen) {
-        // Hub screens intentionally open their hub and do not restore a nested child state.
-        val isHubScreen = screen == Screen.AIHub || screen == Screen.ModelManager
-        val targetRoute = if (screen == Screen.ModelManager) {
-            Screen.ModelHub.route
-        } else {
-            screen.route
-        }
-        navController.navigate(targetRoute) {
-            popUpTo(navController.graph.startDestinationId) {
-                saveState = true
-            }
+    fun navigateFromAppNavigation(root: AppRootDestination) {
+        navController.navigate(root.route) {
+            popUpTo(navController.graph.startDestinationId) { saveState = true }
             launchSingleTop = true
-            restoreState = !isHubScreen
+            restoreState = true
         }
     }
 
     val directNavigationDestinations = listOf(
+        Triple(AppRootDestination.Home, R.string.studio_nav_home, Icons.Default.Home),
+        Triple(AppRootDestination.Tools, R.string.studio_nav_tools, Icons.Default.GridView),
+        Triple(AppRootDestination.Library, R.string.studio_nav_library, Icons.Default.FolderOpen),
+        Triple(AppRootDestination.Tama, R.string.studio_nav_tama, Icons.Default.FavoriteBorder)
+    ).map { (root, labelRes, icon) ->
         AppNavigationDestination(
-            route = Screen.Dashboard.route,
-            label = stringResource(R.string.responsive_nav_home),
-            icon = androidx.compose.material.icons.Icons.Default.Home,
-            contentDescription = stringResource(R.string.responsive_nav_home_accessibility),
-            onClick = { navigateFromAppNavigation(Screen.Dashboard) }
-        ),
-        AppNavigationDestination(
-            route = Screen.AIHub.route,
-            label = stringResource(R.string.responsive_nav_ai),
-            icon = androidx.compose.material.icons.Icons.Default.PlayArrow,
-            contentDescription = stringResource(R.string.responsive_nav_ai_accessibility),
-            isSelected = { route -> route == Screen.AIHub.route || ToolCatalog.matchesRoute(route) },
-            onClick = { navigateFromAppNavigation(Screen.AIHub) }
-        ),
-        AppNavigationDestination(
-            route = Screen.NotesManager.route,
-            label = stringResource(R.string.responsive_nav_notes),
-            icon = androidx.compose.material.icons.Icons.Default.Edit,
-            contentDescription = stringResource(R.string.responsive_nav_notes_accessibility),
-            onClick = { navigateFromAppNavigation(Screen.NotesManager) }
-        ),
-        AppNavigationDestination(
-            route = Screen.Tama.route,
-            label = stringResource(R.string.responsive_nav_pet),
-            icon = androidx.compose.material.icons.Icons.Default.Favorite,
-            contentDescription = stringResource(R.string.responsive_nav_pet_accessibility),
-            isSelected = ::isTamaRoute,
-            onClick = { navigateFromAppNavigation(Screen.Tama) }
-        ),
-        AppNavigationDestination(
-            route = Screen.ModelManager.route,
-            label = stringResource(R.string.responsive_nav_models),
-            icon = androidx.compose.material.icons.Icons.Default.Star,
-            contentDescription = stringResource(R.string.responsive_nav_models_accessibility),
-            isSelected = ::isModelRoute,
-            onClick = { navigateFromAppNavigation(Screen.ModelManager) }
-        ),
-        AppNavigationDestination(
-            route = Screen.Settings.route,
-            label = stringResource(R.string.responsive_nav_settings),
-            icon = androidx.compose.material.icons.Icons.Default.Settings,
-            contentDescription = stringResource(R.string.responsive_nav_settings_accessibility),
-            isSelected = ::isSettingsRoute,
-            onClick = { navigateFromAppNavigation(Screen.Settings) }
+            route = root.route,
+            label = stringResource(labelRes),
+            icon = icon,
+            isSelected = { route -> AppRoutePresentations.forRoute(route).parent == root },
+            onClick = { navigateFromAppNavigation(root) }
         )
-    )
-    val compactNavigationDestinations = listOf(
-        directNavigationDestinations[0],
-        directNavigationDestinations[1],
-        directNavigationDestinations[2].copy(
-            label = stringResource(R.string.responsive_nav_plan),
-            contentDescription = stringResource(R.string.responsive_nav_plan_accessibility)
-        ),
-        directNavigationDestinations[3]
-    )
-    val overflowNavigationDestinations = listOf(
-        directNavigationDestinations[4],
-        directNavigationDestinations[5]
-    )
-    
+    }
+
     // Show welcome screen on first run
     if (showWelcome && !hasCompletedWelcome) {
         WelcomeScreen(
@@ -535,21 +450,28 @@ fun LlamaApp(
         return
     }
 
-    Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        bottomBar = {
-            AdaptiveAppNavigation(
-                currentRoute = currentRoute,
-                destinations = directNavigationDestinations,
-                compactDestinations = compactNavigationDestinations,
-                overflowDestinations = overflowNavigationDestinations
-            )
-        }
+    DailySupportPrompt(
+        settings = settingsRepo,
+        eligible = allowDailySupportPrompt && currentRoute != null &&
+            AppRoutePresentations.forRoute(currentRoute).isRoot &&
+            sharedFileData == null && !showShareChooser &&
+            pendingNavigationRoute == ExternalRouteResolution.NoRoute
+    )
+
+    SoftStudioAppScaffold(
+        currentRoute = currentRoute,
+        destinations = directNavigationDestinations,
+        snackbarHostState = snackbarHostState,
+        onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } }
     ) { innerPadding ->
         NavHost(
             navController = navController, 
             startDestination = Screen.Dashboard.route,
-            modifier = Modifier.padding(innerPadding)
+            modifier = Modifier.padding(innerPadding),
+            enterTransition = { fadeIn(tween(240)) },
+            exitTransition = { fadeOut(tween(180)) },
+            popEnterTransition = { fadeIn(tween(240)) },
+            popExitTransition = { fadeOut(tween(180)) }
         ) {
             composable(Screen.Dashboard.route) { DashboardScreen(navController) }
             composable(Screen.Settings.route) { SettingsHubScreen(navController) }
@@ -557,7 +479,18 @@ fun LlamaApp(
             composable(Screen.Logs.route) { LogsScreen(navController) }
             // AI screens
             composable(Screen.AIHub.route) { AIHubScreen(navController) }
+            composable(Screen.Library.route) { LibraryScreen(navController) }
             composable(Screen.AiServersHub.route) { AiServersHubScreen(navController) }
+            composable(Screen.FileServer.route) {
+                com.example.llamadroid.ui.components.AppScreenScaffold(
+                    title = stringResource(R.string.dashboard_file_server),
+                    onBack = { navController.popBackStack() }
+                ) {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+                        com.example.llamadroid.ui.dashboard.DashboardFileServerCard()
+                    }
+                }
+            }
             composable(
                 route = "${Screen.Chat.route}?port={serverPort}",
                 arguments = listOf(
@@ -574,16 +507,21 @@ fun LlamaApp(
                 com.example.llamadroid.ui.ai.llama.LlamaServerCardsScreen(navController)
             }
             composable(
-                route = "${Screen.ImageGen.route}?startMode={startMode}",
+                route = "${Screen.ImageGen.route}?startMode={startMode}&tab={tab}",
                 arguments = listOf(
                     androidx.navigation.navArgument("startMode") {
                         type = androidx.navigation.NavType.IntType
                         defaultValue = 0
+                    },
+                    androidx.navigation.navArgument("tab") {
+                        type = androidx.navigation.NavType.StringType
+                        defaultValue = "create"
                     }
                 )
             ) { backStackEntry ->
                 val startMode = backStackEntry.arguments?.getInt("startMode") ?: 0
-                ImageGenScreen(navController, initialMode = startMode)
+                ImageGenScreen(navController, initialMode = startMode,
+                    initialTab = backStackEntry.arguments?.getString("tab") ?: "create")
             }
             // Keep the historical route for shortcuts and saved navigation state, but render the
             // same curated workspace and task selector as every other image operation.
@@ -595,7 +533,15 @@ fun LlamaApp(
             composable(Screen.OnnxTts.route) { OnnxTtsScreen(navController) }
             composable(Screen.OnnxTtsGallery.route) { OnnxTtsGalleryScreen(navController) }
             composable(Screen.LiveTranslator.route) { LiveTranslatorScreen(navController) }
-            composable(Screen.VideoGen.route) { VideoGenScreen(navController) }
+            composable(
+                route = "${Screen.VideoGen.route}?tab={tab}",
+                arguments = listOf(androidx.navigation.navArgument("tab") {
+                    type = androidx.navigation.NavType.StringType
+                    defaultValue = "create"
+                })
+            ) { entry ->
+                VideoGenScreen(navController, initialTab = entry.arguments?.getString("tab") ?: "create")
+            }
             composable(Screen.AudioTranscription.route) { AudioTranscriptionScreen(navController) }
             composable(Screen.VideoUpscaler.route) { VideoUpscalerScreen(navController) }
             composable(Screen.VideoInterpolation.route) { VideoInterpolationScreen(navController) }
@@ -712,8 +658,17 @@ fun LlamaApp(
             }
             
             // AI Agent
-            composable(Screen.Agent.route) {
-                com.example.llamadroid.ui.agent.AgentScreen(navController)
+            composable(
+                "${Screen.Agent.route}?conversationId={conversationId}",
+                arguments = listOf(navArgument("conversationId") {
+                    type = NavType.LongType
+                    defaultValue = -1L
+                })
+            ) { backStackEntry ->
+                com.example.llamadroid.ui.agent.AgentScreen(
+                    navController,
+                    initialConversationId = backStackEntry.arguments?.getLong("conversationId")?.takeIf { it > 0L }
+                )
             }
             
             // Tama Farming

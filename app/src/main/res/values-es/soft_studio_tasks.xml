@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="soft_studio_advanced">Avanzado</string>
+    <string name="soft_studio_generate">Generar</string>
+    <string name="soft_studio_start">Iniciar</string>
+    <string name="soft_studio_cancel">Cancelar</string>
+    <string name="soft_studio_empty_title">Todavía no hay resultados</string>
+    <string name="soft_studio_cancelling_title">Cancelando</string>
+    <string name="soft_studio_generated_image_description">Imagen generada: %1$s</string>
+    <string name="soft_studio_input_image_description">Imagen de entrada seleccionada: %1$s</string>
+    <string name="soft_studio_generated_video_description">Vídeo generado: %1$s</string>
+    <string name="soft_studio_workflow_transcribe_summary_title">Transcribir + resumen</string>
+    <string name="soft_studio_workflow_transcribe_summary_description">Transcribe audio o vídeo y después crea un resumen con un LLM.</string>
+    <string name="soft_studio_workflow_txt2img_upscale_title">Texto a imagen + ampliar</string>
+    <string name="soft_studio_workflow_txt2img_upscale_description">Genera una imagen y después amplíala.</string>
+</resources>

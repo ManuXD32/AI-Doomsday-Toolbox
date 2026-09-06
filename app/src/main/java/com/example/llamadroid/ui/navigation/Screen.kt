@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.navigation
 
 sealed class Screen(val route: String) {
     object Dashboard : Screen("dashboard")
+    object Library : Screen("library")
     object ModelManager : Screen("models")       // Now goes to Model Hub
     object Chat : Screen("chat")
     object Settings : Screen("settings")
@@ -10,9 +11,10 @@ sealed class Screen(val route: String) {
     // AI screens
     object AIHub : Screen("ai_hub")              // Landing page for AI features
     object ImageGen : Screen("image_gen") {      // Stable Diffusion image generation
-        fun createRoute(startMode: Int = 0): String {
+        fun createRoute(startMode: Int = 0, tab: String = "create"): String {
             require(startMode in 0..4) { "Image Generation mode must be between 0 and 4" }
-            return "$route?startMode=$startMode"
+            require(tab == "create" || tab == "gallery") { "Unknown image workspace tab" }
+            return "$route?startMode=$startMode" + if (tab == "gallery") "&tab=gallery" else ""
         }
     }
     object ImageGenUpscale : Screen("image_gen_upscale") // Compatibility route into the unified Enlarge task
@@ -21,7 +23,12 @@ sealed class Screen(val route: String) {
     object OnnxTts : Screen("onnx_tts")       // ONNX Runtime text-to-speech
     object OnnxTtsGallery : Screen("onnx_tts_gallery") // ONNX TTS generated audio gallery
     object LiveTranslator : Screen("live_translator") // Turn-based bilingual voice translator
-    object VideoGen : Screen("video_gen")        // Stable Diffusion video generation
+    object VideoGen : Screen("video_gen") {
+        fun createRoute(tab: String = "create"): String {
+            require(tab == "create" || tab == "gallery") { "Unknown video workspace tab" }
+            return route + if (tab == "gallery") "?tab=gallery" else ""
+        }
+    }
     object AudioTranscription : Screen("audio_transcription") // WhisperCPP
     object VideoUpscaler : Screen("video_upscaler")           // Real-ESRGAN video upscaling
     object VideoInterpolation : Screen("video_interpolation") // RIFE video frame interpolation
@@ -38,6 +45,7 @@ sealed class Screen(val route: String) {
     }
     object Workflows : Screen("workflows")                     // AI Workflows (Sequential operations)
     object AiServersHub : Screen("ai_servers_hub")             // Local web servers for AI tools
+    object FileServer : Screen("file_server")                 // Existing LAN file-sharing controls
     // Model screens
     object ModelHub : Screen("model_hub")        // Landing page for model management
     object LLMModels : Screen("llm_models")      // LlamaCpp model management
@@ -89,7 +97,12 @@ sealed class Screen(val route: String) {
     object TermuxFileManager : Screen("termux_file_manager")  // File manager for Termux tools
     object FastsdGallery : Screen("fastsd_gallery")           // FastSD CPU generated images gallery
     // AI Agent screens
-    object Agent : Screen("agent")                             // AI coding agent chat
+    object Agent : Screen("agent") {                           // AI coding agent chat
+        fun createRoute(conversationId: Long): String {
+            require(conversationId > 0L) { "Conversation ID must be positive" }
+            return "$route?conversationId=$conversationId"
+        }
+    }
     object AgentWorkspace : Screen("agent_workspace")          // Agent workspace file manager
     object AgentInvocation : Screen("agent_invocation/{invocationId}") {
         fun createRoute(invocationId: String): String = "agent_invocation/$invocationId"

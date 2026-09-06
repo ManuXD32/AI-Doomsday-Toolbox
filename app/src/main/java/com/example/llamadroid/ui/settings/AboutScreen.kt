@@ -152,7 +152,7 @@ fun AboutScreen(navController: NavController) {
                             emoji = "☕",
                             text = stringResource(R.string.about_kofi),
                             onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://ko-fi.com/L3L61QAJ1S"))
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SupportLinks.KOFI))
                                 context.startActivity(intent)
                             }
                         )
@@ -164,7 +164,7 @@ fun AboutScreen(navController: NavController) {
                             emoji = "💳",
                             text = stringResource(R.string.about_paypal),
                             onClick = {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://paypal.me/ManuelG815"))
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SupportLinks.PAYPAL))
                                 context.startActivity(intent)
                             }
                         )

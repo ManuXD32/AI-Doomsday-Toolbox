@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -125,6 +126,10 @@ import com.example.llamadroid.service.OnnxImageGenerationService
 import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -473,19 +478,12 @@ fun OnnxImageGenScreen(navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
-                    )
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp),
+                .padding(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = { navController.popBackStack() }) {
@@ -494,7 +492,7 @@ fun OnnxImageGenScreen(navController: NavController) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     stringResource(R.string.onnx_image_gen_title),
-                    style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -511,7 +509,7 @@ fun OnnxImageGenScreen(navController: NavController) {
             }
         }
 
-        TabRow(selectedTabIndex = mainTab, modifier = Modifier.padding(horizontal = 16.dp)) {
+        AppScrollableTabRow(selectedTabIndex = mainTab, modifier = Modifier.padding(horizontal = 20.dp)) {
             Tab(
                 selected = mainTab == 0,
                 onClick = { mainTab = 0 },
@@ -528,7 +526,8 @@ fun OnnxImageGenScreen(navController: NavController) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .padding(horizontal = 20.dp)
+                    .weight(1f)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -1216,46 +1215,86 @@ fun OnnxImageGenScreen(navController: NavController) {
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = { startGeneration() },
-                            enabled = !isBusy &&
-                                selectedModel != null &&
-                                prompt.isNotBlank() &&
-                                (selectedMode != OnnxImageGenMode.IMG2IMG ||
-                                    (selectedModelSupportsImg2Img && !initImagePath.isNullOrBlank())),
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.imagegen_generate_btn))
+                }
+            }
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isBusy) {
+                    when (val runningState = generationState) {
+                        is OnnxImageGenerationState.Preparing -> {
+                            Text(
+                                text = runningState.status,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
-                        FilledTonalButton(
-                            onClick = { cancelGeneration() },
-                            enabled = isBusy,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(16.dp)
-                        ) {
-                            Text(stringResource(R.string.action_cancel))
+                        is OnnxImageGenerationState.Generating -> {
+                            Text(
+                                text = runningState.status,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            LinearProgressIndicator(
+                                progress = { runningState.progress.coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
+                        else -> Unit
+                    }
+                    FilledTonalButton(
+                        onClick = { cancelGeneration() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
+                    }
+                } else {
+                    Button(
+                        onClick = { startGeneration() },
+                        enabled = selectedModel != null &&
+                            prompt.isNotBlank() &&
+                            (selectedMode != OnnxImageGenMode.IMG2IMG ||
+                                (selectedModelSupportsImg2Img && !initImagePath.isNullOrBlank())),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp),
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_generate))
                     }
                 }
             }
         } else {
             if (galleryImages.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        stringResource(R.string.onnx_image_gen_gallery_empty),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                AppStatePanel(
+                    kind = AppStateKind.Empty,
+                    title = stringResource(R.string.soft_studio_empty_title),
+                    message = stringResource(R.string.onnx_image_gen_gallery_empty),
+                    modifier = Modifier.fillMaxSize()
+                )
             } else {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 16.dp)
+                        .padding(horizontal = 20.dp)
                 ) {
                     SingleChoiceSegmentedButtonRow(
                         modifier = Modifier
@@ -1622,15 +1661,7 @@ private fun OnnxHeroCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer,
-                            MaterialTheme.colorScheme.secondaryContainer,
-                            MaterialTheme.colorScheme.tertiaryContainer
-                        )
-                    )
-                )
+                .background(MaterialTheme.colorScheme.primaryContainer)
                 .padding(18.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {

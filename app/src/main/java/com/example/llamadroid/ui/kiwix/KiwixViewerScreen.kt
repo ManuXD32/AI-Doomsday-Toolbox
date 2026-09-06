@@ -32,6 +32,7 @@ import com.example.llamadroid.data.db.ZimEntity
 import com.example.llamadroid.service.KiwixService
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppScreenScaffold
 
 /**
  * WebView-based viewer for Kiwix content served by kiwix-serve.
@@ -144,34 +145,26 @@ fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(currentTitle, maxLines = 1) },
-                navigationIcon = {
-                    IconButton(onClick = { 
-                        // Stop server before leaving
-                        kiwixService?.stopServer()
-                        navController.popBackStack() 
-                    }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.kiwix_back))
+    AppScreenScaffold(
+        title = currentTitle,
+        onBack = {
+            // Stop server before leaving
+            kiwixService?.stopServer()
+            navController.popBackStack()
+        },
+        actions = {
+            // Stop server and exit button
+            if (isRunning) {
+                IconButton(onClick = {
+                    kiwixService?.stopServer()
+                    // Navigate to Dashboard Home
+                    navController.navigate("dashboard") {
+                        popUpTo(navController.graph.startDestinationId) { inclusive = false }
                     }
-                },
-                actions = {
-                    // Stop server and exit button
-                    if (isRunning) {
-                        IconButton(onClick = { 
-                            kiwixService?.stopServer()
-                            // Navigate to Dashboard Home
-                            navController.navigate("dashboard") {
-                                popUpTo(navController.graph.startDestinationId) { inclusive = false }
-                            }
-                        }) {
-                            Icon(Icons.Default.Close, stringResource(R.string.agent_action_stop))
-                        }
-                    }
+                }) {
+                    Icon(Icons.Default.Close, stringResource(R.string.agent_action_stop))
                 }
-            )
+            }
         },
         bottomBar = {
             // Navigation controls
@@ -206,11 +199,9 @@ fun KiwixViewerScreen(navController: NavController, zimPath: String? = null) {
                 }
             }
         }
-    ) { padding ->
+    ) { _ ->
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
+            modifier = Modifier.fillMaxSize()
         ) {
             when {
                 installedZims.isEmpty() -> {

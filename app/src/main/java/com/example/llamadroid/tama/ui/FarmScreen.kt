@@ -14,6 +14,10 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -595,12 +599,26 @@ fun FarmTileItem(
     onClick: () -> Unit,
     onLongPress: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    val plotState = tile.crop?.let { crop ->
+        val name = cropDisplayName(context, crop.type)
+        if (crop.isDecayed) stringResource(R.string.soft_studio_farm_decayed, name)
+        else stringResource(R.string.soft_studio_farm_crop, name, crop.stage + 1)
+    } ?: stringResource(when (tile.status) {
+        TileStatus.SOIL -> R.string.soft_studio_farm_soil
+        TileStatus.FARMLAND -> R.string.soft_studio_farm_tilled
+        TileStatus.WET_FARMLAND -> R.string.soft_studio_farm_watered
+    })
+    val plotLabel = stringResource(R.string.soft_studio_farm_plot, tile.id + 1, plotState)
+    val inspectLabel = stringResource(R.string.soft_studio_farm_inspect)
     Card(
         modifier = Modifier
             .aspectRatio(1f)
+            .semantics(mergeDescendants = true) { contentDescription = plotLabel }
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = onLongPress
+                onLongClickLabel = inspectLabel,
+                onLongClick = if (tile.crop != null) onLongPress else null
             ),
         shape = RoundedCornerShape(8.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -694,7 +712,7 @@ private fun FarmPageControls(
             IconButton(
                 onClick = onPrevious,
                 enabled = currentPage > 0,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     Icons.Default.KeyboardArrowLeft,
@@ -710,7 +728,7 @@ private fun FarmPageControls(
             IconButton(
                 onClick = onNext,
                 enabled = currentPage < pageCount - 1,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     Icons.Default.KeyboardArrowRight,
@@ -830,6 +848,7 @@ fun ToolSidebar(
     onPlantingDroneOpen: () -> Unit,
     onHarvesterDroneOpen: () -> Unit
 ) {
+    val context = LocalContext.current
     val tools = inventory.filter { it.type == ItemType.TOOL || it.id == "fertilizer" || it.id == "water" }
     
     LazyRow(
@@ -844,9 +863,19 @@ fun ToolSidebar(
         items(tools) { item ->
             val isSelected = selectedTool?.id == item.id
             val isDrone = item.id == FARM_PLANTING_DRONE_ID || item.id == FARM_HARVESTING_DRONE_ID
+            val toolName = inventoryItemDisplayName(context, item)
+            val durability = item.durability ?: 100
+            val maxDurability = (item.maxDurability ?: 100).coerceAtLeast(1)
+            val toolLabel = if (item.type == ItemType.TOOL && !isDrone)
+                stringResource(R.string.soft_studio_farm_tool, toolName, durability, maxDurability)
+            else stringResource(R.string.soft_studio_farm_supply, toolName, item.quantity)
             Surface(
                 modifier = Modifier
                     .size(68.dp)
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = toolLabel
+                        selected = isSelected && !isDrone
+                    }
                     .clickable {
                         when (item.id) {
                             FARM_PLANTING_DRONE_ID -> onPlantingDroneOpen()
@@ -870,42 +899,29 @@ fun ToolSidebar(
                     }
                     AsyncImage(
                         model = "file:///android_asset/farm/$iconSource",
-                        contentDescription = item.name,
-                        modifier = Modifier
-                            .size(50.dp)
-                            .scale(1.7f),
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp).padding(bottom = 6.dp),
                         contentScale = ContentScale.Fit
                     )
                     
-                    // Show quantity for resources
-                    // Show quantity for resources or durability for tools
                     if (item.type == ItemType.TOOL && !isDrone) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.tertiary,
-                            shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier.align(Alignment.BottomCenter).padding(2.dp)
-                        ) {
-                             Text(
-                                "D:${item.durability ?: 100}",
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                                fontSize = 8.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
+                        LinearProgressIndicator(
+                            progress = { (durability.toFloat() / maxDurability).coerceIn(0f, 1f) },
+                            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                                .padding(8.dp).height(4.dp).clearAndSetSemantics {},
+                            color = MaterialTheme.colorScheme.primary,
+                            trackColor = MaterialTheme.colorScheme.surfaceContainerHighest
+                        )
                     } else {
                         Surface(
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = MaterialTheme.colorScheme.secondaryContainer,
                             shape = RoundedCornerShape(4.dp),
-                            modifier = Modifier.align(Alignment.TopEnd).padding(2.dp)
+                            modifier = Modifier.align(Alignment.TopEnd).padding(2.dp).clearAndSetSemantics {}
                         ) {
-                             Text(
-                                item.quantity.toString(),
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                                fontSize = 10.sp,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold
-                            )
+                            Text(item.quantity.toString(), modifier = Modifier.padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -1586,10 +1602,10 @@ private fun DroneSeedPriorityRow(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onMoveUp, enabled = canMoveUp, modifier = Modifier.size(48.dp)) {
             Icon(Icons.Default.KeyboardArrowUp, contentDescription = stringResource(R.string.tama_farm_drone_priority_up))
         }
-        IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(36.dp)) {
+        IconButton(onClick = onMoveDown, enabled = canMoveDown, modifier = Modifier.size(48.dp)) {
             Icon(Icons.Default.KeyboardArrowDown, contentDescription = stringResource(R.string.tama_farm_drone_priority_down))
         }
     }

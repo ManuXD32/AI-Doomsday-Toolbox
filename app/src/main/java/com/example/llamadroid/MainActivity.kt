@@ -15,7 +15,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.coroutineScope
@@ -25,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import com.example.llamadroid.ui.theme.LlamaDroidTheme
 import com.example.llamadroid.ui.LlamaApp
+import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.service.AgentService
 import com.example.llamadroid.service.AiRuntimeJobStore
@@ -55,6 +58,7 @@ class MainActivity : ComponentActivity() {
     private val pendingNavigationRoute = mutableStateOf<ExternalRouteResolution>(
         ExternalRouteResolution.NoRoute
     )
+    private val supportPromptAllowed = mutableStateOf(false)
     private val isDeployingBinaries = mutableStateOf(true)
     private val deploymentStatusId = mutableStateOf(R.string.deployment_adjusting)
     
@@ -197,6 +201,7 @@ class MainActivity : ComponentActivity() {
         }
         
         // Handle share intent
+        supportPromptAllowed.value = isNormalAppLaunch(intent)
         handleShareIntent(intent)
         pendingNavigationRoute.value = extractNavigationRoute(intent)
 
@@ -210,12 +215,19 @@ class MainActivity : ComponentActivity() {
         }
         
         setContent {
-            LlamaDroidTheme {
+            val appearanceSettings = remember { SettingsRepository(applicationContext) }
+            val themeMode = appearanceSettings.themeMode.collectAsState().value
+            val dynamicColor = appearanceSettings.dynamicColor.collectAsState().value
+            LlamaDroidTheme(
+                themeMode = themeMode,
+                dynamicColor = dynamicColor
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
                     LlamaApp(
+                        allowDailySupportPrompt = supportPromptAllowed.value,
                         sharedFileData = sharedFileData.value,
                         onSharedFileHandled = { sharedFileData.value = null },
                         pendingNavigationRoute = pendingNavigationRoute.value,
@@ -230,6 +242,7 @@ class MainActivity : ComponentActivity() {
     
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        supportPromptAllowed.value = isNormalAppLaunch(intent)
         handleShareIntent(intent)
         pendingNavigationRoute.value = extractNavigationRoute(intent)
     }
@@ -250,6 +263,10 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    private fun isNormalAppLaunch(intent: Intent?): Boolean =
+        (intent?.action == null || intent.action == Intent.ACTION_MAIN) &&
+            intent?.hasExtra(EXTRA_OPEN_ROUTE) != true
+
     private fun handleShareIntent(intent: Intent?) {
         if (intent?.action == Intent.ACTION_SEND) {
             val uri = intent.getParcelableExtraCompat<Uri>(Intent.EXTRA_STREAM)

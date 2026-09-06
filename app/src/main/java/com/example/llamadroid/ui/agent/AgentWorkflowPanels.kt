@@ -25,9 +25,9 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -101,18 +101,20 @@ fun AgentCommandSuggestions(
         else -> emptyList()
     }.take(6)
     if (suggestions.isEmpty()) return
-    ElevatedCard(
+    Card(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column {
             suggestions.forEachIndexed { index, suggestion ->
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .heightIn(min = 48.dp)
                         .clickable { onSelect("${suggestion.command} ") }
                         .padding(horizontal = 14.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -197,12 +199,15 @@ private fun AgentCommandDialogRow(
     description: String,
     onClick: () -> Unit
 ) {
-    ElevatedCard(
+    Card(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
             Text(command, fontWeight = FontWeight.SemiBold)
@@ -226,7 +231,10 @@ fun AgentPendingQuestionPanel(
         runCatching { questionSpecFromJson(pendingQuestion.specificationJson) }.getOrNull()
     }
     if (spec == null) {
-        ElevatedCard(modifier = modifier.fillMaxWidth()) {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        ) {
             Text(
                 stringResource(R.string.agent_question_invalid),
                 modifier = Modifier.padding(16.dp),
@@ -277,11 +285,12 @@ private fun QuestionSpecPanel(
     val allAnswered = spec.questions.all { item ->
         selections[item.id].orEmpty().isNotEmpty() || customAnswers[item.id].orEmpty().isNotBlank()
     }
-    ElevatedCard(
+    Card(
         modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.elevatedCardColors(
+        colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.65f)
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Column(
             modifier = Modifier
@@ -540,7 +549,10 @@ fun AgentTodoDialog(
                 }
                 if (visibleTodos.isEmpty()) {
                     item {
-                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                        ) {
                             Text(
                                 stringResource(R.string.agent_todos_empty),
                                 modifier = Modifier.padding(16.dp),
@@ -550,7 +562,10 @@ fun AgentTodoDialog(
                     }
                 } else {
                     items(visibleTodos, key = { it.id }) { todo ->
-                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                        ) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()

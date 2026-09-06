@@ -49,6 +49,7 @@ import com.example.llamadroid.service.RemoteSummaryClientFactory
 import com.example.llamadroid.service.normalizeDatasetBackend
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -190,27 +191,17 @@ fun DatasetProjectScreen(
         }
     }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(project?.name ?: stringResource(R.string.dataset_tab_sources), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showDatasetInfo = true }) {
-                        Icon(Icons.Default.Info, stringResource(R.string.dataset_info_title))
-                    }
-                }
-            )
+    AppScreenScaffold(
+        title = project?.name ?: stringResource(R.string.dataset_tab_sources),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(onClick = { showDatasetInfo = true }) {
+                Icon(Icons.Default.Info, stringResource(R.string.dataset_info_title))
+            }
         }
-    ) { padding ->
+    ) { _ ->
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
+            modifier = Modifier.fillMaxSize()
         ) {
             // Scrollable Tab Row with icons and short labels
             ScrollableTabRow(

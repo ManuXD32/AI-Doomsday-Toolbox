@@ -1,148 +1,80 @@
 package com.example.llamadroid.ui.settings
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.navigation.NavController
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
 import com.example.llamadroid.R
-import com.example.llamadroid.ui.components.AppContentColumn
-import com.example.llamadroid.ui.components.AppHubCard
-import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
 
-data class SettingsItem(
-    val emoji: String,
-    val title: String,
-    val description: String,
-    val gradientColors: List<Color>,
-    val route: String
-)
+private data class SettingsEntry(val title: Int, val description: Int, val icon: ImageVector, val route: String)
 
-/**
- * Settings Hub - 2-column square grid layout
- */
-@OptIn(ExperimentalMaterial3Api::class)
+/** All preference families remain directly discoverable, including task-specific defaults. */
 @Composable
 fun SettingsHubScreen(navController: NavController) {
-    val settingsItems = listOf(
-        SettingsItem(
-            emoji = "📂",
-            title = stringResource(R.string.settings_general),
-            description = stringResource(R.string.settings_general_desc),
-            gradientColors = listOf(
-                Color(0xFF607D8B).copy(alpha = 0.15f),
-                Color(0xFF455A64).copy(alpha = 0.3f)
-            ),
-            route = "settings_general"
-        ),
-        SettingsItem(
-            emoji = "💬",
-            title = stringResource(R.string.settings_llm),
-            description = stringResource(R.string.settings_llm_desc),
-            gradientColors = listOf(
-                Color(0xFF4CAF50).copy(alpha = 0.15f),
-                Color(0xFF388E3C).copy(alpha = 0.3f)
-            ),
-            route = "settings_llm"
-        ),
-        SettingsItem(
-            emoji = "🎙️",
-            title = stringResource(R.string.whisper_settings_title),
-            description = stringResource(R.string.settings_whisper_desc),
-            gradientColors = listOf(
-                Color(0xFF00BCD4).copy(alpha = 0.15f),
-                Color(0xFF00838F).copy(alpha = 0.3f)
-            ),
-            route = "settings_whisper"
-        ),
-        SettingsItem(
-            emoji = "📝",
-            title = stringResource(R.string.settings_prompts),
-            description = stringResource(R.string.settings_prompts_desc),
-            gradientColors = listOf(
-                Color(0xFF009688).copy(alpha = 0.15f),
-                Color(0xFF00796B).copy(alpha = 0.3f)
-            ),
-            route = "settings_prompts"
-        ),
-        SettingsItem(
-            emoji = "🔧",
-            title = stringResource(R.string.settings_debug),
-            description = stringResource(R.string.settings_debug_desc),
-            gradientColors = listOf(
-                Color(0xFF795548).copy(alpha = 0.15f),
-                Color(0xFF5D4037).copy(alpha = 0.3f)
-            ),
-            route = Screen.Logs.route
-        ),
-        SettingsItem(
-            emoji = "📊",
-            title = stringResource(R.string.settings_stats),
-            description = stringResource(R.string.settings_stats_desc),
-            gradientColors = listOf(
-                Color(0xFF00897B).copy(alpha = 0.15f),
-                Color(0xFF00695C).copy(alpha = 0.3f)
-            ),
-            route = Screen.Stats.route
-        ),
-        SettingsItem(
-            emoji = "ℹ️",
-            title = stringResource(R.string.settings_about),
-            description = stringResource(R.string.settings_about_desc),
-            gradientColors = listOf(
-                Color(0xFF3F51B5).copy(alpha = 0.15f),
-                Color(0xFF303F9F).copy(alpha = 0.3f)
-            ),
-            route = "about"
-        )
+    val entries = listOf(
+        SettingsEntry(R.string.settings_general, R.string.settings_general_desc, Icons.Default.Tune, "settings_general"),
+        SettingsEntry(R.string.settings_llm, R.string.settings_llm_desc, Icons.Default.ChatBubbleOutline, "settings_llm"),
+        SettingsEntry(R.string.settings_imagegen, R.string.settings_imagegen_desc, Icons.Default.Image, "settings_imagegen"),
+        SettingsEntry(R.string.whisper_settings_title, R.string.settings_whisper_desc, Icons.Default.MicNone, "settings_whisper"),
+        SettingsEntry(R.string.settings_upscaler, R.string.settings_upscaler_desc, Icons.Default.AutoAwesome, "settings_upscaler"),
+        SettingsEntry(R.string.settings_pdf, R.string.settings_pdf_desc, Icons.Default.Description, "settings_pdf"),
+        SettingsEntry(R.string.settings_prompts, R.string.settings_prompts_desc, Icons.Default.EditNote, "settings_prompts"),
+        SettingsEntry(R.string.settings_debug, R.string.settings_debug_desc, Icons.Default.Terminal, Screen.Logs.route),
+        SettingsEntry(R.string.settings_stats, R.string.settings_stats_desc, Icons.Default.QueryStats, Screen.Stats.route),
+        SettingsEntry(R.string.settings_about, R.string.settings_about_desc, Icons.Default.Info, "about")
     )
-
-    AppPageBackground {
-        Column(modifier = Modifier.fillMaxSize()) {
-            AppContentColumn(
-                modifier = Modifier.fillMaxWidth(),
-                bottomPadding = 0.dp,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                AppPageHeader(
-                    eyebrow = "SETTINGS",
-                    title = "⚙️ " + stringResource(R.string.settings_title),
-                    subtitle = stringResource(R.string.settings_subtitle)
-                )
+    AppScreenScaffold(title = stringResource(R.string.settings_title), onBack = { navController.popBackStack() }) { padding ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(padding),
+            contentPadding = PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            item {
+                Text(stringResource(R.string.settings_subtitle), style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 12.dp))
             }
-
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(2),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(settingsItems) { item ->
-                    AppHubCard(
-                        emoji = item.emoji,
-                        title = item.title,
-                        description = item.description,
-                        gradientColors = item.gradientColors,
-                        onClick = { navController.navigate(item.route) },
-                        modifier = Modifier.aspectRatio(1f)
-                    )
+            items(entries, key = { it.route }) { entry ->
+                Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 72.dp)
+                            .testTag("studio_settings_${entry.route}")
+                            .clickable { navController.navigate(entry.route) }
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Icon(entry.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(stringResource(entry.title), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(entry.description), style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

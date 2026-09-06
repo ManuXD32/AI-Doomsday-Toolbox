@@ -32,6 +32,10 @@ import android.widget.Toast
 import kotlinx.coroutines.launch
 import java.io.File
 import com.example.llamadroid.util.UpscalerAssetPackSupport
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppStateKind
 
 /**
  * Video Upscaler Screen using realsr-ncnn/realcugan-ncnn
@@ -51,34 +55,34 @@ fun VideoUpscalerScreen(navController: NavController) {
         )
     }
     
-    var showDownloadDialog by remember { mutableStateOf(!hasRequiredAssets) }
+    var showDownloadDialog by remember { mutableStateOf(false) }
     
     if (showDownloadDialog) {
         com.example.llamadroid.ui.components.AssetDownloadDialog(
-            onDismiss = { 
-                // If dismissed without downloading, go back
-                if (!hasRequiredAssets) navController.popBackStack() 
-                showDownloadDialog = false 
-            },
+            onDismiss = { showDownloadDialog = false },
             onDownloadAll = {
                 hasRequiredAssets = true
                 showDownloadDialog = false
             },
             onSkip = {
-                navController.popBackStack()
                 showDownloadDialog = false
             }
         )
-        return
     }
     
     if (!hasRequiredAssets) {
-        // Fallback if dialog is somehow bypassed but assets are missing
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+        AppScreenScaffold(
+            title = stringResource(R.string.ai_video_upscaler),
+            onBack = { navController.popBackStack() }
         ) {
-            Text(stringResource(R.string.feature_upscaler_assets_missing))
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+                AppStatePanel(
+                    kind = AppStateKind.Blocked,
+                    title = stringResource(R.string.feature_upscaler_assets_missing),
+                    actionLabel = stringResource(R.string.action_download),
+                    onAction = { showDownloadDialog = true }
+                )
+            }
         }
         return
     }
@@ -199,6 +203,35 @@ fun VideoUpscalerScreen(navController: NavController) {
             }
         }
     }
+
+    fun startUpscale() {
+        if (selectedVideoPath == null) {
+            errorMessage = resources.getString(R.string.upscaler_error_no_video)
+            return
+        }
+        if (selectedModel == null) {
+            errorMessage = resources.getString(R.string.upscaler_error_no_model)
+            return
+        }
+        errorMessage = null
+        val fileName = "upscaled_${System.currentTimeMillis()}.mp4"
+        val outputPath = File(File(context.filesDir, "video_upscale_output").apply { mkdirs() }, fileName).absolutePath
+        val config = VideoUpscalerConfig(
+            inputPath = selectedVideoPath!!,
+            outputPath = outputPath,
+            engine = selectedEngine,
+            model = selectedModel!!.name,
+            scale = selectedScale,
+            denoise = if (selectedModel!!.engine == UpscalerEngine.REALCUGAN) selectedDenoise else -1,
+            loadThreads = loadThreads,
+            procThreads = procThreads,
+            saveThreads = saveThreads
+        )
+        ContextCompat.startForegroundService(
+            context,
+            VideoUpscalerService.createStartIntent(context, config)
+        )
+    }
     
     // Update model when engine changes
     LaunchedEffect(selectedEngine) {
@@ -266,6 +299,7 @@ fun VideoUpscalerScreen(navController: NavController) {
     }
     
     Scaffold(
+        modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.upscaler_title)) },
@@ -281,6 +315,12 @@ fun VideoUpscalerScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
+        ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .weight(1f)
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
@@ -485,63 +525,6 @@ fun VideoUpscalerScreen(navController: NavController) {
                 else -> {}
             }
             
-            // Upscale Button
-            Button(
-                onClick = {
-                    if (selectedVideoPath == null) {
-                        errorMessage = resources.getString(R.string.upscaler_error_no_video)
-                        return@Button
-                    }
-                    if (selectedModel == null) {
-                        errorMessage = resources.getString(R.string.upscaler_error_no_model)
-                        return@Button
-                    }
-                    
-                    errorMessage = null
-
-                    // Save to app-owned storage so the foreground service can finish even if this screen leaves composition.
-                    val fileName = "upscaled_${System.currentTimeMillis()}.mp4"
-                    val outputPath = File(File(context.filesDir, "video_upscale_output").apply { mkdirs() }, fileName).absolutePath
-                    
-                    val config = VideoUpscalerConfig(
-                        inputPath = selectedVideoPath!!,
-                        outputPath = outputPath,
-                        engine = selectedEngine,
-                        model = selectedModel!!.name,
-                        scale = selectedScale,
-                        denoise = if (selectedModel!!.engine == UpscalerEngine.REALCUGAN) selectedDenoise else -1,
-                        loadThreads = loadThreads,
-                        procThreads = procThreads,
-                        saveThreads = saveThreads
-                    )
-                    ContextCompat.startForegroundService(
-                        context,
-                        VideoUpscalerService.createStartIntent(context, config)
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = upscalerState == VideoUpscalerState.Idle || 
-                          upscalerState == VideoUpscalerState.Completed ||
-                          upscalerState is VideoUpscalerState.Error
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.upscaler_start_btn))
-            }
-            
-            // Cancel Button (when running)
-            if (upscalerState !is VideoUpscalerState.Idle && 
-                upscalerState !is VideoUpscalerState.Completed &&
-                upscalerState !is VideoUpscalerState.Error) {
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(
-                    onClick = { context.startService(VideoUpscalerService.createCancelIntent(context)) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-            
             // Error
             (errorMessage ?: holderError)?.let {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -554,18 +537,51 @@ fun VideoUpscalerScreen(navController: NavController) {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF4CAF50).copy(alpha = 0.2f))
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Check, contentDescription = null, tint = Color(0xFF4CAF50))
+                        Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(stringResource(R.string.upscaler_success_msg), fontWeight = FontWeight.Bold)
                     }
                 }
             }
+        }
+        AppTaskActionFooter(
+            modifier = Modifier
+                .fillMaxWidth()
+        ) {
+            val running = upscalerState !is VideoUpscalerState.Idle &&
+                upscalerState !is VideoUpscalerState.Completed &&
+                upscalerState !is VideoUpscalerState.Error
+            if (running) {
+                OutlinedButton(
+                    onClick = { context.startService(VideoUpscalerService.createCancelIntent(context)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.soft_studio_cancel))
+                }
+            } else {
+                Button(
+                    onClick = ::startUpscale,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = selectedVideoPath != null && selectedModel != null &&
+                        (upscalerState == VideoUpscalerState.Idle ||
+                            upscalerState == VideoUpscalerState.Completed ||
+                            upscalerState is VideoUpscalerState.Error)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.upscaler_start_btn))
+                }
+            }
+        }
         }
     }
 }

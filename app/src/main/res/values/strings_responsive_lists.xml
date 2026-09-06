@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Responsive list and model-manager copy kept separate from the legacy catalog. -->
-    <string name="models_hub_eyebrow">Models</string>
     <string name="models_hub_subtitle">Download, import, and organize on-device AI models.</string>
-    <string name="responsive_logs_eyebrow">Debug</string>
     <string name="responsive_models_mmproj_file">mmproj file</string>
 </resources>

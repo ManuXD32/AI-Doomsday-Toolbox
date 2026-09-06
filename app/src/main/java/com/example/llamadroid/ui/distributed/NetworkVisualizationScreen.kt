@@ -3,6 +3,8 @@ package com.example.llamadroid.ui.distributed
 import android.content.Context
 import android.content.Intent
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.horizontalScroll
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,7 +23,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
@@ -41,15 +42,31 @@ import com.example.llamadroid.service.DistributedMasterLlamaService
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.service.WorkerInfo
 
-// Matrix-style color palette
-private val MatrixGreen = Color(0xFF00FF41)
-private val MatrixDarkGreen = Color(0xFF008F11)
-private val MatrixBg = Color(0xFF0D0D0D)
-private val MatrixBgSecondary = Color(0xFF1A1A1A)
-private val MatrixBorder = Color(0xFF003B00)
-private val MatrixRed = Color(0xFFFF3333)
-private val MatrixCyan = Color(0xFF00FFFF)
-private val MatrixYellow = Color(0xFFFFFF00)
+// Terminal presentation uses semantic roles so the diagnostic surface remains
+// readable in both appearance modes while preserving meaningful status colors.
+@Composable
+private fun matrixGreen() = MaterialTheme.colorScheme.secondary
+
+@Composable
+private fun matrixDarkGreen() = MaterialTheme.colorScheme.onSurfaceVariant
+
+@Composable
+private fun matrixBackground() = MaterialTheme.colorScheme.surfaceContainerLowest
+
+@Composable
+private fun matrixBackgroundSecondary() = MaterialTheme.colorScheme.surfaceContainerLow
+
+@Composable
+private fun matrixBorder() = MaterialTheme.colorScheme.outlineVariant
+
+@Composable
+private fun matrixRed() = MaterialTheme.colorScheme.error
+
+@Composable
+private fun matrixCyan() = MaterialTheme.colorScheme.primary
+
+@Composable
+private fun matrixYellow() = MaterialTheme.colorScheme.tertiary
 
 /**
  * Network Visualization Screen - Hacker/Matrix style
@@ -98,36 +115,14 @@ fun NetworkVisualizationScreen(navController: NavController) {
         label = "cursor"
     )
     
-    Scaffold(
-        containerColor = MatrixBg,
-        topBar = {
-            TopAppBar(
-                title = { 
-                    Text(
-                        "> " + stringResource(R.string.net_title),
-                        fontFamily = FontFamily.Monospace,
-                        color = MatrixGreen
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack, 
-                            contentDescription = stringResource(R.string.net_back),
-                            tint = MatrixGreen
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MatrixBgSecondary
-                )
-            )
-        }
+    AppScreenScaffold(
+        title = stringResource(R.string.net_title),
+        onBack = { navController.popBackStack() }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MatrixBg)
+                .background(matrixBackground())
                 .padding(padding)
                 .verticalScroll(scrollState)
                 .padding(16.dp),
@@ -137,11 +132,11 @@ fun NetworkVisualizationScreen(navController: NavController) {
             // Terminal Header
             TerminalBox(title = stringResource(R.string.net_system_status)) {
                 val (statusText, statusColor) = when (serverState) {
-                    is ServerState.Running -> stringResource(R.string.net_status_online) to MatrixGreen
-                    is ServerState.Loading -> stringResource(R.string.net_status_loading) to MatrixYellow
-                    is ServerState.Starting -> stringResource(R.string.net_status_init) to MatrixYellow
-                    is ServerState.Error -> stringResource(R.string.net_status_error) to MatrixRed
-                    ServerState.Stopped -> stringResource(R.string.net_status_offline) to MatrixRed
+                    is ServerState.Running -> stringResource(R.string.net_status_online) to matrixGreen()
+                    is ServerState.Loading -> stringResource(R.string.net_status_loading) to matrixYellow()
+                    is ServerState.Starting -> stringResource(R.string.net_status_init) to matrixYellow()
+                    is ServerState.Error -> stringResource(R.string.net_status_error) to matrixRed()
+                    ServerState.Stopped -> stringResource(R.string.net_status_offline) to matrixRed()
                 }
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -149,7 +144,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = stringResource(R.string.net_inference_server) + " ",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
-                        color = MatrixDarkGreen
+                        color = matrixDarkGreen()
                     )
                     Text(
                         text = statusText,
@@ -164,7 +159,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                     text = stringResource(R.string.net_mode, mode.name),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = MatrixDarkGreen
+                    color = matrixDarkGreen()
                 )
                 
                 if (inferenceRunning) {
@@ -172,7 +167,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = stringResource(R.string.net_processing) + if (cursorVisible > 0.5f) "_" else " ",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixGreen
+                        color = matrixGreen()
                     )
                 }
             }
@@ -184,22 +179,22 @@ fun NetworkVisualizationScreen(navController: NavController) {
                     text = "┌─────────────────────────────────────┐",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
-                    color = MatrixBorder
+                    color = matrixBorder()
                 )
                 Row {
-                    Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                    Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                     Text(
                         text = stringResource(R.string.net_master_node),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        color = MatrixCyan,
+                        color = matrixCyan(),
                         modifier = Modifier.weight(1f)
                     )
-                    Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                    Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                 }
                 Row {
-                    Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                    Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                     
                     val masterEstMb = if (modelSizeMB > 0 && totalConnectedRam > 0) {
                         (masterProportion / 100f * modelSizeMB).toInt()
@@ -211,16 +206,16 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = "RAM: ${masterRamMB}MB | LOAD: $masterProportion%$ramText",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = MatrixGreen,
+                        color = matrixGreen(),
                         modifier = Modifier.weight(1f)
                     )
-                    Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                    Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                 }
                 Text(
                     text = "└─────────────────────────────────────┘",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
-                    color = MatrixBorder
+                    color = matrixBorder()
                 )
                 
                 if (workers.isNotEmpty()) {
@@ -229,13 +224,13 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = "         │",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = if (inferenceRunning) MatrixGreen else MatrixDarkGreen
+                        color = if (inferenceRunning) matrixGreen() else matrixDarkGreen()
                     )
                     Text(
                         text = "    ─────┼─────" + "─────┬─────".repeat((workers.size - 1).coerceAtLeast(0)),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = if (inferenceRunning) MatrixGreen else MatrixDarkGreen
+                        color = if (inferenceRunning) matrixGreen() else matrixDarkGreen()
                     )
                     
                     // Worker nodes
@@ -246,32 +241,32 @@ fun NetworkVisualizationScreen(navController: NavController) {
                             text = "┌───────────────────────────────┐",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
-                            color = MatrixBorder
+                            color = matrixBorder()
                         )
                         Row {
-                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                             Text(
                                 text = "[WORKER_${index}] 📱 ${worker.deviceName}",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 10.sp,
-                                color = MatrixYellow,
+                                color = matrixYellow(),
                                 modifier = Modifier.weight(1f)
                             )
-                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                         }
                         Row {
-                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                             Text(
                                 text = "${worker.ip}:${worker.port}",
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 9.sp,
-                                color = MatrixDarkGreen,
+                                color = matrixDarkGreen(),
                                 modifier = Modifier.weight(1f)
                             )
-                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                         }
                         Row {
-                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                             val workerProp = if (totalConnectedRam > 0 && worker.isConnected) {
                                 (worker.availableRamMB.toFloat() / totalConnectedRam * 100).toInt()
                             } else {
@@ -289,10 +284,10 @@ fun NetworkVisualizationScreen(navController: NavController) {
                             }
                             
                             val statusColor = when (worker.rpcStatus) {
-                                RpcWorkerStatus.ONLINE -> MatrixGreen
-                                RpcWorkerStatus.FAILED -> MatrixRed
-                                RpcWorkerStatus.CONNECTING -> MatrixCyan
-                                RpcWorkerStatus.UNKNOWN, RpcWorkerStatus.NOT_SELECTED -> MatrixDarkGreen
+                                RpcWorkerStatus.ONLINE -> matrixGreen()
+                                RpcWorkerStatus.FAILED -> matrixRed()
+                                RpcWorkerStatus.CONNECTING -> matrixCyan()
+                                RpcWorkerStatus.UNKNOWN, RpcWorkerStatus.NOT_SELECTED -> matrixDarkGreen()
                             }
                             val statusText = when (worker.rpcStatus) {
                                 RpcWorkerStatus.ONLINE -> stringResource(R.string.net_status_online)
@@ -303,7 +298,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                             }
                             
                             // Use Cyan for Real RAM usage to distinguish from Estimate
-                            val usageColor = if (worker.realRamUsageMB != null) MatrixCyan else statusColor
+                            val usageColor = if (worker.realRamUsageMB != null) matrixCyan() else statusColor
                             
                             Text(
                                 text = "RAM: ${worker.availableRamMB}MB | STATUS: $statusText | LOAD: $workerProp%$ramUsageText",
@@ -312,13 +307,13 @@ fun NetworkVisualizationScreen(navController: NavController) {
                                 color = usageColor,
                                 modifier = Modifier.weight(1f)
                             )
-                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = MatrixBorder)
+                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
                         }
                         Text(
                             text = "└───────────────────────────────┘",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 10.sp,
-                            color = MatrixBorder
+                            color = matrixBorder()
                         )
                     }
                 } else {
@@ -326,7 +321,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = "\n" + stringResource(R.string.net_no_workers),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixRed
+                        color = matrixRed()
                     )
                 }
             }
@@ -338,25 +333,25 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = "TOTAL_LAYERS: $modelLayerCount",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixGreen
+                        color = matrixGreen()
                     )
                     Text(
                         text = "MODEL_SIZE:   ${modelSizeMB}MB",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixGreen
+                        color = matrixGreen()
                     )
                     Text(
                         text = "LOCAL_LAYERS: $masterLayers",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixCyan
+                        color = matrixCyan()
                     )
                     Text(
                         text = "RPC_LAYERS:   $rpcLayerCount",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixYellow
+                        color = matrixYellow()
                     )
                     
                     Spacer(modifier = Modifier.height(8.dp))
@@ -371,27 +366,27 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = stringResource(R.string.net_layer_distribution),
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = MatrixDarkGreen
+                        color = matrixDarkGreen()
                     )
                     Text(
                         text = "[" + "█".repeat(masterBlocks) + "░".repeat(workerBlocks) + "]",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixGreen
+                        color = matrixGreen()
                     )
                     Row {
                         Text(
                             text = " " + stringResource(R.string.net_local_label),
                             fontFamily = FontFamily.Monospace,
                             fontSize = 9.sp,
-                            color = MatrixCyan
+                            color = matrixCyan()
                         )
                         Spacer(modifier = Modifier.weight(1f))
                         Text(
                             text = stringResource(R.string.net_rpc_label) + " ",
                             fontFamily = FontFamily.Monospace,
                             fontSize = 9.sp,
-                            color = MatrixYellow
+                            color = matrixYellow()
                         )
                     }
                 }
@@ -405,7 +400,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = "SYNCING: [${"▓".repeat(progressBlocks)}${"░".repeat(30 - progressBlocks)}] $transferProgress%",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp,
-                        color = MatrixYellow
+                        color = matrixYellow()
                     )
                 }
             }
@@ -416,20 +411,20 @@ fun NetworkVisualizationScreen(navController: NavController) {
                     text = "TOTAL_CLUSTER_RAM: ${totalConnectedRam}MB",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
-                    color = MatrixGreen
+                    color = matrixGreen()
                 )
                 Text(
                     text = "MASTER_ALLOCATION: ${masterRamMB}MB",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 10.sp,
-                    color = MatrixDarkGreen
+                    color = matrixDarkGreen()
                 )
                 workers.forEachIndexed { i, w ->
                     Text(
                         text = "WORKER_${i}_ALLOC:   ${w.availableRamMB}MB",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = MatrixDarkGreen
+                        color = matrixDarkGreen()
                     )
                 }
             }
@@ -442,7 +437,7 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         text = lastCommand!!,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 10.sp,
-                        color = MatrixCyan
+                        color = matrixCyan()
                     )
                 }
             }
@@ -459,8 +454,8 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         context.startService(intent)
                     },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MatrixRed.copy(alpha = 0.3f),
-                        contentColor = MatrixRed
+                        containerColor = matrixRed().copy(alpha = 0.3f),
+                        contentColor = matrixRed()
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -481,8 +476,8 @@ fun NetworkVisualizationScreen(navController: NavController) {
                             DistributedService.stopWorker(context)
                         },
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MatrixYellow.copy(alpha = 0.3f),
-                            contentColor = MatrixYellow
+                            containerColor = matrixYellow().copy(alpha = 0.3f),
+                            contentColor = matrixYellow()
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -501,10 +496,10 @@ fun NetworkVisualizationScreen(navController: NavController) {
                         DistributedService.clearWorkers()
                     },
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MatrixDarkGreen
+                        contentColor = matrixDarkGreen()
                     ),
                     border = ButtonDefaults.outlinedButtonBorder.copy(
-                        brush = androidx.compose.ui.graphics.SolidColor(MatrixDarkGreen)
+                        brush = androidx.compose.ui.graphics.SolidColor(matrixDarkGreen())
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -532,14 +527,14 @@ private fun TerminalBox(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
-            .border(1.dp, MatrixBorder, RoundedCornerShape(4.dp))
-            .background(MatrixBgSecondary)
+            .border(1.dp, matrixBorder(), RoundedCornerShape(4.dp))
+            .background(matrixBackgroundSecondary())
     ) {
         // Title bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MatrixBorder.copy(alpha = 0.5f))
+                .background(matrixBorder().copy(alpha = 0.5f))
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -549,19 +544,19 @@ private fun TerminalBox(
                     Modifier
                         .size(8.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(MatrixRed.copy(alpha = 0.7f))
+                        .background(matrixRed().copy(alpha = 0.7f))
                 )
                 Box(
                     Modifier
                         .size(8.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(MatrixYellow.copy(alpha = 0.7f))
+                        .background(matrixYellow().copy(alpha = 0.7f))
                 )
                 Box(
                     Modifier
                         .size(8.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(MatrixGreen.copy(alpha = 0.7f))
+                        .background(matrixGreen().copy(alpha = 0.7f))
                 )
             }
             Spacer(Modifier.width(12.dp))
@@ -569,13 +564,13 @@ private fun TerminalBox(
                 text = "// $title",
                 fontFamily = FontFamily.Monospace,
                 fontSize = 10.sp,
-                color = MatrixDarkGreen
+                color = matrixDarkGreen()
             )
         }
         
         // Content
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
             content = content
         )

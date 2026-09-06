@@ -35,10 +35,8 @@ import com.example.llamadroid.service.GenerationDiagnosticsStore
 import com.example.llamadroid.service.GenerationExitSnapshot
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
-import com.example.llamadroid.ui.components.AppContentColumn
-import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
@@ -79,19 +77,12 @@ fun LogsScreen(navController: NavController) {
         }
     }
 
-    AppPageBackground {
+    AppScreenScaffold(
+        title = stringResource(R.string.logs_title),
+        subtitle = stringResource(R.string.settings_debug_desc),
+        onBack = { navController.popBackStack() }
+    ) { _ ->
         Column(modifier = Modifier.fillMaxSize()) {
-            AppContentColumn(
-                modifier = Modifier.fillMaxWidth(),
-                bottomPadding = 0.dp,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                AppPageHeader(
-                    eyebrow = stringResource(R.string.responsive_logs_eyebrow),
-                    title = stringResource(R.string.logs_title),
-                    subtitle = stringResource(R.string.settings_debug_desc)
-                )
-            }
         
         // Tab Row
         AppScrollableTabRow(

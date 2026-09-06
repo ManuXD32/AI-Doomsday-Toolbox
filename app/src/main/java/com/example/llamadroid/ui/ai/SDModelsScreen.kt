@@ -20,13 +20,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.res.stringResource
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -51,6 +51,7 @@ import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.isStableDiffusionArtifact
 import com.example.llamadroid.ui.components.DownloadTaskSection
+import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.sd.SdModelFamily
 import com.example.llamadroid.sd.SdComponentRole
 import com.example.llamadroid.sd.SdArtifactInspection
@@ -273,67 +274,67 @@ fun SDModelsScreen(navController: NavController) {
 
             // === Standalone Diffusion Models ===
             SDSearchSuggestion(
-                "⚡ FLUX Schnell Q4 (8GB+)",
+                "FLUX Schnell Q4 (8GB+)",
                 "city96/FLUX.1-schnell-gguf",
                 listOf(SDCapability.FLUX, SDCapability.TXT2IMG)
             ),
             SDSearchSuggestion(
-                "⚡ FLUX Dev Q4 (12GB+)",
+                "FLUX Dev Q4 (12GB+)",
                 "city96/FLUX.1-dev-gguf",
                 listOf(SDCapability.FLUX, SDCapability.TXT2IMG)
             ),
             SDSearchSuggestion(
-                "⚡ FLUX Lite (4GB+)",
+                "FLUX Lite (4GB+)",
                 "flux gguf q2 q3",
                 listOf(SDCapability.FLUX, SDCapability.TXT2IMG)
             ),
             
             // === FLUX Text Encoders ===
             SDSearchSuggestion(
-                "📝 T5-XXL Encoder (GGUF)",
+                "T5-XXL Encoder (GGUF)",
                 "city96/t5-v1_1-xxl-encoder-gguf",
                 listOf(SDCapability.FLUX)
             ),
             SDSearchSuggestion(
-                "📝 CLIP-L Encoder (GGUF)",
+                "CLIP-L Encoder (GGUF)",
                 "zer0int/CLIP-GmP-ViT-L-14",
                 listOf(SDCapability.FLUX)
             ),
             
             // === VAE Models ===
             SDSearchSuggestion(
-                "🎨 FLUX VAE (GGUF)",
+                "FLUX VAE (GGUF)",
                 "city96/FLUX.1-dev-gguf",
                 listOf(SDCapability.FLUX)
             ),
             SDSearchSuggestion(
-                "🎨 SDXL VAE",
+                "SDXL VAE",
                 "sdxl-vae-fp16-fix",
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
             
             // === ControlNet ===
             SDSearchSuggestion(
-                "🎛️ ControlNet GGUF",
+                "ControlNet GGUF",
                 "controlnet gguf",
                 listOf(SDCapability.IMG2IMG)
             ),
             
             // === LoRA ===
             SDSearchSuggestion(
-                "✨ LoRA Models",
+                "LoRA Models",
                 "lora safetensors",
                 listOf(SDCapability.TXT2IMG, SDCapability.IMG2IMG)
             ),
             
             // === Upscalers ===
             SDSearchSuggestion(
-                "⬆️ ESRGAN 4x Upscaler",
+                "ESRGAN 4x Upscaler",
                 "esrgan 4x",
                 listOf(SDCapability.UPSCALE)
             ),
             SDSearchSuggestion(
-                "⬆️ RealESRGAN Anime",
+                "RealESRGAN Anime",
                 "realesrgan anime",
                 listOf(SDCapability.UPSCALE)
             )
@@ -632,18 +633,8 @@ fun SDModelsScreen(navController: NavController) {
         )
     }
     
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
-    ) {
+    AppPageBackground {
+        Column(modifier = Modifier.fillMaxSize()) {
         // Header
         Row(
             modifier = Modifier
@@ -658,12 +649,14 @@ fun SDModelsScreen(navController: NavController) {
                 stringResource(R.string.sd_models_title),
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontWeight = FontWeight.Bold
-                )
+                ),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         
         // Tab Row
-        TabRow(
+        AppScrollableTabRow(
             selectedTabIndex = selectedTab,
             containerColor = MaterialTheme.colorScheme.surface
         ) {
@@ -737,6 +730,7 @@ fun SDModelsScreen(navController: NavController) {
                 },
                 onRepoClick = loadRepoFiles
             )
+        }
         }
     }
 }

@@ -33,11 +33,6 @@ fun LlamaServerCardsScreen(navController: NavController) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            AppPageHeader(
-                eyebrow = stringResource(R.string.ai_chat),
-                title = stringResource(R.string.llama_cards_title),
-                subtitle = stringResource(R.string.llama_cards_subtitle)
-            )
             LlamaServerCardsSection()
         }
     }

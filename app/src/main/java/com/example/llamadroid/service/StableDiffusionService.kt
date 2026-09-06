@@ -13,6 +13,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
+import com.example.llamadroid.LlamaApplication
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -143,6 +144,10 @@ class StableDiffusionService : Service() {
 
     private fun isModeProcessAlive(mode: SDMode): Boolean = synchronized(modeLifecycleLock) {
         modeProcesses.any { (lane, process) -> lane.mode == mode && process.isAlive }
+    }
+
+    override fun attachBaseContext(newBase: Context) {
+        super.attachBaseContext(LlamaApplication.updateLocale(newBase))
     }
 
     override fun onCreate() {

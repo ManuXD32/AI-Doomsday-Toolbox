@@ -13,8 +13,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -154,7 +156,10 @@ private fun FarmLivestockScreen(
 
     Scaffold(
         topBar = {
-            Surface(color = Color.Black.copy(alpha = 0.90f)) {
+            Surface(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
+                tonalElevation = 0.dp
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -164,12 +169,12 @@ private fun FarmLivestockScreen(
                 ) {
                     IconButton(
                         onClick = onBack,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             stringResource(R.string.action_back),
-                            tint = Color.White
+                            tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
                     Text(
@@ -178,7 +183,7 @@ private fun FarmLivestockScreen(
                         } else {
                             stringResource(R.string.tama_farm_coop_title)
                         },
-                        color = Color.White,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
@@ -205,12 +210,14 @@ private fun FarmLivestockScreen(
                     .background(Color.Black.copy(alpha = 0.04f))
             )
 
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 6.dp),
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(if (configuration.fontScale >= 1.3f) 1 else 2),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 10.dp, end = 10.dp, top = 8.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = Color(0xFFF7EFD8).copy(alpha = 0.88f)
@@ -223,13 +230,12 @@ private fun FarmLivestockScreen(
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
+                        Column(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.Top
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Column(
-                                modifier = Modifier.weight(1f),
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Text(
@@ -289,6 +295,7 @@ private fun FarmLivestockScreen(
                                     }
                                 },
                                 enabled = stored > 0,
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
                                 shape = RoundedCornerShape(12.dp),
                                 colors = ButtonDefaults.buttonColors(
                                     containerColor = Color(0xFF8D6E63),
@@ -301,9 +308,7 @@ private fun FarmLivestockScreen(
                                 Text(
                                     stringResource(
                                         if (type == FarmLivestockType.BARN) R.string.tama_farm_collect_milk else R.string.tama_farm_collect_eggs
-                                    ),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
+                                    )
                                 )
                             }
                         }
@@ -315,9 +320,11 @@ private fun FarmLivestockScreen(
                             Surface(
                                 color = if (feedModeEnabled) Color(0xFF42A5F5) else Color(0xFFE8DFC0),
                                 shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.clickable {
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .clickable {
                                     feedModeEnabled = !feedModeEnabled
-                                }
+                                    }
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -356,15 +363,7 @@ private fun FarmLivestockScreen(
                     }
                 }
 
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = PaddingValues(bottom = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                }
                     items(slots.indices.toList()) { index ->
                         val slot = slots[index]
                         val isHungry = livestockNeedsFeed(slot, now)
@@ -445,7 +444,6 @@ private fun FarmLivestockScreen(
                             }
                         )
                     }
-                }
             }
         }
     }

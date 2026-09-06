@@ -25,7 +25,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -49,6 +48,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.AssetPackManagerUtil.AssetPack
+import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.components.AppScrollableTabRow
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -62,12 +63,11 @@ fun ZimManagerScreen(navController: NavController) {
     
     
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Installed", "Catalog")
-    
     // ZIM folder state - removed folder picker, always use internal storage
     val zimFolderUri = null // Using internal app storage
     
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.zim_title)) },
@@ -79,11 +79,8 @@ fun ZimManagerScreen(navController: NavController) {
             )
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
+        AppPageBackground(modifier = Modifier.padding(padding)) {
+            Column(modifier = Modifier.fillMaxSize()) {
             // Tab Row - 4 tabs (Settings moved to main Settings screen)
             val tabs = listOf(
                 stringResource(R.string.zim_tab_installed),
@@ -91,7 +88,7 @@ fun ZimManagerScreen(navController: NavController) {
                 stringResource(R.string.zim_tab_downloads),
                 stringResource(R.string.zim_tab_share)
             )
-            ScrollableTabRow(
+            AppScrollableTabRow(
                 selectedTabIndex = selectedTab,
                 edgePadding = 0.dp
             ) {
@@ -110,6 +107,7 @@ fun ZimManagerScreen(navController: NavController) {
                 1 -> CatalogTab(repo, zimFolderUri)
                 2 -> DownloadingTab()
                 3 -> ZimShareTab()
+            }
             }
         }
     }

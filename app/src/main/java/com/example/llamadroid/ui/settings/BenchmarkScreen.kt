@@ -23,6 +23,7 @@ import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.service.BenchmarkService
 import com.example.llamadroid.ui.components.DraftIntTextField
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
@@ -85,32 +86,23 @@ fun BenchmarkScreen(navController: NavController) {
     }
     val queuedModels = llmModels.filter { it.path in queueModelPaths }
     
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.benchmark_title)) },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { navController.navigate(Screen.BenchmarkHistory.route) }) {
-                        Icon(Icons.Default.History, stringResource(R.string.benchmark_history_title))
-                    }
-                    if (displayResults.isNotEmpty() && !isRunning) {
-                        IconButton(onClick = { showDeleteDialog = true }) {
-                            Icon(Icons.Default.Delete, stringResource(R.string.benchmark_delete_title))
-                        }
-                    }
+    AppScreenScaffold(
+        title = stringResource(R.string.benchmark_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(onClick = { navController.navigate(Screen.BenchmarkHistory.route) }) {
+                Icon(Icons.Default.History, stringResource(R.string.benchmark_history_title))
+            }
+            if (displayResults.isNotEmpty() && !isRunning) {
+                IconButton(onClick = { showDeleteDialog = true }) {
+                    Icon(Icons.Default.Delete, stringResource(R.string.benchmark_delete_title))
                 }
-            )
+            }
         }
-    ) { padding ->
+    ) { _ ->
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {

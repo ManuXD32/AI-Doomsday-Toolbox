@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_nav_title">Toolbox</string>
+    <string name="studio_nav_home">Home</string>
+    <string name="studio_nav_tools">Tools</string>
+    <string name="studio_nav_library">Library</string>
+    <string name="studio_nav_tama">Tama</string>
+    <string name="studio_nav_menu">Open navigation</string>
+    <string name="studio_nav_close">Close navigation</string>
+    <string name="studio_more_actions">More actions</string>
+</resources>

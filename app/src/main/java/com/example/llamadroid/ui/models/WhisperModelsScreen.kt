@@ -37,6 +37,7 @@ import com.example.llamadroid.data.model.PendingDownloadHolder
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.service.WhisperModel
 import com.example.llamadroid.ui.components.DownloadTaskSection
+import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -209,6 +210,7 @@ fun WhisperModelsScreen(navController: NavController) {
     }
     
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.whisper_models_title)) },
@@ -228,13 +230,13 @@ fun WhisperModelsScreen(navController: NavController) {
             )
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp)
-        ) {
+        AppPageBackground(modifier = Modifier.padding(padding)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(16.dp)
+            ) {
             // Info Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -356,6 +358,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 onExport = ::exportModel,
                 onDelete = { model -> scope.launch { repository.deleteModel(model) } }
             )
+            }
         }
     }
 }

@@ -1,10 +1,7 @@
 package com.example.llamadroid.ui.ai
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,10 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,7 +37,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,11 +46,14 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -204,21 +201,21 @@ fun AIHubScreen(navController: NavController) {
     }
 
     AppPageBackground {
-        Column(modifier = Modifier.fillMaxSize()) {
-            AppContentColumn(
-                modifier = Modifier.fillMaxWidth(),
-                bottomPadding = 0.dp,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item(key = "search") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 AppPageHeader(
-                    eyebrow = stringResource(R.string.ai_tools_eyebrow),
-                    title = stringResource(R.string.ai_hub_title),
+                    title = stringResource(R.string.studio_nav_tools),
                     subtitle = stringResource(R.string.ai_hub_subtitle)
                 )
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("studio_tool_search"),
                     singleLine = true,
                     shape = RoundedCornerShape(18.dp),
                     leadingIcon = {
@@ -237,119 +234,104 @@ fun AIHubScreen(navController: NavController) {
                             }
                         }
                     },
-                    label = { Text(stringResource(R.string.ai_tools_search_label)) }
+                    label = {
+                        Text(stringResource(R.string.ai_tools_search_label), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 )
-            }
-
-            CompositionLocalProvider(LocalOverscrollFactory provides null) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 156.dp),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            AppSectionCard {
-                                Text(
-                                    text = stringResource(R.string.ai_tools_no_results_title),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = stringResource(R.string.ai_tools_no_results_desc),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
                             }
-                        }
-                    }
-
-                    if (pinnedChatItems.isNotEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            ToolCategoryHeader(
-                                title = stringResource(R.string.ai_tools_category_pinned_chats),
-                                count = pinnedChatItems.size
+            }
+                if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) {
+                    item {
+                        AppSectionCard {
+                            Text(
+                                text = stringResource(R.string.soft_studio_tools_empty_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
                             )
-                        }
-                        items(
-                            items = pinnedChatItems,
-                            key = { "pinned-chat-${it.chat.id}" }
-                        ) { item ->
-                            PinnedChatHubCard(
-                                chat = item.chat,
-                                server = item.server,
-                                onOpen = {
-                                    val serverId = item.chat.pinnedServerId ?: return@PinnedChatHubCard
-                                    navController.navigate(Screen.LlamaChat.createRoute(item.chat.id, serverId))
-                                },
-                                onUnpin = {
-                                    scope.launch {
-                                        database.llamaChatDao().updateAiHubPin(item.chat.id, false, null, null)
-                                    }
-                                }
-                            )
-                        }
-                    }
-
-                    if (pinnedTools.isNotEmpty()) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            ToolCategoryHeader(
-                                title = stringResource(R.string.ai_tools_category_pinned),
-                                count = pinnedTools.size
-                            )
-                        }
-                        items(
-                            items = pinnedTools,
-                            key = { "pinned-${it.definition.id}" }
-                        ) { item ->
-                            ToolHubCard(
-                                emoji = item.definition.emoji,
-                                title = item.title,
-                                description = item.description,
-                                gradientColors = item.definition.gradientColors,
-                                hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
-                                isPinned = true,
-                                onOpen = { openTool(item) },
-                                onSettings = { selectedSettingsTool = item.definition },
-                                onTogglePinned = { setToolPinned(item.definition.id, false) }
-                            )
-                        }
-                    }
-
-                    groupedTools.forEach { (category, tools) ->
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            ToolCategoryHeader(
-                                title = categoryTitles.getValue(category),
-                                count = tools.size
-                            )
-                        }
-                        items(
-                            items = tools,
-                            key = { it.definition.id }
-                        ) { item ->
-                            ToolHubCard(
-                                emoji = item.definition.emoji,
-                                title = item.title,
-                                description = item.description,
-                                gradientColors = item.definition.gradientColors,
-                                hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
-                                isPinned = false,
-                                onOpen = { openTool(item) },
-                                onSettings = { selectedSettingsTool = item.definition },
-                                onTogglePinned = { setToolPinned(item.definition.id, true) }
+                            Text(
+                                text = stringResource(R.string.soft_studio_tools_empty_desc),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
-            }
+
+                if (pinnedChatItems.isNotEmpty()) {
+                    item {
+                        ToolCategoryHeader(
+                            title = stringResource(R.string.ai_tools_category_pinned_chats),
+                            count = pinnedChatItems.size
+                        )
+                    }
+                    items(pinnedChatItems, key = { "pinned-chat-${it.chat.id}" }) { item ->
+                        PinnedChatHubCard(
+                            chat = item.chat,
+                            server = item.server,
+                            onOpen = {
+                                val serverId = item.chat.pinnedServerId ?: return@PinnedChatHubCard
+                                navController.navigate(Screen.LlamaChat.createRoute(item.chat.id, serverId))
+                            },
+                            onUnpin = {
+                                scope.launch {
+                                    database.llamaChatDao().updateAiHubPin(item.chat.id, false, null, null)
+                                }
+                            }
+                        )
+                    }
+                }
+
+                if (pinnedTools.isNotEmpty()) {
+                    item {
+                        ToolCategoryHeader(
+                            title = stringResource(R.string.soft_studio_tools_pinned),
+                            count = pinnedTools.size
+                        )
+                    }
+                    items(pinnedTools, key = { "pinned-${it.definition.id}" }) { item ->
+                        ToolHubCard(
+                            id = item.definition.id,
+                            icon = item.definition.icon,
+                            category = item.definition.category,
+                            title = item.title,
+                            description = item.description,
+                            hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
+                            isPinned = true,
+                            onOpen = { openTool(item) },
+                            onSettings = { selectedSettingsTool = item.definition },
+                            onTogglePinned = { setToolPinned(item.definition.id, false) }
+                        )
+                    }
+                }
+
+                groupedTools.forEach { (category, tools) ->
+                    item {
+                        ToolCategoryHeader(
+                            title = categoryTitles.getValue(category),
+                            count = tools.size
+                        )
+                    }
+                    items(tools, key = { it.definition.id }) { item ->
+                        ToolHubCard(
+                            id = item.definition.id,
+                            icon = item.definition.icon,
+                            category = item.definition.category,
+                            title = item.title,
+                            description = item.description,
+                            hasSettings = item.definition.settingsAction !is ToolSettingsAction.None,
+                            isPinned = false,
+                            onOpen = { openTool(item) },
+                            onSettings = { selectedSettingsTool = item.definition },
+                            onTogglePinned = { setToolPinned(item.definition.id, true) }
+                        )
+                    }
+                }
         }
     }
 }
 
 @Composable
-private fun ChatServerPickerDialog(
+internal fun ChatServerPickerDialog(
     servers: List<RunningLlamaChatServerUi>,
     onDismiss: () -> Unit,
     onServerSelected: (RunningLlamaChatServerUi) -> Unit
@@ -451,15 +433,17 @@ private fun ToolCategoryHeader(
     title: String,
     count: Int
 ) {
+    val countDescription = pluralStringResource(R.plurals.soft_studio_tools_category_count, count, count)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 6.dp, bottom = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             text = title,
+            modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
@@ -470,7 +454,9 @@ private fun ToolCategoryHeader(
         ) {
             Text(
                 text = count.toString(),
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                    .clearAndSetSemantics { contentDescription = countDescription },
+                maxLines = 1,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onPrimaryContainer
             )
@@ -480,44 +466,71 @@ private fun ToolCategoryHeader(
 
 @Composable
 private fun ToolHubCard(
-    emoji: String,
+    id: String,
+    icon: ImageVector,
+    category: ToolCategory,
     title: String,
     description: String,
-    gradientColors: List<Color>,
     hasSettings: Boolean,
     isPinned: Boolean,
     onOpen: () -> Unit,
     onSettings: () -> Unit,
     onTogglePinned: () -> Unit
 ) {
+    val accent = when (category) {
+        ToolCategory.CONVERSATION -> MaterialTheme.colorScheme.primary
+        ToolCategory.CREATE -> MaterialTheme.colorScheme.tertiary
+        ToolCategory.VOICE -> MaterialTheme.colorScheme.secondary
+        ToolCategory.DOCS -> MaterialTheme.colorScheme.primary
+        ToolCategory.ORGANIZER -> MaterialTheme.colorScheme.tertiary
+        ToolCategory.INFRASTRUCTURE -> MaterialTheme.colorScheme.secondary
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 174.dp)
+            .testTag("studio_tool_$id")
             .clickable(onClick = onOpen),
-        shape = AppChromeDefaults.CardShape,
+        shape = AppChromeDefaults.InnerCardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.CardElevation)
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.verticalGradient(gradientColors))
-                .padding(16.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (LocalDensity.current.fontScale < 1.3f) Surface(
+                modifier = Modifier.size(40.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = accent.copy(alpha = 0.14f)
+            ) {
+                Icon(icon, contentDescription = null, modifier = Modifier.padding(10.dp), tint = accent)
+            }
+            Column(
+                modifier = Modifier
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
             IconButton(
                 onClick = onTogglePinned,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .size(38.dp)
-                    .background(
-                        color = if (isPinned) {
-                            Color(0xFFFFC107).copy(alpha = 0.24f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
-                        },
-                        shape = RoundedCornerShape(999.dp)
-                    )
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Star,
@@ -525,16 +538,13 @@ private fun ToolHubCard(
                         if (isPinned) R.string.ai_tools_unpin_cd else R.string.ai_tools_pin_cd,
                         title
                     ),
-                    tint = if (isPinned) Color(0xFFFFC107) else MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
             if (hasSettings) {
                 IconButton(
                     onClick = onSettings,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .size(38.dp)
+                    modifier = Modifier.size(48.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Settings,
@@ -543,33 +553,6 @@ private fun ToolHubCard(
                     )
                 }
             }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.Center)
-                    .padding(top = 24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Text(text = emoji, style = MaterialTheme.typography.displaySmall)
-                Spacer(modifier = Modifier.height(10.dp))
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }
@@ -593,9 +576,8 @@ private fun PinnedChatHubCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 150.dp)
             .clickable(enabled = serverAvailable, onClick = onOpen),
-        shape = AppChromeDefaults.CardShape,
+        shape = AppChromeDefaults.InnerCardShape,
         colors = CardDefaults.cardColors(
             containerColor = if (serverAvailable) {
                 MaterialTheme.colorScheme.surface
@@ -605,40 +587,28 @@ private fun PinnedChatHubCard(
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = AppChromeDefaults.CardElevation)
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.38f),
-                            MaterialTheme.colorScheme.surface
-                        )
-                    )
-                )
-                .padding(16.dp)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             IconButton(
                 onClick = onUnpin,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .size(40.dp)
-                    .shadow(10.dp, RoundedCornerShape(999.dp))
-                    .background(Color(0xFFFFC107).copy(alpha = 0.28f), RoundedCornerShape(999.dp))
+                modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Star,
                     contentDescription = stringResource(R.string.ai_tools_unpin_cd, chat.title),
-                    tint = Color(0xFFFFC107)
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
 
             Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.Center)
-                    .padding(top = 26.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
                 Text(
                     text = stringResource(R.string.ai_pinned_chat_label),
@@ -649,11 +619,9 @@ private fun PinnedChatHubCard(
                 Text(
                     text = chat.title,
                     style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
-                    textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
@@ -662,7 +630,6 @@ private fun PinnedChatHubCard(
                     } else {
                         MaterialTheme.colorScheme.error
                     },
-                    textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )

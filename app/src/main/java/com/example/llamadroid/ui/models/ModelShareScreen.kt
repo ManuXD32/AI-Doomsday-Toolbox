@@ -43,6 +43,7 @@ import kotlinx.coroutines.withContext
 import com.example.llamadroid.util.FormatUtils
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.components.AppPageBackground
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -148,6 +149,7 @@ fun ModelShareScreen(navController: NavController) {
     }
     
     Scaffold(
+        containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.model_share_title)) },
@@ -159,13 +161,13 @@ fun ModelShareScreen(navController: NavController) {
             )
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+        AppPageBackground(modifier = Modifier.padding(padding)) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
             // Server Control Card
             item {
                 Card(
@@ -281,10 +283,9 @@ fun ModelShareScreen(navController: NavController) {
             
             // Models Header
             item {
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
                         text = stringResource(R.string.model_share_available_title),
@@ -347,7 +348,7 @@ fun ModelShareScreen(navController: NavController) {
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "💡 " + stringResource(R.string.model_share_how_to),
+                            text = stringResource(R.string.model_share_how_to),
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold
                         )
@@ -358,6 +359,7 @@ fun ModelShareScreen(navController: NavController) {
                         )
                     }
                 }
+            }
             }
         }
     }

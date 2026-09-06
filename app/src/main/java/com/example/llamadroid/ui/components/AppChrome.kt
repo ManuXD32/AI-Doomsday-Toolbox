@@ -13,9 +13,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -37,33 +39,36 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.example.llamadroid.R
 
 object AppChromeDefaults {
     val ScreenPadding = 20.dp
     val SectionSpacing = 16.dp
-    val CardShape = RoundedCornerShape(20.dp)
+    val CardShape = RoundedCornerShape(24.dp)
     val InnerCardShape = RoundedCornerShape(16.dp)
     val CompactShape = RoundedCornerShape(12.dp)
-    val CardElevation = 2.dp
-    val HeroElevation = 4.dp
+    // Soft Studio uses tonal surfaces and outlines to establish hierarchy;
+    // elevation remains available to callers as a token but does not add a
+    // shadow to the shared chrome.
+    val CardElevation = 0.dp
+    val HeroElevation = 0.dp
 }
 
 @Composable
 fun rememberAppPageBrush(): Brush {
-    return Brush.verticalGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.surface,
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.38f),
-            MaterialTheme.colorScheme.background
-        )
-    )
+    // Keep the Brush return type for source compatibility with existing
+    // feature screens while making the page treatment a single semantic tone.
+    val tone = MaterialTheme.colorScheme.background
+    return SolidColor(tone)
 }
 
 @Composable
@@ -79,6 +84,12 @@ fun AppPageBackground(
     )
 }
 
+/**
+ * Shared flat page shell. IME padding is applied once at the outer scaffold;
+ * feature content receives an already inset page surface and should not add a
+ * second keyboard inset. Navigation and bottom-bar insets are consumed by the
+ * page surface before the feature body is composed.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppScreenScaffold(
@@ -91,7 +102,7 @@ fun AppScreenScaffold(
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
-        modifier = modifier,
+        modifier = modifier.imePadding(),
         containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
@@ -119,7 +130,7 @@ fun AppScreenScaffold(
                         IconButton(onClick = onBack) {
                             Icon(
                                 imageVector = Icons.Filled.ArrowBack,
-                                contentDescription = null
+                                contentDescription = stringResource(R.string.action_back)
                             )
                         }
                     }
@@ -133,7 +144,11 @@ fun AppScreenScaffold(
         },
         bottomBar = bottomBar
     ) { padding ->
-        AppPageBackground(modifier = Modifier.padding(padding)) {
+        AppPageBackground(
+            modifier = Modifier
+                .padding(padding)
+                .consumeWindowInsets(padding)
+        ) {
             content(PaddingValues())
         }
     }
@@ -161,8 +176,8 @@ fun AppContentColumn(
 @Composable
 fun AppPageHeader(
     title: String,
-    subtitle: String,
     modifier: Modifier = Modifier,
+    subtitle: String? = null,
     eyebrow: String? = null,
     trailing: @Composable (() -> Unit)? = null
 ) {
@@ -187,11 +202,13 @@ fun AppPageHeader(
                 style = MaterialTheme.typography.headlineLarge.copy(fontWeight = FontWeight.Bold),
                 color = MaterialTheme.colorScheme.onSurface
             )
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (!subtitle.isNullOrBlank()) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
         trailing?.invoke()
     }
@@ -214,7 +231,6 @@ fun AppSectionCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(listOf(tonalAccent, Color.Transparent)))
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             content = content
@@ -233,6 +249,8 @@ fun AppHeroCard(
         MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
         MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
     ),
+    icon: ImageVector? = null,
+    iconContentDescription: String? = null,
     content: (@Composable ColumnScope.() -> Unit)? = null
 ) {
     Card(
@@ -244,17 +262,29 @@ fun AppHeroCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.verticalGradient(gradientColors))
                 .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Row(
+            if (icon != null) {
+                Surface(
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = iconContentDescription,
+                        modifier = Modifier.padding(12.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Column(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
@@ -395,7 +425,9 @@ fun AppHubCard(
     description: String,
     gradientColors: List<Color>,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+    iconContentDescription: String? = null
 ) {
     Card(
         modifier = modifier.clickable(onClick = onClick),
@@ -406,12 +438,26 @@ fun AppHubCard(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Brush.verticalGradient(gradientColors))
                 .padding(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            Text(text = emoji, style = MaterialTheme.typography.displaySmall)
+            if (icon != null) {
+                Surface(
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = iconContentDescription,
+                        modifier = Modifier.padding(12.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            } else {
+                Text(text = emoji, style = MaterialTheme.typography.displaySmall)
+            }
             Spacer(modifier = Modifier.height(10.dp))
             Text(
                 text = title,

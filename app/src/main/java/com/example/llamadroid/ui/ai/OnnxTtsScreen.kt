@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,6 +53,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,6 +76,10 @@ import com.example.llamadroid.service.OnnxTtsGenerationService
 import com.example.llamadroid.service.OnnxTtsGenerationState
 import com.example.llamadroid.service.OnnxTtsGenerationStateStore
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.navigation.Screen
 import java.io.File
 
@@ -82,7 +90,10 @@ fun OnnxTtsScreen(navController: NavController) {
     val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val models by db.modelDao().getModelsByType(ModelType.ONNX_TTS).collectAsState(initial = emptyList())
-    var selectedModelId by remember(models) { mutableStateOf(models.firstOrNull()?.filename.orEmpty()) }
+    var selectedModelId by rememberSaveable { mutableStateOf("") }
+    LaunchedEffect(models) {
+        if (models.none { it.filename == selectedModelId }) selectedModelId = models.firstOrNull()?.filename.orEmpty()
+    }
     val selectedModel = remember(models, selectedModelId) {
         models.firstOrNull { it.filename == selectedModelId } ?: models.firstOrNull()
     }
@@ -90,15 +101,15 @@ fun OnnxTtsScreen(navController: NavController) {
         selectedModel?.let { resolveSupertonicVoices(File(it.path)) }.orEmpty()
     }
     val languageOptions = remember { supertonicLanguageCodes }
-    var text by remember { mutableStateOf("") }
-    var sourceUri by remember { mutableStateOf<String?>(null) }
-    var sourceName by remember { mutableStateOf<String?>(null) }
-    var language by remember { mutableStateOf("en") }
-    var voiceName by remember(selectedModel?.path) {
+    var text by rememberSaveable { mutableStateOf("") }
+    var sourceUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var sourceName by rememberSaveable { mutableStateOf<String?>(null) }
+    var language by rememberSaveable { mutableStateOf("en") }
+    var voiceName by rememberSaveable(selectedModel?.path) {
         mutableStateOf(voiceOptions.firstOrNull().orEmpty())
     }
-    var speed by remember { mutableFloatStateOf(1.05f) }
-    var steps by remember { mutableIntStateOf(8) }
+    var speed by rememberSaveable { mutableFloatStateOf(1.05f) }
+    var steps by rememberSaveable { mutableIntStateOf(8) }
     var isRunning by remember { mutableStateOf(false) }
     var progress by remember { mutableFloatStateOf(0f) }
     var status by remember { mutableStateOf("") }
@@ -171,8 +182,29 @@ fun OnnxTtsScreen(navController: NavController) {
         Toast.makeText(context, resources.getString(R.string.onnx_tts_file_loaded, name), Toast.LENGTH_SHORT).show()
     }
 
+    fun startTts() {
+        val model = selectedModel ?: return
+        progress = 0f
+        status = resources.getString(R.string.onnx_tts_status_starting)
+        OnnxTtsGenerationService.start(
+            context,
+            OnnxTtsGenerationJobSpec(
+                modelPath = model.path,
+                modelName = model.filename,
+                text = text.takeIf { it.isNotBlank() },
+                sourceUri = sourceUri,
+                sourceName = sourceName,
+                language = language,
+                voiceName = voiceName,
+                totalSteps = steps,
+                speed = speed
+            )
+        )
+    }
+
     AppPageBackground {
         Scaffold(
+            modifier = Modifier.imePadding(),
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             topBar = {
                 TopAppBar(
@@ -185,10 +217,14 @@ fun OnnxTtsScreen(navController: NavController) {
                 )
             }
         ) { innerPadding ->
-            LazyColumn(
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
+            ) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -205,48 +241,11 @@ fun OnnxTtsScreen(navController: NavController) {
                             modifier = Modifier.padding(16.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(stringResource(R.string.onnx_tts_model_section), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                            if (models.isEmpty()) {
-                                Text(
-                                    stringResource(R.string.onnx_tts_no_model),
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            } else {
-                                OnnxTtsModelPicker(
-                                    models = models,
-                                    selected = selectedModel?.filename.orEmpty(),
-                                    onSelected = { selectedModelId = it }
-                                )
-                            }
-                            OnnxTtsDropdownPicker(
-                                label = stringResource(R.string.onnx_tts_voice_label),
-                                selected = voiceName,
-                                options = voiceOptions,
-                                onSelected = { voiceName = it },
-                                enabled = voiceOptions.isNotEmpty() && !isRunning
-                            )
-                            OnnxTtsDropdownPicker(
-                                label = stringResource(R.string.onnx_tts_language_label),
-                                selected = language,
-                                options = languageOptions,
-                                onSelected = { language = it },
-                                enabled = !isRunning
-                            )
-                        }
-                    }
-                }
-                item {
-                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                        Column(
-                            modifier = Modifier.padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Text(
                                     stringResource(R.string.onnx_tts_text_section),
                                     style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    modifier = Modifier.weight(1f)
+                                    fontWeight = FontWeight.SemiBold
                                 )
                                 Button(
                                     onClick = {
@@ -261,7 +260,8 @@ fun OnnxTtsScreen(navController: NavController) {
                                             )
                                         )
                                     },
-                                    enabled = !isRunning
+                                    enabled = !isRunning,
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Icon(Icons.Default.FolderOpen, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
@@ -288,6 +288,7 @@ fun OnnxTtsScreen(navController: NavController) {
                                     .height(220.dp),
                                 maxLines = 10
                             )
+                            AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
                             Text(stringResource(R.string.onnx_tts_speed_value, speed))
                             Slider(value = speed, onValueChange = { speed = it }, valueRange = 0.5f..2.0f, enabled = !isRunning)
                             Text(stringResource(R.string.onnx_tts_steps_value, steps))
@@ -298,50 +299,51 @@ fun OnnxTtsScreen(navController: NavController) {
                                 steps = 30,
                                 enabled = !isRunning
                             )
+                            }
                             if (isRunning) {
                                 LinearProgressIndicator(progress = { progress.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
                                 Text(status, style = MaterialTheme.typography.bodySmall)
                             }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                Button(
-                                    onClick = {
-                                        val model = selectedModel ?: return@Button
-                                        progress = 0f
-                                        status = resources.getString(R.string.onnx_tts_status_starting)
-                                        OnnxTtsGenerationService.start(
-                                            context,
-                                            OnnxTtsGenerationJobSpec(
-                                                modelPath = model.path,
-                                                modelName = model.filename,
-                                                text = text.takeIf { it.isNotBlank() },
-                                                sourceUri = sourceUri,
-                                                sourceName = sourceName,
-                                                language = language,
-                                                voiceName = voiceName,
-                                                totalSteps = steps,
-                                                speed = speed
-                                            )
-                                        )
-                                    },
-                                    enabled = selectedModel != null && (text.isNotBlank() || !sourceUri.isNullOrBlank()) && !isRunning,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(stringResource(R.string.onnx_tts_generate))
-                                }
-                                if (isRunning) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            context.startService(OnnxTtsGenerationService.cancelIntent(context))
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.Close, contentDescription = null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(stringResource(R.string.action_cancel))
-                                    }
-                                }
                             }
                         }
                     }
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(stringResource(R.string.onnx_tts_model_section), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                            if (models.isEmpty()) {
+                                AppStatePanel(
+                                    kind = AppStateKind.Blocked,
+                                    title = stringResource(R.string.onnx_tts_no_model),
+                                    actionLabel = stringResource(R.string.models_hub),
+                                    onAction = { navController.navigate(Screen.OnnxModels.route) }
+                                )
+                            } else {
+                                OnnxTtsModelPicker(
+                                    models = models,
+                                    selected = selectedModel?.filename.orEmpty(),
+                                    onSelected = { selectedModelId = it }
+                                )
+                            }
+                            OnnxTtsDropdownPicker(
+                                label = stringResource(R.string.onnx_tts_voice_label),
+                                selected = voiceName,
+                                options = voiceOptions,
+                                onSelected = { voiceName = it },
+                                enabled = voiceOptions.isNotEmpty() && !isRunning
+                            )
+                            OnnxTtsDropdownPicker(
+                                label = stringResource(R.string.onnx_tts_language_label),
+                                selected = language,
+                                options = languageOptions,
+                                onSelected = { language = it },
+                                enabled = !isRunning
+                            )
+                        }
+                }
                 }
                 latestAudio?.let { file ->
                     item { OnnxTtsAudioCard(file = file, title = stringResource(R.string.onnx_tts_latest_audio)) }
@@ -352,6 +354,49 @@ fun OnnxTtsScreen(navController: NavController) {
                         onOpen = { navController.navigate(Screen.OnnxTtsGallery.route) }
                     )
                 }
+            }
+            AppTaskActionFooter(
+                modifier = Modifier
+                    .fillMaxWidth()
+            ) {
+                if (isRunning) {
+                    Text(
+                        text = status.ifBlank { stringResource(R.string.onnx_tts_status_starting) },
+                        modifier = Modifier.fillMaxWidth(),
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(
+                        onClick = { context.startService(OnnxTtsGenerationService.cancelIntent(context)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Close, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(R.string.soft_studio_cancel))
+                    }
+                } else {
+                    Button(
+                        onClick = ::startTts,
+                        enabled = selectedModel != null && (text.isNotBlank() || !sourceUri.isNullOrBlank()),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 52.dp)
+                    ) {
+                        Text(stringResource(R.string.soft_studio_generate))
+                    }
+                }
+            }
             }
         }
     }
@@ -389,6 +434,7 @@ private fun OnnxTtsGalleryEntryCard(audioCount: Int, onOpen: () -> Unit) {
 internal fun OnnxTtsAudioCard(file: File, title: String) {
     var player by remember(file.absolutePath) { mutableStateOf<MediaPlayer?>(null) }
     var isPlaying by remember(file.absolutePath) { mutableStateOf(false) }
+    var playbackFailed by remember(file.absolutePath) { mutableStateOf(false) }
     DisposableEffect(file.absolutePath) {
         onDispose {
             runCatching { player?.release() }
@@ -408,27 +454,47 @@ internal fun OnnxTtsAudioCard(file: File, title: String) {
                         current.pause()
                         isPlaying = false
                     } else {
-                        current?.release()
-                        player = MediaPlayer().apply {
-                            setDataSource(file.absolutePath)
-                            prepare()
-                            setOnCompletionListener {
+                        playbackFailed = false
+                        runCatching {
+                            current?.release()
+                            val next = MediaPlayer()
+                            player = next
+                            next.setOnCompletionListener {
                                 isPlaying = false
                                 runCatching { it.release() }
                                 player = null
                             }
-                            start()
+                            next.setOnErrorListener { media, _, _ ->
+                                isPlaying = false
+                                playbackFailed = true
+                                runCatching { media.release() }
+                                player = null
+                                true
+                            }
+                            next.setDataSource(file.absolutePath)
+                            next.prepare()
+                            next.start()
+                            isPlaying = true
+                        }.onFailure {
+                            runCatching { player?.release() }
+                            player = null
+                            isPlaying = false
+                            playbackFailed = true
                         }
-                        isPlaying = true
                     }
                 }
             ) {
-                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null)
+                Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = stringResource(if (isPlaying) R.string.action_pause else R.string.notes_audio_play))
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(file.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        if (playbackFailed) {
+            Text(stringResource(R.string.soft_studio_audio_playback_failed),
+                modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
         }
     }
 }

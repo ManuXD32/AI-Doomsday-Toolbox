@@ -2,23 +2,8 @@
 <resources>
     <!-- Etiquetas compartidas de navegación adaptable y nombres completos de accesibilidad. -->
     <string name="responsive_nav_home">Inicio</string>
-    <string name="responsive_nav_ai">IA</string>
-    <string name="responsive_nav_notes">Organizador</string>
-    <string name="responsive_nav_plan">Agenda</string>
-    <string name="responsive_nav_pet">P.E.T.</string>
     <string name="responsive_nav_more">Más</string>
-    <string name="responsive_nav_models">Modelos</string>
-    <string name="responsive_nav_settings">Ajustes</string>
-
-    <string name="responsive_nav_home_accessibility">Abrir Inicio</string>
-    <string name="responsive_nav_ai_accessibility">Abrir herramientas de IA</string>
-    <string name="responsive_nav_notes_accessibility">Abrir Organizador</string>
-    <string name="responsive_nav_plan_accessibility">Abrir Agenda</string>
-    <string name="responsive_nav_pet_accessibility">Abrir P.E.T.</string>
     <string name="responsive_nav_more_accessibility">Abrir más destinos</string>
-    <string name="responsive_nav_models_accessibility">Abrir Modelos</string>
-    <string name="responsive_nav_settings_accessibility">Abrir Ajustes</string>
-
     <string name="responsive_nav_more_title">Más destinos</string>
     <string name="responsive_nav_more_subtitle">Modelos y ajustes</string>
     <string name="responsive_nav_more_close">Cerrar más destinos</string>

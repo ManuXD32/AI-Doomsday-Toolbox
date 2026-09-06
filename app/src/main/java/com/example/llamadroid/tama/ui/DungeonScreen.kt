@@ -15,7 +15,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -37,7 +36,6 @@ import kotlinx.coroutines.launch
 private val DungeonDark = Color(0xFF1A0F0F)
 private val DungeonAccent = Color(0xFF8B0000)
 private val DungeonGold = Color(0xFFDAA520)
-private val DungeonMist = Color(0xFF2F2F2F)
 
 /**
  * Dungeon selection screen - shows available dungeons for text adventures.
@@ -161,28 +159,24 @@ fun DungeonCard(
     onClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val cardColor = if (isUnlocked) {
-        Brush.horizontalGradient(
-            colors = listOf(DungeonMist, DungeonDark)
-        )
-    } else {
-        Brush.horizontalGradient(
-            colors = listOf(Color.DarkGray.copy(alpha = 0.3f), Color.Black.copy(alpha = 0.5f))
-        )
-    }
-    
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
+            .heightIn(min = 64.dp)
             .clickable(enabled = isUnlocked) { onClick() },
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        colors = CardDefaults.cardColors(
+            containerColor = if (isUnlocked) {
+                MaterialTheme.colorScheme.surfaceVariant
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerLow
+            }
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(cardColor)
                 .padding(16.dp)
         ) {
             Row(
@@ -199,7 +193,7 @@ fun DungeonCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = dungeon.localizedName(context),
-                        color = if (isUnlocked) DungeonGold else Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurface,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp
@@ -211,7 +205,7 @@ fun DungeonCard(
                         } else {
                             stringResource(R.string.adventure_unlock_order, dungeon.unlockOrder)
                         },
-                        color = if (isUnlocked) Color.LightGray else Color.Gray,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace,
                         fontSize = 11.sp
                     )
@@ -224,7 +218,7 @@ fun DungeonCard(
                     Icon(
                         Icons.Default.Lock,
                         contentDescription = stringResource(R.string.adventure_locked),
-                        tint = Color.Gray,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(24.dp)
                     )
                 }

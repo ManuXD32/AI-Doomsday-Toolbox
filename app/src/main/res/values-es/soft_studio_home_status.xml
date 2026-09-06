@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="studio_home_memory_available">%1$s de %2$s GB de memoria disponibles</string>
+</resources>

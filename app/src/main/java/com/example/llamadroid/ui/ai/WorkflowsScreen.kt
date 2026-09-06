@@ -36,16 +36,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
@@ -62,6 +61,8 @@ import com.example.llamadroid.data.SharedFileHolder
 import com.example.llamadroid.onnx.resolveSupertonicVoices
 import com.example.llamadroid.onnx.supertonicLanguageCodes
 import com.example.llamadroid.service.*
+import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftLongTextField
 import com.example.llamadroid.ui.components.IntInputField
@@ -625,14 +626,8 @@ fun WorkflowsScreen(navController: NavController) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                    )
-                )
-            )
+            .imePadding()
+            .background(MaterialTheme.colorScheme.background)
     ) {
         // Header
         Row(
@@ -648,7 +643,7 @@ fun WorkflowsScreen(navController: NavController) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
                 Text(
-                when (selectedWorkflow) {
+                    when (selectedWorkflow) {
                     1 -> stringResource(R.string.workflow_transcribe_summary)
                     2 -> stringResource(R.string.workflow_txt2img_upscale)
                     3 -> stringResource(R.string.workflow_manga_translation)
@@ -657,22 +652,23 @@ fun WorkflowsScreen(navController: NavController) {
                     6 -> stringResource(R.string.workflow_video_interpolate_upscale)
                     else -> stringResource(R.string.workflow_title)
                 },
-                style = MaterialTheme.typography.headlineSmall.copy(
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight = FontWeight.Bold
-                )
+                ),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
             )
         }
         
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp)
+                .fillMaxWidth()
+                .weight(1f)
                 .then(
-                    if (selectedWorkflow == 3 || selectedWorkflow == 6) {
-                        Modifier
-                    } else {
-                        Modifier.verticalScroll(rememberScrollState())
-                    }
+                    if (selectedWorkflow == 0) {
+                        Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
+                    } else Modifier
                 )
         ) {
             // Show running workflow indicator (visible on all tabs)
@@ -754,13 +750,9 @@ fun WorkflowsScreen(navController: NavController) {
                     Spacer(modifier = Modifier.height(16.dp))
                     
                     WorkflowCard(
-                        emoji = "🎙️→📝",
-                        title = "Transcribe + Summary",
-                        description = "Transcribe audio/video, then summarize with LLM",
-                        gradientColors = listOf(
-                            Color(0xFF00BCD4).copy(alpha = 0.15f),
-                            Color(0xFF4CAF50).copy(alpha = 0.3f)
-                        ),
+                        icon = Icons.Default.Mic,
+                        title = stringResource(R.string.soft_studio_workflow_transcribe_summary_title),
+                        description = stringResource(R.string.soft_studio_workflow_transcribe_summary_description),
                         onClick = { 
                             // Binaries are now in base, no need to download
                             selectedWorkflow = 1 
@@ -770,13 +762,9 @@ fun WorkflowsScreen(navController: NavController) {
                     Spacer(modifier = Modifier.height(12.dp))
                     
                     WorkflowCard(
-                        emoji = "🎨→⬆️",
-                        title = "txt2img + Upscale",
-                        description = "Generate image, then upscale it",
-                        gradientColors = listOf(
-                            Color(0xFF2196F3).copy(alpha = 0.15f),
-                            Color(0xFF9C27B0).copy(alpha = 0.3f)
-                        ),
+                        icon = Icons.Default.AutoAwesome,
+                        title = stringResource(R.string.soft_studio_workflow_txt2img_upscale_title),
+                        description = stringResource(R.string.soft_studio_workflow_txt2img_upscale_description),
                         onClick = { 
                             if (UpscalerAssetPackSupport.areModelsReady(context)) {
                                 selectedWorkflow = 2 
@@ -789,52 +777,36 @@ fun WorkflowsScreen(navController: NavController) {
                     Spacer(modifier = Modifier.height(12.dp))
 
                     WorkflowCard(
-                        emoji = "📚→🌐",
+                        icon = Icons.Default.Translate,
                         title = stringResource(R.string.workflow_manga_translation),
                         description = stringResource(R.string.workflow_manga_translation_desc),
-                        gradientColors = listOf(
-                            Color(0xFFE91E63).copy(alpha = 0.15f),
-                            Color(0xFF3F51B5).copy(alpha = 0.3f)
-                        ),
                         onClick = { selectedWorkflow = 3 }
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     WorkflowCard(
-                        emoji = "🎬→🗣️",
+                        icon = Icons.Default.Movie,
                         title = stringResource(R.string.workflow_media_translate_title),
                         description = stringResource(R.string.workflow_media_translate_desc),
-                        gradientColors = listOf(
-                            Color(0xFF009688).copy(alpha = 0.15f),
-                            Color(0xFFFF9800).copy(alpha = 0.28f)
-                        ),
                         onClick = { selectedWorkflow = 4 }
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     WorkflowCard(
-                        emoji = "🎬→💬",
+                        icon = Icons.Default.ClosedCaption,
                         title = stringResource(R.string.workflow_subtitle_translate_title),
                         description = stringResource(R.string.workflow_subtitle_translate_desc),
-                        gradientColors = listOf(
-                            Color(0xFF673AB7).copy(alpha = 0.14f),
-                            Color(0xFF03A9F4).copy(alpha = 0.26f)
-                        ),
                         onClick = { selectedWorkflow = 5 }
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
                     WorkflowCard(
-                        emoji = "VI",
+                        icon = Icons.Default.Tune,
                         title = stringResource(R.string.workflow_video_interpolate_upscale),
                         description = stringResource(R.string.workflow_video_interpolate_upscale_desc),
-                        gradientColors = listOf(
-                            Color(0xFF00BCD4).copy(alpha = 0.14f),
-                            Color(0xFF7E57C2).copy(alpha = 0.28f)
-                        ),
                         onClick = { selectedWorkflow = 6 }
                     )
                 }
@@ -4237,7 +4209,58 @@ private fun SubtitleTranslationWorkflowContent(
         )
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    WorkflowTaskLayout(actions = {
+        val backendReady = !translateSubtitles || isWorkflowTranslationBackendReady(
+            backend = backend,
+            ollamaUrl = ollamaUrl,
+            ollamaModel = ollamaModel,
+            llamaServerUrl = llamaServerUrl,
+            llamaSwapUrl = llamaSwapUrl,
+            llamaSwapModel = llamaSwapModel,
+            liteRtModelId = liteRtModelId
+        )
+        val srtBatchConflict = subtitlePath != null && videoBatch.size > 1
+        val canRun = !state.isRunning &&
+            (videoPath != null || videoBatch.isNotEmpty()) &&
+            (subtitlePath != null || whisperModelPath != null) &&
+            (!translateSubtitles || targetLanguage.isNotBlank()) &&
+            backendReady &&
+            !srtBatchConflict
+        if (srtBatchConflict) {
+            Text(
+                stringResource(R.string.workflow_subtitle_translate_srt_batch_warning),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
+
+        if (state.isRunning) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onPause,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.action_pause))
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        } else {
+            Button(onClick = onRun, enabled = canRun, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    stringResource(
+                        if (translateSubtitles) R.string.workflow_subtitle_translate_run
+                        else R.string.workflow_subtitle_generate_run
+                    )
+                )
+            }
+        }
+    }) {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -4302,9 +4325,9 @@ private fun SubtitleTranslationWorkflowContent(
                                     trailingIcon = {
                                         IconButton(
                                             onClick = { scope.launch { db.workflowTemplateDao().delete(template) } },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(48.dp)
                                         ) {
-                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 )
@@ -4496,60 +4519,7 @@ private fun SubtitleTranslationWorkflowContent(
             } else null
         )
 
-        val backendReady = !translateSubtitles || isWorkflowTranslationBackendReady(
-            backend = backend,
-            ollamaUrl = ollamaUrl,
-            ollamaModel = ollamaModel,
-            llamaServerUrl = llamaServerUrl,
-            llamaSwapUrl = llamaSwapUrl,
-            llamaSwapModel = llamaSwapModel,
-            liteRtModelId = liteRtModelId
-        )
-        val srtBatchConflict = subtitlePath != null && videoBatch.size > 1
-        val canRun = !state.isRunning &&
-            (videoPath != null || videoBatch.isNotEmpty()) &&
-            (subtitlePath != null || whisperModelPath != null) &&
-            (!translateSubtitles || targetLanguage.isNotBlank()) &&
-            backendReady &&
-            !srtBatchConflict
-        if (srtBatchConflict) {
-            Text(
-                stringResource(R.string.workflow_subtitle_translate_srt_batch_warning),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
 
-        if (state.isRunning) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = onPause,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.Pause, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_pause), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                OutlinedButton(
-                    onClick = onCancel,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        } else {
-            Button(onClick = onRun, enabled = canRun, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    stringResource(
-                        if (translateSubtitles) R.string.workflow_subtitle_translate_run
-                        else R.string.workflow_subtitle_generate_run
-                    )
-                )
-            }
-        }
     }
 }
 
@@ -4955,7 +4925,45 @@ private fun MediaDubbingTranslationWorkflowContent(
         )
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    WorkflowTaskLayout(actions = {
+        val backendReady = isWorkflowTranslationBackendReady(
+            backend = backend,
+            ollamaUrl = ollamaUrl,
+            ollamaModel = ollamaModel,
+            llamaServerUrl = llamaServerUrl,
+            llamaSwapUrl = llamaSwapUrl,
+            llamaSwapModel = llamaSwapModel,
+            liteRtModelId = liteRtModelId
+        )
+        val canRun = !state.isRunning &&
+            (selectedPath != null || mediaBatch.isNotEmpty()) &&
+            whisperModelPath != null &&
+            selectedTtsModel != null &&
+            targetLanguage.isNotBlank() &&
+            backendReady
+
+        if (state.isRunning) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = onPause,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.action_pause))
+                }
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        } else {
+            Button(onClick = onRun, enabled = canRun, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.workflow_media_translate_run))
+            }
+        }
+    }) {
         Column(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -5026,9 +5034,9 @@ private fun MediaDubbingTranslationWorkflowContent(
                                     trailingIcon = {
                                         IconButton(
                                             onClick = { scope.launch { db.workflowTemplateDao().delete(template) } },
-                                            modifier = Modifier.size(32.dp)
+                                            modifier = Modifier.size(48.dp)
                                         ) {
-                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                            Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 )
@@ -5209,47 +5217,7 @@ private fun MediaDubbingTranslationWorkflowContent(
             )
         )
 
-        val backendReady = isWorkflowTranslationBackendReady(
-            backend = backend,
-            ollamaUrl = ollamaUrl,
-            ollamaModel = ollamaModel,
-            llamaServerUrl = llamaServerUrl,
-            llamaSwapUrl = llamaSwapUrl,
-            llamaSwapModel = llamaSwapModel,
-            liteRtModelId = liteRtModelId
-        )
-        val canRun = !state.isRunning &&
-            (selectedPath != null || mediaBatch.isNotEmpty()) &&
-            whisperModelPath != null &&
-            selectedTtsModel != null &&
-            targetLanguage.isNotBlank() &&
-            backendReady
 
-        if (state.isRunning) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = onPause,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Default.Pause, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_pause), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                OutlinedButton(
-                    onClick = onCancel,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.action_cancel), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        } else {
-            Button(onClick = onRun, enabled = canRun, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.workflow_media_translate_run))
-            }
-        }
     }
 }
 
@@ -5355,6 +5323,7 @@ private fun MediaTranslationWhisperCard(
                     }
                 }
             }
+            AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
             IntSliderWithInput(
                 value = whisperThreads,
                 onValueChange = onWhisperThreadsChange,
@@ -5362,6 +5331,7 @@ private fun MediaTranslationWhisperCard(
                 label = stringResource(R.string.label_threads)
             )
             WhisperVadInlineControl(settingsRepo = settingsRepo)
+            }
         }
     }
 }
@@ -5413,6 +5383,71 @@ private fun MediaTranslationBackendCard(
                 label = { Text(stringResource(R.string.pdf_target_language_label)) },
                 modifier = Modifier.fillMaxWidth()
             )
+            RemoteSummaryBackendEditor(
+                title = stringResource(R.string.video_summary_remote_settings_title),
+                backend = backend,
+                onBackendChange = onBackendChange,
+                ollamaUrl = ollamaUrl,
+                onOllamaUrlChange = onOllamaUrlChange,
+                llamaServerUrl = llamaServerUrl,
+                onLlamaServerUrlChange = onLlamaServerUrlChange,
+                llamaSwapUrl = llamaSwapUrl,
+                onLlamaSwapUrlChange = onLlamaSwapUrlChange,
+                ollamaModel = ollamaModel,
+                onOllamaModelSelected = onOllamaModelChange,
+                llamaSwapModel = llamaSwapModel,
+                onLlamaSwapModelSelected = onLlamaSwapModelChange,
+                llamaServerModelLabel = llamaServerModelLabel,
+                llamaServerContextLabel = llamaServerContextLabel,
+                llamaServerContextTokens = llamaServerContextTokens,
+                requestedContextForWarning = contextSize,
+                liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                onLiteRtModelSelected = settingsRepo::setWorkflowSummaryLiteRtModelId,
+                liteRtBackend = liteRtBackend,
+                onLiteRtBackendChange = settingsRepo::setWorkflowSummaryLiteRtBackend,
+                liteRtMtpEnabled = liteRtMtpEnabled,
+                onLiteRtMtpEnabledChange = settingsRepo::setWorkflowSummaryLiteRtMtpEnabled,
+                liteRtThinkingEnabled = thinkingEnabled,
+                onLiteRtThinkingEnabledChange = settingsRepo::setWorkflowSummaryThinkingEnabled,
+                fetchMetadata = {
+                    RemoteSummaryClientFactory.fromSnapshot(
+                        context,
+                        RemoteSummarySettingsSnapshot(
+                            backend = backend,
+                            ollamaUrl = ollamaUrl,
+                            llamaServerUrl = llamaServerUrl,
+                            llamaSwapUrl = llamaSwapUrl,
+                            ollamaModel = ollamaModel,
+                            llamaSwapModel = llamaSwapModel,
+                            liteRtModelId = liteRtModelId.takeIf { it > 0L },
+                            liteRtBackend = liteRtBackend,
+                            liteRtMtpEnabled = liteRtMtpEnabled,
+                            thinkingEnabled = thinkingEnabled,
+                            llamaServerModelLabel = llamaServerModelLabel,
+                            llamaServerContextTokens = llamaServerContextTokens,
+                            llamaServerContextLabel = llamaServerContextLabel,
+                            chunkContext = contextSize,
+                            chunkMaxTokens = maxTokens,
+                            mergeContext = contextSize,
+                            mergeMaxTokens = maxTokens,
+                            temperature = temperature,
+                            timeoutMinutes = timeoutMinutes,
+                            targetLanguage = targetLanguage,
+                            summaryPrompt = null,
+                            mergePrompt = null
+                        )
+                    ).fetchMetadata()
+                },
+                onMetadataLoaded = { metadata ->
+                    onMetadataLoaded(metadata)
+                    if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
+                        settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
+                        settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
+                        settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
+                    }
+                }
+            )
+            AppAdvancedSection(title = stringResource(R.string.soft_studio_translation_options)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -5501,70 +5536,8 @@ private fun MediaTranslationBackendCard(
                     )
                 }
             }
-            RemoteSummaryBackendEditor(
-                title = stringResource(R.string.video_summary_remote_settings_title),
-                backend = backend,
-                onBackendChange = onBackendChange,
-                ollamaUrl = ollamaUrl,
-                onOllamaUrlChange = onOllamaUrlChange,
-                llamaServerUrl = llamaServerUrl,
-                onLlamaServerUrlChange = onLlamaServerUrlChange,
-                llamaSwapUrl = llamaSwapUrl,
-                onLlamaSwapUrlChange = onLlamaSwapUrlChange,
-                ollamaModel = ollamaModel,
-                onOllamaModelSelected = onOllamaModelChange,
-                llamaSwapModel = llamaSwapModel,
-                onLlamaSwapModelSelected = onLlamaSwapModelChange,
-                llamaServerModelLabel = llamaServerModelLabel,
-                llamaServerContextLabel = llamaServerContextLabel,
-                llamaServerContextTokens = llamaServerContextTokens,
-                requestedContextForWarning = contextSize,
-                liteRtModelId = liteRtModelId.takeIf { it > 0L },
-                onLiteRtModelSelected = settingsRepo::setWorkflowSummaryLiteRtModelId,
-                liteRtBackend = liteRtBackend,
-                onLiteRtBackendChange = settingsRepo::setWorkflowSummaryLiteRtBackend,
-                liteRtMtpEnabled = liteRtMtpEnabled,
-                onLiteRtMtpEnabledChange = settingsRepo::setWorkflowSummaryLiteRtMtpEnabled,
-                liteRtThinkingEnabled = thinkingEnabled,
-                onLiteRtThinkingEnabledChange = settingsRepo::setWorkflowSummaryThinkingEnabled,
-                fetchMetadata = {
-                    RemoteSummaryClientFactory.fromSnapshot(
-                        context,
-                        RemoteSummarySettingsSnapshot(
-                            backend = backend,
-                            ollamaUrl = ollamaUrl,
-                            llamaServerUrl = llamaServerUrl,
-                            llamaSwapUrl = llamaSwapUrl,
-                            ollamaModel = ollamaModel,
-                            llamaSwapModel = llamaSwapModel,
-                            liteRtModelId = liteRtModelId.takeIf { it > 0L },
-                            liteRtBackend = liteRtBackend,
-                            liteRtMtpEnabled = liteRtMtpEnabled,
-                            thinkingEnabled = thinkingEnabled,
-                            llamaServerModelLabel = llamaServerModelLabel,
-                            llamaServerContextTokens = llamaServerContextTokens,
-                            llamaServerContextLabel = llamaServerContextLabel,
-                            chunkContext = contextSize,
-                            chunkMaxTokens = maxTokens,
-                            mergeContext = contextSize,
-                            mergeMaxTokens = maxTokens,
-                            temperature = temperature,
-                            timeoutMinutes = timeoutMinutes,
-                            targetLanguage = targetLanguage,
-                            summaryPrompt = null,
-                            mergePrompt = null
-                        )
-                    ).fetchMetadata()
-                },
-                onMetadataLoaded = { metadata ->
-                    onMetadataLoaded(metadata)
-                    if (SettingsRepository.isLlamaServerBackend(metadata.backend)) {
-                        settingsRepo.setWorkflowSummaryLlamaServerModelLabel(metadata.serverModelLabel)
-                        settingsRepo.setWorkflowSummaryLlamaServerContextTokens(metadata.serverContextTokens)
-                        settingsRepo.setWorkflowSummaryLlamaServerContextLabel(metadata.serverContextLabel)
-                    }
-                }
-            )
+            }
+
         }
     }
 }
@@ -5807,10 +5780,9 @@ private fun WorkflowOutputPathRow(label: String, path: String) {
 
 @Composable
 private fun WorkflowCard(
-    emoji: String,
+    icon: ImageVector,
     title: String,
     description: String,
-    gradientColors: List<Color>,
     onClick: () -> Unit
 ) {
     Card(
@@ -5818,12 +5790,13 @@ private fun WorkflowCard(
             .fillMaxWidth()
             .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(brush = Brush.horizontalGradient(gradientColors))
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
                 .padding(20.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -5833,7 +5806,12 @@ private fun WorkflowCard(
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Text(emoji, fontSize = 22.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                 }
                 Spacer(modifier = Modifier.width(14.dp))
@@ -6152,7 +6130,40 @@ private fun Txt2ImgUpscaleWorkflowContent(
     
     val scope = rememberCoroutineScope()
     
-    Column {
+    WorkflowTaskLayout(actions = {
+        // Run and Cancel buttons
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val canRun =
+                modelPath != null &&
+                    upscalerPath != null &&
+                    prompt.isNotBlank() &&
+                    missingRequiredComponents.isEmpty() &&
+                    !isRunning
+            Button(
+                onClick = runWorkflow,
+                enabled = canRun,
+                modifier = Modifier.weight(1f)
+            ) {
+                if (isRunning) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(if (isRunning) stringResource(R.string.workflow_running_btn) else stringResource(R.string.workflow_run_btn))
+            }
+
+            if (isRunning) {
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Icon(Icons.Default.Close, null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(stringResource(R.string.action_cancel))
+                }
+            }
+        }
+    }) {
         // ===== Template Save/Load for Txt2Img =====
         var showTemplateMenu by remember { mutableStateOf(false) }
         var showSaveDialog by remember { mutableStateOf(false) }
@@ -6231,13 +6242,13 @@ private fun Txt2ImgUpscaleWorkflowContent(
                                             templateName = template.name
                                             showEditDialog = true
                                             showTemplateMenu = false
-                                        }, modifier = Modifier.size(32.dp)) { 
-                                            Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp)) 
+                                        }, modifier = Modifier.size(48.dp)) {
+                                            Icon(Icons.Default.Edit, stringResource(R.string.action_edit), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                                         }
                                         IconButton(onClick = {
                                             scope.launch { db.workflowTemplateDao().delete(template) }
-                                        }, modifier = Modifier.size(32.dp)) { 
-                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) 
+                                        }, modifier = Modifier.size(48.dp)) {
+                                            Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 }
@@ -6366,6 +6377,17 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 Text(stringResource(R.string.workflow_step_gen_img), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(12.dp))
                 
+                // Prompt
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = onPromptChange,
+                    label = { Text(stringResource(R.string.workflow_prompt_label)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 // Model selector
                 var modelExpanded by remember { mutableStateOf(false) }
                 ExposedDropdownMenuBox(expanded = modelExpanded, onExpandedChange = { modelExpanded = it }) {
@@ -6483,17 +6505,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                // Prompt
-                OutlinedTextField(
-                    value = prompt,
-                    onValueChange = onPromptChange,
-                    label = { Text(stringResource(R.string.workflow_prompt_label)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2
-                )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
+                AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
                 // Negative prompt
                 OutlinedTextField(
                     value = negativePrompt,
@@ -6584,8 +6596,9 @@ private fun Txt2ImgUpscaleWorkflowContent(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     IconButton(onClick = { onSeedChange((0..Int.MAX_VALUE).random().toLong()) }) {
-                        Icon(Icons.Default.Refresh, "Random")
+                        Icon(Icons.Default.Refresh, stringResource(R.string.imagegen_random_seed))
                     }
+                }
                 }
             }
         }
@@ -6651,6 +6664,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
+                AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
                 // Repeats slider
                 IntSliderWithInput(
                     value = upscaleRepeats,
@@ -6672,6 +6686,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
                 
                 Spacer(modifier = Modifier.height(12.dp))
                 
+                }
                 // Final resolution preview
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))) {
                     Row(modifier = Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -6740,38 +6755,7 @@ private fun Txt2ImgUpscaleWorkflowContent(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Run and Cancel buttons
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            val canRun =
-                modelPath != null &&
-                    upscalerPath != null &&
-                    prompt.isNotBlank() &&
-                    missingRequiredComponents.isEmpty() &&
-                    !isRunning
-            Button(
-                onClick = runWorkflow, 
-                enabled = canRun, 
-                modifier = Modifier.weight(1f)
-            ) {
-                if (isRunning) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                Text(if (isRunning) stringResource(R.string.workflow_running_btn) else stringResource(R.string.workflow_run_btn))
-            }
-            
-            if (isRunning) {
-                OutlinedButton(
-                    onClick = onCancel,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Icon(Icons.Default.Close, null)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(stringResource(R.string.action_cancel))
-                }
-            }
-        }
+
     }
 }
 
@@ -6992,7 +6976,38 @@ private fun TranscribeSummaryWorkflowContent(
         }
     }
     
-    Column {
+    WorkflowTaskLayout(actions = {
+        // Run/Cancel buttons
+        val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
+            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
+            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
+            SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
+            else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
+        }
+        val canRun = whisperModelPath != null && audioUri != null && backendReady && !isRunning
+
+        if (isRunning) {
+            // Cancel button when running
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Icon(Icons.Default.Close, null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.action_cancel))
+            }
+        } else {
+            // Run button when not running
+            Button(
+                onClick = onRun,
+                enabled = canRun,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.workflow_run_btn))
+            }
+        }
+    }) {
         // ===== Template Save/Load =====
         var showTemplateMenu by remember { mutableStateOf(false) }
         var showSaveDialog by remember { mutableStateOf(false) }
@@ -7060,13 +7075,13 @@ private fun TranscribeSummaryWorkflowContent(
                                             templateName = template.name
                                             showEditDialog = true
                                             showTemplateMenu = false
-                                        }, modifier = Modifier.size(32.dp)) { 
-                                            Icon(Icons.Default.Edit, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp)) 
+                                        }, modifier = Modifier.size(48.dp)) {
+                                            Icon(Icons.Default.Edit, stringResource(R.string.action_edit), tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                                         }
                                         IconButton(onClick = {
                                             scope.launch { db.workflowTemplateDao().delete(template) }
-                                        }, modifier = Modifier.size(32.dp)) { 
-                                            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp)) 
+                                        }, modifier = Modifier.size(48.dp)) {
+                                            Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                         }
                                     }
                                 }
@@ -7353,6 +7368,7 @@ private fun TranscribeSummaryWorkflowContent(
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
+                AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
                 // Temperature
                 SliderWithInput(
                     value = temperature,
@@ -7417,6 +7433,7 @@ private fun TranscribeSummaryWorkflowContent(
                         checked = thinkingEnabled,
                         onCheckedChange = onThinkingEnabledChange
                     )
+                }
                 }
             }
         }
@@ -7495,35 +7512,22 @@ private fun TranscribeSummaryWorkflowContent(
         
         Spacer(modifier = Modifier.height(16.dp))
         
-        // Run/Cancel buttons
-        val backendReady = when (SettingsRepository.normalizeOllamaOrLlamaBackend(summaryBackend)) {
-            SettingsRepository.PDF_BACKEND_LLAMA_SERVER -> summaryLlamaUrl.isNotBlank()
-            SettingsRepository.PDF_BACKEND_LLAMA_SWAP -> summaryLlamaSwapUrl.isNotBlank() && !summaryLlamaSwapModel.isNullOrBlank()
-            SettingsRepository.PDF_BACKEND_LITERT -> summaryLiteRtModelId > 0L
-            else -> summaryOllamaUrl.isNotBlank() && !summaryOllamaModel.isNullOrBlank()
-        }
-        val canRun = whisperModelPath != null && audioUri != null && backendReady && !isRunning
-        
-        if (isRunning) {
-            // Cancel button when running
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
-            ) {
-                Icon(Icons.Default.Close, null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.action_cancel))
-            }
-        } else {
-            // Run button when not running
-            Button(
-                onClick = onRun,
-                enabled = canRun,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(stringResource(R.string.workflow_run_btn))
-            }
-        }
+
+    }
+}
+
+/** Each workflow keeps its task controls visible while the complete form scrolls. */
+@Composable
+private fun WorkflowTaskLayout(
+    actions: @Composable ColumnScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            content = content
+        )
+        AppTaskActionFooter(content = actions)
     }
 }

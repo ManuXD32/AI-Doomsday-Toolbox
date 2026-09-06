@@ -83,6 +83,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
@@ -294,11 +295,7 @@ fun AdventureGateScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(GateDark, Color(0xFF21152D), GateDark)
-                    )
-                )
+                .background(GateDark)
         ) {
             when {
                 pet == null -> AdventureGateInfo(stringResource(R.string.adventure_gate_no_pet))
@@ -982,37 +979,23 @@ private fun AdventureGateProfileCard(
                 ElementList(stringResource(R.string.adventure_gate_weak_to), shieldWeaknesses)
                 ElementList(stringResource(R.string.adventure_gate_resists), shieldResistances)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = onOpenLoadout,
-                    modifier = Modifier.weight(1f),
-                    border = BorderStroke(1.dp, GateAccent.copy(alpha = 0.7f))
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    border = BorderStroke(1.dp, GateAccent),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GateAccent)
                 ) {
-                    Text(
-                        text = stringResource(R.string.adventure_gate_loadout_button),
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(stringResource(R.string.adventure_gate_loadout_button))
                 }
                 Button(
                     onClick = onOpenShop ?: onOpenGear ?: {},
-                    modifier = Modifier.weight(1f),
                     enabled = onOpenShop != null || onOpenGear != null,
-                    colors = ButtonDefaults.buttonColors(containerColor = GateAccent)
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = GateAccent, contentColor = GateDark)
                 ) {
-                    Text(
-                        text = stringResource(
-                            if (onOpenGear != null && onOpenShop == null) {
-                                R.string.adventure_gate_gear_closet
-                            } else {
-                                R.string.adventure_gate_shop_button
-                            }
-                        ),
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Text(stringResource(if (onOpenGear != null && onOpenShop == null)
+                        R.string.adventure_gate_gear_closet else R.string.adventure_gate_shop_button))
                 }
             }
         }
@@ -1250,7 +1233,10 @@ private fun AdventureGateShopDialog(
             }
         )
     }
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             modifier = Modifier
                 .widthIn(max = 460.dp)
@@ -1820,7 +1806,10 @@ private fun GearClosetDialog(
         .filter { it.slot == slot && inventory.quantityOf(it.id) > 0 }
         .sortedWith(compareBy<AdventureGateEquipmentDefinition> { it.uniqueDrop }.thenBy { it.unlockWorldIndex }.thenBy { it.id })
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             modifier = Modifier
                 .widthIn(max = 430.dp)
@@ -2317,6 +2306,7 @@ private fun ShopRowSurface(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black.copy(alpha = 0.18f))
             .padding(8.dp),

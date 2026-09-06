@@ -70,6 +70,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -108,6 +109,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.navigation.NavController
@@ -174,7 +176,7 @@ import com.example.llamadroid.service.toRamPlannerOptions
 import com.example.llamadroid.service.toSdPlanningWorkers
 import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppPageBackground
-import com.example.llamadroid.ui.components.AppPageHeader
+import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.SdSchedulerPicker
 import com.example.llamadroid.ui.components.SdTensorTypeRulesPicker
@@ -297,23 +299,24 @@ fun SdDistributedGalleryScreen(navController: NavController) {
                 }
             }
 
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                SdGeneratedMediaFilter.entries.forEachIndexed { index, item ->
-                    SegmentedButton(
+            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SdGeneratedMediaFilter.entries.forEach { item ->
+                    FilterChip(
                         selected = filter == item,
                         onClick = { filter = item },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = SdGeneratedMediaFilter.entries.size)
-                    ) {
-                        Text(
-                            when (item) {
-                                SdGeneratedMediaFilter.ALL -> stringResource(R.string.sd_dist_gallery_all)
-                                SdGeneratedMediaFilter.IMAGES -> stringResource(R.string.sd_dist_gallery_images)
-                                SdGeneratedMediaFilter.VIDEOS -> stringResource(R.string.sd_dist_gallery_videos)
-                            },
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        label = {
+                            Text(
+                                when (item) {
+                                    SdGeneratedMediaFilter.ALL -> stringResource(R.string.sd_dist_gallery_all)
+                                    SdGeneratedMediaFilter.IMAGES -> stringResource(R.string.sd_dist_gallery_images)
+                                    SdGeneratedMediaFilter.VIDEOS -> stringResource(R.string.sd_dist_gallery_videos)
+                                },
+                                maxLines = 1
+                            )
+                        }
+                    )
                 }
             }
         }
@@ -490,7 +493,7 @@ fun SdDistributedWorkerScreen(navController: NavController) {
                     Text(stringResource(R.string.sd_dist_worker_cache_clear), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(
                     onClick = {
                         SdDistributedService.startWorker(
@@ -504,20 +507,20 @@ fun SdDistributedWorkerScreen(navController: NavController) {
                         )
                     },
                     enabled = !isRunning,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.sd_dist_start_worker), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.sd_dist_start_worker))
                 }
                 OutlinedButton(
                     onClick = { SdDistributedService.stopWorker(context) },
                     enabled = isRunning,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.Stop, contentDescription = null)
                     Spacer(Modifier.width(8.dp))
-                    Text(stringResource(R.string.sd_dist_stop_worker), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.sd_dist_stop_worker))
                 }
             }
         }
@@ -1856,20 +1859,9 @@ private fun SdDistributedPage(
     subtitle: String,
     content: @Composable () -> Unit
 ) {
-    AppPageBackground {
-        Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            AppContentColumn {
-                AppPageHeader(
-                    title = title,
-                    subtitle = subtitle,
-                    trailing = {
-                        IconButton(onClick = { navController.popBackStack() }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
-                        }
-                    }
-                )
-                content()
-            }
+    AppScreenScaffold(title = title, onBack = { navController.popBackStack() }) {
+        AppContentColumn(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            content()
         }
     }
 }
@@ -2487,7 +2479,7 @@ private fun FarmStatusChip(label: String, value: String, color: Color) {
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.elevatedCardColors(containerColor = RenderFarmPalette.graphiteSoft)
     ) {
-        Column(modifier = Modifier.width(150.dp).padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(modifier = Modifier.widthIn(min = 150.dp, max = 260.dp).padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(label, style = MaterialTheme.typography.labelSmall, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(value, style = MaterialTheme.typography.bodySmall, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
@@ -3757,9 +3749,9 @@ private fun PipelineChip(title: String, subtitle: String) {
 @Composable
 private fun WorkerStatusCard(isRunning: Boolean, address: String, connections: Int) {
     AppSectionCard(tonalAccent = if (isRunning) Color(0xFF1B8A5A).copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Default.Memory, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-            Column(modifier = Modifier.weight(1f)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(if (isRunning) stringResource(R.string.sd_dist_status_running) else stringResource(R.string.sd_dist_status_stopped), fontWeight = FontWeight.SemiBold)
                 Text(address, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -3779,10 +3771,10 @@ private fun NumberSliderField(
 ) {
     val numeric = valueDraft.toFloatOrNull()?.coerceIn(range.start, range.endInclusive) ?: range.start
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 label,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 style = MaterialTheme.typography.labelLarge,
                 color = if (onDark) Color.White else MaterialTheme.colorScheme.onSurface
             )
@@ -3791,7 +3783,7 @@ private fun NumberSliderField(
                 onValueChange = { onValueDraftChange(it.filter(Char::isDigit).take(6)) },
                 suffix = { if (suffix.isNotBlank()) Text(suffix) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.width(150.dp),
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 colors = distributedOutlinedTextFieldColors(onDark)
             )
