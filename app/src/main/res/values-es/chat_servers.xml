@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="chat_servers_current_endpoint">Servidor de chat</string>
+    <string name="chat_servers_port">Puerto %1$d</string>
+    <string name="chat_servers_selected_summary">%1$s · %2$s</string>
+    <string name="chat_servers_choose_cd">Elegir el servidor de Chat</string>
+    <string name="chat_servers_picker_title">Elegir servidor de Chat</string>
+    <string name="chat_servers_picker_hint">Elige un servidor llama.cpp activo para esta sesión de Chat.</string>
+    <string name="chat_servers_picker_current_port">Puerto seleccionado: %1$d</string>
+    <string name="chat_servers_no_running">No hay servidores llama.cpp gestionados activos.</string>
+    <string name="chat_servers_selected">Seleccionado</string>
+    <string name="chat_servers_manage">Gestionar servidores</string>
+    <string name="chat_servers_manage_cd">Gestionar servidores llama.cpp</string>
+</resources>

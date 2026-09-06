@@ -41,6 +41,7 @@ private data class SettingsEntry(val title: Int, val description: Int, val icon:
 fun SettingsHubScreen(navController: NavController) {
     val entries = listOf(
         SettingsEntry(R.string.settings_general, R.string.settings_general_desc, Icons.Default.Tune, "settings_general"),
+        SettingsEntry(R.string.llama_cards_title, R.string.settings_llama_servers_desc, Icons.Default.Dns, Screen.LlamaServers.route),
         SettingsEntry(R.string.settings_llm, R.string.settings_llm_desc, Icons.Default.ChatBubbleOutline, "settings_llm"),
         SettingsEntry(R.string.settings_imagegen, R.string.settings_imagegen_desc, Icons.Default.Image, "settings_imagegen"),
         SettingsEntry(R.string.whisper_settings_title, R.string.settings_whisper_desc, Icons.Default.MicNone, "settings_whisper"),
