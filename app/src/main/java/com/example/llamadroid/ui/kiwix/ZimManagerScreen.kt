@@ -50,6 +50,7 @@ import com.example.llamadroid.util.AssetPackManagerUtil
 import com.example.llamadroid.util.AssetPackManagerUtil.AssetPack
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,7 +73,10 @@ fun ZimManagerScreen(navController: NavController) {
             TopAppBar(
                 title = { Text(stringResource(R.string.zim_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 }

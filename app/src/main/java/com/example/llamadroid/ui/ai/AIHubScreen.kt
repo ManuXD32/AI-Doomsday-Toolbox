@@ -1,5 +1,8 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import androidx.compose.foundation.lazy.rememberLazyListState
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -37,6 +40,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -200,8 +204,22 @@ fun AIHubScreen(navController: NavController) {
         )
     }
 
+    val tourTargets = LocalWalkthroughTargets.current
+    val toolListState = rememberLazyListState()
+    val tourKeys = buildList {
+        add("tools.search")
+        if (pinnedChatItems.isEmpty() && pinnedTools.isEmpty() && groupedTools.isEmpty()) add("empty")
+        if (pinnedChatItems.isNotEmpty()) { add("pinned.chat.header"); pinnedChatItems.forEach { add("chat.${it.chat.id}") } }
+        if (pinnedTools.isNotEmpty()) { add("pinned.tool.header"); pinnedTools.forEach { add("tool.${it.definition.id}") } }
+        groupedTools.forEach { (category, tools) -> add("category.$category"); tools.forEach { add("tool.${it.definition.id}") } }
+    }
+    LaunchedEffect(tourTargets?.requestedId, tourTargets?.retryKey, tourKeys) {
+        val index = tourKeys.indexOf(tourTargets?.requestedId)
+        if (index >= 0 && toolListState.layoutInfo.visibleItemsInfo.none { it.index == index }) toolListState.scrollToItem(index)
+    }
     AppPageBackground {
         LazyColumn(
+            state = toolListState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -215,7 +233,7 @@ fun AIHubScreen(navController: NavController) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    modifier = Modifier.fillMaxWidth().testTag("studio_tool_search"),
+                    modifier = Modifier.fillMaxWidth().testTag("studio_tool_search").walkthroughTarget("tools.search"),
                     singleLine = true,
                     shape = RoundedCornerShape(18.dp),
                     leadingIcon = {
@@ -488,7 +506,7 @@ private fun ToolHubCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .testTag("studio_tool_$id")
+            .testTag("studio_tool_$id").walkthroughTarget("tool.$id")
             .clickable(onClick = onOpen),
         shape = AppChromeDefaults.InnerCardShape,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

@@ -98,6 +98,7 @@ import com.example.llamadroid.service.OnnxBackgroundRemovalService
 import com.example.llamadroid.service.OnnxBackgroundRemovalState
 import com.example.llamadroid.service.OnnxBackgroundRemovalStateStore
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppStateKind
@@ -319,7 +320,10 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                 TopAppBar(
                     title = { Text(stringResource(R.string.bgr_title)) },
                     navigationIcon = {
-                        IconButton(onClick = { navController.popBackStack() }) {
+                        IconButton(
+                            onClick = { navController.popBackStack() },
+                            modifier = Modifier.walkthroughTarget("back")
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                         }
                     }

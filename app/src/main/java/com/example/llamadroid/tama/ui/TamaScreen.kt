@@ -1,5 +1,6 @@
 package com.example.llamadroid.tama.ui
 
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughActive
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -187,6 +188,8 @@ fun TamaScreen(
     }
 
     var showNameDialog by remember { mutableStateOf(false) }
+    val activeWalkthrough = LocalWalkthroughActive.current
+    val guidedVisit = remember { activeWalkthrough }
     var showMenu by remember { mutableStateOf(false) }
 
     // File picker for export
@@ -245,7 +248,7 @@ fun TamaScreen(
     // Load pet on first composition
     LaunchedEffect(Unit) {
         val loadedPet = gameEngine.loadPet()
-        if (loadedPet == null) {
+        if (loadedPet == null && !guidedVisit) {
             showNameDialog = true
         }
     }
@@ -523,6 +526,12 @@ fun TamaScreen(
         // Reserve the pet header before sizing the scene on short tablet windows.
         val roomMaxSize = minOf(560.dp, (maxHeight - 64.dp).coerceAtLeast(240.dp))
         Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        if (pet == null && guidedVisit) {
+            Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.tour_tama_missing_body))
+                Button(onClick = { showNameDialog = true }) { Text(stringResource(R.string.tour_tama_setup)) }
+            }
+        }
         // Header with view toggle
         Row(
             modifier = Modifier

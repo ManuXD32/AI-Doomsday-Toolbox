@@ -57,6 +57,7 @@ import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
 import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -175,7 +176,10 @@ fun VideoSumupScreen(navController: NavController) {
             TopAppBar(
                 title = { Text(stringResource(R.string.video_sumup_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 }

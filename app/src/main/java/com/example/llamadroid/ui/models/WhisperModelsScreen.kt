@@ -38,6 +38,7 @@ import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.service.WhisperModel
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -215,7 +216,10 @@ fun WhisperModelsScreen(navController: NavController) {
             TopAppBar(
                 title = { Text(stringResource(R.string.whisper_models_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.kiwix_back))
                     }
                 },

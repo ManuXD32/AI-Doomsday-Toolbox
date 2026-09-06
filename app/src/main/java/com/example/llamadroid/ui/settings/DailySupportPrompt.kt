@@ -39,7 +39,7 @@ import kotlinx.coroutines.withContext
 
 /** A foreground launch check only; no alarms, background scheduling or payment tracking. */
 @Composable
-fun DailySupportPrompt(settings: SettingsRepository, eligible: Boolean) {
+fun DailySupportPrompt(settings: SettingsRepository, eligible: Boolean, launchId: Int = 0) {
     var foregroundDay by remember { mutableLongStateOf(LocalDate.now().toEpochDay()) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var visible by rememberSaveable { mutableStateOf(false) }
@@ -54,10 +54,16 @@ fun DailySupportPrompt(settings: SettingsRepository, eligible: Boolean) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    LaunchedEffect(launchId, eligible) {
+        foregroundDay = LocalDate.now().toEpochDay()
+        if (!eligible) visible = false
+    }
     LaunchedEffect(eligible, foregroundDay) {
-        if (eligible && withContext(Dispatchers.IO) { settings.claimDailySupportPrompt(foregroundDay) }) {
-            visible = true
+        if (!eligible) {
+            visible = false
+            return@LaunchedEffect
         }
+        if (withContext(Dispatchers.IO) { settings.claimDailySupportPrompt(foregroundDay) }) visible = true
     }
     if (visible && eligible) {
         SupportAppDialog(

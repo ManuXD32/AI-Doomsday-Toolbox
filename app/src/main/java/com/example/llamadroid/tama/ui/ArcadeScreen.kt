@@ -64,6 +64,7 @@ import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.data.resolvePetSpriteAssetPath
 import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.navigation.NavController
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -222,8 +223,11 @@ fun ArcadeScreen(
             CenterAlignedTopAppBar(
                 title = { Text(stringResource(R.string.tama_arcade_title), fontFamily = FontFamily.Monospace) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = null)
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(

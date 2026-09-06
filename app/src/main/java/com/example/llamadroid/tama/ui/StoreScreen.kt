@@ -38,6 +38,7 @@ import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.data.FarmShopCatalog
 import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -97,7 +98,10 @@ fun StoreScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 },

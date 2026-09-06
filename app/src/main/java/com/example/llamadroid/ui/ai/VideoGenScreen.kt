@@ -143,6 +143,7 @@ import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.navigation.Screen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -581,7 +582,10 @@ fun VideoGenScreen(navController: NavController, initialTab: String = "create") 
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(
+                onClick = { navController.popBackStack() },
+                modifier = Modifier.walkthroughTarget("back")
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
             }
             Text(

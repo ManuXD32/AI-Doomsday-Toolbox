@@ -72,6 +72,7 @@ import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.WhisperVadInlineControl
 import com.example.llamadroid.ui.settings.PdfTranslationQualityModeSelector
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -636,10 +637,13 @@ fun WorkflowsScreen(navController: NavController) {
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { 
-                if (selectedWorkflow == 0) navController.popBackStack()
-                else selectedWorkflow = 0
-            }) {
+            IconButton(
+                onClick = {
+                    if (selectedWorkflow == 0) navController.popBackStack()
+                    else selectedWorkflow = 0
+                },
+                modifier = Modifier.walkthroughTarget("back")
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
                 Text(

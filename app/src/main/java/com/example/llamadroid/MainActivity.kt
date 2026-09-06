@@ -36,6 +36,7 @@ import com.example.llamadroid.service.DatasetForegroundService
 import com.example.llamadroid.tama.notifications.TamaNotificationScheduler
 import com.example.llamadroid.util.UpscalerAssetPackSupport
 import com.example.llamadroid.util.getParcelableExtraCompat
+import com.example.llamadroid.ui.navigation.appLaunchIdentity
 import com.example.llamadroid.ui.navigation.ExternalRouteResolver
 import com.example.llamadroid.ui.navigation.ExternalRouteResolution
 
@@ -59,6 +60,8 @@ class MainActivity : ComponentActivity() {
         ExternalRouteResolution.NoRoute
     )
     private val supportPromptAllowed = mutableStateOf(false)
+    private val normalLaunchId = mutableStateOf(0)
+    private val externalLaunchId = mutableStateOf(0)
     private val isDeployingBinaries = mutableStateOf(true)
     private val deploymentStatusId = mutableStateOf(R.string.deployment_adjusting)
     
@@ -107,6 +110,8 @@ class MainActivity : ComponentActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        normalLaunchId.value = savedInstanceState?.getInt("walkthrough_normal_launch_id") ?: 0
+        externalLaunchId.value = savedInstanceState?.getInt("walkthrough_external_launch_id") ?: 0
 
         enableEdgeToEdge()
 
@@ -200,10 +205,16 @@ class MainActivity : ComponentActivity() {
             preferences.edit().putLong(KEY_LAST_SEEN_VERSION_CODE, currentVersionCode).apply()
         }
         
-        // Handle share intent
-        supportPromptAllowed.value = isNormalAppLaunch(intent)
-        handleShareIntent(intent)
-        pendingNavigationRoute.value = extractNavigationRoute(intent)
+        // Recreated activities restore navigation; they must not replay an already handled
+        // external intent or dismiss a retained walkthrough. Unhandled requests still retry.
+        val restoredLaunch = savedInstanceState?.takeIf {
+            it.getString("launch_identity") == appLaunchIdentity(intent)
+        }
+        supportPromptAllowed.value = restoredLaunch?.getBoolean("launch_was_normal") ?: isNormalAppLaunch(intent)
+        if (restoredLaunch?.getBoolean("launch_share_handled") != true) handleShareIntent(intent)
+        if (restoredLaunch?.getBoolean("launch_route_handled") != true) {
+            pendingNavigationRoute.value = extractNavigationRoute(intent)
+        }
 
         GenerationDiagnosticsStore.consumePendingRelaunchWarning()?.let { exitSnapshot ->
             reconcileAgentJobsAfterCrash(exitSnapshot.hadActiveGeneration)
@@ -228,6 +239,9 @@ class MainActivity : ComponentActivity() {
                 ) {
                     LlamaApp(
                         allowDailySupportPrompt = supportPromptAllowed.value,
+                        allowAutomaticWalkthrough = supportPromptAllowed.value,
+                        normalLaunchId = normalLaunchId.value,
+                        externalLaunchId = externalLaunchId.value,
                         sharedFileData = sharedFileData.value,
                         onSharedFileHandled = { sharedFileData.value = null },
                         pendingNavigationRoute = pendingNavigationRoute.value,
@@ -240,9 +254,27 @@ class MainActivity : ComponentActivity() {
         }
     }
     
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("walkthrough_normal_launch_id", normalLaunchId.value)
+        outState.putInt("walkthrough_external_launch_id", externalLaunchId.value)
+        outState.putString("launch_identity", appLaunchIdentity(intent))
+        outState.putBoolean("launch_was_normal", supportPromptAllowed.value)
+        outState.putBoolean("launch_share_handled", sharedFileData.value == null)
+        outState.putBoolean("launch_route_handled", pendingNavigationRoute.value == ExternalRouteResolution.NoRoute)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        supportPromptAllowed.value = isNormalAppLaunch(intent)
+        setIntent(intent)
+        val normalLaunch = isNormalAppLaunch(intent)
+        if (normalLaunch) {
+            normalLaunchId.value += 1
+        } else {
+            externalLaunchId.value += 1
+        }
+        supportPromptAllowed.value = normalLaunch
+        sharedFileData.value = null
         handleShareIntent(intent)
         pendingNavigationRoute.value = extractNavigationRoute(intent)
     }
@@ -263,18 +295,25 @@ class MainActivity : ComponentActivity() {
         }
     }
     
-    private fun isNormalAppLaunch(intent: Intent?): Boolean =
+    private fun isNormalAppLaunch(intent: Intent?): Boolean = try {
         (intent?.action == null || intent.action == Intent.ACTION_MAIN) &&
             intent?.hasExtra(EXTRA_OPEN_ROUTE) != true
+    } catch (_: RuntimeException) {
+        false
+    }
 
     private fun handleShareIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND) {
-            val uri = intent.getParcelableExtraCompat<Uri>(Intent.EXTRA_STREAM)
-            val mimeType = intent.type ?: ""
-            
-            if (uri != null && mimeType.isNotEmpty()) {
-                sharedFileData.value = SharedFileData(uri, mimeType)
+        try {
+            if (intent?.action == Intent.ACTION_SEND) {
+                val uri = intent.getParcelableExtraCompat<Uri>(Intent.EXTRA_STREAM)
+                val mimeType = intent.type ?: ""
+
+                if (uri != null && mimeType.isNotEmpty()) {
+                    sharedFileData.value = SharedFileData(uri, mimeType)
+                }
             }
+        } catch (_: RuntimeException) {
+            return
         }
     }
 
@@ -282,12 +321,15 @@ class MainActivity : ComponentActivity() {
         // External launchers (widgets, notifications and old shortcuts) can outlive the
         // destination they were created for. Resolve at the Activity boundary so malformed or
         // stale values never reach NavController.navigate().
-        if (intent?.hasExtra(EXTRA_OPEN_ROUTE) != true) {
-            return ExternalRouteResolution.NoRoute
+        return try {
+            if (intent?.hasExtra(EXTRA_OPEN_ROUTE) != true) {
+                ExternalRouteResolution.NoRoute
+            } else {
+                ExternalRouteResolver.resolve(intent.getStringExtra(EXTRA_OPEN_ROUTE))
+            }
+        } catch (_: RuntimeException) {
+            ExternalRouteResolution.Rejected
         }
-        val rawRoute = runCatching { intent.getStringExtra(EXTRA_OPEN_ROUTE) }
-            .getOrElse { return ExternalRouteResolution.Rejected }
-        return ExternalRouteResolver.resolve(rawRoute)
     }
 
     private fun appVersionCode(): Long {

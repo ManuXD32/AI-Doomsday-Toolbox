@@ -2,6 +2,7 @@ package com.example.llamadroid.ui.navigation
 
 sealed class Screen(val route: String) {
     object Dashboard : Screen("dashboard")
+    object Walkthrough : Screen("walkthrough")
     object Library : Screen("library")
     object ModelManager : Screen("models")       // Now goes to Model Hub
     object Chat : Screen("chat")

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tour_title">App tour</string>
+    <string name="tour_intro">Find your way around Toolbox, then explore a tool family at your own pace. You can close the guide at any time.</string>
+    <string name="tour_core_title">Start with the essentials</string>
+    <string name="tour_core_description">Eight stops through Home, Tools, image creation, Library, Tama and Settings.</string>
+    <string name="tour_start">Start tour</string>
+    <string name="tour_resume">Resume</string>
+    <string name="tour_replay">Replay</string>
+    <string name="tour_start_chapter">Explore chapter</string>
+    <string name="tour_completed">Completed</string>
+    <string name="tour_chapters">Explore the tools</string>
+    <string name="tour_close">Close walkthrough</string>
+    <string name="tour_progress">%1$d of %2$d</string>
+    <string name="tour_previous">Previous</string>
+    <string name="tour_next">Next</string>
+    <string name="tour_finish">Finish</string>
+    <string name="tour_skip_step">Skip step</string>
+    <string name="tour_tap_target">Tap the highlighted control. You are using the real app.</string>
+    <string name="tour_open_tool">Open tool</string>
+    <string name="tour_missing">This control is not visible here. You can open the tool, view the example, retry, or skip this step.</string>
+    <string name="tour_retry">Find control again</string>
+    <string name="tour_preview">View example</string>
+    <string name="tour_preview_caption">Example from the app with demonstration data. Your models, projects and results may be different.</string>
+    <string name="tour_no_setup_required">Explore freely: no model download, permission, purchase or running task is required to finish this guide.</string>
+    <string name="tour_icons">Icon guide</string>
+    <string name="tour_icon_pin">Pin: keep a tool handy on Home.</string>
+    <string name="tour_icon_settings">Gear: configure the app or tool.</string>
+    <string name="tour_icon_more">Three dots: more actions and options.</string>
+    <string name="tour_icon_back">Arrow: return to the previous page.</string>
+    <string name="tour_icon_gallery">Gallery: find saved output.</string>
+    <string name="tour_icon_stop">Stop: cancel running work; check its status before retrying.</string>
+    <string name="tour_core_home">Your starting point</string>
+    <string name="tour_core_home_body">Home keeps pinned tools, recent conversations and projects close by. Status cards show what is available on this device. Use the four main destinations to move around; on compact screens or with larger text, open the menu instead.</string>
+    <string name="tour_core_tools">Find a tool</string>
+    <string name="tour_core_tools_body">Open Tools using the highlighted navigation control. Search by task or engine name, or browse the categories. The pin keeps a tool on Home; the small gear opens its settings. Next, we will open image generation.</string>
+    <string name="tour_core_create">Create an image</string>
+    <string name="tour_core_create_body">Open Image generation. Describe an image in the prompt, choose a compatible model, and review the readiness message. Advanced controls expand when needed. Generate starts work, Stop cancels it, and Gallery contains saved results. You can continue this tour without installing a model or generating anything.</string>
+    <string name="tour_core_back">Return with Back</string>
+    <string name="tour_core_back_body">Tap the top-left arrow to return to Tools. Deep tools have their own Back control; the main navigation returns when you reach a root page. Your saved results remain available from Library.</string>
+    <string name="tour_core_library">Keep resources and results together</string>
+    <string name="tour_core_library_body">Open Library. Models lets you download or import compatible assets. Knowledge stores searchable documents, and Offline content opens your reading collection. The output links take you directly to image, video and audio galleries. Empty collections explain how to get started.</string>
+    <string name="tour_core_tama">Meet Tama</string>
+    <string name="tour_core_tama_body">Open Tama to see your pet room or the first-pet setup. Care actions sit below the full room; scroll or swipe to find more. Inventory, shop, farm, games and adventures have their own entrances. This guide does not create a pet, spend coins, or change your room.</string>
+    <string name="tour_core_settings">Make Toolbox yours</string>
+    <string name="tour_core_settings_body">Tap the gear. General settings contains appearance and language. Other groups configure models, generation, speech and diagnostics. About includes help and support links. Use Back when you are ready to return to the main navigation.</string>
+    <string name="tour_core_replay">Explore whenever you like</string>
+    <string name="tour_core_replay_body">Return to Home. The Explore button beside Settings opens this guide again. Resume an unfinished chapter, replay the essentials, or choose a tool family. The X always closes guidance and leaves you in the app.</string>
+    <string name="tour_tama_missing_title">Tama is not ready yet</string>
+    <string name="tour_tama_missing_body">No pet is available yet. Open Tama to check or set up your companion. Your farm, games and gallery will become available when a pet is ready.</string>
+    <string name="tour_tama_setup">Set up Tama</string>
+    <string name="tour_show_guide">Show guide</string>
+    <!-- The native-Llama lesson opens the same server-list state as chat; retain its stable
+         drawable ID while resolving the locale-specific chat capture. -->
+    <item name="tour_lesson_native_llama" type="drawable">@drawable/tour_lesson_chat</item>
+</resources>

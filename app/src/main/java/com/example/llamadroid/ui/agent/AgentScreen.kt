@@ -1,8 +1,11 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughActive
+
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.room.withTransaction
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -504,9 +507,11 @@ fun AgentScreen(
     // First-run popup - show once to remind user to create project
     val prefs = remember { context.getSharedPreferences("agent_prefs", Context.MODE_PRIVATE) }
     var showFirstRunPopup by remember { mutableStateOf(false) }
+    val walkthroughActive = LocalWalkthroughActive.current
+    val deferFirstRunPopupForVisit = remember { walkthroughActive }
     
     LaunchedEffect(Unit) {
-        if (!prefs.getBoolean("first_run_shown", false)) {
+        if (!deferFirstRunPopupForVisit && !prefs.getBoolean("first_run_shown", false)) {
             showFirstRunPopup = true
             prefs.edit().putBoolean("first_run_shown", true).apply()
         }
@@ -1090,6 +1095,43 @@ fun AgentScreen(
         scope.launch {
             settingsRepository.setLastAgentConversationId(-1L)
         }
+    }
+
+    // Route Back is deliberately independent from the Projects dashboard action above. The
+    // dashboard action changes the selected project; leaving this route must preserve that
+    // selection and any active runtime continuation so re-entry can resume in place.
+    val hasBlockingAgentDialog = showSetupInfo ||
+        showConnectionSettings ||
+        showAgentSettings ||
+        showToolSettings ||
+        showNewProjectDialog ||
+        showCustomTools ||
+        showCustomAgents ||
+        showSkillManager ||
+        showCommands ||
+        showTodos ||
+        showBuildSwitchOffer ||
+        showProjectManagement ||
+        showDeleteConfirmation != null ||
+        showNewFolderDialog ||
+        renameFolderTarget != null ||
+        renameProjectTarget != null ||
+        moveProjectTarget != null ||
+        moveFolderTarget != null ||
+        moveProjectBatch.isNotEmpty() ||
+        pendingDenyMessage != null ||
+        pendingActiveUserMessage != null ||
+        showFirstRunPopup ||
+        showConversations ||
+        imagePreviewPath != null
+    val hasAgentEditor = editingMessageId != null || planEditSession != null
+    BackHandler(
+        enabled = shouldHandleAgentSystemBack(
+            hasBlockingDialog = hasBlockingAgentDialog,
+            hasEditor = hasAgentEditor
+        )
+    ) {
+        navController.navigateAgentBackToPreviousPage()
     }
 
     fun handleApproval(approved: Boolean, msg: AgentService.Companion.ChatMessage, denyReason: String = "") {
@@ -1922,7 +1964,7 @@ fun AgentScreen(
         contentWindowInsets = WindowInsets(0.dp, 0.dp, 0.dp, 0.dp),
         topBar = {
             AgentTopBar(
-                onShowDashboard = { returnToProjectDashboard() },
+                onNavigateBack = { navController.navigateAgentBackToPreviousPage() },
                 onShowAgentSettings = { showAgentSettings = true },
                 onShowToolSettings = { showToolSettings = true },
                 onShowSettings = { showConnectionSettings = true },
@@ -2752,7 +2794,7 @@ fun AgentScreen(
     }
     
     // First-run popup dialog
-    if (showFirstRunPopup) {
+    if (showFirstRunPopup && !walkthroughActive) {
         AlertDialog(
             onDismissRequest = { showFirstRunPopup = false },
             title = { Text(stringResource(R.string.agent_welcome_title)) },

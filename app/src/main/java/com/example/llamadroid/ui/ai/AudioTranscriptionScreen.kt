@@ -52,6 +52,7 @@ import com.example.llamadroid.ui.components.ResponsiveActionGroup
 import com.example.llamadroid.ui.components.ResponsiveActionStyle
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -491,7 +492,10 @@ fun AudioTranscriptionScreen(navController: NavController) {
             TopAppBar(
                 title = { Text(stringResource(R.string.whisper_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 },

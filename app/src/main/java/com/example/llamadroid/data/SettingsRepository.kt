@@ -176,6 +176,7 @@ data class LlamaOcrSettingsSnapshot(
 
 class SettingsRepository(private val context: Context) {
     private val prefs: SharedPreferences = context.getSharedPreferences("llamadroid_settings", Context.MODE_PRIVATE)
+    val walkthrough: WalkthroughPreferences = WalkthroughPreferences(prefs)
     @Suppress("unused")
     private val llamaManagedSettingsMigration = migrateLegacyLlamaManagedPreferences()
 

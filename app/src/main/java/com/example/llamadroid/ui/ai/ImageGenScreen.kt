@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
@@ -2143,6 +2144,7 @@ fun ImageGenScreen(
                         onValueChange = { prompt = it },
                         modifier = Modifier
                             .fillMaxWidth()
+                            .walkthroughTarget("image.prompt")
                             .height(100.dp),
                         placeholder = {
                             val promptContext = when {
@@ -3602,7 +3604,7 @@ fun ImageGenScreen(
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(onClick = { navController.popBackStack() }, modifier = Modifier.walkthroughTarget("back")) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
             Text(

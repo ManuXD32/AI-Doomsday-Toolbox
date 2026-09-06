@@ -127,6 +127,7 @@ import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppTaskActionFooter
@@ -486,7 +487,10 @@ fun OnnxImageGenScreen(navController: NavController) {
                 .padding(start = 20.dp, top = 12.dp, end = 20.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(
+                onClick = { navController.popBackStack() },
+                modifier = Modifier.walkthroughTarget("back")
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
             }
             Column(modifier = Modifier.weight(1f)) {

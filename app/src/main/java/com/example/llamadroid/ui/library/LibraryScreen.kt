@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.library
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -63,7 +64,8 @@ fun LibraryScreen(navController: NavController) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             AppPageHeader(
-                title = stringResource(R.string.soft_studio_library_title)
+                title = stringResource(R.string.soft_studio_library_title),
+                modifier = Modifier.walkthroughTarget("library.resources")
             )
 
             AppSectionCard {

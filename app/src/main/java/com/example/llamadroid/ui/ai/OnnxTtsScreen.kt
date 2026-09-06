@@ -81,6 +81,7 @@ import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -210,7 +211,10 @@ fun OnnxTtsScreen(navController: NavController) {
                 TopAppBar(
                     title = { Text(stringResource(R.string.onnx_tts_title)) },
                     navigationIcon = {
-                        IconButton(onClick = { navController.popBackStack() }) {
+                        IconButton(
+                            onClick = { navController.popBackStack() },
+                            modifier = Modifier.walkthroughTarget("back")
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                         }
                     }

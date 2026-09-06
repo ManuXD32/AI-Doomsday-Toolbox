@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -642,7 +643,10 @@ fun SDModelsScreen(navController: NavController) {
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { navController.popBackStack() }) {
+            IconButton(
+                onClick = { navController.popBackStack() },
+                modifier = Modifier.walkthroughTarget("back")
+            ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
             Text(

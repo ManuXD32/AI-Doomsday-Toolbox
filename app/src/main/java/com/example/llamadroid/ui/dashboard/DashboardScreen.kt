@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.dashboard
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -133,7 +134,8 @@ fun DashboardScreen(navController: NavController) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             AppPageHeader(
-                title = stringResource(R.string.soft_studio_home_title)
+                title = stringResource(R.string.soft_studio_home_title),
+                modifier = Modifier.walkthroughTarget("home.summary")
             )
 
             val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }

@@ -1,5 +1,6 @@
 package com.example.llamadroid.ui.components
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.foundation.background
@@ -127,7 +128,7 @@ fun AppScreenScaffold(
                 },
                 navigationIcon = {
                     if (onBack != null) {
-                        IconButton(onClick = onBack) {
+                        IconButton(onClick = onBack, modifier = Modifier.walkthroughTarget("back")) {
                             Icon(
                                 imageVector = Icons.Filled.ArrowBack,
                                 contentDescription = stringResource(R.string.action_back)

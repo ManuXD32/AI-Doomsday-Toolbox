@@ -79,6 +79,7 @@ import com.example.llamadroid.tama.data.TamaPet
 import com.example.llamadroid.tama.db.TamaArtworkEntity
 import com.example.llamadroid.tama.game.TamaDailyDreamManager
 import com.example.llamadroid.tama.game.TamaGameEngine
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 import java.text.DateFormat
 import kotlinx.coroutines.launch
@@ -165,7 +166,10 @@ fun TamaGalleryScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.tama_gallery_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                 }

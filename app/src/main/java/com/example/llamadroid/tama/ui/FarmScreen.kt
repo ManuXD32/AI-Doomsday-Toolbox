@@ -56,6 +56,7 @@ import com.example.llamadroid.tama.db.FarmUpgradeEntity
 import com.example.llamadroid.tama.game.wellCapacityForLevel
 import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -149,7 +150,10 @@ fun FarmScreen(
                 TopAppBar(
                     title = { Text(stringResource(R.string.tama_farm_title)) },
                     navigationIcon = {
-                        IconButton(onClick = onBack) {
+                        IconButton(
+                            onClick = onBack,
+                            modifier = Modifier.walkthroughTarget("back")
+                        ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                         }
                     }
@@ -179,7 +183,10 @@ fun FarmScreen(
             TopAppBar(
                 title = { Text(stringResource(R.string.tama_farm_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(
+                        onClick = onBack,
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 },

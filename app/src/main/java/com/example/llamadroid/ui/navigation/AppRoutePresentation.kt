@@ -32,6 +32,7 @@ object AppRoutePresentations {
         val root = AppRootDestination.entries.firstOrNull { it.route == base }
         if (root != null) return AppRoutePresentation(root, true)
         val parent = when {
+            base == "walkthrough" -> AppRootDestination.Home
             base in tamaRoutes -> AppRootDestination.Tama
             base in libraryRoutes -> AppRootDestination.Library
             base == "settings" || base.startsWith("settings_") || base in setOf("about", "logs") -> null

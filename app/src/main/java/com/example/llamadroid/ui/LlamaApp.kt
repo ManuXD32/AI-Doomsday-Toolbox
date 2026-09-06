@@ -1,5 +1,13 @@
 package com.example.llamadroid.ui
 
+import com.example.llamadroid.ui.walkthrough.*
+import com.example.llamadroid.ui.navigation.AppNavigationLayout
+import com.example.llamadroid.ui.navigation.appNavigationLayout
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
 import androidx.navigation.NavType
 
 import androidx.navigation.navArgument
@@ -15,6 +23,8 @@ import com.example.llamadroid.ui.navigation.AppRoutePresentations
 import com.example.llamadroid.ui.navigation.SoftStudioAppScaffold
 import com.example.llamadroid.ui.library.LibraryScreen
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -162,7 +172,10 @@ fun LlamaApp(
     onSharedFileHandled: () -> Unit = {},
     pendingNavigationRoute: ExternalRouteResolution = ExternalRouteResolution.NoRoute,
     onNavigationHandled: () -> Unit = {},
-    allowDailySupportPrompt: Boolean = false
+    allowDailySupportPrompt: Boolean = false,
+    allowAutomaticWalkthrough: Boolean = allowDailySupportPrompt,
+    normalLaunchId: Int = 0,
+    externalLaunchId: Int = 0
 ) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
@@ -174,6 +187,16 @@ fun LlamaApp(
     val feedbackScope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val settingsRepo = remember { SettingsRepository(context) }
+    val tour: WalkthroughState = viewModel(factory = remember(settingsRepo) {
+        object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = WalkthroughState(settingsRepo.walkthrough) as T
+        }
+    })
+    val tourTargets = remember { WalkthroughTargets() }
+    LaunchedEffect(normalLaunchId) { tour.beginLaunch(normalLaunchId) }
+    LaunchedEffect(externalLaunchId) { tour.interruptForExternalLaunch(externalLaunchId) }
+
     val hasCompletedWelcome by settingsRepo.hasCompletedWelcome.collectAsState()
     var showWelcome by remember { mutableStateOf(!hasCompletedWelcome) }
     
@@ -232,6 +255,11 @@ fun LlamaApp(
     
     // Handle shared file
     LaunchedEffect(sharedFileData) {
+        // A new launch supersedes a pending chooser. Do not clear the holder here: a chosen
+        // destination may still be consuming the file after onSharedFileHandled clears input.
+        showShareChooser = false
+        pendingShareData = null
+        shareOptions = emptyList()
         sharedFileData?.let { data ->
             pendingShareData = data  // Store for later use by chooser
             val mimeType = data.mimeType
@@ -410,6 +438,7 @@ fun LlamaApp(
                                 resources.getString(R.string.navigation_destination_unavailable)
                             )
                         }
+                        return@LaunchedEffect
                     }
                 }
                 onNavigationHandled()
@@ -450,19 +479,56 @@ fun LlamaApp(
         return
     }
 
+    val tourEligible = allowAutomaticWalkthrough && currentRoute == Screen.Dashboard.route &&
+        sharedFileData == null && !showShareChooser && pendingNavigationRoute == ExternalRouteResolution.NoRoute
+    LaunchedEffect(tourEligible) { tour.observeEligibility(tourEligible) }
+    LaunchedEffect(sharedFileData, pendingNavigationRoute) {
+        if (sharedFileData != null || pendingNavigationRoute != ExternalRouteResolution.NoRoute) tour.dismiss()
+    }
+    val tourDensity = LocalDensity.current
+    val tourWindow = LocalWindowInfo.current.containerSize
+    val tourNavigationLayout = appNavigationLayout((tourWindow.width / tourDensity.density).toInt(),
+        (tourWindow.height / tourDensity.density).toInt(), tourDensity.fontScale)
+    val tourSession = tour.session
+    val tourRequestedTarget = tour.step?.let {
+        tourTarget(it, currentRoute, tourNavigationLayout == AppNavigationLayout.Drawer, tourTargets.drawerOpen)
+    }
+    SideEffect {
+        tourTargets.active = tourSession != null
+        tourTargets.requestedId = tourRequestedTarget
+    }
+
     DailySupportPrompt(
         settings = settingsRepo,
-        eligible = allowDailySupportPrompt && currentRoute != null &&
+        launchId = normalLaunchId,
+        eligible = allowDailySupportPrompt && !tour.awaitingAutomaticPresentation &&
+            (tour.automaticCheckFinished || !settingsRepo.walkthrough.automaticEligible) &&
+            !tour.suppressSupportForLaunch && currentRoute != null &&
             AppRoutePresentations.forRoute(currentRoute).isRoot &&
             sharedFileData == null && !showShareChooser &&
             pendingNavigationRoute == ExternalRouteResolution.NoRoute
     )
 
+    CompositionLocalProvider(LocalWalkthroughTargets provides tourTargets, LocalWalkthroughActive provides (tourSession != null)) {
+    WalkthroughHighlight(tourTargets) {
     SoftStudioAppScaffold(
         currentRoute = currentRoute,
         destinations = directNavigationDestinations,
         snackbarHostState = snackbarHostState,
-        onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } }
+        onSettings = { navController.navigate(Screen.Settings.route) { launchSingleTop = true } },
+        onTour = {
+            tour.openGuide()
+            navController.navigate(Screen.Walkthrough.route) { launchSingleTop = true }
+        },
+        onCloseTour = if (tour.session != null) ({ tour.dismiss() }) else null,
+        walkthroughBar = {
+            WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = { route ->
+                // Explicit fallback navigation remains user initiated and never starts a tool job.
+                val root = AppRootDestination.entries.firstOrNull { it.route == route }
+                if (root != null) navigateFromAppNavigation(root)
+                else navController.navigate(if (route == Screen.Chat.route) Screen.LlamaServers.route else route) { launchSingleTop = true }
+            })
+        }
     ) { innerPadding ->
         NavHost(
             navController = navController, 
@@ -474,6 +540,23 @@ fun LlamaApp(
             popExitTransition = { fadeOut(tween(180)) }
         ) {
             composable(Screen.Dashboard.route) { DashboardScreen(navController) }
+            composable(Screen.Walkthrough.route) {
+                WalkthroughGuide(tour, onBack = { navController.popBackStack() }, onStart = { chapterId, resume ->
+                    val root = when (chapterId) {
+                        CoreTour.ID, "settings_help" -> AppRootDestination.Home
+                        "tama" -> AppRootDestination.Tama
+                        else -> AppRootDestination.Tools
+                    }
+                    // The guide belongs to Home. Remove it before saving/restoring a root,
+                    // otherwise navigating Home restores the guide we just saved above it.
+                    navController.popBackStack(Screen.Dashboard.route, inclusive = false)
+                    if (root != AppRootDestination.Home) {
+                        navigateFromAppNavigation(root)
+                        navController.popBackStack(root.route, inclusive = false)
+                    }
+                    tour.start(chapterId, resume)
+                })
+            }
             composable(Screen.Settings.route) { SettingsHubScreen(navController) }
             composable(Screen.Stats.route) { StatsScreen(navController) }
             composable(Screen.Logs.route) { LogsScreen(navController) }
@@ -675,14 +758,12 @@ fun LlamaApp(
             composable(Screen.Farm.route) {
                 val pet by tamaGameEngine.pet.collectAsState()
                 
-                // Show loading state instead of auto-navigating back to prevent navigation loop
+                // A missing pet must offer a usable way back and setup, including during a tour.
                 if (pet == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
                     return@composable
                 }
                 
@@ -760,6 +841,12 @@ fun LlamaApp(
             
             composable(Screen.Store.route) {
                 val petState by tamaGameEngine.pet.collectAsState()
+                if (petState == null) {
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
+                }
                 petState?.let { activePet ->
                     val farmUpgrades by farmRepository.observeUpgrades(activePet.id).collectAsState(initial = emptyList())
                     val livestock by farmRepository.observeLivestock(activePet.id).collectAsState(initial = emptyList())
@@ -942,12 +1029,10 @@ fun LlamaApp(
             composable(Screen.TamaGallery.route) {
                 val pet by tamaGameEngine.pet.collectAsState()
                 if (pet == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
                     return@composable
                 }
                 com.example.llamadroid.tama.ui.TamaGalleryScreen(
@@ -960,12 +1045,10 @@ fun LlamaApp(
             composable(Screen.Arcade.route) {
                 val pet by tamaGameEngine.pet.collectAsState()
                 if (pet == null) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    com.example.llamadroid.ui.walkthrough.TamaSetupState(
+                        onBack = { navController.popBackStack() },
+                        onOpenTama = { navigateFromAppNavigation(AppRootDestination.Tama) }
+                    )
                     return@composable
                 }
                 com.example.llamadroid.tama.ui.ArcadeScreen(
@@ -1023,5 +1106,7 @@ fun LlamaApp(
                 )
             }
         }
+    }
+    }
     }
 }

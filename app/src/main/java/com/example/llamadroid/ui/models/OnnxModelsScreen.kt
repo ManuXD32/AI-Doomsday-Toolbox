@@ -72,6 +72,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.navigation.NavController
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
@@ -215,7 +216,10 @@ fun OnnxModelsScreen(navController: NavController) {
                     .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { navController.popBackStack() }) {
+                    IconButton(
+                        onClick = { navController.popBackStack() },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.action_back))
                     }
                     Text(

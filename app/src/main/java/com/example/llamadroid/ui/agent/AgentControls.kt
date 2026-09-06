@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -105,7 +107,7 @@ fun AgentComposerHost(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AgentTopBar(
-    onShowDashboard: () -> Unit,
+    onNavigateBack: () -> Unit,
     onShowAgentSettings: () -> Unit,
     onShowToolSettings: () -> Unit,
     onShowSettings: () -> Unit,
@@ -137,8 +139,8 @@ fun AgentTopBar(
             )
         },
         navigationIcon = {
-            IconButton(onClick = onShowDashboard) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.agent_dashboard_return))
+            IconButton(onClick = onNavigateBack, modifier = Modifier.walkthroughTarget("back")) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
             }
         },
         actions = {

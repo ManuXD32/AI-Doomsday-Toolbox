@@ -48,6 +48,7 @@ import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.DocumentUriDisplayName
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -218,17 +219,20 @@ fun PDFToolboxScreen(navController: NavController) {
             TopAppBar(
                 title = { Text(stringResource(R.string.pdf_toolbox_title)) },
                 navigationIcon = {
-                    IconButton(onClick = { 
-                        if (selectedTool != null) {
-                            selectedTool = null
-                            selectedPdfStrings = emptyList()
-                            selectedImageStrings = emptyList()
-                            ocrResult = ""
-                            ocrProgressMessage = ""
-                        } else {
-                            navController.popBackStack() 
-                        }
-                    }) {
+                    IconButton(
+                        onClick = {
+                            if (selectedTool != null) {
+                                selectedTool = null
+                                selectedPdfStrings = emptyList()
+                                selectedImageStrings = emptyList()
+                                ocrResult = ""
+                                ocrProgressMessage = ""
+                            } else {
+                                navController.popBackStack()
+                            }
+                        },
+                        modifier = Modifier.walkthroughTarget("back")
+                    ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.action_back))
                     }
                 }

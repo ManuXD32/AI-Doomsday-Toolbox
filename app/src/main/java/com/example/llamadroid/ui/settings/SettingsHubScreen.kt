@@ -1,5 +1,9 @@
 package com.example.llamadroid.ui.settings
 
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -47,8 +51,17 @@ fun SettingsHubScreen(navController: NavController) {
         SettingsEntry(R.string.settings_stats, R.string.settings_stats_desc, Icons.Default.QueryStats, Screen.Stats.route),
         SettingsEntry(R.string.settings_about, R.string.settings_about_desc, Icons.Default.Info, "about")
     )
+    val listState = rememberLazyListState()
+    val tourTargets = LocalWalkthroughTargets.current
+    val requestedTarget = tourTargets?.requestedId
+    LaunchedEffect(requestedTarget, tourTargets?.retryKey) {
+        val route = requestedTarget?.takeIf { it.startsWith("settings.") }?.removePrefix("settings.")
+        val index = entries.indexOfFirst { it.route == route }
+        if (index >= 0) listState.scrollToItem(index + 1)
+    }
     AppScreenScaffold(title = stringResource(R.string.settings_title), onBack = { navController.popBackStack() }) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize().padding(padding),
             contentPadding = PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -61,7 +74,7 @@ fun SettingsHubScreen(navController: NavController) {
                 Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainerLow) {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 72.dp)
-                            .testTag("studio_settings_${entry.route}")
+                            .testTag("studio_settings_${entry.route}").walkthroughTarget("settings.${entry.route}")
                             .clickable { navController.navigate(entry.route) }
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
