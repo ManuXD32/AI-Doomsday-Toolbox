@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.components
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll

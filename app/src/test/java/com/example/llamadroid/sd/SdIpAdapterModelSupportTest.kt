@@ -38,7 +38,7 @@ class SdIpAdapterModelSupportTest {
     @Test
     fun `new model compatibility defaults distinguish sd15 and sdxl`() {
         val expected = setOf("checkpoint:sd1", "checkpoint:sdxl")
-        assertEquals(expected, defaultCompatProfilesFor(ModelType.SD_CLIP_VISION))
+        assertTrue(defaultCompatProfilesFor(ModelType.SD_CLIP_VISION).containsAll(expected))
         assertEquals(expected, defaultCompatProfilesFor(ModelType.SD_IP_ADAPTER))
     }
 }

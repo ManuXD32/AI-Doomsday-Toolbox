@@ -131,6 +131,8 @@ data class SdDistributedMasterSettingsEntity(
     val videoHighNoiseLorasJson: String = "[]",
     val videoLoraApplyMode: String = "",
     val videoCustomFlags: String = "",
+    /** Versioned video components/options beyond the legacy template fields. */
+    @androidx.room.ColumnInfo(defaultValue = "'{}'") val videoAdvancedJson: String = "{}",
     val devicesExpanded: Boolean = true,
     val plannerExpanded: Boolean = true,
     val generationExpanded: Boolean = false,

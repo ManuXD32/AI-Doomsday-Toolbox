@@ -48,6 +48,7 @@ import com.example.llamadroid.ui.components.IntInputField
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.DocumentUriDisplayName
 import com.example.llamadroid.util.FormatUtils
@@ -63,6 +64,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun PDFToolboxScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val pdfService = remember { PDFService(context) }
@@ -217,6 +219,7 @@ fun PDFToolboxScreen(navController: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.pdf_toolbox_title)) },
                 navigationIcon = {
                     IconButton(
@@ -309,7 +312,11 @@ fun PDFToolboxScreen(navController: NavController) {
                         icon = Icons.Default.MergeType,
                         title = stringResource(R.string.pdf_merge),
                         description = stringResource(R.string.pdf_merge_desc),
-                        onClick = { selectedTool = "merge" }
+                        onClick = {
+                            walkthroughTargets?.recordEvent("documents.pdf.input")
+                            selectedTool = "merge"
+                        },
+                        modifier = Modifier.walkthroughTarget("documents.pdf.input")
                     )
                 }
                 
@@ -2332,11 +2339,13 @@ private fun PDFToolCard(
     icon: ImageVector,
     title: String,
     description: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .then(modifier)
             .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_bundle_lingbot_phone_title">LingBot · Vídeo para móvil</string>
+    <string name="sd_bundle_lingbot_phone_desc">Transformador Dense 1.3B, codificador de texto Qwen3-VL 4B Q4 y autocodificador reducido taew2_1. Incluye los componentes del ejemplo para móvil de Generación de vídeo. El decodificador reducido sacrifica detalle para consumir menos memoria.</string>
+    <string name="video_lingbot_example_prompt">Un pequeño gato naranja gira lentamente la cabeza junto a una ventana soleada. Cámara fija, luz natural suave y movimiento tranquilo.</string>
+    <string name="video_lingbot_example_negative">Desenfoque, parpadeo, anatomía deformada, movimientos bruscos de cámara, texto, marca de agua.</string>
+</resources>

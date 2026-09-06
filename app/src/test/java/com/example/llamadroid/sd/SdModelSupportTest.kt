@@ -5,6 +5,8 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.db.SD_CAPABILITY_IMG2IMG
 import com.example.llamadroid.data.db.SD_CAPABILITY_TXT2IMG
 import com.example.llamadroid.data.db.buildSdCapabilities
+import com.example.llamadroid.data.db.SD_CAPABILITY_VID_GEN
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -83,5 +85,40 @@ class SdModelSupportTest {
 
         assertEquals(SdModelFamily.SD3, spec?.family)
         assertTrue(spec?.requiredRoles?.contains(SdComponentRole.CLIP_G) == true)
+    }
+
+    @Test
+    fun `video family bridge keeps stable stored values`() {
+        assertEquals(SdModelFamily.LINGBOT_VIDEO, SdVideoFamily.LINGBOT_VIDEO.toSdModelFamily())
+        assertEquals(SdVideoFamily.SVD, SdModelFamily.SVD.toVideoFamily())
+        assertEquals("lingbot_video", SdVideoFamily.LINGBOT_VIDEO.toSdModelFamily().storedValue)
+    }
+
+    @Test
+    fun `video main selection requires explicit or detected family`() {
+        val generic = ModelEntity(
+            filename = "model.safetensors",
+            path = "/models/model.safetensors",
+            sizeBytes = 1024L,
+            type = ModelType.SD_DIFFUSION,
+            repoId = "local",
+            sdCapabilities = SD_CAPABILITY_VID_GEN
+        )
+        val lingbot = generic.copy(sdFamily = SdModelFamily.LINGBOT_VIDEO.storedValue)
+
+        assertTrue(generic.isSdVideoMainModel())
+        assertFalse(generic.matchesSdVideoFamily(SdVideoFamily.LINGBOT_VIDEO))
+        assertTrue(lingbot.matchesSdVideoFamily(SdVideoFamily.LINGBOT_VIDEO, "dense_1.3b"))
+        assertFalse(lingbot.matchesSdVideoFamily(SdVideoFamily.WAN))
+    }
+
+    @Test
+    fun `video companion defaults include the role-specific family set`() {
+        assertTrue(SdModelFamily.LTX_VIDEO.storedValue in defaultCompatProfilesFor(ModelType.SD_AUDIO_VAE))
+        assertTrue(SdModelFamily.LTX_VIDEO.storedValue in defaultCompatProfilesFor(ModelType.SD_EMBEDDINGS_CONNECTORS))
+        assertTrue(SdModelFamily.ANIMATEDIFF.storedValue in defaultCompatProfilesFor(ModelType.SD_MOTION_MODULE))
+        assertTrue(SdModelFamily.WAN.storedValue in defaultCompatProfilesFor(ModelType.SD_LORA))
+        assertTrue(SdModelFamily.WAN.storedValue in defaultCompatProfilesFor(ModelType.SD_CLIP_VISION))
+        assertTrue(SdModelFamily.SVD.storedValue in defaultCompatProfilesFor(ModelType.SD_CLIP_VISION))
     }
 }

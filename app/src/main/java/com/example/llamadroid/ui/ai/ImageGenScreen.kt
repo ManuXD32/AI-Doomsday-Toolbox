@@ -1,5 +1,9 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import android.content.Context
 import android.content.Intent
@@ -123,6 +127,7 @@ fun ImageGenScreen(
     initialTab: String = "create"
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     val restoredDraft = remember { settingsRepo.imageGenerationDraft() }
@@ -2164,7 +2169,11 @@ fun ImageGenScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { showAdvanced = !showAdvanced },
+                            .clickable {
+                                walkthroughTargets?.recordEvent("image.options")
+                                showAdvanced = !showAdvanced
+                            }
+                            .walkthroughTarget("image.options"),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
@@ -3614,6 +3623,7 @@ fun ImageGenScreen(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, stringResource(R.string.gen_help_open))
             }
@@ -3646,9 +3656,28 @@ fun ImageGenScreen(
             }
         }
 
+        val formScroll = rememberLazyListState()
+        WalkthroughScrollOwner(setOf("image.options")) { target ->
+            if (target == "image.options") {
+                if (mainTab != 0) mainTab = 0
+                // The advanced row is inside the prompt item. Its index is stable
+                // relative to the optional readiness notice and input card.
+                val imageInputVisible = selectedMode in setOf(
+                    IMAGE_GEN_MODE_IMG2IMG,
+                    IMAGE_GEN_MODE_UPSCALE,
+                    IMAGE_GEN_MODE_INPAINT
+                ) || (selectedMode == IMAGE_GEN_MODE_ADETAILER && adetailerInputMode == ADetailerInputMode.EXISTING_IMAGE)
+                val optionsIndex = 1 +
+                    (if (componentResetNotice != null) 1 else 0) +
+                    (if (imageInputVisible) 1 else 0)
+                formScroll.animateScrollToItem(optionsIndex)
+            }
+        }
+
         mainTabStateHolder.SaveableStateProvider(mainTab) {
             if (mainTab == 0) {
                 LazyColumn(
+                    state = formScroll,
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 20.dp),

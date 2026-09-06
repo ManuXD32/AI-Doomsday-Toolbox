@@ -76,7 +76,10 @@ fun SettingsHubScreen(navController: NavController) {
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 72.dp)
                             .testTag("studio_settings_${entry.route}").walkthroughTarget("settings.${entry.route}")
-                            .clickable { navController.navigate(entry.route) }
+                            .clickable {
+                                tourTargets?.recordEvent("settings.${entry.route}")
+                                navController.navigate(entry.route)
+                            }
                             .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp)

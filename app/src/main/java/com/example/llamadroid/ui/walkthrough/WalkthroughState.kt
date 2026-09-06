@@ -19,7 +19,8 @@ internal data class TourStep(
     val route: String,
     val previewKey: String,
     val focusTarget: String? = null,
-    val toolId: String? = null
+    val toolId: String? = null,
+    val eventId: String? = null
 )
 
 internal object CoreTour {
@@ -36,7 +37,8 @@ internal object CoreTour {
     )
 }
 
-internal data class TourSession(val chapterId: String, val index: Int)
+internal data class TourSession(val chapterId: String, val index: Int, val originRoute: String? = null,
+    val routeAfterAction: String? = null)
 
 /** Activity-owned, deliberately not saved-state-owned: rotation retains guidance, process death does not reopen it. */
 internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewModel() {
@@ -54,6 +56,8 @@ internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewM
     private var launchId = 0
     private var externalLaunchIdSeen = 0
     private var manualGuideSeen = false
+    var featureChooserId by mutableStateOf<String?>(null)
+        private set
 
     fun beginLaunch(id: Int) {
         if (id != launchId) {
@@ -74,13 +78,32 @@ internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewM
         // external launch. An in-flight claim may still finish, but it must be re-armed instead
         // of presenting a coach over the externally opened content.
         launchEligible = false
+        featureChooserId = null
         if (session != null) dismiss()
     }
 
-    fun steps(chapterId: String): List<TourStep> = if (chapterId == CoreTour.ID) CoreTour.steps else
-        WalkthroughCatalog.chapter(chapterId)?.lessons.orEmpty().map {
+    fun steps(chapterId: String): List<TourStep> {
+        if (chapterId == CoreTour.ID) return CoreTour.steps
+        if (chapterId.startsWith("feature:")) {
+            val recipeId = chapterId.removePrefix("feature:")
+            val guide = FeatureGuideCatalog.guides.firstOrNull { guide -> guide.recipes.any { it.id == recipeId } }
+                ?: return emptyList()
+            val recipe = guide.recipes.first { it.id == recipeId }
+            val origin = session?.takeIf { it.chapterId == chapterId }?.originRoute ?: guide.route
+            var destination = origin
+            return recipe.steps.mapIndexed { index, it ->
+                // Explanations after a cross-surface step stay with that surface. Returning to
+                // the recipe's original page here would send users back out of the tool.
+                destination = it.route ?: session?.takeIf { it.chapterId == chapterId && it.index == index }
+                    ?.routeAfterAction ?: destination
+                TourStep(it.id, it.titleRes, it.bodyRes, destination, it.previewKey,
+                    focusTarget = it.targetId, eventId = it.eventId)
+            }
+        }
+        return WalkthroughCatalog.chapter(chapterId)?.lessons.orEmpty().map {
             TourStep(it.id, it.titleRes, it.bodyRes, it.route, it.previewKey, toolId = it.toolId)
         }
+    }
     val step: TourStep? get() = session?.let { steps(it.chapterId).getOrNull(it.index) }
 
     fun observeEligibility(eligible: Boolean) {
@@ -113,6 +136,7 @@ internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewM
     }
 
     fun openGuide() {
+        featureChooserId = null
         manualGuideSeen = true
         automaticCheckFinished = true
         suppressSupportForLaunch = true
@@ -120,6 +144,21 @@ internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewM
         viewModelScope.launch {
             withContext(Dispatchers.IO) { preferences.consumeManualPresentation() }
         }
+    }
+
+    /** A feature chooser is a modal over its existing route; opening help never rebuilds the tool. */
+    fun openFeatureGuide(guideId: String) {
+        if (FeatureGuideCatalog.guides.none { it.id == guideId }) return
+        openGuide()
+        featureChooserId = guideId
+    }
+
+    fun closeFeatureChooser() { featureChooserId = null }
+
+    fun startFeature(recipeId: String, resume: Boolean, currentRoute: String?) {
+        featureChooserId = null
+        start("feature:$recipeId", resume)
+        session = session?.copy(originRoute = currentRoute?.takeUnless { routeBase(it) == "walkthrough" })
     }
 
     fun start(chapterId: String, resume: Boolean) {
@@ -132,7 +171,7 @@ internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewM
         persist()
     }
 
-    fun move(delta: Int) {
+    fun move(delta: Int, observedRoute: String? = null) {
         val current = session ?: return
         val next = current.index + delta
         if (next >= steps(current.chapterId).size) {
@@ -140,7 +179,9 @@ internal class WalkthroughState(val preferences: WalkthroughPreferences) : ViewM
             session = null
             revision++
         } else if (next >= 0) {
-            session = current.copy(index = next)
+            val explicitDestination = FeatureGuideCatalog.recipe(current.chapterId)?.steps?.getOrNull(next)?.route
+            session = current.copy(index = next, routeAfterAction =
+                if (explicitDestination != null) null else observedRoute ?: current.routeAfterAction)
             persist()
         }
     }

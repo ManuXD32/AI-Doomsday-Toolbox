@@ -10,6 +10,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.util.CpuFeatures
 import com.example.llamadroid.util.DebugLog
@@ -21,7 +22,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 import java.net.NetworkInterface
-import com.example.llamadroid.util.SystemMonitor
+import com.example.llamadroid.util.MemoryTelemetry
 import com.example.llamadroid.service.UnifiedNotificationManager.TaskType
 import com.example.llamadroid.LlamaApplication
 
@@ -1050,10 +1051,22 @@ class DistributedService : Service() {
 
         private fun publishWorkerMemoryBudget(budget: WorkerMemoryBudget) {
             val contributionMiB = budget.contributionMiB.coerceIn(0L, Int.MAX_VALUE.toLong())
-            _workerMemoryBudget.value = budget.copy(contributionMiB = contributionMiB)
+            val normalizedBudget = budget.copy(contributionMiB = contributionMiB)
+            _workerMemoryBudget.value = normalizedBudget
+            val previousContributionMiB = _workerRamMB.value.toLong()
             _workerRamMB.value = contributionMiB.toInt()
-            if (budget.totalMiB > 0L) {
-                workerPrefs()?.edit()?.putInt(WORKER_MEMORY_KEY, contributionMiB.toInt())?.apply()
+            if (WorkerRamPersistencePolicy.shouldPersist(
+                    previousContributionMiB = previousContributionMiB,
+                    effectiveContributionMiB = contributionMiB,
+                    hasUsableSnapshot = budget.totalMiB > 0L
+                )
+            ) {
+                android.os.Trace.beginSection("WorkerMemory.preferenceWrite")
+                try {
+                    workerPrefs()?.edit()?.putInt(WORKER_MEMORY_KEY, contributionMiB.toInt())?.apply()
+                } finally {
+                    android.os.Trace.endSection()
+                }
             }
         }
 
@@ -1332,7 +1345,7 @@ class DistributedService : Service() {
         // Start foreground service with notification
         val (taskId, notification) = UnifiedNotificationManager.startTaskForForeground(
             TaskType.LLAMA_SERVER,
-            "Distributed Worker"
+            getString(com.example.llamadroid.R.string.dist_worker_mode)
         )
         notificationId = taskId
         startForeground(taskId, notification)
@@ -1340,9 +1353,12 @@ class DistributedService : Service() {
         // Start notification update loop
         notificationJob?.cancel()
         notificationJob = serviceScope.launch {
-            val systemMonitor = SystemMonitor(applicationContext)
-            systemMonitor.observeStats().collect { stats ->
-                val statusText = "RAM: ${String.format(java.util.Locale.getDefault(), "%.1f", stats.freeRamGb)}GB Free / ${String.format(java.util.Locale.getDefault(), "%.1f", stats.totalRamGb)}GB Total"
+            MemoryTelemetry.observe(applicationContext).collect { stats ->
+                val statusText = getString(
+                    com.example.llamadroid.R.string.worker_topology_notification_memory,
+                    stats.freeRamGb,
+                    stats.totalRamGb
+                )
                 UnifiedNotificationManager.updateProgress(taskId, -1f, statusText) // Indeterminate progress
             }
         }

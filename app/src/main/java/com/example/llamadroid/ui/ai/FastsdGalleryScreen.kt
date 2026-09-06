@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.util.Base64
@@ -39,7 +41,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import com.example.llamadroid.service.SSHService
@@ -70,6 +74,7 @@ fun FastsdGalleryScreen(navController: NavController) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val sshService = remember { SSHService(context) }
     
     var images by remember { mutableStateOf<List<FastsdImage>>(emptyList()) }
@@ -305,6 +310,7 @@ fun FastsdGalleryScreen(navController: NavController) {
                         }
                     },
                     actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                         IconButton(onClick = { showDeleteDialog = true }) {
                             Icon(Icons.Default.Delete, stringResource(R.string.action_delete), tint = MaterialTheme.colorScheme.error)
                         }
@@ -322,6 +328,7 @@ fun FastsdGalleryScreen(navController: NavController) {
                         }
                     },
                     actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                         // Refresh button
                         IconButton(onClick = { refreshImages() }) {
                             Icon(Icons.Default.Refresh, stringResource(R.string.action_refresh))
@@ -391,6 +398,7 @@ fun FastsdGalleryScreen(navController: NavController) {
                 else -> {
                     LazyVerticalGrid(
                         columns = if (LocalDensity.current.fontScale >= 1.3f) GridCells.Fixed(1) else GridCells.Adaptive(160.dp),
+                        modifier = Modifier.walkthroughTarget("fastsd.gallery"),
                         contentPadding = PaddingValues(20.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -402,6 +410,7 @@ fun FastsdGalleryScreen(navController: NavController) {
                                 isSelectionMode = isSelectionMode,
                                 isSelected = isSelected,
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("fastsd.gallery")
                                     if (isSelectionMode) {
                                         selectedImages = if (isSelected) {
                                             selectedImages - image.filename

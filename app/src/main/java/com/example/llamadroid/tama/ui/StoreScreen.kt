@@ -39,6 +39,7 @@ import com.example.llamadroid.tama.data.FarmShopCatalog
 import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -61,6 +62,7 @@ fun StoreScreen(
     onBack: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val tabs = listOf(
         stringResource(R.string.tama_farm_store_tab_seeds),
         stringResource(R.string.tama_farm_store_tab_tools),
@@ -106,6 +108,7 @@ fun StoreScreen(
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     Row(
                         modifier = Modifier.padding(end = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -149,12 +152,16 @@ fun StoreScreen(
                 ) {
                     ScrollableTabRow(
                         selectedTabIndex = selectedTab,
-                        edgePadding = 0.dp
+                        edgePadding = 0.dp,
+                        modifier = Modifier.walkthroughTarget("tama.store")
                     ) {
                         tabs.forEachIndexed { index, title ->
                             Tab(
                                 selected = selectedTab == index,
-                                onClick = { selectedTab = index },
+                                onClick = {
+                                    selectedTab = index
+                                    walkthroughTargets?.recordEvent("tama.store")
+                                },
                                 text = {
                                     Text(
                                         text = title,

@@ -37,6 +37,8 @@ import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.delay
 import java.io.File
 import java.text.SimpleDateFormat
@@ -49,6 +51,7 @@ private enum class LogTab { APP, GENERATION_DIAGNOSTICS, RPC }
 
 @Composable
 fun LogsScreen(navController: NavController) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val appLogs by DebugLog.logs.collectAsState()
     val rpcLogs by DistributedService.rpcLogs.collectAsState()
     val generationBreadcrumbs by GenerationDiagnosticsStore.recentBreadcrumbs.collectAsState()
@@ -87,14 +90,19 @@ fun LogsScreen(navController: NavController) {
         // Tab Row
         AppScrollableTabRow(
             selectedTabIndex = selectedTab.ordinal,
-            modifier = Modifier.padding(horizontal = 20.dp),
+            modifier = Modifier
+                .padding(horizontal = 20.dp)
+                .walkthroughTarget("settings.settings_logs"),
             edgePadding = 0.dp,
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
             contentColor = MaterialTheme.colorScheme.onSurface
         ) {
             Tab(
                 selected = selectedTab == LogTab.APP,
-                onClick = { selectedTab = LogTab.APP },
+                onClick = {
+                    walkthroughTargets?.recordEvent("settings.diagnostics")
+                    selectedTab = LogTab.APP
+                },
                 text = { 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -111,7 +119,10 @@ fun LogsScreen(navController: NavController) {
             )
             Tab(
                 selected = selectedTab == LogTab.GENERATION_DIAGNOSTICS,
-                onClick = { selectedTab = LogTab.GENERATION_DIAGNOSTICS },
+                onClick = {
+                    walkthroughTargets?.recordEvent("settings.diagnostics")
+                    selectedTab = LogTab.GENERATION_DIAGNOSTICS
+                },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
@@ -133,7 +144,10 @@ fun LogsScreen(navController: NavController) {
             )
             Tab(
                 selected = selectedTab == LogTab.RPC,
-                onClick = { selectedTab = LogTab.RPC },
+                onClick = {
+                    walkthroughTargets?.recordEvent("settings.diagnostics")
+                    selectedTab = LogTab.RPC
+                },
                 text = { 
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="video_input_first_image">Imagen inicial</string>
+    <string name="video_input_last_image">Imagen final</string>
+    <string name="video_input_control_image">Imagen de control</string>
+    <string name="video_input_control_video">Vídeo de control</string>
+    <string name="video_input_reference_images">Imágenes de referencia</string>
+    <string name="video_input_reference_videos">Vídeos de referencia</string>
+    <string name="video_input_reference_video_audio">Vídeos de referencia con audio</string>
+    <string name="video_input_reference_audio">Audio de referencia</string>
+    <string name="video_input_choose_file">Elegir archivo</string>
+    <string name="video_input_add_files">Añadir archivos</string>
+    <string name="video_input_choose_frame_directory">Elegir carpeta de fotogramas</string>
+    <string name="video_input_add_frame_directories">Añadir carpetas de fotogramas</string>
+    <string name="video_input_copying">Preparando entrada…</string>
+    <string name="video_input_import_failed">No se pudo preparar esta entrada. Comprueba el espacio disponible y elige un archivo o una carpeta de fotogramas legible para reintentarlo.</string>
+</resources>

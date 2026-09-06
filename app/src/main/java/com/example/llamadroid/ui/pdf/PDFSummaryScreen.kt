@@ -61,6 +61,8 @@ import com.example.llamadroid.ui.components.SummarySettingsChipCard
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.DocumentUriDisplayName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -70,6 +72,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun PDFSummaryScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
@@ -187,6 +190,7 @@ fun PDFSummaryScreen(navController: NavController) {
 
     fun extractText() {
         val pdf = selectedPdf ?: return
+        walkthroughTargets?.recordEvent("documents.pdf.input")
         scope.launch {
             PdfSummaryStateHolder.setIsExtracting(true)
             PdfSummaryStateHolder.setProgressMessage(resources.getString(R.string.pdf_extracting_progress))
@@ -245,6 +249,7 @@ fun PDFSummaryScreen(navController: NavController) {
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(
                         onClick = {
                             scope.launch { PDFSummaryService.refreshBackendMetadata(context) }
@@ -311,7 +316,9 @@ fun PDFSummaryScreen(navController: NavController) {
             if (selectedPdf == null) {
                 OutlinedButton(
                     onClick = { pdfPicker.launch(arrayOf("application/pdf")) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("documents.pdf.input"),
                     enabled = !isSummarizing
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
@@ -319,7 +326,12 @@ fun PDFSummaryScreen(navController: NavController) {
                     Text(stringResource(R.string.pdf_select_pdf))
                 }
             } else {
-                Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("documents.pdf.input"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     androidx.compose.foundation.layout.Row(modifier = Modifier.padding(16.dp)) {
                         Text(
                             selectedPdfName ?: stringResource(R.string.pdf_selected_file),

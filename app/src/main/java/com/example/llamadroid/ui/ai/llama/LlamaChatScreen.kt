@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai.llama
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.Manifest
 import android.content.ClipboardManager
 import android.content.ContentValues
@@ -82,7 +84,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.core.content.FileProvider
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
@@ -1804,6 +1806,7 @@ fun LlamaChatScreen(
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(
                         onClick = {
                             if (isCallActiveForChat) {

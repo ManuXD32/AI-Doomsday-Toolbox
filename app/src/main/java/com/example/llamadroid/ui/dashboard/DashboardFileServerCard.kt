@@ -62,6 +62,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.example.llamadroid.R
 import com.example.llamadroid.service.FileServerService
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +74,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun DashboardFileServerCard() {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var fileServerService by remember { mutableStateOf<FileServerService?>(null) }
@@ -165,7 +168,9 @@ fun DashboardFileServerCard() {
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .walkthroughTarget("file_server.folder"),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (fileServerRunning) {
@@ -219,7 +224,10 @@ fun DashboardFileServerCard() {
                     )
                 }
                 OutlinedButton(
-                    onClick = { folderPicker.launch(null) },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("file_server.folder")
+                        folderPicker.launch(null)
+                    },
                     enabled = !fileServerRunning,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -229,6 +237,7 @@ fun DashboardFileServerCard() {
 
             Button(
                 onClick = {
+                    walkthroughTargets?.recordEvent("file_server.folder")
                     if (fileServerRunning) {
                         fileServerService?.stopServer()
                     } else {

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="feature_guide_title">Guía de la función</string>
+    <string name="feature_guide_intro">Elige un inicio rápido o una receta específica. La pantalla actual, los borradores y las tareas en curso permanecen abiertos. Usa los controles reales o consulta la vista previa y omite cualquier paso.</string>
+</resources>

@@ -39,7 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import coil.compose.AsyncImage
 import androidx.navigation.NavController
 import com.example.llamadroid.R
@@ -57,6 +57,8 @@ import com.example.llamadroid.tama.game.TamaGameEngine
 import com.example.llamadroid.tama.game.TamaTranscriptionStatus
 import com.example.llamadroid.tama.db.TamaSummaryEntity
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.PickVisualMediaRequest
@@ -92,6 +94,7 @@ fun TamaChatScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val pet by gameEngine.pet.collectAsState()
     val messages by agentService.messages.collectAsState()
     val isLoading by agentService.isLoading.collectAsState()
@@ -328,6 +331,7 @@ fun TamaChatScreen(
                 }
             },
             actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                 // Retry Connection
                 IconButton(onClick = {
                     agentService.retryConnection()
@@ -423,7 +427,8 @@ fun TamaChatScreen(
                     onValueChange = { inputText = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp),
+                        .padding(bottom = 8.dp)
+                        .walkthroughTarget("tama.chat"),
                     placeholder = { Text(stringResource(R.string.tama_chat_placeholder), color = TamaMutedText, fontSize = 14.sp) },
                     colors = tamaOutlinedFieldColors(containerColor = Color.Transparent),
                     maxLines = 4,
@@ -485,6 +490,7 @@ fun TamaChatScreen(
                         onClick = {
                             scope.launch {
                                 sendCurrentMessage()
+                                walkthroughTargets?.recordEvent("tama.chat")
                             }
                         },
                         modifier = Modifier

@@ -3,9 +3,11 @@ package com.example.llamadroid.data.repository
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
 import com.example.llamadroid.R
 import com.example.llamadroid.data.api.HuggingFaceService
 import com.example.llamadroid.data.dao.LiteRtModelDao
+import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.LITERT_BACKEND_AUTO
@@ -22,6 +24,7 @@ import com.example.llamadroid.data.model.liteRtKbEmbeddingRuntimeFromText
 import com.example.llamadroid.data.model.liteRtPackageTargetFromText
 import com.example.llamadroid.data.model.liteRtVisionSupportFromText
 import com.example.llamadroid.data.model.normalizeLiteRtBackend
+import com.example.llamadroid.data.model.library.ModelArtifactLifecycle
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.util.DebugLog
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
@@ -593,11 +596,57 @@ class LiteRtModelRepository(
 
     suspend fun removeModel(model: LiteRtModelEntity): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val file = File(model.path)
-            if (file.exists()) {
-                if (file.isDirectory) file.deleteRecursively() else file.delete()
+            val database = AppDatabase.getDatabase(context)
+            val libraryDao = database.modelLibraryDao()
+            val modelKey = "litert:${model.id.takeIf { it > 0L } ?: model.path.hashCode()}"
+            val pendingArtifacts = libraryDao.observePendingArtifacts().first()
+            val allProvenance = libraryDao.observeProvenance().first()
+            val currentFile = File(model.path)
+            val packageRoot = (if (currentFile.isDirectory) currentFile else currentFile.parentFile)
+                ?.canonicalFile
+            fun isWithinPackage(path: String): Boolean {
+                val root = packageRoot ?: return false
+                val candidate = runCatching { File(path).canonicalFile }.getOrNull() ?: return false
+                val rootPath = root.absolutePath
+                val candidatePath = candidate.absolutePath
+                return candidatePath == rootPath || candidatePath.startsWith("$rootPath${File.separator}")
             }
-            modelDao.delete(model)
+
+            val otherRuntimePaths = database.modelDao().getAllModels().first().map { it.path }
+            val otherLiteRtPaths = database.liteRtModelDao().getAllOnce()
+                .filter { it.id != model.id }
+                .map { it.path }
+            val protectedPaths = buildList {
+                addAll(otherRuntimePaths)
+                addAll(otherLiteRtPaths)
+                addAll(allProvenance.filter { it.modelKey != modelKey }.mapNotNull { it.localPath })
+            }
+            val ownedCandidates = linkedSetOf(currentFile)
+            pendingArtifacts
+                .filter { it.promotedModelKey == modelKey }
+                .flatMap { listOfNotNull(it.stagingPath, it.destinationPath) }
+                .filter(::isWithinPackage)
+                .map(::File)
+                .forEach(ownedCandidates::add)
+            allProvenance
+                .filter { it.modelKey == modelKey }
+                .mapNotNull { it.localPath }
+                .filter(::isWithinPackage)
+                .map(::File)
+                .forEach(ownedCandidates::add)
+            ModelArtifactLifecycle.deleteOwnedPaths(ownedCandidates, protectedPaths)
+
+            val detached = ModelArtifactLifecycle.detachPromotedPendingArtifacts(
+                artifacts = pendingArtifacts,
+                modelKey = modelKey,
+                now = System.currentTimeMillis()
+            )
+            val changed = detached.filterIndexed { index, artifact -> artifact != pendingArtifacts[index] }
+            database.withTransaction {
+                libraryDao.deleteByModelKey(modelKey)
+                libraryDao.upsertPendingArtifactsAtomically(changed)
+                database.liteRtModelDao().delete(model)
+            }
         }
     }
 

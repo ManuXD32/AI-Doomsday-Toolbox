@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="media_topology_copy">Copiar los detalles completos del nodo</string>
+    <string name="media_topology_workers">Trabajadores conocidos</string>
+    <string name="media_topology_capacity">RAM e hilos configurados</string>
+    <string name="media_topology_estimated_plan">Asignación prevista · estimada</string>
+    <string name="media_topology_actual_modules">Módulos informados</string>
+    <string name="media_topology_load">Carga medida</string>
+    <string name="media_topology_not_reported">El trabajador no lo ha informado</string>
+</resources>

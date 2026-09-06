@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -46,7 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -98,6 +99,9 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.AIConstants
 import kotlinx.coroutines.launch
 import java.io.File
@@ -125,8 +129,10 @@ private fun resolveSupertonicVoices(bundleRoot: File): List<String> {
 @Composable
 fun LiveTranslatorScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    val formScroll = rememberLazyListState()
     val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
     val templates by db.liveTranslatorTemplateDao().observeTemplates().collectAsState(initial = emptyList())
@@ -307,6 +313,7 @@ fun LiveTranslatorScreen(navController: NavController) {
         scope.launch {
             val id = db.liveTranslatorTemplateDao().upsert(buildTemplate())
             selectedTemplateId = id
+            walkthroughTargets?.recordEvent("voice.translator.input")
             startupGuard.run("live_translator_start") {
                 context.startForegroundService(LiveTranslatorService.startIntent(context, id))
             }
@@ -325,6 +332,18 @@ fun LiveTranslatorScreen(navController: NavController) {
                 whisperThreads = whisperThreads
             )
         )
+    }
+
+    WalkthroughScrollOwner(setOf("voice.translator.input")) { target ->
+        if (target == "voice.translator.input") {
+            val setupMissing = whisperModelPath.isNullOrBlank() || ttsModelPath.isNullOrBlank()
+            val statusVisible = serviceState.phase != LiveTranslatorPhase.IDLE ||
+                serviceState.status.isNotBlank() || !setupMissing
+            val languageIndex = 1 +
+                (if (setupMissing) 1 else 0) +
+                (if (statusVisible) 1 else 0)
+            formScroll.animateScrollToItem(languageIndex)
+        }
     }
 
     if (serviceState.isActive) {
@@ -361,6 +380,7 @@ fun LiveTranslatorScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize(),
+            state = formScroll,
             contentPadding = androidx.compose.foundation.layout.PaddingValues(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
@@ -702,7 +722,9 @@ private fun LiveTranslatorLanguagesCard(
             value = speaker1Language,
             onValueChange = onSpeaker1LanguageChange,
             label = { Text(stringResource(R.string.live_translator_speaker_1_language)) },
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .walkthroughTarget("voice.translator.input")
         )
         OutlinedTextField(
             value = speaker2Language,

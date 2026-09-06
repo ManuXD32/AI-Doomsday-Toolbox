@@ -20,7 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.CustomToolEntity
@@ -52,6 +52,7 @@ fun CustomToolsScreen(
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { 
                         editingTool = null
                         showEditor = true 

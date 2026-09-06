@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.settings
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,6 +27,8 @@ import com.example.llamadroid.service.BenchmarkService
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import kotlinx.coroutines.launch
@@ -37,6 +41,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun BenchmarkScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val settingsRepo = remember { SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
     val benchmarkService = remember { BenchmarkService(context) }
@@ -90,11 +95,17 @@ fun BenchmarkScreen(navController: NavController) {
         title = stringResource(R.string.benchmark_title),
         onBack = { navController.popBackStack() },
         actions = {
-            IconButton(onClick = { navController.navigate(Screen.BenchmarkHistory.route) }) {
+            IconButton(onClick = {
+                walkthroughTargets?.recordEvent("benchmark.history")
+                navController.navigate(Screen.BenchmarkHistory.route)
+            }) {
                 Icon(Icons.Default.History, stringResource(R.string.benchmark_history_title))
             }
             if (displayResults.isNotEmpty() && !isRunning) {
-                IconButton(onClick = { showDeleteDialog = true }) {
+                IconButton(onClick = {
+                    walkthroughTargets?.recordEvent("benchmark.run")
+                    showDeleteDialog = true
+                }) {
                     Icon(Icons.Default.Delete, stringResource(R.string.benchmark_delete_title))
                 }
             }
@@ -103,7 +114,8 @@ fun BenchmarkScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(16.dp)
+                .walkthroughTarget("benchmark.run"),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Model Selection
@@ -408,6 +420,7 @@ fun BenchmarkScreen(navController: NavController) {
                     // Stop Button
                     Button(
                         onClick = {
+                            walkthroughTargets?.recordEvent("benchmark.run")
                             BenchmarkService.cancel()
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -425,6 +438,7 @@ fun BenchmarkScreen(navController: NavController) {
                         // Run Button
                         Button(
                             onClick = {
+                                walkthroughTargets?.recordEvent("benchmark.run")
                                 val modelPath = selectedModelPath ?: return@Button
                                 benchmarkService.startBenchmark(
                                     modelPath = modelPath,
@@ -447,6 +461,7 @@ fun BenchmarkScreen(navController: NavController) {
 
                         OutlinedButton(
                             onClick = {
+                                walkthroughTargets?.recordEvent("benchmark.run")
                                 benchmarkService.startBenchmarkQueue(
                                     models = queuedModels.map { model ->
                                         BenchmarkService.QueuedModel(

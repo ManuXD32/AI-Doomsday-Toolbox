@@ -24,6 +24,8 @@ import androidx.navigation.NavController
 import com.example.llamadroid.R
 import com.example.llamadroid.BuildConfig
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * About screen with credits, donations, and library info.
@@ -32,6 +34,7 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 @Composable
 fun AboutScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val nativeBuildCommits = remember(context) {
         runCatching {
             context.assets.open("native_build_commits.txt").bufferedReader().use { reader ->
@@ -48,7 +51,8 @@ fun AboutScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .walkthroughTarget("settings.about"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -119,6 +123,7 @@ fun AboutScreen(navController: NavController) {
                             }
                             IconButton(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.support")
                                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/ManuXD32"))
                                     context.startActivity(intent)
                                 }
@@ -152,6 +157,7 @@ fun AboutScreen(navController: NavController) {
                             emoji = "☕",
                             text = stringResource(R.string.about_kofi),
                             onClick = {
+                                walkthroughTargets?.recordEvent("settings.support")
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SupportLinks.KOFI))
                                 context.startActivity(intent)
                             }
@@ -164,6 +170,7 @@ fun AboutScreen(navController: NavController) {
                             emoji = "💳",
                             text = stringResource(R.string.about_paypal),
                             onClick = {
+                                walkthroughTargets?.recordEvent("settings.support")
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(SupportLinks.PAYPAL))
                                 context.startActivity(intent)
                             }

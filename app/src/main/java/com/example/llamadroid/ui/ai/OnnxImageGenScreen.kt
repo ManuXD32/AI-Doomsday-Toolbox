@@ -42,7 +42,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -90,7 +90,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
@@ -127,6 +127,8 @@ import com.example.llamadroid.service.OnnxImageGenerationState
 import com.example.llamadroid.service.OnnxImageGenerationStateStore
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.components.AppScrollableTabRow
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
@@ -145,6 +147,7 @@ import java.util.Locale
 @Composable
 fun OnnxImageGenScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val startupGuard = rememberAiJobStartupGuard()
     val db = remember { AppDatabase.getDatabase(context) }
@@ -405,6 +408,7 @@ fun OnnxImageGenScreen(navController: NavController) {
             formError = resources.getString(R.string.onnx_image_gen_error_empty_prompt)
             return
         }
+        walkthroughTargets?.recordEvent("image.onnx.input")
         holder.updateState(OnnxImageGenerationState.Preparing(resources.getString(R.string.onnx_image_gen_status_preparing)))
         startupGuard.run("onnx_image_generation_start") {
             context.startForegroundService(OnnxImageGenerationService.createStartIntent(context, config))
@@ -476,6 +480,10 @@ fun OnnxImageGenScreen(navController: NavController) {
         }
     }
 
+    WalkthroughScrollOwner(setOf("image.onnx.input")) { target ->
+        if (target == "image.onnx.input" && mainTab != 0) mainTab = 0
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -508,6 +516,7 @@ fun OnnxImageGenScreen(navController: NavController) {
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
             IconButton(onClick = { showInfoDialog = true }) {
                 Icon(Icons.Default.Info, contentDescription = stringResource(R.string.gen_help_open))
             }
@@ -792,7 +801,9 @@ fun OnnxImageGenScreen(navController: NavController) {
                                 prompt = it
                                 holder.updatePrompt(it)
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .walkthroughTarget("image.onnx.input"),
                             minLines = 4,
                             label = { Text(stringResource(R.string.onnx_image_gen_prompt_label)) },
                             shape = RoundedCornerShape(14.dp)

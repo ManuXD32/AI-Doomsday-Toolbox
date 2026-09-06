@@ -15,7 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -32,6 +32,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -70,13 +71,18 @@ fun DownloadTaskSection(
     modelTypes: List<ModelType>,
     modifier: Modifier = Modifier,
     includeTask: (DownloadTaskEntity) -> Boolean = { true },
-    staleRoots: List<File>? = null
+    staleRoots: List<File>? = null,
+    artifactFamily: com.example.llamadroid.data.model.library.ModelFamily? = null
 ) {
     val context = LocalContext.current
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
     val modelTypeNames = remember(modelTypes) { modelTypes.map { it.name } }
-    val storedTasks by db.downloadTaskDao().observeByModelTypes(modelTypeNames).collectAsState(initial = emptyList())
+    val taskFlow = remember(modelTypeNames, artifactFamily) {
+        if (artifactFamily == null) db.downloadTaskDao().observeByModelTypes(modelTypeNames)
+        else db.downloadTaskDao().observeByLibraryFamily(modelTypeNames, artifactFamily.storedValue)
+    }
+    val storedTasks by taskFlow.collectAsState(initial = emptyList())
     val installedModels by db.modelDao().getModelsByTypes(modelTypes).collectAsState(initial = emptyList())
     val progressMap by DownloadProgressHolder.progress.collectAsState()
     var staleTasks by remember { mutableStateOf<List<DownloadTaskEntity>>(emptyList()) }
@@ -100,9 +106,10 @@ fun DownloadTaskSection(
     }
 
     val visibleStored = storedTasks
-        .filter(includeTask)
-        .filterNot { it.status in setOf(DOWNLOAD_TASK_STATUS_COMPLETED, DOWNLOAD_TASK_STATUS_CANCELLED, DOWNLOAD_TASK_STATUS_DISCARDED) }
-        .filterNot { it.status == DOWNLOAD_TASK_STATUS_ACTIVE && progressMap.containsKey(it.progressKey) }
+        .filter { task -> (task.stageOnly && artifactFamily?.storedValue == task.artifactFamily) || includeTask(task) }
+        .filterNot { it.status in setOf(DOWNLOAD_TASK_STATUS_COMPLETED, DOWNLOAD_TASK_STATUS_DISCARDED) ||
+            (!it.stageOnly && it.status == DOWNLOAD_TASK_STATUS_CANCELLED) }
+        .filterNot { !it.stageOnly && it.status == DOWNLOAD_TASK_STATUS_ACTIVE && progressMap.containsKey(it.progressKey) }
     val visibleTasks = (visibleStored + staleTasks).distinctBy { it.id }
 
     if (visibleTasks.isEmpty()) return
@@ -138,16 +145,17 @@ fun DownloadTaskSection(
                 progress = progressMap[task.progressKey],
                 onResume = {
                     if (task.url.isNotBlank()) {
-                        PendingDownloadHolder.addPendingFrom(task)
-                        DownloadProgressHolder.updateProgress(
-                            task.progressKey,
-                            task.filename,
-                            if (task.hasUsablePartial()) DownloadProgressHolder.INDETERMINATE else 0f
-                        )
-                        DownloadService.resumeDownload(context, task.id)
+                        if (!task.stageOnly) {
+                            PendingDownloadHolder.addPendingFrom(task)
+                            DownloadProgressHolder.updateProgress(
+                                task.progressKey, task.filename, DownloadProgressHolder.INDETERMINATE
+                            )
+                        }
+                        DownloadService.resumeDownload(context, task.id, explicitRetry = true)
                     }
                 },
                 onDiscard = { DownloadService.discardDownload(context, task.id) },
+                onCancel = { DownloadService.cancelDownload(context, task.filename, task.id) },
                 onRemovePartial = { confirmTask = task }
             )
         }
@@ -163,8 +171,12 @@ fun DownloadTaskSection(
                     onClick = {
                         scope.launch {
                             withContext(Dispatchers.IO) {
-                                DownloadTaskArtifacts.deletePartialArtifact(task)
-                                db.downloadTaskDao().deleteById(task.id)
+                                if (task.stageOnly) {
+                                    DownloadService.discardDownload(context, task.id)
+                                } else {
+                                    DownloadTaskArtifacts.deletePartialArtifact(task)
+                                    db.downloadTaskDao().deleteById(task.id)
+                                }
                             }
                             confirmTask = null
                             refreshStaleTasks()
@@ -217,8 +229,12 @@ private fun DownloadTaskCard(
     progress: Float?,
     onResume: () -> Unit,
     onDiscard: () -> Unit,
+    onCancel: () -> Unit,
     onRemovePartial: () -> Unit
 ) {
+    val partialBytes by produceState(0L, task.id, task.updatedAt, task.status) {
+        value = withContext(Dispatchers.IO) { task.partFile().takeIf { it.isFile }?.length() ?: 0L }
+    }
     val statusLabel = when (task.status) {
         DOWNLOAD_TASK_STATUS_ACTIVE ->
             if (progress == null) {
@@ -228,14 +244,16 @@ private fun DownloadTaskCard(
             }
         DOWNLOAD_TASK_STATUS_RESUMABLE -> stringResource(R.string.download_status_resumable)
         DOWNLOAD_TASK_STATUS_FAILED -> stringResource(R.string.download_status_failed)
+        DOWNLOAD_TASK_STATUS_CANCELLED -> stringResource(R.string.model_library_status_cancelled)
         DOWNLOAD_TASK_STATUS_STALE -> stringResource(R.string.download_status_stale)
         else -> task.status
     }
     val isLiveActive = task.status == DOWNLOAD_TASK_STATUS_ACTIVE && progress != null
     val isInterruptedActive = task.status == DOWNLOAD_TASK_STATUS_ACTIVE && progress == null
     val canResume = task.url.isNotBlank() &&
-        (task.status in setOf(DOWNLOAD_TASK_STATUS_RESUMABLE, DOWNLOAD_TASK_STATUS_FAILED) || isInterruptedActive)
-    val canRemovePartial = !isLiveActive && task.hasUsablePartial()
+        (task.status in setOf(DOWNLOAD_TASK_STATUS_RESUMABLE, DOWNLOAD_TASK_STATUS_FAILED,
+            DOWNLOAD_TASK_STATUS_CANCELLED) || isInterruptedActive)
+    val canRemovePartial = !isLiveActive && partialBytes > 0L
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -255,7 +273,7 @@ private fun DownloadTaskCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    val bytes = FormatUtils.Display.formatBytes(LocalContext.current, task.bytesDownloaded.coerceAtLeast(task.partFile().length()))
+                    val bytes = FormatUtils.Display.formatBytes(LocalContext.current, task.bytesDownloaded.coerceAtLeast(partialBytes))
                     Text(
                         stringResource(R.string.download_partial_size, bytes),
                         style = MaterialTheme.typography.bodySmall,
@@ -318,7 +336,7 @@ private fun DownloadTaskCard(
                 }
                 if (isLiveActive) {
                     OutlinedButton(
-                        onClick = onDiscard,
+                        onClick = onCancel,
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Text(stringResource(R.string.action_cancel))
@@ -336,5 +354,3 @@ private fun DownloadTaskCard(
         }
     }
 }
-
-private fun DownloadTaskEntity.hasUsablePartial(): Boolean = partFile().isFile && partFile().length() > 0L

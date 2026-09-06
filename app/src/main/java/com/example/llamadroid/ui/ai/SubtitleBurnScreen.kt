@@ -29,6 +29,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -57,6 +58,9 @@ import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Subtitle Burn Screen - Burns subtitles into videos using ffmpeg
@@ -67,6 +71,8 @@ import com.example.llamadroid.ui.components.AppStateKind
 @Composable
 fun SubtitleBurnScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val formScroll = rememberLazyListState()
     val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
 
@@ -161,6 +167,7 @@ fun SubtitleBurnScreen(navController: NavController) {
     fun startBurn() {
         if (videoUri != null && subtitleUri != null && service != null) {
             resultActionError = null
+            walkthroughTargets?.recordEvent("video.subtitle.options")
             service?.startBurn(
                 SubtitleBurnConfig(
                     videoUri = videoUri!!,
@@ -179,6 +186,19 @@ fun SubtitleBurnScreen(navController: NavController) {
         }
     }
 
+    WalkthroughScrollOwner(setOf("video.subtitle.options")) { target ->
+        if (target == "video.subtitle.options") {
+            val hasStateItem = serviceState is SubtitleBurnState.Complete ||
+                serviceState is SubtitleBurnState.Error ||
+                serviceState is SubtitleBurnState.Cancelling ||
+                serviceState is SubtitleBurnState.Cancelled
+            val optionsIndex = (if (hasStateItem) 1 else 0) +
+                (if (resultActionError != null) 1 else 0) +
+                (if (showInfoCard) 1 else 0) + 1
+            formScroll.animateScrollToItem(optionsIndex)
+        }
+    }
+
     Scaffold(
         modifier = Modifier.imePadding(),
         topBar = {
@@ -190,6 +210,7 @@ fun SubtitleBurnScreen(navController: NavController) {
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { showInfoCard = !showInfoCard }) {
                         Icon(
                             Icons.Default.Info,
@@ -208,6 +229,7 @@ fun SubtitleBurnScreen(navController: NavController) {
                 .consumeWindowInsets(padding)
         ) {
         LazyColumn(
+            state = formScroll,
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 20.dp),
@@ -300,7 +322,11 @@ fun SubtitleBurnScreen(navController: NavController) {
             // Styling Options
             item {
                 AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("video.subtitle.options")
+                ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(stringResource(R.string.subtitle_styling_title), fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         Spacer(Modifier.height(16.dp))

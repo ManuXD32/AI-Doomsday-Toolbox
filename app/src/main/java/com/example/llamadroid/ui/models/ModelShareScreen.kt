@@ -31,6 +31,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.service.ModelShareService
@@ -49,6 +51,7 @@ import com.example.llamadroid.ui.components.AppPageBackground
 @Composable
 fun ModelShareScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
@@ -152,6 +155,7 @@ fun ModelShareScreen(navController: NavController) {
         containerColor = Color.Transparent,
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.model_share_title)) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
@@ -171,7 +175,7 @@ fun ModelShareScreen(navController: NavController) {
             // Server Control Card
             item {
                 Card(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().walkthroughTarget("models.share"),
                     colors = CardDefaults.cardColors(
                         containerColor = if (isRunning) 
                             MaterialTheme.colorScheme.primaryContainer
@@ -256,6 +260,7 @@ fun ModelShareScreen(navController: NavController) {
                         // Start/Stop Button
                         Button(
                             onClick = {
+                                walkthroughTargets?.recordEvent("models.share")
                                 if (isRunning) {
                                     service?.stopServer()
                                 } else {

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="sd_type_audio_vae">VAE de audio</string>
+    <string name="sd_type_connectors">Conectores de embeddings</string>
+    <string name="sd_type_motion_module">Módulo de movimiento</string>
+</resources>

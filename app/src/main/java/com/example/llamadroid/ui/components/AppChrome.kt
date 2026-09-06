@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.components
 
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.FeatureGuideAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.foundation.background
@@ -136,7 +137,10 @@ fun AppScreenScaffold(
                         }
                     }
                 },
-                actions = actions,
+                actions = {
+                    FeatureGuideAction()
+                    actions()
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color.Transparent,
                     scrolledContainerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)

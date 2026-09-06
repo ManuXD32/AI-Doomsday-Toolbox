@@ -55,7 +55,9 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -349,6 +351,7 @@ fun AgentChatList(
     readOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val renderMessages = remember(messages) {
         buildAgentChatRenderProjection(messages)
     }
@@ -370,8 +373,14 @@ fun AgentChatList(
                     val message = item.message
                     ChatMessageBubble(
                         message = message,
-                        onApprove = { onApprove(message) },
-                        onDeny = { onDeny(message) },
+                        onApprove = {
+                            walkthroughTargets?.recordEvent(if (message.isPlan) "agent.plan" else "agent.approval")
+                            onApprove(message)
+                        },
+                        onDeny = {
+                            walkthroughTargets?.recordEvent(if (message.isPlan) "agent.plan" else "agent.approval")
+                            onDeny(message)
+                        },
                         onDelete = { onDelete(message.id) },
                         onRegenerate = { onRegenerate(message.id) },
                         onEdit = { onEdit(message.id, message.content) },
@@ -383,7 +392,10 @@ fun AgentChatList(
                         isPlanResolving = resolvingPlanMessageId == message.id,
                         onToggleOutput = { onToggleOutput(message.id) },
                         onKnowledgeLinkClick = onKnowledgeLinkClick,
-                        onRetry = { onRetryNeedsDirection(message) },
+                        onRetry = {
+                            walkthroughTargets?.recordEvent("agent.continue")
+                            onRetryNeedsDirection(message)
+                        },
                         showMessageActions = !readOnly
                     )
                 }
@@ -913,7 +925,7 @@ fun ChatMessageBubble(
                         Button(
                             onClick = onDeny, 
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer, contentColor = MaterialTheme.colorScheme.onErrorContainer), 
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).walkthroughTarget("agent.approvals"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(stringResource(R.string.action_deny), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -924,7 +936,7 @@ fun ChatMessageBubble(
                                 containerColor = MaterialTheme.colorScheme.primary,
                                 contentColor = MaterialTheme.colorScheme.onPrimary
                             ),
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).walkthroughTarget("agent.approvals"),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Text(
@@ -944,7 +956,9 @@ fun ChatMessageBubble(
                         Spacer(modifier = Modifier.height(10.dp))
                         Button(
                             onClick = onRetry,
-                            modifier = Modifier.align(Alignment.End),
+                            modifier = Modifier
+                                .align(Alignment.End)
+                                .walkthroughTarget("agent.continue"),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.error,
                                 contentColor = MaterialTheme.colorScheme.onError
@@ -1277,7 +1291,8 @@ private fun AgentPlanDecisionButtons(
             ),
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp),
+                .heightIn(min = 48.dp)
+                .walkthroughTarget("agent.plan"),
             shape = RoundedCornerShape(12.dp)
         ) {
             Icon(Icons.Default.Close, null, modifier = Modifier.size(18.dp))
@@ -1324,7 +1339,8 @@ private fun AgentPlanDecisionButtons(
                 ),
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 48.dp),
+                    .heightIn(min = 48.dp)
+                    .walkthroughTarget("agent.plan"),
                 shape = RoundedCornerShape(12.dp)
             ) {
                 if (isResolving) {

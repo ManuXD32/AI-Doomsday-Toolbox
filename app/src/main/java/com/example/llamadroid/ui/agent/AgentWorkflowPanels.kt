@@ -23,7 +23,7 @@ import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -53,7 +53,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.data.db.AgentPendingQuestionEntity
@@ -500,6 +500,7 @@ fun AgentTodoDialog(
         Scaffold(
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = {
                         Column {
                             Text(stringResource(R.string.agent_todos_title))

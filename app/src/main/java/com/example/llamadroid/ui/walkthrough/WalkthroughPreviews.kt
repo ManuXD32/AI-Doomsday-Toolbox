@@ -43,5 +43,20 @@ internal fun lessonPreviewResource(id: String): Int? = when (id) {
     "settings" -> R.drawable.tour_lesson_settings
     "about" -> R.drawable.tour_lesson_about
     "diagnostics" -> R.drawable.tour_lesson_diagnostics
+    "models_llm" -> R.drawable.tour_lesson_models_llm
+    "models_sd_components" -> R.drawable.tour_lesson_models_sd_components
+    "models_onnx_bundle" -> R.drawable.tour_lesson_models_onnx_bundle
+    "models_litert_backend" -> R.drawable.tour_lesson_models_litert_backend
+    "models_whisper_vad" -> R.drawable.tour_lesson_models_whisper_vad
+    "models_custom_url" -> R.drawable.tour_lesson_models_custom_url
+    "models_saved_links" -> R.drawable.tour_lesson_models_saved_links
+    "models_unknown" -> R.drawable.tour_lesson_models_unknown
+    "models_hf_folder" -> R.drawable.tour_lesson_models_hf_folder
+    "models_bundles" -> R.drawable.tour_lesson_models_bundles
+    "conversations_native_management" -> R.drawable.tour_lesson_conversations_native_management
+    "conversations_scheduler" -> R.drawable.tour_lesson_conversations_scheduler
+    "conversations_server_selection" -> R.drawable.tour_lesson_conversations_server_selection
+    "distributed_roles" -> R.drawable.tour_lesson_distributed_roles
+    "fastsd_gallery" -> R.drawable.tour_lesson_fastsd_gallery
     else -> null
 }

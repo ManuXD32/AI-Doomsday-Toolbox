@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.heightIn
 
 import android.content.Context
@@ -338,6 +340,7 @@ fun LegacyUpscaleScreen(navController: NavController) {
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
         }
 
         val mainTabs = listOf(

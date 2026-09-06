@@ -33,6 +33,39 @@ class WalkthroughStateTest {
     }
 
     @Test
+    fun `detail guides retain real arguments and use safe parents from Home`() {
+        val cases = listOf(
+            Triple("agent.recovery", "agent_invocation/demo-id", "agent"),
+            Triple("knowledge.chunk", "knowledge_chunk/42", "knowledge_base"),
+            Triple("termux.webview", "termux_webview/https%3A%2F%2Flocalhost/Demo/tool", "termux"),
+            Triple("training.progress", "quadtrix_webui/https%3A%2F%2Flocalhost", "quadtrix_trainer"),
+            Triple("tama.adventure", "adventure/FOREST", "dungeon")
+        )
+        cases.forEach { (recipe, detail, parent) ->
+            val state = WalkthroughState(walkthroughPreferences)
+            state.startFeature(recipe, false, detail)
+            assertEquals(detail, state.step?.route)
+            state.move(1)
+            assertEquals(detail, state.step?.route)
+            state.dismiss()
+            state.startFeature(recipe, false, "walkthrough")
+            assertEquals(parent, state.step?.route)
+        }
+    }
+
+    @Test
+    fun `feature action result is retained for following explanations`() {
+        val state = WalkthroughState(walkthroughPreferences)
+        state.startFeature("models.manager", false, "model_hub")
+        state.move(1, observedRoute = "model_sources?family=SD&tab=sources")
+        assertEquals("model_sources?family=SD&tab=sources", state.step?.route)
+        state.move(1)
+        assertEquals("model_sources?family=SD&tab=sources", state.step?.route)
+        state.move(-2)
+        assertEquals("model_hub", state.step?.route)
+    }
+
+    @Test
     fun `core tour has the bounded eight step route`() {
         assertEquals(8, CoreTour.steps.size)
         assertEquals(
@@ -452,6 +485,81 @@ class WalkthroughStateTest {
         assertEquals("library", state.step?.id)
         assertEquals("root.library", tourTarget(state.step!!, "dashboard", false, false))
         assertEquals("library.resources", tourTarget(state.step!!, "library", false, false))
+    }
+
+    @Test
+    fun `feature guidance keeps origin and progress without rearming core`() {
+        val state = WalkthroughState(walkthroughPreferences)
+        val guide = FeatureGuideCatalog.guides.first { it.recipes.any { recipe -> recipe.steps.size > 1 } }
+        val recipe = guide.recipes.first { it.steps.size > 1 }
+        state.openFeatureGuide(guide.id)
+        assertEquals(guide.id, state.featureChooserId)
+        assertNull(state.session)
+        assertTrue(state.suppressSupportForLaunch)
+        state.startFeature(recipe.id, false, "native_chat/17?draft=preserved")
+        assertNull(state.featureChooserId)
+        assertEquals("native_chat/17?draft=preserved", state.session?.originRoute)
+        state.move(1)
+        val progress = state.step?.id
+        state.dismiss()
+        assertEquals(progress, state.preferences.progress("feature:${recipe.id}"))
+        val restored = WalkthroughState(walkthroughPreferences)
+        assertNull(restored.session)
+        restored.startFeature(recipe.id, true, "native_chat/17?draft=preserved")
+        assertEquals(progress, restored.step?.id)
+        restored.interruptForExternalLaunch(1)
+        assertNull(restored.session)
+        assertEquals(progress, restored.preferences.progress("feature:${recipe.id}"))
+    }
+
+    @Test
+    fun `feature chooser dismissal and external interruption retain core progress`() {
+        val state = WalkthroughState(walkthroughPreferences)
+        state.start(CoreTour.ID, false)
+        state.move(2)
+        state.openFeatureGuide(FeatureGuideCatalog.guides.first().id)
+        state.closeFeatureChooser()
+        assertNull(state.featureChooserId)
+        assertEquals("create", state.preferences.progress(CoreTour.ID))
+        state.openFeatureGuide(FeatureGuideCatalog.guides.first().id)
+        state.interruptForExternalLaunch(3)
+        assertNull(state.featureChooserId)
+        assertNull(state.session)
+    }
+
+    @Test
+    fun `cross surface feature explanations remain at the selected tool`() {
+        val state = WalkthroughState(walkthroughPreferences)
+        state.startFeature("models.custom_url", false, "sd_models")
+        assertEquals("model_sources", state.step?.route)
+        state.move(1)
+        assertEquals("model_sources", state.step?.route)
+        state.move(1)
+        assertEquals("model_sources", state.step?.route)
+    }
+
+    @Test
+    fun `connected media recipe target event survives resume recreation and replay`() {
+        val recipe = requireNotNull(FeatureGuideCatalog.recipe("image.inpaint"))
+        val state = WalkthroughState(walkthroughPreferences)
+        state.startFeature(recipe.id, resume = false, currentRoute = "image_gen")
+
+        assertEquals("image.options", state.step?.focusTarget)
+        assertEquals("image.options", state.step?.eventId)
+        val registry = WalkthroughTargets().apply { active = true }
+        registry.recordEvent(requireNotNull(state.step?.eventId))
+        assertEquals(1, registry.events["image.options"])
+
+        state.move(1)
+        state.dismiss()
+        val recreated = WalkthroughState(WalkthroughPreferences(prefs))
+        recreated.startFeature(recipe.id, resume = true, currentRoute = "image_gen")
+        assertEquals(1, recreated.session?.index)
+        assertEquals("image.options", recreated.steps(recreated.session!!.chapterId).first().focusTarget)
+
+        recreated.startFeature(recipe.id, resume = false, currentRoute = "image_gen")
+        assertEquals(0, recreated.session?.index)
+        assertEquals("image.options", recreated.step?.focusTarget)
     }
 
     private fun awaitState(timeoutMillis: Long = 2_000L, condition: () -> Boolean) {

@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.ui.zIndex
-import android.app.ActivityManager
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.Image
@@ -24,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -31,18 +31,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.service.DistributedService
-import com.example.llamadroid.service.DistributedMode
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.StateFlow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
-import androidx.compose.material.icons.filled.Info
 import com.example.llamadroid.R
-import com.example.llamadroid.util.SystemMonitor
-import com.example.llamadroid.util.SystemStats
+import com.example.llamadroid.util.MemoryTelemetry
+import com.example.llamadroid.util.MemoryTelemetrySnapshot
 import android.webkit.WebView
 import android.webkit.WebResourceRequest
 import android.webkit.WebViewClient
@@ -55,18 +55,17 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Public
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import com.example.llamadroid.service.WorkerMemoryBudget
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Worker mode screen - run rpc-server to contribute compute resources.
@@ -75,21 +74,21 @@ import com.example.llamadroid.ui.components.AppScreenScaffold
 @Composable
 fun WorkerModeScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val scrollState = rememberScrollState()
     
     val isRunning by DistributedService.isRunning.collectAsStateWithLifecycle()
     val localIp by DistributedService.localIp.collectAsStateWithLifecycle()
     val workerPort by DistributedService.workerPort.collectAsStateWithLifecycle()
-    val workerRamMB by DistributedService.workerRamMB.collectAsStateWithLifecycle()
-    val appliedWorkerMemoryBudget by DistributedService.workerMemoryBudget.collectAsStateWithLifecycle()
     val connectionCount by DistributedService.connectionCount.collectAsStateWithLifecycle()
-    
-    // System Monitor for RAM Card
-    val systemMonitor = remember { SystemMonitor(context) }
-    val stats by systemMonitor.observeStats()
-        .collectAsStateWithLifecycle(initialValue = SystemStats(0, 0, 0f, 0f))
-    val memoryRefreshSignal = stats
+
+    // One shared, IO-only stream serves both worker cards and the foreground notification.
+    // The screen keeps the flow reference stable and lets each card collect independently.
+    val memoryTelemetry = remember(context) { MemoryTelemetry.observe(context) }
+    val workerControls = remember {
+        WorkerControlState(DistributedService.workerRamMB.value.toLong().coerceAtLeast(0L))
+    }
     
     // Get device name (try user-set name first, fallback to model)
     val deviceName = remember { 
@@ -98,85 +97,6 @@ fun WorkerModeScreen(navController: NavController) {
         } catch (e: Exception) { null } ?: android.os.Build.MODEL ?: "Unknown Device"
     }
     
-    // Get device memory info
-    val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-    val memInfo = remember(memoryRefreshSignal) {
-        ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
-    }
-    val availableRamMiB = memInfo.availMem / WorkerMemoryBudget.MIB_BYTES
-    val totalRamMiB = memInfo.totalMem / WorkerMemoryBudget.MIB_BYTES
-
-    // Keep all worker controls on one immutable snapshot. The service recalculates the same
-    // snapshot before saving or launching so a stale UI value cannot over-allocate memory.
-    var requestedRamMiB by remember {
-        mutableLongStateOf(workerRamMB.toLong().coerceAtLeast(0L))
-    }
-    val workerMemoryBudget = remember(totalRamMiB, availableRamMiB, requestedRamMiB) {
-        WorkerMemoryBudget.fromBytes(
-            totalBytes = memInfo.totalMem,
-            availableBytes = memInfo.availMem,
-            requestedMiB = requestedRamMiB
-        )
-    }
-    val displayedMemoryBudget = if (
-        isRunning && appliedWorkerMemoryBudget.totalMiB > 0L
-    ) {
-        appliedWorkerMemoryBudget
-    } else {
-        workerMemoryBudget
-    }
-    val unavailableFraction = if (displayedMemoryBudget.totalMiB > 0L) {
-        ((displayedMemoryBudget.totalMiB - displayedMemoryBudget.availableMiB).toFloat() /
-            displayedMemoryBudget.totalMiB.toFloat()).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    val sanitizedRamMiB = workerMemoryBudget.contributionMiB
-    val sliderMaximumMiB = workerMemoryBudget.maximumMiB.coerceAtLeast(1L)
-    var ramTextValue by remember {
-        mutableStateOf(sanitizedRamMiB.toString())
-    }
-    var threadsValue by remember { mutableIntStateOf(4) }
-    var enableCache by remember { mutableStateOf(false) }
-
-    // Pick up a saved or service-applied contribution when the route is recreated or a worker
-    // stops. While running, the applied worker value remains authoritative and is not edited.
-    LaunchedEffect(workerRamMB, isRunning) {
-        if (!isRunning && requestedRamMiB != workerRamMB.toLong()) {
-            requestedRamMiB = workerRamMB.toLong().coerceAtLeast(0L)
-        }
-    }
-
-    // Memory availability can change while this screen is stopped. Re-clamp controls and the
-    // saved contribution, but never push a new value while an active worker is serving requests.
-    LaunchedEffect(workerMemoryBudget, isRunning) {
-        if (!isRunning) {
-            requestedRamMiB = sanitizedRamMiB
-            ramTextValue = sanitizedRamMiB.toString()
-            // Debounce slider recompositions so the selected value survives screen recreation
-            // without writing preferences for every pointer event.
-            delay(250)
-            if (!DistributedService.isRunning.value) {
-                DistributedService.setWorkerRam(
-                    context = context,
-                    ramMB = sanitizedRamMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                )
-            }
-        }
-    }
-    val latestRequestedRamMiB by rememberUpdatedState(requestedRamMiB)
-    DisposableEffect(Unit) {
-        onDispose {
-            if (!DistributedService.isRunning.value) {
-                DistributedService.setWorkerRam(
-                    context = context,
-                    ramMB = latestRequestedRamMiB.coerceAtLeast(0L)
-                        .coerceAtMost(Int.MAX_VALUE.toLong())
-                        .toInt()
-                )
-            }
-        }
-    }
     
     // QR Code generation
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -251,251 +171,27 @@ fun WorkerModeScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(24.dp),
+                .padding(24.dp)
+                .walkthroughTarget("distributed.worker"),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             // Status indicator with connection count
             StatusCard(isRunning = isRunning, connectionCount = connectionCount, ip = localIp, port = workerPort, deviceName = deviceName)
             
-            // Memory Stats Card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = AppChromeDefaults.CardShape,
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            stringResource(R.string.dashboard_memory),
-                            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
-                        )
-                    }
-                    
-                    LinearProgressIndicator(
-                        progress = { unavailableFraction },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        color = when {
-                            unavailableFraction > 0.8f -> MaterialTheme.colorScheme.error
-                            unavailableFraction > 0.6f -> Color(0xFFFFA726)
-                            else -> MaterialTheme.colorScheme.primary
-                        },
-                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                    )
-
-                    WorkerMemoryMetric(
-                        label = stringResource(R.string.dist_worker_memory_total),
-                        valueMiB = displayedMemoryBudget.totalMiB
-                    )
-                    WorkerMemoryMetric(
-                        label = stringResource(R.string.dist_worker_memory_available),
-                        valueMiB = displayedMemoryBudget.availableMiB,
-                        valueColor = MaterialTheme.colorScheme.primary
-                    )
-                    WorkerMemoryMetric(
-                        label = stringResource(R.string.dist_worker_memory_reserved),
-                        valueMiB = displayedMemoryBudget.reservedMiB
-                    )
-                    WorkerMemoryMetric(
-                        label = stringResource(R.string.dist_worker_memory_contribution),
-                        valueMiB = displayedMemoryBudget.contributionMiB,
-                        valueColor = MaterialTheme.colorScheme.primary
-                    )
-                }
-            }
-            
-            // RAM Configuration
-            if (!isRunning) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(20.dp)
-                    ) {
-                        Text(
-                            text = stringResource(R.string.dist_ram_to_share),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // RAM with text input (synced with slider)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "$sanitizedRamMiB ${stringResource(R.string.agent_unit_mb)}",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.weight(1f)
-                            )
-                            OutlinedTextField(
-                                value = ramTextValue,
-                                onValueChange = { newValue ->
-                                    ramTextValue = newValue
-                                    newValue.toLongOrNull()?.let { ram ->
-                                        val sanitized = WorkerMemoryBudget.calculate(
-                                            totalMiB = totalRamMiB,
-                                            availableMiB = availableRamMiB,
-                                            requestedMiB = ram
-                                        ).contributionMiB
-                                        requestedRamMiB = sanitized
-                                        ramTextValue = sanitized.toString()
-                                    }
-                                },
-                                label = { Text(stringResource(R.string.agent_unit_mb)) },
-                                singleLine = true,
-                                modifier = Modifier.width(100.dp),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
-                            )
-                        }
-                        
-                        Slider(
-                            value = sanitizedRamMiB.coerceIn(0L, sliderMaximumMiB).toFloat(),
-                            onValueChange = {
-                                val requested = it.toLong().coerceIn(0L, sliderMaximumMiB)
-                                requestedRamMiB = requested
-                                ramTextValue = requested.toString()
-                            },
-                            valueRange = 0f..sliderMaximumMiB.toFloat(),
-                            steps = ((sliderMaximumMiB / WorkerMemoryBudget.MINIMUM_VIABLE_MIB) - 1L)
-                                .coerceAtLeast(0L)
-                                .coerceAtMost(Int.MAX_VALUE.toLong())
-                                .toInt(),
-                            enabled = workerMemoryBudget.maximumMiB > 0L,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Text(
-                            text = stringResource(
-                                R.string.dist_total_avail_ram,
-                                availableRamMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
-                                totalRamMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Text(
-                            text = stringResource(
-                                R.string.dist_worker_memory_budget_summary,
-                                workerMemoryBudget.reservedMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
-                                workerMemoryBudget.maximumMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        if (!workerMemoryBudget.canLaunch) {
-                            Text(
-                                text = stringResource(
-                                    R.string.dist_worker_memory_unavailable,
-                                    WorkerMemoryBudget.MINIMUM_VIABLE_MIB
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Icon(
-                                Icons.Default.Info,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                            Text(
-                                text = stringResource(R.string.dist_worker_ram_budget_warning),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onTertiaryContainer
-                            )
-                        }
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Threads setting
-                        Text(
-                            text = stringResource(R.string.dist_threads_count, threadsValue),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Medium
-                        )
-                        
-                        Slider(
-                            value = threadsValue.toFloat(),
-                            onValueChange = { threadsValue = it.toInt() },
-                            valueRange = 1f..8f,
-                            steps = 6,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        
-                        Spacer(modifier = Modifier.height(16.dp))
-                        
-                        // Cache toggle
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = stringResource(R.string.dist_enable_local_cache),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = stringResource(R.string.dist_local_cache_desc),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = enableCache,
-                                onCheckedChange = { enableCache = it }
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        OutlinedButton(
-                            onClick = { DistributedService.clearWorkerCache(context) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.dist_clear_worker_cache))
-                        }
-                    }
-                }
-            }
+            WorkerMemoryCard(
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                appliedBudgetFlow = DistributedService.workerMemoryBudget,
+                controls = workerControls
+            )
+            WorkerRamConfigurationCard(
+                context = context,
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                workerRamFlow = DistributedService.workerRamMB,
+                controls = workerControls
+            )
             
             // Connection Info (Merged into StatusCard conceptually check below)
             // Keeping separated QR card for now but simplified logic
@@ -615,6 +311,7 @@ fun WorkerModeScreen(navController: NavController) {
                             Spacer(modifier = Modifier.height(12.dp))
                             Button(
                                 onClick = { 
+                                    walkthroughTargets?.recordEvent("distributed.worker")
                                     showWebMonitor = true 
                                 },
                                 modifier = Modifier.fillMaxWidth(),
@@ -741,52 +438,13 @@ fun WorkerModeScreen(navController: NavController) {
             
             Spacer(modifier = Modifier.height(8.dp))
             
-            // Start/Stop Button
-            Button(
-                onClick = {
-                    if (isRunning) {
-                        DistributedService.stopWorker(context)
-                    } else {
-                        // Save the sanitized stopped snapshot first, then pass that exact
-                        // contribution through the intent. The service validates again at launch.
-                        val savedBudget = DistributedService.setWorkerRam(
-                            context = context,
-                            ramMB = sanitizedRamMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                        )
-                        if (savedBudget.canLaunch) {
-                            DistributedService.startWorker(
-                                context = context,
-                                port = 50052,
-                                ramMB = savedBudget.contributionMiB
-                                    .coerceAtMost(Int.MAX_VALUE.toLong())
-                                    .toInt(),
-                                threads = threadsValue,
-                                enableCache = enableCache
-                            )
-                        }
-                    }
-                },
-                enabled = isRunning || workerMemoryBudget.canLaunch,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isRunning) 
-                        MaterialTheme.colorScheme.error 
-                    else 
-                        MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Icon(
-                    imageVector = if (isRunning) Icons.Default.Close else Icons.Default.PlayArrow,
-                    contentDescription = null
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (isRunning) stringResource(R.string.dist_stop_worker) else stringResource(R.string.dist_start_worker),
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
+            WorkerStartStopButton(
+                context = context,
+                memoryTelemetry = memoryTelemetry,
+                isRunning = isRunning,
+                controls = workerControls,
+                onAction = { walkthroughTargets?.recordEvent("distributed.worker") }
+            )
         }
     }
 
@@ -956,6 +614,377 @@ private fun hasSameWebOrigin(allowedUrl: String, candidateUrl: String): Boolean 
 }
 
 @Composable
+private fun WorkerMemoryCard(
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    appliedBudgetFlow: StateFlow<WorkerMemoryBudget>,
+    controls: WorkerControlState
+) {
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val appliedBudget by appliedBudgetFlow.collectAsStateWithLifecycle()
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB
+        )
+    }
+    // Device usage stays live; the allocation already applied to a running worker stays fixed.
+    val displayedBudget = budget
+    val unavailableFraction = if (displayedBudget.totalMiB > 0L) {
+        ((displayedBudget.totalMiB - displayedBudget.availableMiB).toFloat() /
+            displayedBudget.totalMiB.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = AppChromeDefaults.CardShape,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Text(
+                    stringResource(R.string.dashboard_memory),
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
+            LinearProgressIndicator(
+                progress = { unavailableFraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                color = when {
+                    unavailableFraction > 0.8f -> MaterialTheme.colorScheme.error
+                    unavailableFraction > 0.6f -> Color(0xFFFFA726)
+                    else -> MaterialTheme.colorScheme.primary
+                },
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_total),
+                valueMiB = displayedBudget.totalMiB
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_available),
+                valueMiB = displayedBudget.availableMiB,
+                valueColor = MaterialTheme.colorScheme.primary
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_reserved),
+                valueMiB = displayedBudget.reservedMiB
+            )
+            WorkerMemoryMetric(
+                label = stringResource(R.string.dist_worker_memory_contribution),
+                valueMiB = if (isRunning) appliedBudget.contributionMiB else displayedBudget.contributionMiB,
+                valueColor = MaterialTheme.colorScheme.primary
+            )
+            if (memory.sampledAtEpochMs > 0L) {
+                Text(
+                    text = stringResource(R.string.worker_topology_memory_live),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkerRamConfigurationCard(
+    context: Context,
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    workerRamFlow: StateFlow<Int>,
+    controls: WorkerControlState
+) {
+    if (isRunning) return
+
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val workerRamMB by workerRamFlow.collectAsStateWithLifecycle()
+    var ramFieldFocused by remember { mutableStateOf(false) }
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB
+        )
+    }
+    val sanitizedRamMiB = budget.contributionMiB
+    val sliderMaximumMiB = budget.maximumMiB.coerceAtLeast(1L)
+
+    // A service-applied value is authoritative whenever a route is recreated or a worker stops.
+    LaunchedEffect(workerRamMB, isRunning) {
+        if (!isRunning && controls.requestedRamMiB != workerRamMB.toLong()) {
+            controls.requestedRamMiB = workerRamMB.toLong().coerceAtLeast(0L)
+            controls.ramTextValue = controls.requestedRamMiB.toString()
+        }
+    }
+
+    // Available memory can shrink while stopped. Clamp the editable contribution, but leave a
+    // focused draft alone until focus leaves the field. The write itself is debounced below.
+    LaunchedEffect(memory, isRunning, ramFieldFocused) {
+        if (!isRunning && !ramFieldFocused && memory.totalBytes > 0L) {
+            controls.requestedRamMiB = sanitizedRamMiB
+            controls.ramTextValue = sanitizedRamMiB.toString()
+        }
+    }
+    LaunchedEffect(context, isRunning) {
+        if (!isRunning) {
+            snapshotFlow { controls.requestedRamMiB }
+                .distinctUntilChanged()
+                .debounce(250L)
+                .collect { requestedMiB ->
+                    if (!DistributedService.isRunning.value) {
+                        DistributedService.setWorkerRam(
+                            context = context,
+                            ramMB = requestedMiB.coerceAtLeast(0L)
+                                .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        )
+                    }
+                }
+        }
+    }
+    val latestRequestedRamMiB by rememberUpdatedState(controls.requestedRamMiB)
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!DistributedService.isRunning.value) {
+                DistributedService.setWorkerRam(
+                    context = context,
+                    ramMB = latestRequestedRamMiB.coerceAtLeast(0L)
+                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                )
+            }
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = stringResource(R.string.dist_ram_to_share),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "$sanitizedRamMiB ${stringResource(R.string.agent_unit_mb)}",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = controls.ramTextValue,
+                    onValueChange = { newValue ->
+                        controls.ramTextValue = newValue
+                        newValue.toLongOrNull()?.let { requested ->
+                            controls.requestedRamMiB = requested.coerceAtLeast(0L)
+                        }
+                    },
+                    label = { Text(stringResource(R.string.agent_unit_mb)) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .width(100.dp)
+                        .onFocusChanged { ramFieldFocused = it.isFocused },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+            }
+            Slider(
+                value = sanitizedRamMiB.coerceIn(0L, sliderMaximumMiB).toFloat(),
+                onValueChange = { value ->
+                    val requested = value.toLong().coerceIn(0L, sliderMaximumMiB)
+                    controls.requestedRamMiB = requested
+                    controls.ramTextValue = requested.toString()
+                },
+                valueRange = 0f..sliderMaximumMiB.toFloat(),
+                steps = ((sliderMaximumMiB / WorkerMemoryBudget.MINIMUM_VIABLE_MIB) - 1L)
+                    .coerceAtLeast(0L)
+                    .coerceAtMost(Int.MAX_VALUE.toLong())
+                    .toInt(),
+                enabled = budget.maximumMiB > 0L,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = stringResource(
+                    R.string.dist_total_avail_ram,
+                    memory.availableMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    memory.totalMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = stringResource(
+                    R.string.dist_worker_memory_budget_summary,
+                    budget.reservedMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                    budget.maximumMiB.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!budget.canLaunch) {
+                Text(
+                    text = stringResource(
+                        R.string.dist_worker_memory_unavailable,
+                        WorkerMemoryBudget.MINIMUM_VIABLE_MIB
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f),
+                        RoundedCornerShape(8.dp)
+                    )
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                Text(
+                    text = stringResource(R.string.dist_worker_ram_budget_warning),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+            Text(
+                text = stringResource(R.string.dist_threads_count, controls.threadsValue),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium
+            )
+            Slider(
+                value = controls.threadsValue.toFloat(),
+                onValueChange = { controls.threadsValue = it.toInt() },
+                valueRange = 1f..8f,
+                steps = 6,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.dist_enable_local_cache),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Text(
+                        text = stringResource(R.string.dist_local_cache_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = controls.enableCache,
+                    onCheckedChange = { controls.enableCache = it }
+                )
+            }
+            OutlinedButton(
+                onClick = { DistributedService.clearWorkerCache(context) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.dist_clear_worker_cache))
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkerStartStopButton(
+    context: Context,
+    memoryTelemetry: StateFlow<MemoryTelemetrySnapshot>,
+    isRunning: Boolean,
+    controls: WorkerControlState,
+    onAction: () -> Unit = {}
+) {
+    val memory by memoryTelemetry.collectAsStateWithLifecycle()
+    val budget = remember(memory.totalBytes, memory.availableBytes, controls.requestedRamMiB) {
+        WorkerMemoryBudget.fromBytes(
+            totalBytes = memory.totalBytes,
+            availableBytes = memory.availableBytes,
+            requestedMiB = controls.requestedRamMiB
+        )
+    }
+    Button(
+        onClick = {
+            onAction()
+            if (isRunning) {
+                DistributedService.stopWorker(context)
+            } else {
+                // Save this stopped snapshot first. The service validates the same contribution
+                // again immediately before launching the native worker.
+                val savedBudget = DistributedService.setWorkerRam(
+                    context = context,
+                    ramMB = controls.requestedRamMiB.coerceAtLeast(0L)
+                        .coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                )
+                if (savedBudget.canLaunch) {
+                    DistributedService.startWorker(
+                        context = context,
+                        port = DistributedService.RPC_DEFAULT_PORT,
+                        ramMB = savedBudget.contributionMiB
+                            .coerceAtMost(Int.MAX_VALUE.toLong()).toInt(),
+                        threads = controls.threadsValue,
+                        enableCache = controls.enableCache
+                    )
+                }
+            }
+        },
+        enabled = isRunning || budget.canLaunch,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = if (isRunning) MaterialTheme.colorScheme.error
+            else MaterialTheme.colorScheme.primary
+        )
+    ) {
+        Icon(
+            imageVector = if (isRunning) Icons.Default.Close else Icons.Default.PlayArrow,
+            contentDescription = null
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (isRunning) stringResource(R.string.dist_stop_worker)
+            else stringResource(R.string.dist_start_worker),
+            style = MaterialTheme.typography.titleMedium
+        )
+    }
+}
+
+private class WorkerControlState(initialRamMiB: Long) {
+    var requestedRamMiB by mutableLongStateOf(initialRamMiB.coerceAtLeast(0L))
+    var ramTextValue by mutableStateOf(initialRamMiB.coerceAtLeast(0L).toString())
+    var threadsValue by mutableIntStateOf(4)
+    var enableCache by mutableStateOf(false)
+}
+
+@Composable
 private fun WorkerMemoryMetric(
     label: String,
     valueMiB: Long,
@@ -1034,7 +1063,12 @@ private fun StatusCard(isRunning: Boolean, connectionCount: Int, ip: String?, po
                 Text(
                     text = when {
                         connectionCount > 0 -> stringResource(R.string.dist_receiving_layers)
-                        isRunning -> "Listening on $ip:$port\nBroadcasting as: $deviceName" // Explicit feedback
+                        isRunning -> stringResource(
+                            R.string.worker_topology_worker_listening,
+                            ip ?: "—",
+                            port,
+                            deviceName
+                        )
                         else -> stringResource(R.string.dist_configure_worker_ram)
                     },
                     style = MaterialTheme.typography.bodyMedium,

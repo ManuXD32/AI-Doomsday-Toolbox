@@ -31,10 +31,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Card
@@ -75,6 +76,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
@@ -90,6 +93,9 @@ import com.example.llamadroid.data.model.supportsLiteRtVision
 import com.example.llamadroid.data.repository.LiteRtCatalogEntry
 import com.example.llamadroid.data.repository.LiteRtModelCatalog
 import com.example.llamadroid.data.repository.LiteRtModelRepository
+import com.example.llamadroid.data.model.library.ModelFamily
+import com.example.llamadroid.data.model.library.ModelSourceDraft
+import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.service.LiteRtBackendDoctorResult
 import com.example.llamadroid.service.LiteRtBackendDoctorStore
 import com.example.llamadroid.service.DownloadService
@@ -121,6 +127,9 @@ fun LiteRtModelsScreen(navController: NavController) {
             modelDao = db.liteRtModelDao()
         )
     }
+    val sourceRepository = rememberModelSourceRepository(context)
+    val savedSources by sourceRepository.sources.collectAsState(initial = emptyList())
+    val sourceProvenance by sourceRepository.provenance.collectAsState(initial = emptyList())
     val models by repository.observeModels().collectAsState(initial = emptyList())
     val progress by DownloadProgressHolder.progress.collectAsState()
     val statuses by DownloadProgressHolder.status.collectAsState()
@@ -139,6 +148,10 @@ fun LiteRtModelsScreen(navController: NavController) {
     var importSupportsVision by remember { mutableStateOf(false) }
     var importSupportsAudio by remember { mutableStateOf(false) }
     var importSupportsEmbedding by remember { mutableStateOf(false) }
+    var importSourceUrl by remember { mutableStateOf("") }
+    var importSourceLabel by remember { mutableStateOf("") }
+    var importSourceError by remember { mutableStateOf<String?>(null) }
+    var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     var pendingDelete by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var pendingExport by remember { mutableStateOf<LiteRtModelEntity?>(null) }
     var doctorDetails by remember { mutableStateOf<LiteRtBackendDoctorResult?>(null) }
@@ -169,6 +182,9 @@ fun LiteRtModelsScreen(navController: NavController) {
         importSupportsVision = liteRtVisionSupportFromText(inferenceText)
         importSupportsAudio = liteRtAudioSupportFromText(inferenceText)
         importSupportsEmbedding = liteRtEmbeddingSupportFromText(inferenceText)
+        importSourceUrl = ""
+        importSourceLabel = ""
+        importSourceError = null
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -210,13 +226,28 @@ fun LiteRtModelsScreen(navController: NavController) {
         stringResource(R.string.models_tab_discover)
     )
 
-    AppScreenScaffold(title = stringResource(R.string.litert_models_title), onBack = { navController.popBackStack() }) {
+    AppScreenScaffold(
+        title = stringResource(R.string.litert_models_title),
+        onBack = { navController.popBackStack() },
+        actions = {
+            IconButton(
+                onClick = { navController.navigate("${Screen.ModelSources.route}?family=LITERT&tab=download") },
+                modifier = Modifier.walkthroughTarget("models.download")
+            ) {
+                Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
+            }
+        }
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             AppContentColumn(
                 modifier = Modifier.fillMaxWidth(),
                 bottomPadding = 8.dp,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                ModelManagerShortcutRow(
+                    navController = navController,
+                    family = ModelFamily.LITERT
+                )
                 AppSectionCard {
                     AppScrollableTabRow(
                         selectedTabIndex = selectedTab,
@@ -287,6 +318,7 @@ fun LiteRtModelsScreen(navController: NavController) {
                             modalityAudioValue = it.supportsLiteRtAudio()
                             modalityEmbeddingValue = it.supportsLiteRtEmbedding()
                         },
+                        onSource = { sourceAsset = installedAssetForLiteRtModel(it) },
                         onRemove = { pendingDelete = it },
                         onDoctorDetails = { doctorDetails = it }
                     )
@@ -459,8 +491,14 @@ fun LiteRtModelsScreen(navController: NavController) {
     }
 
     pendingImportUri?.let { uri ->
+        val invalidSourceText = stringResource(R.string.model_source_invalid_link)
         AlertDialog(
-            onDismissRequest = { pendingImportUri = null },
+            onDismissRequest = {
+                pendingImportUri = null
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
+            },
             title = { Text(stringResource(R.string.litert_models_import_options_title)) },
             text = {
                 Column(
@@ -489,13 +527,36 @@ fun LiteRtModelsScreen(navController: NavController) {
                         checked = importSupportsEmbedding,
                         onCheckedChange = { importSupportsEmbedding = it }
                     )
+                    OptionalModelSourceFields(
+                        family = ModelFamily.LITERT,
+                        url = importSourceUrl,
+                        onUrlChange = {
+                            importSourceUrl = it
+                            importSourceError = null
+                        },
+                        label = importSourceLabel,
+                        onLabelChange = { importSourceLabel = it },
+                        error = importSourceError
+                    )
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val sourceDraft = optionalModelSourceDraft(
+                            family = ModelFamily.LITERT,
+                            url = importSourceUrl,
+                            label = importSourceLabel
+                        )
+                        if (sourceDraft.isFailure) {
+                            importSourceError = invalidSourceText
+                            return@TextButton
+                        }
                         val selectedUri = uri
                         pendingImportUri = null
+                        importSourceUrl = ""
+                        importSourceLabel = ""
+                        importSourceError = null
                         scope.launch {
                             val result = repository.importFromUri(
                                 selectedUri,
@@ -503,6 +564,28 @@ fun LiteRtModelsScreen(navController: NavController) {
                                 supportsAudioOverride = importSupportsAudio,
                                 supportsEmbeddingOverride = importSupportsEmbedding
                             )
+                            if (result.isSuccess) {
+                                val imported = result.getOrThrow()
+                                sourceDraft.getOrNull()?.let { draft ->
+                                    attachModelSource(
+                                        sourceRepository,
+                                        ModelSourceAttachmentRequest(
+                                            asset = installedAssetForLiteRtModel(imported),
+                                            newSource = draft,
+                                            role = "litert"
+                                        )
+                                    ).onFailure { error ->
+                                        Toast.makeText(
+                                            context,
+                                            resources.getString(
+                                                R.string.model_source_save_failed,
+                                                error.message ?: resources.getString(R.string.error_generic)
+                                            ),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            }
                             toast(
                                 result.fold(
                                     onSuccess = { resources.getString(R.string.litert_models_imported) },
@@ -514,8 +597,37 @@ fun LiteRtModelsScreen(navController: NavController) {
                 ) { Text(stringResource(R.string.action_import)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingImportUri = null }) {
+                TextButton(onClick = {
+                    pendingImportUri = null
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
+                }) {
                     Text(stringResource(R.string.action_cancel))
+                }
+            }
+        )
+    }
+
+    sourceAsset?.let { asset ->
+        ModelSourceAttachmentDialog(
+            asset = asset,
+            sources = savedSources,
+            provenance = sourceProvenance,
+            onDismiss = { sourceAsset = null },
+            onSave = { request ->
+                sourceAsset = null
+                scope.launch {
+                    attachModelSource(sourceRepository, request)
+                        .onSuccess { toast(resources.getString(R.string.model_source_saved)) }
+                        .onFailure { error ->
+                            toast(
+                                resources.getString(
+                                    R.string.model_source_save_failed,
+                                    error.message ?: resources.getString(R.string.error_generic)
+                                )
+                            )
+                        }
                 }
             }
         )
@@ -592,18 +704,17 @@ private fun LiteRtInstalledTab(
     onExport: (LiteRtModelEntity) -> Unit,
     onEditContext: (LiteRtModelEntity) -> Unit,
     onEditModalities: (LiteRtModelEntity) -> Unit,
+    onSource: (LiteRtModelEntity) -> Unit,
     onRemove: (LiteRtModelEntity) -> Unit,
     onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit
 ) {
-    val storageSnapshot = remember(models, managedRoot.absolutePath) {
-        readLiteRtStorageSnapshot(managedRoot, models)
-    }
+    val storageSnapshot = com.example.llamadroid.ui.components.rememberModelStorageInventory()
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item { LiteRtStorageOverviewCard(storageSnapshot) }
+        item { com.example.llamadroid.ui.components.ModelStorageOverviewCard(storageSnapshot, "litert") }
         item {
             Text(
                 stringResource(R.string.litert_models_installed_title, models.size),
@@ -647,6 +758,7 @@ private fun LiteRtInstalledTab(
                     onExport = { onExport(model) },
                     onEditContext = { onEditContext(model) },
                     onEditModalities = { onEditModalities(model) },
+                    onSource = { onSource(model) },
                     onRemove = { onRemove(model) },
                     onDoctorDetails = onDoctorDetails
                 )
@@ -687,7 +799,8 @@ private fun LiteRtDownloadingTab(
             DownloadTaskSection(
                 modelTypes = listOf(ModelType.LLM),
                 includeTask = { it.id.startsWith(LITERT_PROGRESS_PREFIX) },
-                staleRoots = listOf(File(context.noBackupFilesDir, "litert_models"))
+                staleRoots = listOf(File(context.noBackupFilesDir, "litert_models")),
+                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.LITERT
             )
         }
 
@@ -959,6 +1072,7 @@ private fun LiteRtCompactModelCard(
     onExport: () -> Unit,
     onEditContext: () -> Unit,
     onEditModalities: () -> Unit,
+    onSource: () -> Unit,
     onRemove: () -> Unit,
     onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit
 ) {
@@ -974,6 +1088,7 @@ private fun LiteRtCompactModelCard(
         onRename = onRename,
         onEditContext = onEditContext,
         onEditModalities = onEditModalities,
+        onSource = onSource,
         doctorResults = doctorResults,
         onDoctorDetails = onDoctorDetails
     )
@@ -1327,6 +1442,7 @@ private fun ModelStyleCard(
     onRename: (() -> Unit)? = null,
     onEditContext: (() -> Unit)? = null,
     onEditModalities: (() -> Unit)? = null,
+    onSource: (() -> Unit)? = null,
     doctorResults: List<LiteRtBackendDoctorResult> = emptyList(),
     onDoctorDetails: (LiteRtBackendDoctorResult) -> Unit = {}
 ) {
@@ -1398,6 +1514,15 @@ private fun ModelStyleCard(
                 horizontalArrangement = Arrangement.End,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                onSource?.let {
+                    IconButton(onClick = it) {
+                        Icon(
+                            Icons.Default.Link,
+                            contentDescription = stringResource(R.string.model_source_attach_title),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
                 doctorResults.firstOrNull()?.let { result ->
                     IconButton(onClick = { onDoctorDetails(result) }) {
                         Icon(
@@ -1447,172 +1572,6 @@ private fun ModelStyleCard(
                     Icon(actionIcon, contentDescription = null, tint = actionColor)
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun LiteRtStorageOverviewCard(snapshot: LiteRtStorageSnapshot) {
-    val context = LocalContext.current
-    val totalText = FormatUtils.Display.formatBytes(context, snapshot.totalBytes)
-    val freeText = FormatUtils.Display.formatBytes(context, snapshot.freeBytes)
-    val modelsText = FormatUtils.Display.formatBytes(context, snapshot.modelBytes)
-    val otherText = FormatUtils.Display.formatBytes(context, snapshot.otherUsedBytes)
-    val usedFraction = if (snapshot.totalBytes > 0L) {
-        ((snapshot.totalBytes - snapshot.freeBytes).toFloat() / snapshot.totalBytes.toFloat()).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-
-    AppSectionCard {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier.size(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        stringResource(R.string.models_storage_title),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        stringResource(R.string.models_storage_subtitle),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-            }
-            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    StorageMetric(
-                        label = stringResource(R.string.models_storage_total),
-                        value = totalText,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    StorageMetric(
-                        label = stringResource(R.string.models_storage_free),
-                        value = freeText,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    StorageMetric(
-                        label = stringResource(R.string.models_storage_models),
-                        value = modelsText,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    StorageMetric(
-                        label = stringResource(R.string.models_storage_total),
-                        value = totalText,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StorageMetric(
-                        label = stringResource(R.string.models_storage_free),
-                        value = freeText,
-                        modifier = Modifier.weight(1f)
-                    )
-                    StorageMetric(
-                        label = stringResource(R.string.models_storage_models),
-                        value = modelsText,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-            LinearProgressIndicator(
-                progress = { usedFraction },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
-            if (androidx.compose.ui.platform.LocalDensity.current.fontScale >= 1.3f) {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        stringResource(
-                            R.string.models_storage_legend_value,
-                            stringResource(R.string.models_storage_models),
-                            modelsText
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        stringResource(
-                            R.string.models_storage_legend_value,
-                            stringResource(R.string.models_storage_other),
-                            otherText
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text(
-                        stringResource(
-                            R.string.models_storage_legend_value,
-                            stringResource(R.string.models_storage_models),
-                            modelsText
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        stringResource(
-                            R.string.models_storage_legend_value,
-                            stringResource(R.string.models_storage_other),
-                            otherText
-                        ),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun StorageMetric(label: String, value: String, modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
-    ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(
-                label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                value,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
         }
     }
 }
@@ -1674,27 +1633,6 @@ private fun localizedCatalogDescription(entry: LiteRtCatalogEntry): String =
             else -> entry.description
         }
     }
-
-private data class LiteRtStorageSnapshot(
-    val totalBytes: Long,
-    val freeBytes: Long,
-    val modelBytes: Long,
-    val otherUsedBytes: Long
-)
-
-private fun readLiteRtStorageSnapshot(root: File, models: List<LiteRtModelEntity>): LiteRtStorageSnapshot {
-    val stats = StatFs(root.absolutePath)
-    val total = stats.totalBytes
-    val free = stats.availableBytes
-    val modelBytes = models.sumOf { it.sizeBytes }.coerceAtLeast(0L)
-    val other = (total - free - modelBytes).coerceAtLeast(0L)
-    return LiteRtStorageSnapshot(
-        totalBytes = total,
-        freeBytes = free,
-        modelBytes = modelBytes,
-        otherUsedBytes = other
-    )
-}
 
 private fun defaultExportName(model: LiteRtModelEntity): String {
     val source = File(model.path)

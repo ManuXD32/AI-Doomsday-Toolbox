@@ -35,6 +35,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Main entry point for distributed inference feature.
@@ -44,6 +46,7 @@ import com.example.llamadroid.R
 @Composable
 fun DistributedScreen(navController: NavController) {
     val scrollState = rememberScrollState()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     
     AppScreenScaffold(
         title = stringResource(R.string.dist_title),
@@ -53,7 +56,8 @@ fun DistributedScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(20.dp),
+                .padding(20.dp)
+                .walkthroughTarget("distributed.roles"),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -63,7 +67,10 @@ fun DistributedScreen(navController: NavController) {
                 title = stringResource(R.string.dist_role_master_title),
                 description = stringResource(R.string.dist_role_master_desc),
                 buttonText = stringResource(R.string.dist_role_master_btn),
-                onClick = { navController.navigate(Screen.MasterMode.route) }
+                onClick = {
+                    walkthroughTargets?.recordEvent("distributed.roles")
+                    navController.navigate(Screen.MasterMode.route)
+                }
             )
             
             // Worker Mode Card
@@ -72,7 +79,10 @@ fun DistributedScreen(navController: NavController) {
                 title = stringResource(R.string.dist_role_worker_title),
                 description = stringResource(R.string.dist_role_worker_desc),
                 buttonText = stringResource(R.string.dist_role_worker_btn),
-                onClick = { navController.navigate(Screen.WorkerMode.route) }
+                onClick = {
+                    walkthroughTargets?.recordEvent("distributed.roles")
+                    navController.navigate(Screen.WorkerMode.route)
+                }
             )
             
             Spacer(modifier = Modifier.height(8.dp))

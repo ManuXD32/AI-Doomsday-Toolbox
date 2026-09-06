@@ -2,82 +2,90 @@ package com.example.llamadroid.ui.distributed
 
 import android.content.Context
 import android.content.Intent
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.horizontalScroll
-import com.example.llamadroid.ui.components.AppScreenScaffold
+import android.text.format.DateUtils
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavController
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
+import com.example.llamadroid.service.DistributedMasterLlamaService
+import com.example.llamadroid.service.DistributedMasterRuntimeState
 import com.example.llamadroid.service.DistributedMode
 import com.example.llamadroid.service.DistributedService
 import com.example.llamadroid.service.RpcWorkerStatus
-import com.example.llamadroid.service.DistributedMasterRuntimeState
-import com.example.llamadroid.service.DistributedMasterLlamaService
 import com.example.llamadroid.service.ServerState
 import com.example.llamadroid.service.WorkerInfo
+import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.components.AppInfoRow
+import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.components.AppSectionTitle
+import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
-// Terminal presentation uses semantic roles so the diagnostic surface remains
-// readable in both appearance modes while preserving meaningful status colors.
-@Composable
-private fun matrixGreen() = MaterialTheme.colorScheme.secondary
-
-@Composable
-private fun matrixDarkGreen() = MaterialTheme.colorScheme.onSurfaceVariant
-
-@Composable
-private fun matrixBackground() = MaterialTheme.colorScheme.surfaceContainerLowest
-
-@Composable
-private fun matrixBackgroundSecondary() = MaterialTheme.colorScheme.surfaceContainerLow
-
-@Composable
-private fun matrixBorder() = MaterialTheme.colorScheme.outlineVariant
-
-@Composable
-private fun matrixRed() = MaterialTheme.colorScheme.error
-
-@Composable
-private fun matrixCyan() = MaterialTheme.colorScheme.primary
-
-@Composable
-private fun matrixYellow() = MaterialTheme.colorScheme.tertiary
+private const val MAX_VISIBLE_RPC_LOGS = 40
+private const val MAX_VISIBLE_COMMAND_CHARS = 12_000
 
 /**
- * Network Visualization Screen - Hacker/Matrix style
+ * Soft Studio topology view for the distributed LLM route.
+ *
+ * The graph is intentionally a normal, full-width card layout. Cards remain readable at narrow
+ * widths and the connector is drawn by Canvas so endpoint and status text never has to fit inside
+ * an ASCII box. Logs and command text are both bounded before they enter a scroll owner.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NetworkVisualizationScreen(navController: NavController) {
-    val context = LocalContext.current
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scrollState = rememberScrollState()
-    
-    // Collect distributed service states
     val workers by DistributedService.workers.collectAsStateWithLifecycle()
     val isRunning by DistributedService.isRunning.collectAsStateWithLifecycle()
     val mode by DistributedService.mode.collectAsStateWithLifecycle()
@@ -87,492 +95,543 @@ fun NetworkVisualizationScreen(navController: NavController) {
     val modelSizeMB by DistributedService.modelSizeMB.collectAsStateWithLifecycle()
     val inferenceRunning by DistributedService.inferenceRunning.collectAsStateWithLifecycle()
     val transferProgress by DistributedService.transferProgress.collectAsStateWithLifecycle()
+    val rpcLogs by DistributedService.rpcLogs.collectAsStateWithLifecycle()
     val lastCommand by DistributedService.lastCommand.collectAsStateWithLifecycle()
-    
-    LaunchedEffect(Unit) { DistributedMasterRuntimeState.attach(context.applicationContext) }
+
+    LaunchedEffect(Unit) {
+        DistributedMasterRuntimeState.attach(context.applicationContext)
+    }
     val serverState by DistributedMasterRuntimeState.state.collectAsStateWithLifecycle()
-    
-    val masterLayers = modelLayerCount - rpcLayerCount
-    val totalConnectedRam = masterRamMB + workers.filter { it.isConnected }.sumOf { it.availableRamMB }
-    
-    // Calculate proportions for display
-    // If calculating based on RAM
-    val masterProportion = if (totalConnectedRam > 0) {
-        (masterRamMB.toFloat() / totalConnectedRam * 100).toInt()
+
+    val connectedWorkers = remember(workers) { workers.filter { it.isConnected } }
+    val totalClusterRam = masterRamMB + connectedWorkers.sumOf { it.availableRamMB.coerceAtLeast(0) }
+    val masterShare = if (totalClusterRam > 0) {
+        (masterRamMB.toFloat() / totalClusterRam * 100f).toInt().coerceIn(0, 100)
     } else {
         100
     }
-    
-    // Blinking cursor animation
-    val infiniteTransition = rememberInfiniteTransition(label = "blink")
-    val cursorVisible by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(500, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "cursor"
-    )
-    
+    val rpcShare = (100 - masterShare).coerceIn(0, 100)
+    val masterLayers = (modelLayerCount - rpcLayerCount).coerceAtLeast(0)
+
     AppScreenScaffold(
         title = stringResource(R.string.net_title),
         onBack = { navController.popBackStack() }
-    ) { padding ->
+    ) { _ ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(matrixBackground())
-                .padding(padding)
                 .verticalScroll(scrollState)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(AppChromeDefaults.ScreenPadding)
+                .walkthroughTarget("distributed.topology"),
+            verticalArrangement = Arrangement.spacedBy(AppChromeDefaults.SectionSpacing)
         ) {
-            // Terminal Header
-            TerminalBox(title = stringResource(R.string.net_system_status)) {
-                val (statusText, statusColor) = when (serverState) {
-                    is ServerState.Running -> stringResource(R.string.net_status_online) to matrixGreen()
-                    is ServerState.Loading -> stringResource(R.string.net_status_loading) to matrixYellow()
-                    is ServerState.Starting -> stringResource(R.string.net_status_init) to matrixYellow()
-                    is ServerState.Error -> stringResource(R.string.net_status_error) to matrixRed()
-                    ServerState.Stopped -> stringResource(R.string.net_status_offline) to matrixRed()
-                }
-                
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = stringResource(R.string.net_inference_server) + " ",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        color = matrixDarkGreen()
-                    )
-                    Text(
-                        text = statusText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = statusColor
-                    )
-                }
-                
-                Text(
-                    text = stringResource(R.string.net_mode, mode.name),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = matrixDarkGreen()
-                )
-                
-                if (inferenceRunning) {
-                    Text(
-                        text = stringResource(R.string.net_processing) + if (cursorVisible > 0.5f) "_" else " ",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixGreen()
-                    )
-                }
-            }
-            
-            // Network Topology
-            TerminalBox(title = stringResource(R.string.net_topology)) {
-                // Master node
-                Text(
-                    text = "┌─────────────────────────────────────┐",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = matrixBorder()
-                )
-                Row {
-                    Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                    Text(
-                        text = stringResource(R.string.net_master_node),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = matrixCyan(),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                }
-                Row {
-                    Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                    
-                    val masterEstMb = if (modelSizeMB > 0 && totalConnectedRam > 0) {
-                        (masterProportion / 100f * modelSizeMB).toInt()
-                    } else 0
-                    
-                    val ramText = if (masterEstMb > 0) " | EST: ~${masterEstMb}MB" else ""
-                    
-                    Text(
-                        text = "RAM: ${masterRamMB}MB | LOAD: $masterProportion%$ramText",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = matrixGreen(),
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                }
-                Text(
-                    text = "└─────────────────────────────────────┘",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = matrixBorder()
-                )
-                
-                if (workers.isNotEmpty()) {
-                    // Connection lines
-                    Text(
-                        text = "         │",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = if (inferenceRunning) matrixGreen() else matrixDarkGreen()
-                    )
-                    Text(
-                        text = "    ─────┼─────" + "─────┬─────".repeat((workers.size - 1).coerceAtLeast(0)),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = if (inferenceRunning) matrixGreen() else matrixDarkGreen()
-                    )
-                    
-                    // Worker nodes
-                    workers.forEachIndexed { index, worker ->
-                        val layersPerWorker = if (workers.isNotEmpty()) rpcLayerCount / workers.size else 0
-                        
-                        Text(
-                            text = "┌───────────────────────────────┐",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = matrixBorder()
-                        )
-                        Row {
-                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                            Text(
-                                text = "[WORKER_${index}] 📱 ${worker.deviceName}",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp,
-                                color = matrixYellow(),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                        }
-                        Row {
-                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                            Text(
-                                text = "${worker.ip}:${worker.port}",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 9.sp,
-                                color = matrixDarkGreen(),
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                        }
-                        Row {
-                            Text("│ ", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                            val workerProp = if (totalConnectedRam > 0 && worker.isConnected) {
-                                (worker.availableRamMB.toFloat() / totalConnectedRam * 100).toInt()
-                            } else {
-                                0
-                            }
-                            
-                            // Determine RAM display (Real > Est)
-                            val ramUsageText = if (worker.realRamUsageMB != null) {
-                                " | REAL: ${worker.realRamUsageMB}MB"
-                            } else {
-                                val workerEstMb = if (modelSizeMB > 0 && worker.isConnected) {
-                                    (workerProp / 100f * modelSizeMB).toInt()
-                                } else 0
-                                if (workerEstMb > 0) " | EST: ~${workerEstMb}MB" else ""
-                            }
-                            
-                            val statusColor = when (worker.rpcStatus) {
-                                RpcWorkerStatus.ONLINE -> matrixGreen()
-                                RpcWorkerStatus.FAILED -> matrixRed()
-                                RpcWorkerStatus.CONNECTING -> matrixCyan()
-                                RpcWorkerStatus.UNKNOWN, RpcWorkerStatus.NOT_SELECTED -> matrixDarkGreen()
-                            }
-                            val statusText = when (worker.rpcStatus) {
-                                RpcWorkerStatus.ONLINE -> stringResource(R.string.net_status_online)
-                                RpcWorkerStatus.FAILED -> stringResource(R.string.net_status_failed)
-                                RpcWorkerStatus.CONNECTING -> stringResource(R.string.net_status_connecting)
-                                RpcWorkerStatus.NOT_SELECTED -> stringResource(R.string.net_status_not_selected)
-                                RpcWorkerStatus.UNKNOWN -> stringResource(R.string.net_status_unknown)
-                            }
-                            
-                            // Use Cyan for Real RAM usage to distinguish from Estimate
-                            val usageColor = if (worker.realRamUsageMB != null) matrixCyan() else statusColor
-                            
-                            Text(
-                                text = "RAM: ${worker.availableRamMB}MB | STATUS: $statusText | LOAD: $workerProp%$ramUsageText",
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 9.sp,
-                                color = usageColor,
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(" │", fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = matrixBorder())
-                        }
-                        Text(
-                            text = "└───────────────────────────────┘",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                            color = matrixBorder()
-                        )
-                    }
-                } else {
-                    Text(
-                        text = "\n" + stringResource(R.string.net_no_workers),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixRed()
-                    )
-                }
-            }
-            
-            // Model Info
+            RuntimeStatusCard(serverState, mode, inferenceRunning)
+            TopologyGraphCard(
+                workers = workers,
+                isRunning = isRunning,
+                masterRamMB = masterRamMB,
+                masterShare = masterShare,
+                masterLayers = masterLayers,
+                modelSizeMB = modelSizeMB,
+                totalClusterRam = totalClusterRam
+            )
             if (modelLayerCount > 0) {
-                TerminalBox(title = stringResource(R.string.net_model_metrics)) {
-                    Text(
-                        text = "TOTAL_LAYERS: $modelLayerCount",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixGreen()
-                    )
-                    Text(
-                        text = "MODEL_SIZE:   ${modelSizeMB}MB",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixGreen()
-                    )
-                    Text(
-                        text = "LOCAL_LAYERS: $masterLayers",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixCyan()
-                    )
-                    Text(
-                        text = "RPC_LAYERS:   $rpcLayerCount",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixYellow()
-                    )
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    // ASCII progress bar
-                    val masterRatio = if (modelLayerCount > 0) masterLayers.toFloat() / modelLayerCount else 0f
-                    val barWidth = 30
-                    val masterBlocks = (masterRatio * barWidth).toInt()
-                    val workerBlocks = barWidth - masterBlocks
-                    
-                    Text(
-                        text = stringResource(R.string.net_layer_distribution),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = matrixDarkGreen()
-                    )
-                    Text(
-                        text = "[" + "█".repeat(masterBlocks) + "░".repeat(workerBlocks) + "]",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixGreen()
-                    )
-                    Row {
-                        Text(
-                            text = " " + stringResource(R.string.net_local_label),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.sp,
-                            color = matrixCyan()
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        Text(
-                            text = stringResource(R.string.net_rpc_label) + " ",
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 9.sp,
-                            color = matrixYellow()
-                        )
-                    }
-                }
-            }
-            
-            // Transfer progress
-            if (transferProgress > 0 && transferProgress < 100) {
-                TerminalBox(title = stringResource(R.string.net_transfer)) {
-                    val progressBlocks = (transferProgress / 100f * 30).toInt()
-                    Text(
-                        text = "SYNCING: [${"▓".repeat(progressBlocks)}${"░".repeat(30 - progressBlocks)}] $transferProgress%",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        color = matrixYellow()
-                    )
-                }
-            }
-            
-            // Memory stats
-            TerminalBox(title = stringResource(R.string.net_memory_allocation)) {
-                Text(
-                    text = "TOTAL_CLUSTER_RAM: ${totalConnectedRam}MB",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 11.sp,
-                    color = matrixGreen()
+                ModelAllocationCard(
+                    totalLayers = modelLayerCount,
+                    modelSizeMB = modelSizeMB,
+                    masterLayers = masterLayers,
+                    rpcLayers = rpcLayerCount,
+                    masterShare = masterShare,
+                    rpcShare = rpcShare
                 )
-                Text(
-                    text = "MASTER_ALLOCATION: ${masterRamMB}MB",
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 10.sp,
-                    color = matrixDarkGreen()
-                )
-                workers.forEachIndexed { i, w ->
-                    Text(
-                        text = "WORKER_${i}_ALLOC:   ${w.availableRamMB}MB",
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = matrixDarkGreen()
-                    )
-                }
             }
-            
-            // Server Launch Command
-            if (lastCommand != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                TerminalBox(title = "LAUNCH_COMMAND") {
-                    Text(
-                        text = lastCommand!!,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp,
-                        color = matrixCyan()
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(8.dp))
-            
-            // Control buttons
-            TerminalBox(title = stringResource(R.string.net_controls)) {
-                Button(
-                    onClick = {
-                        val intent = Intent(context, DistributedMasterLlamaService::class.java).apply {
-                            action = DistributedMasterLlamaService.ACTION_STOP
-                        }
-                        context.startService(intent)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = matrixRed().copy(alpha = 0.3f),
-                        contentColor = matrixRed()
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(R.string.net_terminate_server),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp
-                    )
-                }
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                if (mode == DistributedMode.WORKER && isRunning) {
-                    Button(
-                        onClick = {
-                            DistributedService.stopWorker(context)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = matrixYellow().copy(alpha = 0.3f),
-                            contentColor = matrixYellow()
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            stringResource(R.string.net_stop_rpc),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-                
-                OutlinedButton(
-                    onClick = {
-                        DistributedService.clearWorkers()
-                    },
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = matrixDarkGreen()
-                    ),
-                    border = ButtonDefaults.outlinedButtonBorder.copy(
-                        brush = androidx.compose.ui.graphics.SolidColor(matrixDarkGreen())
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        stringResource(R.string.net_clear_workers),
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp
-                    )
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(16.dp))
+            if (transferProgress in 1..99) TransferCard(transferProgress)
+            ClusterMemoryCard(masterRamMB, totalClusterRam, workers)
+            RpcLogsCard(rpcLogs)
+            if (!lastCommand.isNullOrBlank()) CommandCard(lastCommand.orEmpty())
+            ControlsCard(
+                context = context,
+                mode = mode,
+                isRunning = isRunning,
+                onAction = { walkthroughTargets?.recordEvent("distributed.topology") }
+            )
         }
     }
 }
 
 @Composable
-private fun TerminalBox(
-    title: String,
-    content: @Composable ColumnScope.() -> Unit
+private fun RuntimeStatusCard(
+    serverState: ServerState,
+    mode: DistributedMode,
+    inferenceRunning: Boolean
 ) {
+    val (status, tint) = when (serverState) {
+        is ServerState.Running -> stringResource(R.string.net_status_online) to MaterialTheme.colorScheme.secondary
+        is ServerState.Loading -> stringResource(R.string.net_status_loading) to MaterialTheme.colorScheme.tertiary
+        is ServerState.Starting -> stringResource(R.string.net_status_init) to MaterialTheme.colorScheme.tertiary
+        is ServerState.Error -> stringResource(R.string.net_status_error) to MaterialTheme.colorScheme.error
+        ServerState.Stopped -> stringResource(R.string.net_status_offline) to MaterialTheme.colorScheme.error
+    }
+    AppSectionCard {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NodeIcon(androidx.compose.material.icons.Icons.Default.Router, tint)
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = stringResource(R.string.net_inference_server),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = status,
+                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                    color = tint
+                )
+                Text(
+                    text = stringResource(R.string.net_mode, stringResource(when (mode) {
+                        DistributedMode.MASTER -> R.string.dist_master_mode
+                        DistributedMode.WORKER -> R.string.dist_worker_mode
+                        DistributedMode.NONE -> R.string.sd_dist_disabled
+                    })),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (inferenceRunning) {
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Text(
+                        text = stringResource(R.string.net_processing),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TopologyGraphCard(
+    workers: List<WorkerInfo>,
+    isRunning: Boolean,
+    masterRamMB: Int,
+    masterShare: Int,
+    masterLayers: Int,
+    modelSizeMB: Long,
+    totalClusterRam: Int
+) {
+    AppSectionCard {
+        AppSectionTitle(
+            title = stringResource(R.string.worker_topology_graph_title),
+            supporting = stringResource(R.string.worker_topology_graph_subtitle)
+        )
+        TopologyNodeCard(
+            icon = androidx.compose.material.icons.Icons.Default.Router,
+            title = stringResource(R.string.worker_topology_master_name),
+            endpoint = stringResource(R.string.worker_topology_master_endpoint),
+            status = if (isRunning) stringResource(R.string.net_status_online)
+            else stringResource(R.string.net_status_offline),
+            statusColor = if (isRunning) MaterialTheme.colorScheme.secondary
+            else MaterialTheme.colorScheme.error,
+            metrics = stringResource(
+                R.string.worker_topology_master_metrics,
+                masterRamMB,
+                masterShare,
+                masterLayers
+            ),
+            detail = null
+        )
+        if (workers.isEmpty()) {
+            AppEmptyTopologyState()
+        } else {
+            ResponsiveTopologyNodes(workers.withIndex().toList()) { (index, worker) ->
+                Column {
+                    TopologyConnector(workerStatus(worker))
+                    WorkerNodeCard(index, worker, modelSizeMB, totalClusterRam)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppEmptyTopologyState() {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .border(1.dp, matrixBorder(), RoundedCornerShape(4.dp))
-            .background(matrixBackgroundSecondary())
-    ) {
-        // Title bar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(matrixBorder().copy(alpha = 0.5f))
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Fake terminal buttons
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(matrixRed().copy(alpha = 0.7f))
-                )
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(matrixYellow().copy(alpha = 0.7f))
-                )
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(matrixGreen().copy(alpha = 0.7f))
-                )
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = "// $title",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.sp,
-                color = matrixDarkGreen()
+            .padding(top = 8.dp)
+            .background(
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                AppChromeDefaults.CompactShape
             )
-        }
-        
-        // Content
-        Column(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-            content = content
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.worker_topology_no_workers_title),
+            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+        )
+        Text(
+            text = stringResource(R.string.worker_topology_no_workers_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
+
+@Composable
+private fun WorkerNodeCard(
+    index: Int,
+    worker: WorkerInfo,
+    modelSizeMB: Long,
+    totalClusterRam: Int
+) {
+    val status = workerStatus(worker)
+    val statusText = stringResource(status.stringRes)
+    val statusColor = when (status) {
+        RpcWorkerStatus.ONLINE -> MaterialTheme.colorScheme.secondary
+        RpcWorkerStatus.CONNECTING -> MaterialTheme.colorScheme.tertiary
+        RpcWorkerStatus.FAILED -> MaterialTheme.colorScheme.error
+        RpcWorkerStatus.UNKNOWN, RpcWorkerStatus.NOT_SELECTED -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val share = if (totalClusterRam > 0 && worker.isConnected) {
+        (worker.availableRamMB.toFloat() / totalClusterRam * 100f).toInt().coerceIn(0, 100)
+    } else 0
+    val estimatedRam = if (worker.realRamUsageMB == null && modelSizeMB > 0L && share > 0) {
+        "~${(share / 100f * modelSizeMB).toInt()} MB"
+    } else null
+    val ramDetail = worker.realRamUsageMB?.let { value ->
+        stringResource(R.string.worker_topology_real_ram, formatMegabytes(value))
+    } ?: estimatedRam?.let { value ->
+        stringResource(R.string.worker_topology_estimated_ram, value)
+    } ?: stringResource(R.string.worker_topology_estimated_ram, "—")
+    val layers = worker.assignedLayers?.let { range ->
+        if (range.first == range.last) range.first.toString() else "${range.first}–${range.last}"
+    } ?: "—"
+    val identifier = worker.savedWorkerId?.let {
+        stringResource(R.string.worker_topology_saved_identifier, it)
+    } ?: stringResource(R.string.worker_topology_derived_identifier)
+    val lastConfirmed = worker.lastConfirmedAtMs?.let {
+        DateUtils.getRelativeTimeSpanString(it, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS)
+            .toString()
+    }
+    val details = buildList {
+        add(stringResource(R.string.worker_topology_layers, layers))
+        add(stringResource(R.string.worker_topology_identifier) + ": " + identifier)
+        lastConfirmed?.let { add(stringResource(R.string.worker_topology_last_confirmed, it)) }
+        worker.statusDetail?.takeIf { it.isNotBlank() }?.let {
+            add(stringResource(R.string.worker_topology_status_detail, it.take(160)))
+        }
+    }.joinToString("\n")
+    TopologyNodeCard(
+        icon = androidx.compose.material.icons.Icons.Default.Memory,
+        title = stringResource(R.string.worker_topology_worker_name, index + 1, worker.deviceName),
+        endpoint = "${worker.ip}:${worker.port}",
+        status = statusText,
+        statusColor = statusColor,
+        metrics = stringResource(
+            R.string.worker_topology_metrics,
+            worker.availableRamMB,
+            share,
+            ramDetail
+        ),
+        detail = details
+    )
+}
+
+@Composable
+private fun TopologyNodeCard(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    endpoint: String,
+    status: String,
+    statusColor: Color,
+    metrics: String,
+    detail: String?
+) {
+    MediaTopologyNode(
+        title = title,
+        status = status,
+        fields = buildList {
+            add(stringResource(R.string.worker_topology_endpoint) to endpoint)
+            add(stringResource(R.string.worker_topology_memory_title) to metrics)
+            detail?.let { add(stringResource(R.string.worker_topology_identifier) to it) }
+        }
+    )
+}
+
+@Composable
+private fun TopologyConnector(status: RpcWorkerStatus) {
+    val color = when (status) {
+        RpcWorkerStatus.ONLINE -> MaterialTheme.colorScheme.secondary
+        RpcWorkerStatus.CONNECTING -> MaterialTheme.colorScheme.tertiary
+        RpcWorkerStatus.FAILED -> MaterialTheme.colorScheme.error
+        RpcWorkerStatus.UNKNOWN, RpcWorkerStatus.NOT_SELECTED -> MaterialTheme.colorScheme.outlineVariant
+    }
+    Canvas(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(28.dp)
+    ) {
+        val x = size.width / 2f
+        drawLine(
+            color = color,
+            start = Offset(x, 0f),
+            end = Offset(x, size.height),
+            strokeWidth = 2.dp.toPx(),
+            cap = StrokeCap.Round
+        )
+        drawCircle(color = color, radius = 4.dp.toPx(), center = Offset(x, size.height / 2f))
+    }
+}
+
+@Composable
+private fun ModelAllocationCard(
+    totalLayers: Int,
+    modelSizeMB: Long,
+    masterLayers: Int,
+    rpcLayers: Int,
+    masterShare: Int,
+    rpcShare: Int
+) {
+    val masterRatio = if (totalLayers > 0) masterLayers.toFloat() / totalLayers else 0f
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.worker_topology_model_title))
+        Text(
+            text = stringResource(
+                R.string.worker_topology_model_metrics,
+                totalLayers,
+                modelSizeMB,
+                masterLayers,
+                rpcLayers
+            ),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        LinearProgressIndicator(
+            progress = { masterRatio.coerceIn(0f, 1f) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(12.dp)
+                .clip(RoundedCornerShape(999.dp)),
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.tertiaryContainer
+        )
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                text = stringResource(R.string.worker_topology_allocation_master, masterShare),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = stringResource(R.string.worker_topology_allocation_workers, rpcShare),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.tertiary
+            )
+        }
+    }
+}
+
+@Composable
+private fun TransferCard(progress: Int) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.worker_topology_transfer_title))
+        LinearProgressIndicator(
+            progress = { progress.coerceIn(0, 100) / 100f },
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.tertiary
+        )
+        Text(
+            text = stringResource(R.string.worker_topology_transfer_progress, progress),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun ClusterMemoryCard(
+    masterRamMB: Int,
+    totalClusterRam: Int,
+    workers: List<WorkerInfo>
+) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.worker_topology_memory_title))
+        AppInfoRow(
+            label = stringResource(R.string.worker_topology_cluster_memory),
+            value = "$totalClusterRam MB",
+            highlight = true
+        )
+        AppInfoRow(
+            label = stringResource(R.string.worker_topology_master_memory),
+            value = "$masterRamMB MB"
+        )
+        workers.forEachIndexed { index, worker ->
+            AppInfoRow(
+                label = stringResource(R.string.worker_topology_worker_memory, index + 1),
+                value = "${worker.availableRamMB} MB"
+            )
+        }
+    }
+}
+
+@Composable
+private fun RpcLogsCard(rpcLogs: List<String>) {
+    val visibleLogs = rpcLogs.takeLast(MAX_VISIBLE_RPC_LOGS)
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.worker_topology_logs_title))
+        if (visibleLogs.isEmpty()) {
+            Text(
+                text = stringResource(R.string.worker_topology_logs_empty),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            Text(
+                text = stringResource(R.string.worker_topology_logs_bound, visibleLogs.size),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            SelectionContainer {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState())
+                        .clip(AppChromeDefaults.CompactShape)
+                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, AppChromeDefaults.CompactShape)
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = visibleLogs.joinToString("\n").take(20_000),
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommandCard(command: String) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.worker_topology_command_title))
+        SelectionContainer {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+                    .clip(AppChromeDefaults.CompactShape)
+                    .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                    .padding(12.dp)
+            ) {
+                Text(
+                    text = command.take(MAX_VISIBLE_COMMAND_CHARS),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlsCard(
+    context: Context,
+    mode: DistributedMode,
+    isRunning: Boolean,
+    onAction: () -> Unit = {}
+) {
+    AppSectionCard {
+        AppSectionTitle(title = stringResource(R.string.worker_topology_controls_title))
+        Button(
+            onClick = {
+                onAction()
+                context.startService(
+                    Intent(context, DistributedMasterLlamaService::class.java).apply {
+                        action = DistributedMasterLlamaService.ACTION_STOP
+                    }
+                )
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Close, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.net_terminate_server))
+        }
+        if (mode == DistributedMode.WORKER && isRunning) {
+            OutlinedButton(
+                onClick = {
+                    onAction()
+                    DistributedService.stopWorker(context)
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.Close, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.net_stop_rpc))
+            }
+        }
+        OutlinedButton(
+            onClick = {
+                onAction()
+                DistributedService.clearWorkers()
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Refresh, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(stringResource(R.string.net_clear_workers))
+        }
+    }
+}
+
+@Composable
+private fun NodeIcon(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color
+) {
+    Surface(
+        modifier = Modifier.size(40.dp),
+        shape = androidx.compose.foundation.shape.CircleShape,
+        color = tint.copy(alpha = 0.14f)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            modifier = Modifier.padding(9.dp),
+            tint = tint
+        )
+    }
+}
+
+private fun workerStatus(worker: WorkerInfo): RpcWorkerStatus = when {
+    worker.isConnected -> RpcWorkerStatus.ONLINE
+    worker.rpcStatus != RpcWorkerStatus.UNKNOWN -> worker.rpcStatus
+    else -> RpcWorkerStatus.UNKNOWN
+}
+
+private val RpcWorkerStatus.stringRes: Int
+    get() = when (this) {
+        RpcWorkerStatus.ONLINE -> R.string.net_status_online
+        RpcWorkerStatus.FAILED -> R.string.net_status_failed
+        RpcWorkerStatus.CONNECTING -> R.string.net_status_connecting
+        RpcWorkerStatus.NOT_SELECTED -> R.string.net_status_not_selected
+        RpcWorkerStatus.UNKNOWN -> R.string.net_status_unknown
+    }
+
+private fun formatMegabytes(value: Float): String =
+    String.format(java.util.Locale.getDefault(), "%.1f MB", value)

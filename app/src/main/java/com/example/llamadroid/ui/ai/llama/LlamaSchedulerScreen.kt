@@ -30,7 +30,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -106,6 +106,8 @@ import com.example.llamadroid.service.supportsSdTxt2Img
 import com.example.llamadroid.ui.components.DraftFloatTextField
 import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.DraftNullableIntTextField
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.text.DateFormat
 import java.time.DayOfWeek
 import java.time.ZoneId
@@ -118,6 +120,7 @@ import org.json.JSONObject
 @Composable
 fun LlamaSchedulerScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val runNowStartedText = stringResource(R.string.llama_scheduler_run_now_started)
     val stopRequestedText = stringResource(R.string.llama_scheduler_stop_requested)
     val database = remember { AppDatabase.getDatabase(context.applicationContext) }
@@ -149,6 +152,7 @@ fun LlamaSchedulerScreen(navController: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = {
                     Column {
                         Text(stringResource(R.string.llama_scheduler_title))
@@ -184,15 +188,24 @@ fun LlamaSchedulerScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(selectedTabIndex = selectedTab) {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.walkthroughTarget("llama.scheduler")
+            ) {
                 Tab(
                     selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
+                    onClick = {
+                        selectedTab = 0
+                        walkthroughTargets?.recordEvent("llama.scheduler")
+                    },
                     text = { Text(stringResource(R.string.llama_scheduler_tasks_tab)) }
                 )
                 Tab(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = {
+                        selectedTab = 1
+                        walkthroughTargets?.recordEvent("llama.scheduler")
+                    },
                     text = { Text(stringResource(R.string.llama_scheduler_logs_tab)) }
                 )
             }

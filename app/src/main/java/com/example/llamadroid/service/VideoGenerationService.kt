@@ -13,6 +13,13 @@ import androidx.documentfile.provider.DocumentFile
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.binary.BinaryRepository
+import com.example.llamadroid.sd.SdLoraConfigurationException
+import com.example.llamadroid.sd.SdVideoComponentRole
+import com.example.llamadroid.sd.SdVideoInputException
+import com.example.llamadroid.sd.SdVideoPrerequisiteException
+import com.example.llamadroid.sd.SdVideoWorkflowException
+import com.example.llamadroid.sd.SdVideoWorkflowErrorCode
+import com.example.llamadroid.sd.activeInOrder
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.DeviceAcceleration
@@ -32,30 +39,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedOutputStream
 import java.io.File
-import com.example.llamadroid.sd.SdLoraSpec
-import com.example.llamadroid.sd.activeInOrder
-import com.example.llamadroid.sd.validateSdLoras
 import java.util.Locale
 import java.io.FileOutputStream
 import kotlin.math.roundToInt
-
-internal fun buildVideoPrompt(config: VideoGenerationConfig): String =
-    (config.resolvedLoras().activeInOrder().map { item ->
-        wanLoraPromptToken(item)
-    } + config.prompt)
-        .filter { it.isNotBlank() }
-        .joinToString(" ")
-
-/**
- * sd.cpp's Wan 2.2 prompt contract uses a dedicated `|high_noise|` marker for
- * adapters that belong only to the high-noise pass.  Keeping this in the
- * prompt, rather than inferring it from the file name, preserves user intent
- * through saved configs and metadata round trips.
- */
-internal fun wanLoraPromptToken(item: SdLoraSpec): String {
-    val marker = if (item.highNoiseOnly) "|high_noise|" else ""
-    return "<lora:$marker${item.promptTokenName}:${item.strength}>"
-}
 
 /**
  * Dedicated foreground service for stable-diffusion.cpp video generation.
@@ -125,6 +111,21 @@ class VideoGenerationService : Service() {
                     ?.let { runCatching { VideoGenerationMode.valueOf(it) }.getOrNull() }
                     ?.let { cancelMode(it, useDistributedStateHolder) }
             }
+            ACTION_RETRY_CONVERSION -> {
+                val useDistributedStateHolder = intent.getBooleanExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, false)
+                val metadata = intent.getStringExtra(EXTRA_METADATA_PATH)
+                    ?.let { GeneratedVideoMetadata.fromFile(File(it)) }
+                if (metadata == null) {
+                    DebugLog.log("[VIDEO-GEN] Missing or unreadable metadata for conversion retry")
+                } else if (hasActiveModeJob(metadata.modeEnum, useDistributedStateHolder)) {
+                    VideoGenerationStateHolder.getForMode(metadata.modeEnum, useDistributedStateHolder).updateState(
+                        VideoGenerationState.Error(getString(R.string.video_gen_error_already_running))
+                    )
+                } else {
+                    ensureForegroundTask()
+                    startConversionRetry(metadata, useDistributedStateHolder)
+                }
+            }
         }
         return START_NOT_STICKY
     }
@@ -172,7 +173,7 @@ class VideoGenerationService : Service() {
                     publishTimeoutForLane(lane, message, event = "foreground_timeout_failed")
                     DebugLog.log("[VIDEO-GEN] ${config.mode} native process exited during foreground timeout: ${e.message}")
                 } else {
-                    val message = e.message ?: getString(R.string.error_generic)
+                    val message = localizeVideoRuntimeError(e)
                     markActivity(config.mode, "failed")
                     DebugLog.log("[VIDEO-GEN] Failed: $message")
                     holder.updateState(VideoGenerationState.Error(message))
@@ -184,6 +185,86 @@ class VideoGenerationService : Service() {
                 modeJobs.remove(lane)
                 clearTimedOutLane(lane)
                 clearDiagnostics(config.mode)
+                cleanupAfterWork()
+            }
+        }
+    }
+
+    /** Retry only the portable conversion for a completed native artifact. */
+    private fun startConversionRetry(
+        metadata: GeneratedVideoMetadata,
+        useDistributedStateHolder: Boolean
+    ) {
+        val mode = metadata.modeEnum
+        val lane = laneFor(mode, useDistributedStateHolder)
+        val holder = VideoGenerationStateHolder.getForMode(mode, useDistributedStateHolder)
+        ensureWakeLockHeld()
+        markActivity(mode, "conversion-retry")
+        ensureStallMonitorRunning()
+        modeJobs[lane] = serviceScope.launch {
+            try {
+                val nativeFile = File(metadata.nativeOutputPath ?: metadata.aviPath)
+                if (!nativeFile.exists()) {
+                    throw IllegalStateException(getString(R.string.video_runtime_native_output_missing))
+                }
+                val metadataFile = File(metadata.metadataPath)
+                val outputFile = File(metadata.mp4Path).apply {
+                    parentFile?.mkdirs()
+                }
+                val nativeFormat = com.example.llamadroid.sd.SdVideoNativeOutputFormat.entries
+                    .firstOrNull { it.name.equals(metadata.nativeOutputFormat, ignoreCase = true) }
+                    ?: com.example.llamadroid.sd.SdVideoNativeOutputFormat.AVI
+                val outputFormat = com.example.llamadroid.sd.SdVideoOutputFormat.entries
+                    .firstOrNull { it.name.equals(metadata.outputFormat, ignoreCase = true) }
+                    ?: com.example.llamadroid.sd.SdVideoOutputFormat.MP4
+                val audioCodec = metadata.audioCodec?.let { raw ->
+                    com.example.llamadroid.sd.SdVideoAudioCodec.entries
+                        .firstOrNull { it.name.equals(raw, ignoreCase = true) }
+                }
+                val status = getString(R.string.video_runtime_status_converting, outputFormat.name)
+                holder.updateState(VideoGenerationState.Converting(0.8f, status))
+                updateNotification(status, 0.8f)
+                val conversion = convertNativeOutput(
+                    inputNative = nativeFile,
+                    audioSidecar = metadata.audioSidecarPath?.let(::File)?.takeIf { it.isFile }
+                        ?: findVideoAudioSidecar(nativeFile),
+                    output = outputFile,
+                    nativeFormat = nativeFormat,
+                    outputFormat = outputFormat,
+                    audioCodec = audioCodec,
+                    mode = mode,
+                    holder = holder,
+                    useDistributedStateHolder = useDistributedStateHolder,
+                    recoveryEnabled = true
+                )
+                var updated = metadata.copy(
+                    nativeOutputPath = nativeFile.absolutePath,
+                    conversionAttempted = conversion.attempted,
+                    conversionRecoveredNative = conversion.recoveredNative,
+                    conversionWarning = conversion.warning
+                )
+                updated.writeToFile(metadataFile)
+                val exported = exportArtifacts(updated, metadataFile)
+                updated = exported.first
+                updated.writeToFile(metadataFile)
+                val warning = listOfNotNull(conversion.warning, exported.second)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" ")
+                    .ifBlank { null }
+                holder.updateState(VideoGenerationState.Complete(updated, warning))
+                completeForegroundTask(getString(R.string.video_gen_notification_complete))
+            } catch (cancelled: CancellationException) {
+                DebugLog.log("[VIDEO-GEN] Conversion retry cancelled: ${cancelled.message}")
+                holder.reset()
+                dismissForegroundTask()
+            } catch (error: Exception) {
+                val message = localizeVideoRuntimeError(error)
+                DebugLog.log("[VIDEO-GEN] Conversion retry failed: $message")
+                holder.updateState(VideoGenerationState.Error(message))
+                failForegroundTask(message)
+            } finally {
+                modeJobs.remove(lane)
+                clearDiagnostics(mode)
                 cleanupAfterWork()
             }
         }
@@ -235,11 +316,11 @@ class VideoGenerationService : Service() {
             }
         }
 
-        val outputAvi = File(config.outputAviPath).apply {
+        val outputAvi = File(config.resolvedNativeOutputPath()).apply {
             parentFile?.mkdirs()
             if (exists()) delete()
         }
-        val outputMp4 = File(config.outputMp4Path).apply {
+        val outputMp4 = File(config.resolvedPortableOutputPath()).apply {
             parentFile?.mkdirs()
             if (exists()) delete()
         }
@@ -247,6 +328,17 @@ class VideoGenerationService : Service() {
             parentFile?.mkdirs()
             if (exists()) delete()
         }
+
+        val activeVideoLoras = config.resolvedLoras().activeInOrder()
+        com.example.llamadroid.sd.validateSdLoras(
+            activeVideoLoras,
+            requireReadableFiles = true
+        )
+        // The pinned native parser accepts absolute prompt paths. This plan
+        // keeps every adapter in its original directory and still gives the
+        // builder one singular --lora-model-dir value.
+        val loraStaging = VideoLoraStagingPlan.nativeAbsolute(activeVideoLoras)
+        try {
 
         holder.updateState(
             VideoGenerationState.Generating(
@@ -264,122 +356,18 @@ class VideoGenerationService : Service() {
             candidateCapabilities: SdBinaryCapabilities?
         ): File {
             if (outputAvi.exists()) outputAvi.delete()
-            val requiredFlags = mutableSetOf<String>()
-
-            fun requireFlag(flag: String) {
-                if (candidateCapabilities != null &&
-                    candidateCapabilities != SdBinaryCapabilities.ALLOW_ALL &&
-                    !candidateCapabilities.supports(flag)
-                ) {
-                    requiredFlags += flag
-                }
+            if (config.mode == VideoGenerationMode.IMG2VID && config.resolvedVideoInputs().initImagePath.isNullOrBlank()) {
+                throw IllegalArgumentException(getString(R.string.video_gen_error_input_image_required))
             }
-
-            val args = mutableListOf(
-                candidateBinary.absolutePath,
-                "-M", "vid_gen",
-                "--diffusion-model", config.diffusionModelPath,
-                "--prompt", buildVideoPrompt(config)
-            )
-
-            val videoLoras = config.resolvedLoras().also {
-                validateSdLoras(it, requireReadableFiles = true)
-            }
-            val loraDirectories = videoLoras
-                .activeInOrder()
-                .mapNotNull { File(it.path).parent?.takeIf { parent -> parent.isNotBlank() } }
-                .distinct()
-            if (loraDirectories.isNotEmpty()) {
-                requireFlag("--lora-model-dir")
-                loraDirectories.forEach { directory ->
-                    args.addAll(listOf("--lora-model-dir", directory))
-                }
-                config.loraApplyMode?.let { mode ->
-                    requireFlag("--lora-apply-mode")
-                    args.addAll(listOf("--lora-apply-mode", mode.cliName))
-                }
-            }
-
-            if (config.negativePrompt.isNotBlank()) {
-                args.addAll(listOf("-n", config.negativePrompt))
-            }
-            args.addAll(
-                listOf(
-                    "--sampling-method", config.samplingMethod.cliName,
-                    "--video-frames", config.videoFrames.toString(),
-                    "--fps", config.fps.toString(),
-                    "--width", config.width.toString(),
-                    "--height", config.height.toString(),
-                    "--steps", config.steps.toString(),
-                    "--cfg-scale", config.cfgScale.toString(),
-                    "-o", outputAvi.absolutePath,
-                    "-t", config.threads.toString(),
-                    "-v"
+            val args = try {
+                buildVideoCommandArgs(
+                    config = config.copy(nativeOutputPath = outputAvi.absolutePath),
+                    executablePath = candidateBinary.absolutePath,
+                    binaryCapabilities = candidateCapabilities,
+                    loraStaging = loraStaging
                 )
-            )
-            config.scheduler?.let { scheduler ->
-                requireFlag("--scheduler")
-                args.addAll(listOf("--scheduler", scheduler.cliName))
-            }
-            config.flowShift?.let { flowShift ->
-                requireFlag("--flow-shift")
-                args.addAll(listOf("--flow-shift", flowShift.toString()))
-            }
-            config.cacheMode?.let { args.addAll(listOf("--cache-mode", it.cliName)) }
-            if (config.cacheOption.isNotBlank()) {
-                args.addAll(listOf("--cache-option", config.cacheOption))
-            }
-            if (config.scmMask.isNotBlank()) {
-                args.addAll(listOf("--scm-mask", config.scmMask))
-            }
-            config.scmPolicy?.let { args.addAll(listOf("--scm-policy", it.cliName)) }
-            if (config.useT5xxl && !config.t5xxlPath.isNullOrBlank()) {
-                args.addAll(listOf("--t5xxl", config.t5xxlPath))
-            }
-            if (config.useVae && !config.vaePath.isNullOrBlank()) {
-                args.addAll(listOf("--vae", config.vaePath))
-            }
-            if (config.mode == VideoGenerationMode.IMG2VID) {
-                val initImagePath = config.initImagePath
-                    ?: throw IllegalArgumentException(getString(R.string.video_gen_error_input_image_required))
-                args.addAll(listOf("--init-img", initImagePath))
-            }
-            if (config.vaeTiling) {
-                args.add("--vae-tiling")
-                if (config.vaeTileSize.isNotBlank()) {
-                    args.addAll(listOf("--vae-tile-size", config.vaeTileSize))
-                }
-            }
-            if (config.diffusionFa) {
-                args.add("--diffusion-fa")
-            }
-            if (config.diffusionConvDirect) args.add("--diffusion-conv-direct")
-            if (config.vaeConvDirect) args.add("--vae-conv-direct")
-            if (config.mmap) {
-                args.add("--mmap")
-            }
-            if (!config.distributedRuntime.enabled) {
-                appendLocalSdBackendArgs(
-                    args = args,
-                    paramsBackendMode = config.sdParamsBackendMode,
-                    paramsBackendSpec = config.sdParamsBackendSpec,
-                    runtimeBackendMode = effectiveSdRuntimeBackendModeForBinary(candidateBinary, config.sdRuntimeBackendMode),
-                    maxVramCpuGiB = effectiveSdMaxVramCpuGiBForBinary(candidateBinary, config.maxVramCpuGiB),
-                    flagSupported = { flag ->
-                        candidateCapabilities == null ||
-                            candidateCapabilities == SdBinaryCapabilities.ALLOW_ALL ||
-                            candidateCapabilities.supports(flag)
-                    }
-                )
-            }
-            try {
-                appendSdDistributedArgs(args, config.distributedRuntime, candidateCapabilities)
-                appendSdCustomFlags(args, config.customFlags)
             } catch (error: SdDisallowedDistributedFlagException) {
                 throw IllegalStateException(getString(R.string.sd_dist_error_row_split_not_supported))
-            }
-            if (requiredFlags.isNotEmpty()) {
-                throw SdUnsupportedFlagsException(requiredFlags.toList().sorted())
             }
 
             DebugLog.log("[VIDEO-GEN] Running command: ${args.joinToString(" ")}")
@@ -505,7 +493,7 @@ class VideoGenerationService : Service() {
                 etaTickerJob.cancel()
             }
 
-            return resolveGeneratedAvi(outputAvi)
+            return resolveGeneratedNativeOutput(outputAvi)
         }
 
         val generatedAvi = runCatching {
@@ -527,30 +515,41 @@ class VideoGenerationService : Service() {
             }
         }
         markActivity(config.mode, "converting")
-        holder.updateState(VideoGenerationState.Converting(0.8f, getString(R.string.video_gen_status_converting)))
-        updateNotification(getString(R.string.video_gen_status_converting), 0.8f)
+        val conversionStatus = getString(
+            R.string.video_runtime_status_converting,
+            config.outputFormat.name
+        )
+        holder.updateState(VideoGenerationState.Converting(0.8f, conversionStatus))
+        updateNotification(conversionStatus, 0.8f)
 
-        convertAviToMp4(
-            inputAvi = generatedAvi,
-            outputMp4 = outputMp4,
+        val audioSidecar = findVideoAudioSidecar(generatedAvi)
+        val conversion = convertNativeOutput(
+            audioSidecar = audioSidecar,
+            inputNative = generatedAvi,
+            output = outputMp4,
+            nativeFormat = config.nativeOutputFormat,
+            outputFormat = config.outputFormat,
+            audioCodec = config.audioCodec,
             mode = config.mode,
             holder = holder,
-            useDistributedStateHolder = useDistributedStateHolder
+            useDistributedStateHolder = useDistributedStateHolder,
+            recoveryEnabled = config.conversionRecoveryEnabled
         )
 
+        val resolvedVideoComponents = config.resolvedVideoComponents()
         var metadata = GeneratedVideoMetadata(
             mode = config.mode.folderName,
             prompt = config.prompt,
             negativePrompt = config.negativePrompt,
             diffusionModelPath = config.diffusionModelPath,
             diffusionModelName = File(config.diffusionModelPath).name,
-            vaeEnabled = config.useVae && !config.vaePath.isNullOrBlank(),
-            vaePath = config.vaePath,
-            vaeName = config.vaePath?.let { File(it).name },
-            t5xxlEnabled = config.useT5xxl && !config.t5xxlPath.isNullOrBlank(),
-            t5xxlPath = config.t5xxlPath,
-            t5xxlName = config.t5xxlPath?.let { File(it).name },
-            initImagePath = config.initImagePath,
+            vaeEnabled = resolvedVideoComponents.vaePath != null,
+            vaePath = resolvedVideoComponents.vaePath,
+            vaeName = resolvedVideoComponents.vaePath?.let { File(it).name },
+            t5xxlEnabled = resolvedVideoComponents.t5xxlPath != null,
+            t5xxlPath = resolvedVideoComponents.t5xxlPath,
+            t5xxlName = resolvedVideoComponents.t5xxlPath?.let { File(it).name },
+            initImagePath = config.resolvedVideoInputs().initImagePath,
             videoFrames = config.videoFrames,
             fps = config.fps,
             width = config.width,
@@ -585,7 +584,31 @@ class VideoGenerationService : Service() {
             metadataPath = metadataFile.absolutePath,
             conditioningDurationMs = stageTimings.conditioningMs,
             samplingDurationMs = stageTimings.samplingMs,
-            decodingDurationMs = stageTimings.decodingMs
+            decodingDurationMs = stageTimings.decodingMs,
+            videoFamily = config.videoFamily?.storedValue,
+            videoVariant = config.videoVariant,
+            workflow = config.resolvedVideoWorkflow().storedValue,
+            videoComponents = resolvedVideoComponents,
+            videoInputs = config.resolvedVideoInputs(),
+            useTae = config.useTae || resolvedVideoComponents.taePath != null && resolvedVideoComponents.vaePath == null,
+            taePath = resolvedVideoComponents.taePath,
+            taeName = resolvedVideoComponents.taePath?.let { File(it).name },
+            seed = config.seed,
+            highNoiseSteps = config.highNoiseSteps,
+            highNoiseCfgScale = config.highNoiseCfgScale,
+            highNoiseSamplingMethod = config.highNoiseSamplingMethod,
+            controlStrength = config.controlStrength,
+            vaeTileOverlap = config.vaeTileOverlap,
+            vaeRelativeTileSize = config.vaeRelativeTileSize.takeIf { it.isNotBlank() },
+            hires = config.hires,
+            outputFormat = config.outputFormat.name,
+            nativeOutputFormat = config.nativeOutputFormat.name,
+            nativeOutputPath = generatedAvi.absolutePath,
+            audioCodec = config.audioCodec?.name,
+            conversionAttempted = conversion.attempted,
+            conversionRecoveredNative = conversion.recoveredNative,
+            conversionWarning = conversion.warning,
+            audioSidecarPath = audioSidecar?.absolutePath
         )
         metadata.writeToFile(metadataFile)
 
@@ -599,21 +622,30 @@ class VideoGenerationService : Service() {
             .copy(generationDurationMs = SystemClock.elapsedRealtime() - startedAtMs)
         metadata.writeToFile(metadataFile)
 
-        val warning = exportResult.second
+        val warning = listOfNotNull(conversion.warning, exportResult.second)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+            .ifBlank { null }
         if (!warning.isNullOrBlank()) {
             DebugLog.log("[VIDEO-GEN] Export warning: $warning")
         }
 
         metadata to warning
+        } finally {
+            loraStaging.close()
+        }
     }
 
-    private fun resolveGeneratedAvi(expectedFile: File): File {
-        if (expectedFile.exists()) return expectedFile
-        val fallback = expectedFile.parentFile
-            ?.listFiles()
-            ?.filter { it.extension.equals("avi", ignoreCase = true) }
-            ?.maxByOrNull { it.lastModified() }
-        return fallback ?: throw IllegalStateException(getString(R.string.video_gen_error_avi_missing))
+    private fun resolveGeneratedNativeOutput(expectedFile: File): File {
+        if (expectedFile.isFile && expectedFile.length() > 0L) return expectedFile
+        // Native may normalize the requested extension. Only inspect this run's basename;
+        // picking the newest file from the gallery could report an earlier run as success.
+        val candidates = listOf("avi", "webm", "webp").flatMap { extension ->
+            listOf(File(expectedFile.parentFile, "${expectedFile.nameWithoutExtension}.$extension"),
+                File(expectedFile.parentFile, "${expectedFile.name}.$extension"))
+        }
+        return candidates.firstOrNull { it.isFile && it.length() > 0L }
+            ?: throw IllegalStateException(getString(R.string.video_runtime_native_output_missing))
     }
 
     private fun buildVideoSamplingStatus(snapshot: SdProgressSnapshot): String {
@@ -651,26 +683,127 @@ class VideoGenerationService : Service() {
 
     private fun formatStageDuration(durationMs: Long): String = "${durationMs / 1_000.0}s"
 
-    private suspend fun convertAviToMp4(
-        inputAvi: File,
-        outputMp4: File,
+    private fun localizeVideoRuntimeError(error: Throwable): String = when (error) {
+        is SdUnsupportedFlagsException -> getString(
+            R.string.imagegen_error_binary_missing_flags,
+            error.flags.joinToString(", ")
+        )
+        is SdUnsupportedModesException -> getString(
+            R.string.video_runtime_unsupported_mode,
+            error.modes.joinToString(", ")
+        )
+        is SdVideoPrerequisiteException -> buildList {
+            error.result.missingComponents.forEach { role ->
+                add(getString(R.string.video_runtime_missing_component, videoComponentLabel(role)))
+            }
+            error.result.missingInputs.forEach { role ->
+                add(getString(R.string.video_runtime_missing_input, videoInputLabel(role)))
+            }
+        }.joinToString(" ").ifBlank { getString(R.string.error_generic) }
+        is SdVideoWorkflowException -> when (error.code) {
+            SdVideoWorkflowErrorCode.NATIVE_WORKFLOW_UNSUPPORTED ->
+                getString(R.string.video_runtime_native_workflow_unsupported)
+            else -> getString(R.string.video_runtime_invalid_workflow)
+        }
+        is SdVideoInputException -> when (error.code) {
+            SdVideoInputException.Code.INVALID_NUMERIC_VALUE ->
+                getString(R.string.video_gen_error_invalid_number, error.detail.orEmpty())
+            SdVideoInputException.Code.FRAMES_MUST_BE_VIDEO ->
+                getString(R.string.video_output_requires_two_frames)
+            SdVideoInputException.Code.MODE_REQUIRES_INIT_IMAGE ->
+                getString(R.string.video_runtime_input_image_required)
+            SdVideoInputException.Code.REFERENCE_AUDIO_MISMATCH ->
+                getString(R.string.video_runtime_reference_audio_mismatch)
+            SdVideoInputException.Code.MINIMAX_REFERENCES_CONFLICT_WITH_KEYFRAMES ->
+                getString(R.string.video_runtime_minimax_reference_keyframe_conflict)
+            SdVideoInputException.Code.MINIMAX_CONTROL_VIDEO_UNSUPPORTED ->
+                getString(R.string.video_runtime_minimax_control_video_unsupported)
+        }
+        is SdLoraConfigurationException -> getString(
+            R.string.video_runtime_invalid_lora,
+            error.issues.joinToString(", ") { issue -> issue.code.name.lowercase(Locale.US) }
+        )
+        else -> error.message ?: getString(R.string.error_generic)
+    }
+
+    private fun videoInputLabel(role: com.example.llamadroid.sd.SdVideoInputRole): String = getString(when (role) {
+        com.example.llamadroid.sd.SdVideoInputRole.INIT_IMAGE -> R.string.video_input_first_image
+        com.example.llamadroid.sd.SdVideoInputRole.END_IMAGE -> R.string.video_input_last_image
+        com.example.llamadroid.sd.SdVideoInputRole.CONTROL_IMAGE -> R.string.video_input_control_image
+        com.example.llamadroid.sd.SdVideoInputRole.CONTROL_VIDEO -> R.string.video_input_control_video
+        com.example.llamadroid.sd.SdVideoInputRole.REFERENCE_IMAGE -> R.string.video_input_reference_images
+        com.example.llamadroid.sd.SdVideoInputRole.REFERENCE_VIDEO -> R.string.video_input_reference_videos
+        com.example.llamadroid.sd.SdVideoInputRole.REFERENCE_VIDEO_AUDIO -> R.string.video_input_reference_video_audio
+        com.example.llamadroid.sd.SdVideoInputRole.REFERENCE_AUDIO -> R.string.video_input_reference_audio
+    })
+
+    private fun videoComponentLabel(role: SdVideoComponentRole): String = when (role) {
+        SdVideoComponentRole.DIFFUSION_MODEL -> getString(R.string.video_runtime_component_diffusion_model)
+        SdVideoComponentRole.FULL_MODEL -> getString(R.string.video_runtime_component_full_model)
+        SdVideoComponentRole.HIGH_NOISE_DIFFUSION_MODEL -> getString(R.string.video_runtime_component_high_noise_diffusion_model)
+        SdVideoComponentRole.VAE -> getString(R.string.video_runtime_component_vae)
+        SdVideoComponentRole.TAE -> getString(R.string.video_runtime_component_tae)
+        SdVideoComponentRole.T5XXL -> getString(R.string.video_runtime_component_t5xxl)
+        SdVideoComponentRole.LLM -> getString(R.string.video_runtime_component_llm)
+        SdVideoComponentRole.LLM_VISION -> getString(R.string.video_runtime_component_llm_vision)
+        SdVideoComponentRole.AUDIO_VAE -> getString(R.string.video_runtime_component_audio_vae)
+        SdVideoComponentRole.EMBEDDINGS_CONNECTORS -> getString(R.string.video_runtime_component_embeddings_connectors)
+        SdVideoComponentRole.MOTION_MODULE -> getString(R.string.video_runtime_component_motion_module)
+        SdVideoComponentRole.CLIP_VISION -> getString(R.string.video_runtime_component_clip_vision)
+        SdVideoComponentRole.CONTROL_NET -> getString(R.string.video_runtime_component_control_net)
+        SdVideoComponentRole.LORA -> "LoRA"
+        SdVideoComponentRole.HIRES_UPSCALER -> getString(R.string.video_runtime_component_hires_upscaler)
+    }
+
+    private data class VideoConversionResult(
+        val attempted: Boolean,
+        val recoveredNative: Boolean,
+        val warning: String? = null
+    )
+
+    private suspend fun convertNativeOutput(
+        inputNative: File,
+        output: File,
+        audioSidecar: File? = null,
+        nativeFormat: com.example.llamadroid.sd.SdVideoNativeOutputFormat,
+        outputFormat: com.example.llamadroid.sd.SdVideoOutputFormat,
+        audioCodec: com.example.llamadroid.sd.SdVideoAudioCodec?,
         mode: VideoGenerationMode,
         holder: VideoGenerationStateHolder,
-        useDistributedStateHolder: Boolean
-    ) = withContext(Dispatchers.IO) {
+        useDistributedStateHolder: Boolean,
+        recoveryEnabled: Boolean
+    ): VideoConversionResult = withContext(Dispatchers.IO) {
+        // A same-extension request still needs ffmpeg when the user selected
+        // an audio policy (including explicit NONE), otherwise a direct copy
+        // would silently retain or discard the wrong soundtrack. A null
+        // policy intentionally leaves the native artifact untouched.
+        if (nativeFormat.extension == outputFormat.extension && audioCodec == null && audioSidecar == null) {
+            if (inputNative.canonicalFile != output.canonicalFile) {
+                inputNative.copyTo(output, overwrite = true)
+            }
+            return@withContext VideoConversionResult(attempted = false, recoveredNative = false)
+        }
+
         val binaryRepo = BinaryRepository(applicationContext)
         val ffmpegBinary = binaryRepo.getFFmpegBinary()
-            ?: throw IllegalStateException(getString(R.string.video_gen_error_ffmpeg_missing))
+            ?: if (recoveryEnabled) {
+                return@withContext VideoConversionResult(
+                    attempted = true,
+                    recoveredNative = true,
+                    warning = getString(R.string.video_runtime_conversion_recovered)
+                )
+            } else {
+                throw IllegalStateException(getString(R.string.video_gen_error_ffmpeg_missing))
+            }
 
-        val args = listOf(
-            ffmpegBinary.absolutePath,
-            "-y",
-            "-i", inputAvi.absolutePath,
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            outputMp4.absolutePath
-        )
+        val conversionOutput = if (inputNative.canonicalFile == output.canonicalFile) {
+            File(output.parentFile, ".${output.name}.conversion-${System.nanoTime()}.tmp")
+        } else {
+            output
+        }
+        if (conversionOutput.exists()) conversionOutput.delete()
+        val args = buildVideoConversionArgs(ffmpegBinary.absolutePath, inputNative,
+            conversionOutput, outputFormat, audioCodec, audioSidecar)
 
         val processBuilder = ProcessBuilder(args)
             .directory(ffmpegBinary.parentFile)
@@ -678,11 +811,22 @@ class VideoGenerationService : Service() {
             "${ffmpegLibDir.absolutePath}:${binaryRepo.getLibraryDir()}"
 
         val lane = laneFor(mode, useDistributedStateHolder)
-        modeProcesses[lane] = processBuilder.start()
-        val ffmpegProcess = modeProcesses[lane]!!
+        val ffmpegProcess = try {
+            processBuilder.start()
+        } catch (error: Exception) {
+            if (recoveryEnabled && inputNative.exists() && error !is CancellationException) {
+                return@withContext VideoConversionResult(
+                    attempted = true,
+                    recoveredNative = true,
+                    warning = getString(R.string.video_runtime_conversion_recovered)
+                )
+            }
+            throw error
+        }
+        modeProcesses[lane] = ffmpegProcess
         val processLogFile = File(
-            outputMp4.parentFile,
-            "${outputMp4.nameWithoutExtension}.ffmpeg.log"
+            output.parentFile,
+            "${output.nameWithoutExtension}.ffmpeg.log"
         ).apply {
             parentFile?.mkdirs()
             if (exists()) delete()
@@ -698,39 +842,62 @@ class VideoGenerationService : Service() {
                 }
                 tick += 1
                 val progress = (0.80f + (tick.coerceAtMost(12) * 0.01f)).coerceAtMost(0.92f)
+                val status = getString(R.string.video_runtime_status_converting, outputFormat.name)
                 holder.updateState(
-                    VideoGenerationState.Converting(progress, getString(R.string.video_gen_status_converting))
+                    VideoGenerationState.Converting(progress, status)
                 )
-                updateNotification(getString(R.string.video_gen_status_converting), progress)
+                updateNotification(status, progress)
             }
         }
 
-        val exitCode = BufferedOutputStream(FileOutputStream(processLogFile, false)).use { processLog ->
-            val stdoutJob = launch(Dispatchers.IO) {
-                consumeBoundedProcessOutput(
-                    input = ffmpegProcess.inputStream,
-                    rawLogOutput = processLog,
-                    onLogLine = { line -> handleConversionOutput(line, appendToLog = true) },
-                    onProgress = { progress -> handleConversionOutput(progress, appendToLog = false) }
-                )
+        var processCompleted = false
+        val exitCode = try {
+            BufferedOutputStream(FileOutputStream(processLogFile, false)).use { processLog ->
+                val stdoutJob = launch(Dispatchers.IO) {
+                    consumeBoundedProcessOutput(
+                        input = ffmpegProcess.inputStream,
+                        rawLogOutput = processLog,
+                        onLogLine = { line -> handleConversionOutput(line, appendToLog = true) },
+                        onProgress = { progress -> handleConversionOutput(progress, appendToLog = false) }
+                    )
+                }
+                val stderrJob = launch(Dispatchers.IO) {
+                    consumeBoundedProcessOutput(
+                        input = ffmpegProcess.errorStream,
+                        rawLogOutput = processLog,
+                        onLogLine = { line -> handleConversionOutput(line, appendToLog = true) },
+                        onProgress = { progress -> handleConversionOutput(progress, appendToLog = false) }
+                    )
+                }
+                val processExitCode = ffmpegProcess.waitFor()
+                stdoutJob.join()
+                stderrJob.join()
+                processCompleted = true
+                processExitCode
             }
-            val stderrJob = launch(Dispatchers.IO) {
-                consumeBoundedProcessOutput(
-                    input = ffmpegProcess.errorStream,
-                    rawLogOutput = processLog,
-                    onLogLine = { line -> handleConversionOutput(line, appendToLog = true) },
-                    onProgress = { progress -> handleConversionOutput(progress, appendToLog = false) }
-                )
+        } finally {
+            modeProcesses.remove(lane)
+            if (!processCompleted && conversionOutput != output && conversionOutput.exists()) {
+                conversionOutput.delete()
             }
-            val processExitCode = ffmpegProcess.waitFor()
-            stdoutJob.join()
-            stderrJob.join()
-            processExitCode
         }
-        modeProcesses.remove(lane)
-        if (exitCode != 0 || !outputMp4.exists()) {
+        if (exitCode != 0 || !conversionOutput.exists()) {
+            if (conversionOutput != output && conversionOutput.exists()) conversionOutput.delete()
+            if (recoveryEnabled && inputNative.exists()) {
+                if (output.canonicalFile != inputNative.canonicalFile && output.exists()) output.delete()
+                return@withContext VideoConversionResult(
+                    attempted = true,
+                    recoveredNative = true,
+                    warning = getString(R.string.video_runtime_conversion_recovered)
+                )
+            }
             throw IllegalStateException(getString(R.string.video_gen_error_conversion_failed, exitCode))
         }
+        if (conversionOutput != output) {
+            conversionOutput.copyTo(output, overwrite = true)
+            conversionOutput.delete()
+        }
+        VideoConversionResult(attempted = true, recoveredNative = false)
     }
 
     private fun exportArtifacts(
@@ -756,18 +923,32 @@ class VideoGenerationService : Service() {
                 return metadata to getString(R.string.video_gen_warning_output_unavailable)
             }
 
-            val aviDoc = createOrReplaceDocument(modeFolder, metadata.aviPath, "video/x-msvideo")
-            val mp4Doc = createOrReplaceDocument(modeFolder, metadata.mp4Path, "video/mp4")
+            val nativePath = metadata.nativeOutputPath ?: metadata.aviPath
+            val nativeFile = File(nativePath)
+            val outputFile = File(metadata.mp4Path)
+            val nativeDoc = nativeFile.takeIf { it.exists() }?.let {
+                createOrReplaceDocument(modeFolder, it.absolutePath, videoMimeType(it))
+            }
+            val outputDoc = outputFile.takeIf { it.exists() }
+                ?.takeUnless { it.canonicalFile == nativeFile.canonicalFile }
+                ?.let { createOrReplaceDocument(modeFolder, it.absolutePath, videoMimeType(it)) }
+            val audioFile = metadata.audioSidecarPath?.let(::File)?.takeIf { it.isFile }
+            val audioDoc = audioFile?.let { createOrReplaceDocument(modeFolder, it.absolutePath, "audio/wav") }
             val metadataDoc = createOrReplaceDocument(modeFolder, metadataFile.absolutePath, "application/json")
 
             val updatedMetadata = metadata.copy(
-                exportedAviUri = aviDoc?.uri?.toString(),
-                exportedMp4Uri = mp4Doc?.uri?.toString(),
-                exportedMetadataUri = metadataDoc?.uri?.toString()
+                exportedAviUri = nativeDoc?.uri?.toString()
+                    ?.takeIf { nativeFile.extension.equals("avi", ignoreCase = true) },
+                exportedMp4Uri = outputDoc?.uri?.toString()
+                    ?: nativeDoc?.uri?.toString()?.takeIf { outputFile.exists() && outputFile.canonicalFile == nativeFile.canonicalFile },
+                exportedMetadataUri = metadataDoc?.uri?.toString(),
+                exportedNativeUri = nativeDoc?.uri?.toString(),
+                exportedAudioUri = audioDoc?.uri?.toString()
             )
 
-            aviDoc?.uri?.let { copyFileToUri(File(metadata.aviPath), it) }
-            mp4Doc?.uri?.let { copyFileToUri(File(metadata.mp4Path), it) }
+            nativeDoc?.uri?.let { copyFileToUri(nativeFile, it) }
+            outputDoc?.uri?.let { copyFileToUri(outputFile, it) }
+            audioDoc?.uri?.let { audioFile?.let { file -> copyFileToUri(file, it) } }
             metadataDoc?.uri?.let { writeTextToUri(updatedMetadata.toJson().toString(2), it) }
 
             updatedMetadata to null
@@ -781,6 +962,13 @@ class VideoGenerationService : Service() {
         val name = File(sourcePath).name
         parent.findFile(name)?.delete()
         return parent.createFile(mimeType, name)
+    }
+
+    private fun videoMimeType(file: File): String = when (file.extension.lowercase(Locale.US)) {
+        "webm" -> "video/webm"
+        "webp" -> "image/webp"
+        "mp4" -> "video/mp4"
+        else -> "video/x-msvideo"
     }
 
     private fun copyFileToUri(sourceFile: File, uri: Uri) {
@@ -1283,8 +1471,10 @@ class VideoGenerationService : Service() {
 
         private const val ACTION_START_GENERATION = "com.example.llamadroid.action.START_VIDEO_GENERATION"
         private const val ACTION_CANCEL_MODE = "com.example.llamadroid.action.CANCEL_VIDEO_GENERATION"
+        private const val ACTION_RETRY_CONVERSION = "com.example.llamadroid.action.RETRY_VIDEO_CONVERSION"
         private const val EXTRA_CONFIG = "extra_video_generation_config"
         private const val EXTRA_MODE = "extra_video_generation_mode"
+        private const val EXTRA_METADATA_PATH = "extra_video_metadata_path"
         private const val EXTRA_USE_DISTRIBUTED_STATE_HOLDER = "extra_video_generation_use_distributed_holder"
         private const val DIAGNOSTIC_SOURCE = "video_generation"
 
@@ -1309,6 +1499,16 @@ class VideoGenerationService : Service() {
                 putExtra(EXTRA_MODE, mode.name)
                 putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
             }
+
+        fun createRetryConversionIntent(
+            context: Context,
+            metadata: GeneratedVideoMetadata,
+            useDistributedStateHolder: Boolean = false
+        ): Intent = Intent(context, VideoGenerationService::class.java).apply {
+            action = ACTION_RETRY_CONVERSION
+            putExtra(EXTRA_METADATA_PATH, metadata.metadataPath)
+            putExtra(EXTRA_USE_DISTRIBUTED_STATE_HOLDER, useDistributedStateHolder)
+        }
     }
 
     private data class VideoWorkLane(

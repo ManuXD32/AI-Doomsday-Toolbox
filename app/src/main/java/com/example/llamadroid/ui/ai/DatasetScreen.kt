@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,6 +24,7 @@ import androidx.navigation.NavController
 import com.example.llamadroid.data.db.*
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -62,7 +65,8 @@ fun DatasetScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(16.dp)
+                .walkthroughTarget("documents.dataset.tabs"),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // Info card

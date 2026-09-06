@@ -57,6 +57,7 @@ import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.SummaryMarkdownCard
 import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 
@@ -64,6 +65,7 @@ import java.io.File
 @Composable
 fun VideoSumupScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val settingsRepo = remember { SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
@@ -156,6 +158,7 @@ fun VideoSumupScreen(navController: NavController) {
             tempFile.absolutePath
         }
         if (videoPath != null && selectedWhisperPath != null && backendReady) {
+            walkthroughTargets?.recordEvent("documents.summary.input")
             VideoSumupService.startSummarization(
                 context = context,
                 videoPath = videoPath,
@@ -174,6 +177,7 @@ fun VideoSumupScreen(navController: NavController) {
         modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.video_sumup_title)) },
                 navigationIcon = {
                     IconButton(
@@ -381,7 +385,9 @@ fun VideoSumupScreen(navController: NavController) {
             if (selectedVideoString == null) {
                 Button(
                     onClick = { videoPicker.launch(arrayOf("video/*")) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("documents.summary.input"),
                     enabled = !isRunning
                 ) {
                     Icon(Icons.Default.PlayArrow, null)
@@ -389,7 +395,11 @@ fun VideoSumupScreen(navController: NavController) {
                     Text(stringResource(R.string.video_sumup_select_video))
                 }
             } else {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .walkthroughTarget("documents.summary.input")
+                ) {
                     androidx.compose.foundation.layout.Row(modifier = Modifier.padding(16.dp)) {
                         Text(selectedVideoName ?: stringResource(R.string.video_sumup_video_placeholder), modifier = Modifier.weight(1f))
                         IconButton(

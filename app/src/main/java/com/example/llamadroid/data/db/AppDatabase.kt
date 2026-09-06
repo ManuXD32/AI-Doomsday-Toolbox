@@ -155,14 +155,20 @@ class Converters {
         SdDistributedPlacementEntity::class,
         SdDistributedRunEntity::class,
         DownloadTaskEntity::class,
+        ModelSourceEntity::class,
+        ModelProvenanceEntity::class,
+        ModelBundleEntity::class,
+        ModelBundleItemEntity::class,
+        PendingModelArtifactEntity::class,
         SystemStatsSampleEntity::class,
         SystemStatsEventEntity::class
     ], 
-    version = 112,
+    version = 113,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {
+    abstract fun modelLibraryDao(): ModelLibraryDao
     abstract fun modelDao(): ModelDao
     abstract fun chatDao(): ChatDao
     abstract fun systemPromptDao(): SystemPromptDao

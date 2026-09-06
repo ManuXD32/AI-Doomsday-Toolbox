@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -33,7 +34,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -77,7 +78,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.core.content.FileProvider
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
@@ -98,6 +99,8 @@ import com.example.llamadroid.service.OnnxBackgroundRemovalService
 import com.example.llamadroid.service.OnnxBackgroundRemovalState
 import com.example.llamadroid.service.OnnxBackgroundRemovalStateStore
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.AppAdvancedSection
@@ -126,6 +129,7 @@ private val BGR_RESIZE_PRESETS = listOf(256, 384, 512, 768, 1024, 1536, 2048)
 @Composable
 fun OnnxBackgroundRemovalScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
@@ -311,6 +315,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                 preserveSourceNames = preserveNames
             )
         )
+        walkthroughTargets?.recordEvent("image.background.input")
     }
 
     AppPageBackground {
@@ -318,6 +323,7 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.bgr_title)) },
                     navigationIcon = {
                         IconButton(
@@ -335,12 +341,20 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                     .fillMaxSize()
                     .padding(innerPadding)
             ) {
-                    AppScrollableTabRow(selectedTabIndex = selectedTab) {
+                AppScrollableTabRow(selectedTabIndex = selectedTab) {
                     Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text(stringResource(R.string.bgr_tab_remove)) })
                     Tab(selected = selectedTab == 1, onClick = { selectedTab = 1; refreshGallery() }, text = { Text(stringResource(R.string.bgr_tab_gallery)) })
                 }
+                val inputListState = rememberLazyListState()
+                WalkthroughScrollOwner(setOf("image.background.input")) { target ->
+                    if (target == "image.background.input") {
+                        if (selectedTab != 0) selectedTab = 0
+                        inputListState.animateScrollToItem(2)
+                    }
+                }
                 if (selectedTab == 0) {
                     LazyColumn(
+                        state = inputListState,
                         modifier = Modifier.weight(1f),
                         contentPadding = PaddingValues(20.dp),
                         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -419,7 +433,14 @@ fun OnnxBackgroundRemovalScreen(navController: NavController) {
                                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(stringResource(R.string.bgr_inputs_section), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                                        Button(onClick = { picker.launch(arrayOf("image/*")) }, enabled = !isRunning) {
+                                        Button(
+                                            onClick = {
+                                                walkthroughTargets?.recordEvent("image.background.input")
+                                                picker.launch(arrayOf("image/*"))
+                                            },
+                                            enabled = !isRunning,
+                                            modifier = Modifier.walkthroughTarget("image.background.input")
+                                        ) {
                                             Icon(Icons.Default.FolderOpen, contentDescription = null)
                                             Spacer(Modifier.width(8.dp))
                                             Text(stringResource(R.string.bgr_pick_images))

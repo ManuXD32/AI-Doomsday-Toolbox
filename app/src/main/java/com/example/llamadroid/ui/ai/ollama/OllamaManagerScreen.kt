@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai.ollama
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -34,7 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
@@ -47,6 +49,8 @@ import com.example.llamadroid.service.SSHService
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.components.AppStatePanel
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 private enum class ModelCreateMode {
     RemoteApi,
@@ -59,6 +63,7 @@ fun OllamaManagerScreen(
     navController: NavController,
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val database = AppDatabase.getDatabase(context)
     val repository = remember { OllamaRepository(database.ollamaServerDao()) }
     val sshService = remember { SSHService(context) }
@@ -103,17 +108,26 @@ fun OllamaManagerScreen(
         onBack = { navController.popBackStack() },
         actions = {
             if (selectedTab == 0) {
-                IconButton(onClick = { showAddServerDialog = true }) {
+                IconButton(onClick = {
+                    walkthroughTargets?.recordEvent("ollama.models")
+                    showAddServerDialog = true
+                }) {
                     Icon(Icons.Default.Add, contentDescription = stringResource(R.string.ollama_add_server))
                 }
             } else {
                 IconButton(
-                    onClick = { viewModel.refreshSelectedServerModels() },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("ollama.models")
+                        viewModel.refreshSelectedServerModels()
+                    },
                     enabled = uiState.selectedServer != null
                 ) {
                     Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.ollama_refresh_models))
                 }
-                IconButton(onClick = { showModelPullDialog = true }) {
+                IconButton(onClick = {
+                    walkthroughTargets?.recordEvent("ollama.models")
+                    showModelPullDialog = true
+                }) {
                     Icon(Icons.Default.Add, contentDescription = stringResource(R.string.ollama_pull_model_title))
                 }
             }
@@ -124,7 +138,10 @@ fun OllamaManagerScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(selectedTabIndex = selectedTab) {
+            TabRow(
+                selectedTabIndex = selectedTab,
+                modifier = Modifier.walkthroughTarget("ollama.models")
+            ) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
@@ -132,7 +149,10 @@ fun OllamaManagerScreen(
                 )
                 Tab(
                     selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("ollama.models")
+                        selectedTab = 1
+                    },
                     text = { Text(stringResource(R.string.ollama_models)) }
                 )
             }

@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.Manifest
 import android.app.Activity
 import android.content.ClipData
@@ -52,6 +54,7 @@ import com.example.llamadroid.ui.components.ResponsiveActionGroup
 import com.example.llamadroid.ui.components.ResponsiveActionStyle
 import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.AppAdvancedSection
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import java.io.File
@@ -66,6 +69,7 @@ private const val RECORD_PERMISSION_REQUESTED_KEY = "audio_transcription_record_
 @Composable
 fun AudioTranscriptionScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
@@ -446,6 +450,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
             return
         }
         transcriptionUiState = transcriptionUiState.onTranscriptionStarted()
+        walkthroughTargets?.recordEvent("voice.transcription.input")
         settingsRepo.setWhisperLastModelPath(selectedModelPath)
         settingsRepo.setWhisperLastLanguage(selectedLanguage)
         settingsRepo.setWhisperLastTranslate(translateToEnglish)
@@ -500,6 +505,7 @@ fun AudioTranscriptionScreen(navController: NavController) {
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { navController.navigate("settings_whisper") }) {
                         Icon(
                             Icons.Default.Settings,
@@ -555,7 +561,9 @@ fun AudioTranscriptionScreen(navController: NavController) {
 
             // Audio Selection
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .walkthroughTarget("voice.transcription.input"),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {

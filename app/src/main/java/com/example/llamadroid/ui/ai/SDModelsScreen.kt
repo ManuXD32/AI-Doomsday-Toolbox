@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.annotation.StringRes
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -50,7 +52,11 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.FileInfo
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.library.ModelFamily
+import com.example.llamadroid.data.model.library.ModelSourceDraft
+import com.example.llamadroid.data.model.library.ModelSourceRepository
 import com.example.llamadroid.data.model.isStableDiffusionArtifact
+import com.example.llamadroid.ui.models.ModelManagerShortcutRow
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.sd.SdModelFamily
@@ -63,6 +69,7 @@ import com.example.llamadroid.sd.buildSdCompatProfiles
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
 import com.example.llamadroid.sd.defaultCompatProfilesFor
 import com.example.llamadroid.sd.inferSdFamily
+import com.example.llamadroid.sd.isVideoFamily
 import com.example.llamadroid.sd.matchesSdFamily
 import com.example.llamadroid.sd.parseSdCompatProfiles
 import com.example.llamadroid.sd.sdFamilyEnum
@@ -126,17 +133,17 @@ enum class SDModelSelectionType(
     CLIP_VISION(ModelType.SD_CLIP_VISION, R.string.sd_type_clip_vision),
     IP_ADAPTER(ModelType.SD_IP_ADAPTER, R.string.sd_type_ip_adapter),
     ADETAILER(ModelType.SD_ADETAILER, R.string.sd_type_adetailer),
+    AUDIO_VAE(ModelType.SD_AUDIO_VAE, R.string.sd_type_audio_vae),
+    CONNECTORS(ModelType.SD_EMBEDDINGS_CONNECTORS, R.string.sd_type_connectors),
+    MOTION_MODULE(ModelType.SD_MOTION_MODULE, R.string.sd_type_motion_module),
     IMAGE_LLM(ModelType.LLM, R.string.sd_type_image_llm),
     IMAGE_LLM_VISION(ModelType.VISION_PROJECTOR, R.string.sd_type_image_llm_vision),
     UPSCALER(ModelType.SD_UPSCALER, R.string.sd_type_upscaler)
 }
 
+// Video and image pipelines can share LLM encoders with native chat. These are the
+// same model records; selecting them here does not create a second installed copy.
 private val SD_MANAGER_SELECTION_TYPES = SDModelSelectionType.entries
-    .filterNot {
-        // Image LLMs and projectors are managed by ModelManagerScreen, never by
-        // the Stable Diffusion installed/import card.
-        it == SDModelSelectionType.IMAGE_LLM || it == SDModelSelectionType.IMAGE_LLM_VISION
-    }
 
 private enum class SdInspectionRowStatus {
     IDLE,
@@ -164,6 +171,10 @@ fun SDModelsScreen(navController: NavController) {
     val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
+    val sourceRepository = com.example.llamadroid.ui.models.rememberModelSourceRepository(context)
+    val savedSources by sourceRepository.sources.collectAsState(initial = emptyList())
+    val sourceProvenance by sourceRepository.provenance.collectAsState(initial = emptyList())
+    var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     val keyboardController = LocalSoftwareKeyboardController.current
     
     // Installed SD models - Classic types
@@ -633,6 +644,38 @@ fun SDModelsScreen(navController: NavController) {
             confirmButton = {}
         )
     }
+
+    sourceAsset?.let { asset ->
+        com.example.llamadroid.ui.models.ModelSourceAttachmentDialog(
+            asset = asset,
+            sources = savedSources,
+            provenance = sourceProvenance,
+            onDismiss = { sourceAsset = null },
+            onSave = { request ->
+                sourceAsset = null
+                scope.launch {
+                    com.example.llamadroid.ui.models.attachModelSource(sourceRepository, request)
+                        .onSuccess {
+                            android.widget.Toast.makeText(
+                                context,
+                                resources.getString(R.string.model_source_saved),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        .onFailure { error ->
+                            android.widget.Toast.makeText(
+                                context,
+                                resources.getString(
+                                    R.string.model_source_save_failed,
+                                    error.message ?: resources.getString(R.string.error_generic)
+                                ),
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+            }
+        )
+    }
     
     AppPageBackground {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -651,13 +694,27 @@ fun SDModelsScreen(navController: NavController) {
             }
             Text(
                 stringResource(R.string.sd_models_title),
+                modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.headlineSmall.copy(
                     fontWeight = FontWeight.Bold
                 ),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+            IconButton(
+                onClick = { navController.navigate("${Screen.ModelSources.route}?family=SD&tab=download") },
+                modifier = Modifier.walkthroughTarget("models.download")
+            ) {
+                Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
+            }
         }
+
+        ModelManagerShortcutRow(
+            navController = navController,
+            family = ModelFamily.SD,
+            modifier = Modifier.padding(horizontal = 16.dp)
+        )
         
         // Tab Row
         AppScrollableTabRow(
@@ -712,7 +769,9 @@ fun SDModelsScreen(navController: NavController) {
                 },
                 repository = repository,
                 settingsRepo = settingsRepo,
-                onOpenOnnxModels = { navController.navigate(Screen.OnnxModels.route) }
+                onOpenOnnxModels = { navController.navigate(Screen.OnnxModels.route) },
+                sourceRepository = sourceRepository,
+                onSourceRequest = { sourceAsset = com.example.llamadroid.ui.models.installedAssetForModel(it) }
             )
             1 -> DownloadingTab(
                 downloadProgress = downloadProgress,
@@ -758,11 +817,21 @@ private fun InstalledSDModelsTab(
     onDelete: (ModelEntity) -> Unit,
     repository: ModelRepository,
     settingsRepo: com.example.llamadroid.data.SettingsRepository,
-    onOpenOnnxModels: () -> Unit
+    onOpenOnnxModels: () -> Unit,
+    sourceRepository: ModelSourceRepository,
+    onSourceRequest: (ModelEntity) -> Unit
 ) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+
+    val allModelRows by remember(context) { AppDatabase.getDatabase(context).modelDao().getAllModels() }
+        .collectAsState(initial = emptyList())
+    val additionalModels = remember(allModelRows) {
+        allModelRows.filter { it.type in setOf(ModelType.SD_AUDIO_VAE, ModelType.SD_EMBEDDINGS_CONNECTORS,
+            ModelType.SD_MOTION_MODULE, ModelType.SD_TEXTUAL_INVERSION) ||
+            (it.type in setOf(ModelType.LLM, ModelType.VISION_PROJECTOR, ModelType.MMPROJ) && !it.sdCompatProfiles.isNullOrBlank()) }
+    }
 
     // The installed rows are emitted from separate Room flows, so keep one
     // deterministic list for bulk inspection.  Inspection only reads bounded
@@ -782,10 +851,12 @@ private fun InstalledSDModelsTab(
         photoMakerModels,
         clipVisionModels,
         ipAdapterModels,
-        adetailerModels
+        adetailerModels,
+        additionalModels
     ).flatten()
         .filter { it.type.isStableDiffusionArtifact() }
         .distinctBy { it.path }
+    val storage = com.example.llamadroid.ui.components.rememberModelStorageInventory()
     val inspectionStates = remember { mutableStateMapOf<String, SdInspectionRowState>() }
     var isInspectingAll by remember { mutableStateOf(false) }
     var inspectedCount by remember { mutableIntStateOf(0) }
@@ -866,6 +937,9 @@ private fun InstalledSDModelsTab(
     var pendingInspectionError by remember { mutableStateOf<String?>(null) }
     var isInspectingPending by remember { mutableStateOf(false) }
     var inspectionSelectionType by remember { mutableStateOf<SDModelSelectionType?>(null) }
+    var importSourceUrl by remember { mutableStateOf("") }
+    var importSourceLabel by remember { mutableStateOf("") }
+    var importSourceError by remember { mutableStateOf<String?>(null) }
 
     // Import progress tracking
     var isImporting by remember { mutableStateOf(false) }
@@ -1067,6 +1141,9 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 // Show import dialog after file is selected
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
                 showImportDialog = pendingUri != null
                 if (pendingUri != null) {
                     if (selectedImportType.storedType.isStableDiffusionArtifact()) {
@@ -1089,6 +1166,7 @@ private fun InstalledSDModelsTab(
     
     // Combined import dialog (type selection + capabilities)
     if (showImportDialog && pendingUri != null) {
+        val invalidSourceText = stringResource(R.string.model_source_invalid_link)
         val selectionNeedsInspection = selectedImportType.storedType.isStableDiffusionArtifact()
         val selectionInspectionBlock = pendingInspection
             ?.takeIf { selectionNeedsInspection }
@@ -1129,6 +1207,9 @@ private fun InstalledSDModelsTab(
                 pendingInspectionError = null
                 isInspectingPending = false
                 inspectionSelectionType = null
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
             },
             title = { Text(stringResource(R.string.sd_models_import_title)) },
             text = {
@@ -1279,6 +1360,18 @@ private fun InstalledSDModelsTab(
                             )
                         }
                         Spacer(modifier = Modifier.height(16.dp))
+                        com.example.llamadroid.ui.models.OptionalModelSourceFields(
+                            family = ModelFamily.SD,
+                            url = importSourceUrl,
+                            onUrlChange = {
+                                importSourceUrl = it
+                                importSourceError = null
+                            },
+                            label = importSourceLabel,
+                            onLabelChange = { importSourceLabel = it },
+                            error = importSourceError
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
                         Text(
                             stringResource(R.string.models_import_delete_note),
                             style = MaterialTheme.typography.bodySmall,
@@ -1289,6 +1382,15 @@ private fun InstalledSDModelsTab(
             },
             confirmButton = {
                 Button(onClick = {
+                    val sourceDraft = com.example.llamadroid.ui.models.optionalModelSourceDraft(
+                        family = ModelFamily.SD,
+                        url = importSourceUrl,
+                        label = importSourceLabel
+                    )
+                    if (sourceDraft.isFailure) {
+                        importSourceError = invalidSourceText
+                        return@Button
+                    }
                     showImportDialog = false
                     val uri = pendingUri!!
                     val filename = pendingFilename
@@ -1324,8 +1426,31 @@ private fun InstalledSDModelsTab(
                         ) { progress ->
                             importProgress = progress
                         }
+                        val importedModel = result.getOrNull()
+                        val sourceResult = if (importedModel != null && sourceDraft.getOrNull() != null) {
+                            com.example.llamadroid.ui.models.attachModelSource(
+                                sourceRepository,
+                                com.example.llamadroid.ui.models.ModelSourceAttachmentRequest(
+                                    asset = com.example.llamadroid.ui.models.installedAssetForModel(importedModel),
+                                    newSource = sourceDraft.getOrThrow(),
+                                    role = com.example.llamadroid.ui.models.installedAssetForModel(importedModel).role
+                                )
+                            )
+                        } else {
+                            null
+                        }
                         withContext(Dispatchers.Main) {
                             isImporting = false
+                            sourceResult?.onFailure { error ->
+                                android.widget.Toast.makeText(
+                                    context,
+                                    resources.getString(
+                                        R.string.model_source_save_failed,
+                                        error.message ?: resources.getString(R.string.error_generic)
+                                    ),
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
                             result.onFailure { error ->
                                 val message = when (error) {
                                     is SdArtifactValidationException ->
@@ -1371,6 +1496,9 @@ private fun InstalledSDModelsTab(
                     importSdFamily = null
                     importSdVariant = ""
                     importCompatProfiles = ""
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
                 }, enabled = !isInspectingPending && selectionInspectionBlock == null) {
                     Text(stringResource(R.string.action_import))
                 }
@@ -1390,6 +1518,9 @@ private fun InstalledSDModelsTab(
                     importSdFamily = null
                     importSdVariant = ""
                     importCompatProfiles = ""
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
                 }) {
                     Text(stringResource(R.string.action_cancel))
                 }
@@ -1456,13 +1587,16 @@ private fun InstalledSDModelsTab(
         )
     }
     
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.example.llamadroid.ui.models.LocalModelSourceRequest provides onSourceRequest
+    ) {
     Box(modifier = Modifier.fillMaxSize()) {
         val hasAnyModels = checkpoints.isNotEmpty() || upscalers.isNotEmpty() ||
             diffusionModels.isNotEmpty() || clipLModels.isNotEmpty() || clipGModels.isNotEmpty() ||
             t5xxlModels.isNotEmpty() || taeModels.isNotEmpty() || vaeModels.isNotEmpty() ||
             controlNetModels.isNotEmpty() || loraModels.isNotEmpty() || photoMakerModels.isNotEmpty() ||
             clipVisionModels.isNotEmpty() || ipAdapterModels.isNotEmpty() ||
-            adetailerModels.isNotEmpty()
+            adetailerModels.isNotEmpty() || additionalModels.isNotEmpty()
         
         if (!hasAnyModels) {
             Box(
@@ -1471,7 +1605,9 @@ private fun InstalledSDModelsTab(
                     .padding(32.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+                    com.example.llamadroid.ui.components.ModelStorageOverviewCard(storage, "sd")
+                    Spacer(modifier = Modifier.height(24.dp))
                     Icon(
                         Icons.Default.Create,
                         contentDescription = null,
@@ -1500,6 +1636,9 @@ private fun InstalledSDModelsTab(
                 contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item(key = "sd-storage") {
+                    com.example.llamadroid.ui.components.ModelStorageOverviewCard(storage, "sd")
+                }
                 item(key = "sd-artifact-inspection-control") {
                     SdInspectionControl(
                         totalModels = allInstalledModels.size,
@@ -1519,6 +1658,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CHECKPOINT"), loaded = storage.loaded)
                     }
                     items(checkpoints) { model ->
                         InstalledModelCard(
@@ -1549,6 +1689,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_DIFFUSION"), loaded = storage.loaded)
                     }
                     items(diffusionModels) { model ->
                         InstalledModelCard(
@@ -1579,6 +1720,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CLIP_L"), loaded = storage.loaded)
                     }
                     items(clipLModels) { model ->
                         InstalledModelCard(
@@ -1609,6 +1751,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_T5XXL"), loaded = storage.loaded)
                     }
                     items(t5xxlModels) { model ->
                         InstalledModelCard(
@@ -1638,6 +1781,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CLIP_G"), loaded = storage.loaded)
                     }
                     items(clipGModels) { model ->
                         InstalledModelCard(
@@ -1670,6 +1814,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_TAE"), loaded = storage.loaded)
                     }
                     items(taeModels) { model ->
                         InstalledModelCard(
@@ -1703,6 +1848,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_VAE"), loaded = storage.loaded)
                     }
                     items(vaeModels) { model ->
                         InstalledModelCard(
@@ -1733,6 +1879,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CONTROLNET"), loaded = storage.loaded)
                     }
                     items(controlNetModels) { model ->
                         InstalledModelCard(
@@ -1763,6 +1910,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_LORA"), loaded = storage.loaded)
                     }
                     items(loraModels) { model ->
                         InstalledModelCard(
@@ -1792,6 +1940,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_PHOTOMAKER"), loaded = storage.loaded)
                     }
                     items(photoMakerModels) { model ->
                         InstalledModelCard(
@@ -1824,6 +1973,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_CLIP_VISION"), loaded = storage.loaded)
                     }
                     items(clipVisionModels) { model ->
                         InstalledModelCard(
@@ -1856,6 +2006,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_IP_ADAPTER"), loaded = storage.loaded)
                     }
                     items(ipAdapterModels) { model ->
                         InstalledModelCard(
@@ -1888,6 +2039,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_ADETAILER"), loaded = storage.loaded)
                     }
                     items(adetailerModels) { model ->
                         InstalledModelCard(
@@ -1910,6 +2062,28 @@ private fun InstalledSDModelsTab(
                     }
                 }
                 
+                additionalModels.groupBy { it.type }.forEach { (type, group) ->
+                    item(key = "component-${type.name}") {
+                        Text(stringResource(selectionTypeForModel(group.first()).labelRes),
+                            style = MaterialTheme.typography.titleMedium)
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:${type.name}"), loaded = storage.loaded)
+                    }
+                    items(group, key = { "component-${it.path}" }) { model ->
+                        InstalledModelCard(model = model, capabilities = installedCapabilitiesFor(model),
+                            onDelete = { pendingDeleteModel = model }, onExport = { exportModel(model) },
+                            onInspect = { inspectOne(model) },
+                            inspectionState = inspectionStates[model.path] ?: SdInspectionRowState(),
+                            onEdit = {
+                                editingModel = model
+                                editedFilename = model.filename
+                                selectedEditType = selectionTypeForModel(model)
+                                editSupportsTxt2Img = checkpointSupportsTxt2Img(model)
+                                editSupportsImg2Img = checkpointSupportsImg2Img(model)
+                                editCompatProfiles = model.sdCompatProfiles.orEmpty()
+                            })
+                    }
+                }
+
                 // Upscalers
                 if (upscalers.isNotEmpty()) {
                     item {
@@ -1919,6 +2093,7 @@ private fun InstalledSDModelsTab(
                             style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold),
                             modifier = Modifier.padding(vertical = 8.dp)
                         )
+                        com.example.llamadroid.ui.components.ModelStorageCount(storage.usage("type:SD_UPSCALER"), loaded = storage.loaded)
                     }
                     items(upscalers) { model ->
                         InstalledModelCard(
@@ -2148,6 +2323,7 @@ private fun InstalledSDModelsTab(
         ) {
             Icon(Icons.Default.Add, contentDescription = stringResource(R.string.sd_models_import_title))
         }
+    }
     }
 }
 
@@ -2434,8 +2610,11 @@ private fun selectionTypeForModel(model: ModelEntity): SDModelSelectionType = wh
     ModelType.SD_CLIP_VISION -> SDModelSelectionType.CLIP_VISION
     ModelType.SD_IP_ADAPTER -> SDModelSelectionType.IP_ADAPTER
     ModelType.SD_ADETAILER -> SDModelSelectionType.ADETAILER
+    ModelType.SD_AUDIO_VAE -> SDModelSelectionType.AUDIO_VAE
+    ModelType.SD_EMBEDDINGS_CONNECTORS -> SDModelSelectionType.CONNECTORS
+    ModelType.SD_MOTION_MODULE -> SDModelSelectionType.MOTION_MODULE
     ModelType.LLM -> SDModelSelectionType.IMAGE_LLM
-    ModelType.VISION_PROJECTOR -> SDModelSelectionType.IMAGE_LLM_VISION
+    ModelType.VISION_PROJECTOR, ModelType.MMPROJ -> SDModelSelectionType.IMAGE_LLM_VISION
     ModelType.SD_UPSCALER -> SDModelSelectionType.UPSCALER
     else -> SDModelSelectionType.CHECKPOINT
 }
@@ -2704,11 +2883,12 @@ private fun selectableFamiliesFor(selectionType: SDModelSelectionType): List<SdM
     // resolution decide whether the selected file's actual layout is valid.
     SDModelSelectionType.CHECKPOINT,
     SDModelSelectionType.DIFFUSION -> SdModelFamily.entries
+    SDModelSelectionType.VIDEO_GEN -> SdModelFamily.entries.filter { it.isVideoFamily() }
     else -> emptyList()
 }
 
 @StringRes
-private fun sdFamilyLabelRes(family: SdModelFamily): Int = when (family) {
+internal fun sdFamilyLabelRes(family: SdModelFamily): Int = when (family) {
     SdModelFamily.CHECKPOINT -> R.string.sd_models_family_checkpoint
     SdModelFamily.SD3 -> R.string.sd_models_family_sd3
     SdModelFamily.FLUX_1 -> R.string.sd_models_family_flux1
@@ -2721,6 +2901,13 @@ private fun sdFamilyLabelRes(family: SdModelFamily): Int = when (family) {
     SdModelFamily.Z_IMAGE -> R.string.sd_models_family_z_image
     SdModelFamily.OVIS_IMAGE -> R.string.sd_models_family_ovis_image
     SdModelFamily.ANIMA -> R.string.sd_models_family_anima
+    SdModelFamily.WAN -> R.string.video_runtime_family_wan
+    SdModelFamily.HUNYUAN_VIDEO -> R.string.video_runtime_family_hunyuan_video
+    SdModelFamily.LINGBOT_VIDEO -> R.string.video_runtime_family_lingbot_video
+    SdModelFamily.LTX_VIDEO -> R.string.video_runtime_family_ltx_video
+    SdModelFamily.MINIMAX_H3 -> R.string.video_runtime_family_minimax_h3
+    SdModelFamily.SVD -> R.string.video_runtime_family_svd
+    SdModelFamily.ANIMATEDIFF -> R.string.video_runtime_family_animatediff
 }
 
 private fun compatProfileSuggestionsFor(selectionType: SDModelSelectionType): List<String> {
@@ -2942,6 +3129,9 @@ private fun detectedSelectionType(role: SdArtifactRole?): SDModelSelectionType? 
     SdArtifactRole.LLM_VISION -> SDModelSelectionType.IMAGE_LLM_VISION
     SdArtifactRole.LORA -> SDModelSelectionType.LORA
     SdArtifactRole.CONTROLNET -> SDModelSelectionType.CONTROLNET
+    SdArtifactRole.AUDIO_VAE -> SDModelSelectionType.AUDIO_VAE
+    SdArtifactRole.EMBEDDINGS_CONNECTORS -> SDModelSelectionType.CONNECTORS
+    SdArtifactRole.MOTION_MODULE -> SDModelSelectionType.MOTION_MODULE
     SdArtifactRole.UNKNOWN,
     null -> null
 }
@@ -2990,6 +3180,7 @@ private fun inspectionBlockForSelection(
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 private fun InstalledModelCard(
     model: ModelEntity,
     capabilities: List<SDCapability>,
@@ -2999,6 +3190,7 @@ private fun InstalledModelCard(
     onInspect: () -> Unit = {},
     inspectionState: SdInspectionRowState = SdInspectionRowState()
 ) {
+    val onSource = com.example.llamadroid.ui.models.LocalModelSourceRequest.current
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -3009,17 +3201,19 @@ private fun InstalledModelCard(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text(
+                    model.filename,
+                    modifier = Modifier.fillMaxWidth(),
+                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold)
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        model.filename,
-                        style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
                     Text(
                         FormatUtils.formatFileSize(model.sizeBytes),
                         style = MaterialTheme.typography.bodySmall,
@@ -3053,6 +3247,13 @@ private fun InstalledModelCard(
                         )
                     }
                 }
+                IconButton(onClick = { onSource(model) }) {
+                    Icon(
+                        Icons.Default.Link,
+                        contentDescription = stringResource(R.string.model_source_attach_title),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 IconButton(onClick = onEdit) {
                     Icon(
                         Icons.Default.Edit,
@@ -3080,7 +3281,7 @@ private fun InstalledModelCard(
             
             // Capability badges
             Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 capabilities.forEach { cap ->
                     CapabilityBadge(cap)
                 }
@@ -3335,6 +3536,7 @@ private fun DownloadingTab(
     ) {
         item {
             DownloadTaskSection(
+                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.SD,
                 modelTypes = listOf(
                     ModelType.SD_CHECKPOINT,
                     ModelType.SD_UPSCALER,
@@ -3350,7 +3552,10 @@ private fun DownloadingTab(
                     ModelType.SD_PHOTOMAKER,
                     ModelType.SD_CLIP_VISION,
                     ModelType.SD_IP_ADAPTER,
-                    ModelType.SD_ADETAILER
+                    ModelType.SD_ADETAILER,
+                    ModelType.SD_AUDIO_VAE,
+                    ModelType.SD_EMBEDDINGS_CONNECTORS,
+                    ModelType.SD_MOTION_MODULE
                 )
             )
         }
@@ -3630,11 +3835,13 @@ private fun SearchResultCard(
                     )
                 }
             }
-            Icon(
-                Icons.Default.Add,
-                contentDescription = stringResource(R.string.sd_models_view_files),
-                tint = MaterialTheme.colorScheme.primary
-            )
+            com.example.llamadroid.ui.models.HfRepositoryBrowseButton(
+                result.id, com.example.llamadroid.data.model.library.ModelFamily.SD)
+            IconButton(onClick = onClick) {
+                Icon(Icons.Default.Add,
+                    contentDescription = stringResource(R.string.sd_models_view_files),
+                    tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
@@ -81,6 +82,8 @@ import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppStateKind
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 
@@ -88,6 +91,8 @@ import java.io.File
 @Composable
 fun OnnxTtsScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    val formScroll = rememberLazyListState()
     val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val models by db.modelDao().getModelsByType(ModelType.ONNX_TTS).collectAsState(initial = emptyList())
@@ -201,6 +206,11 @@ fun OnnxTtsScreen(navController: NavController) {
                 speed = speed
             )
         )
+        walkthroughTargets?.recordEvent("voice.tts.input")
+    }
+
+    WalkthroughScrollOwner(setOf("voice.tts.input")) { target ->
+        if (target == "voice.tts.input") formScroll.animateScrollToItem(1)
     }
 
     AppPageBackground {
@@ -209,6 +219,7 @@ fun OnnxTtsScreen(navController: NavController) {
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.onnx_tts_title)) },
                     navigationIcon = {
                         IconButton(
@@ -228,6 +239,7 @@ fun OnnxTtsScreen(navController: NavController) {
                     .consumeWindowInsets(innerPadding)
             ) {
             LazyColumn(
+                state = formScroll,
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(20.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -289,7 +301,8 @@ fun OnnxTtsScreen(navController: NavController) {
                                 label = { Text(stringResource(R.string.onnx_tts_text_label)) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(220.dp),
+                                    .height(220.dp)
+                                    .walkthroughTarget("voice.tts.input"),
                                 maxLines = 10
                             )
                             AppAdvancedSection(title = stringResource(R.string.soft_studio_advanced)) {

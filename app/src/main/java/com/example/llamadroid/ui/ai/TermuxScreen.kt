@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.ui.graphics.Color
 
 import android.content.ClipData
@@ -46,6 +48,8 @@ import com.example.llamadroid.service.SSHService
 import com.example.llamadroid.service.SSHConfig
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -59,6 +63,7 @@ import java.util.Collections
 @Composable
 fun TermuxScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val sshService = remember { SSHService(context) }
     val settingsRepository = remember { SettingsRepository(context) }
@@ -531,7 +536,10 @@ fun TermuxScreen(navController: NavController) {
             navController.popBackStack()
         },
         actions = {
-            IconButton(onClick = { showSetupGuide = !showSetupGuide }) {
+            IconButton(onClick = {
+                walkthroughTargets?.recordEvent("termux.tools")
+                showSetupGuide = !showSetupGuide
+            }) {
                 Icon(Icons.Default.Info, stringResource(R.string.termux_setup_guide))
             }
         }
@@ -539,7 +547,8 @@ fun TermuxScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(16.dp),
+                .padding(16.dp)
+                .walkthroughTarget("termux.tools"),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Setup Guide
@@ -595,9 +604,11 @@ fun TermuxScreen(navController: NavController) {
                     onPasswordChange = { password = it },
                     onTogglePassword = { showPassword = !showPassword },
                     onConnect = {
+                        walkthroughTargets?.recordEvent("termux.tools")
                         connect()
                     },
                     onDisconnect = {
+                        walkthroughTargets?.recordEvent("termux.tools")
                         sshService.disconnect()
                         SSHService.clearOutput()
                     }
@@ -831,10 +842,12 @@ fun TermuxScreen(navController: NavController) {
                                                 )
                                             },
                                             onOpenWebView = {
+                                                walkthroughTargets?.recordEvent("termux.webview")
                                                 val url = "http://127.0.0.1:${tool.port}"
                                                 navController.navigate(Screen.TermuxWebView.createRoute(url, tool.name, tool.id))
                                             },
                                             onOpenGallery = {
+                                                walkthroughTargets?.recordEvent("termux.tools")
                                                 navController.navigate(Screen.FastsdGallery.route)
                                             }
                                         )
@@ -866,10 +879,13 @@ fun TermuxScreen(navController: NavController) {
 
                 // Model Manager Card
                 item {
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { navController.navigate(Screen.TermuxFileManager.route) },
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    walkthroughTargets?.recordEvent("termux.files")
+                                    navController.navigate(Screen.TermuxFileManager.route)
+                                },
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                     ) {

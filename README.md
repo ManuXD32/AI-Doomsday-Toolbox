@@ -13,8 +13,9 @@ Read the web guide at [adt.manube.org](https://adt.manube.org/) for the page-by-
 [![License](https://img.shields.io/badge/License-Apache%202.0-yellow.svg)](LICENSE)
 
 <p align="center">
-  <img width="31%" alt="AI Doomsday Toolbox home screen" src="https://github.com/user-attachments/assets/fcaeb854-6804-4f65-ac39-de7a00b3a77b" />
-  <img width="31%" alt="AI Doomsday Toolbox feature overview" src="https://github.com/user-attachments/assets/943faf10-5613-43b7-85cf-8e414a235237" />
+  <img width="31%" alt="AI Doomsday Toolbox home screen" src="assets/readme/home.png" />
+  <img width="31%" alt="AI Doomsday Toolbox tools screen" src="assets/readme/tools.png" />
+  <img width="31%" alt="AI Doomsday Toolbox library screen" src="assets/readme/library.png" />
 </p>
 
 
@@ -27,7 +28,10 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ## Highlights
 
-- Offline AI on Android with local LLM, Whisper, image generation, upscaling, and media tools
+- Offline AI on Android with local LLM, Whisper, image and video generation, upscaling, and media tools
+- Material 3 interface with Home, Tools, Library, and Tama navigation, phone and tablet layouts, and English and Spanish support
+- Guided tours with real controls, screenshots, and feature-by-feature recipes that you can skip, resume, or replay
+- Custom model downloads, full Hugging Face repository browsing, saved links, and your own model bundles
 - Distributed inference features for coordinating multiple Android devices on the same network
 - Built-in Ollama manager, llama native chat, and remote summary tools
 - Dataset creator that turns text and PDFs into cleaned, rated instruction-answer pairs with Alpaca export
@@ -38,9 +42,10 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ## Guide Index
 
-- [Dashboard](#dashboard): servers, knowledge bases, file sharing, Kiwix, distributed inference
-- [AI HUB](#ai-hub): AI Servers, studios, workflows, datasets, native chat, agent tools
-- [Models](#models): model families, imports, downloads, exports, sharing
+- [Dashboard](#dashboard): Home, pinned tools, recent work, device and server status
+- [AI HUB](#ai-hub): Tools, AI Servers, studios, workflows, datasets, native chat, agent tools
+- [Library](#library): models, knowledge bases, offline content, image and video galleries
+- [Models](#models): model families, custom downloads, saved links, repository browsing, bundles, sharing
 - [Settings](#settings): runtime controls, backups, restore, prompts, output paths
 - [Organizer](#organizer): notes, calendar, alarms, widgets
 - [P.E.T.](#pet): pet systems, chat, gallery, farm, adventures
@@ -49,27 +54,39 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ### Dashboard
 
-- The Dashboard is the control surface for the app's local services and infrastructure tools.
-- It brings together server start and stop controls, knowledge bases, local file sharing, Kiwix, and distributed inference entry points.
+- The Dashboard is now Home, with pinned tools, recent conversations and projects, and compact device and server status.
+- The bottom navigation connects Home, Tools, Library, and Tama, with a navigation rail on larger layouts and a menu on compact or large-text layouts.
+- The Explore button beside Settings opens the app tour, with options to start, resume, replay, or choose a chapter.
 - The file server browser can now receive uploads from connected devices too, including whole folders that stay grouped under the selected folder name, plus progress, speed, and remaining-time feedback behind a compact `+` upload picker.
 
 ### AI HUB
 
-- The AI HUB groups the main AI work surfaces inside the app.
+- The AI HUB is now the Tools catalog, grouping the main AI work surfaces by task with search and pin controls.
 - It groups AI Servers, image and video generation, ONNX image generation, background removal, text to speech, audio transcription, subtitle and translation workflows, PDF tools, video summary, benchmark, dataset creation, training, Termux SSH tools, the AI agent workspace, Ollama Manager, and native llama chat.
 - The browser-facing AI Servers Hub also maps Image Studio, Video Studio, Workflows, Voice Studio, Video Upscale, Docs and Datasets, and Llama Chat into local web UIs with QR and LAN access controls.
+
+### Library
+
+- The Library brings together models, knowledge bases, offline content, and saved output collections.
+- Open the image and video galleries directly without going through the generation form.
+- Keep reading, manage local resources, and return to saved work from one root page.
 
 ### Models
 
 - The Models area is split by model family so you can manage LLM, Stable Diffusion, ONNX, LiteRT, Whisper, and shared model workflows separately.
-- The model screens cover installed items, downloads, discovery, import, export, rename, and sharing flows.
+- The model screens cover installed items, downloads, discovery, import, export, rename, and sharing flows, with installed counts and occupied storage.
+- Paste a Hugging Face file link or direct HTTPS link into Custom download, or use the folder button to browse a complete Hugging Face repository.
+- Keep download sources in Saved links and create separate bundles for LLM, Stable Diffusion, ONNX, LiteRT, and Whisper.
+- Files that cannot be confidently identified stay in Unknown until you choose their family and component type.
 - The LLM-side model flow also includes vision-projector handling for compatible setups.
 
 ### Settings
 
 - The Settings area covers general app behavior, LLM runtime controls, image generation settings, Whisper settings, video upscaler settings, and system prompts.
 - It also contains the backup and restore flows, including full app backup and the native chat plus Organizer ZIP transfer flow.
-- It includes output-folder, acceleration, thread-count, and saved-prompt controls.
+- Full app backup includes portable saved sources and bundle definitions so you can download missing models after moving devices.
+- Choose system, light, or dark appearance, optional wallpaper colors, and English or Spanish.
+- It includes output-folder, acceleration, thread-count, and saved-prompt controls, plus a permanent entry for managing llama.cpp servers.
 
 ### Organizer
 
@@ -84,14 +101,32 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ## Features
 
+### App Navigation And Guided Tours
+
+- Keep pinned tools and recent work on Home
+- Search the Tools catalog by task and open models, knowledge, offline content, and galleries from Library
+- Use the same Material 3 interface on phones and tablets, with layouts that adapt to screen size and text size
+- Follow the automatic first-use tour after setup, or replay it from the Explore button on Home
+- Open the Explore button inside each feature for practical quick starts, common options, and screenshot examples
+- Choose from 26 guides and 89 recipes, with Previous, Next, Skip, Resume, Replay, and an always-available X
+- Complete the explanations without downloading models, granting permissions, creating data, or starting inference
+
+<p align="center">
+  <img width="31%" alt="App tour and chapters" src="assets/readme/app-tour.png" />
+  <img width="31%" alt="Tools walkthrough with live guidance" src="assets/readme/tools-tour.png" />
+  <img width="31%" alt="Library on a tablet" src="assets/readme/tablet-library.png" />
+</p>
+
 ### Distributed Inference And Android Cluster Workflows
 
 - Run distributed inference features across multiple Android devices
 - Experiment with turning old phones into a low-cost phone cluster for local AI workloads
 - Monitor worker/master flows from inside the app
+- Read device names, endpoints, connection states, RAM, allocation, and load in responsive network cards
+- Keep Worker memory status current with a shared two-second sample that runs off the UI thread
 - Share models and services over the local network for offline collaboration
 <p align="center">
-  <img width="31%" alt="Distributed inference screen" src="https://github.com/user-attachments/assets/4cf4ef0a-631c-4e86-b59f-1ec799ec6a5f" />
+  <img width="31%" alt="Distributed inference screen" src="assets/readme/distributed.webp" />
 </p>
 
 
@@ -102,12 +137,17 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Connect to llama.cpp-compatible servers and llama-server backends through a native in-app chat UI
 - OpenAI-compatible local server mode on port `8080`
 - Multiple model support with switching from the app interface
+- Create, start, and stop llama.cpp servers from the server manager even while chat is available
+- Choose between running servers from inside chat when more than one is active
+- Schedule tasks and review their next run and logs from the built-in scheduler
 - Optional LAN-visible server behavior through settings when needed
 - Use Ollama-compatible workflows where they fit best for your setup
 - Keep inference on-device or on your own local network instead of relying on cloud chat
 
 <p align="center">
-  <img width="31%" alt="Local AI chat screen" src="https://github.com/user-attachments/assets/096752ba-3832-4020-a670-969a94acb1da" />
+  <img width="31%" alt="Native llama server manager" src="assets/readme/llama-servers.webp" />
+  <img width="31%" alt="llama.cpp server controls" src="assets/readme/server-selection.webp" />
+  <img width="31%" alt="Scheduled AI tasks" src="assets/readme/scheduler.webp" />
 </p>
 
 ### Ollama Manager
@@ -118,7 +158,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Create derived models without leaving the Android interface
 
 <p align="center">
-  <img width="31%" alt="Ollama manager screen" src="https://github.com/user-attachments/assets/59cb9abd-635f-4d1a-aaec-bbd566085dc0" />
+  <img width="31%" alt="Ollama manager screen" src="assets/readme/ollama.webp" />
 </p>
 
 ### Benchmarking
@@ -129,7 +169,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Use real llama benchmarking output instead of guessing performance
 
 <p align="center">
-  <img width="31%" alt="Benchmarking screen" src="https://github.com/user-attachments/assets/131a2495-20e1-4ea7-b3f5-02801afc4881" />
+  <img width="31%" alt="Benchmarking screen" src="assets/readme/benchmark.webp" />
 </p>
 
 ### Dataset Creator
@@ -156,7 +196,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 **Note:** The Termux tool installers now clone the maintained ManuXD32 forks for Big-AGI (`v2-dev`), FastSDCPU, Oobabooga/textgen, and A1111 to reduce upstream breakage. FastSDCPU installation also prepares the shared MCP runtime, so MCP no longer needs its own separate install step. A1111 / AUTOMATIC1111 support is still experimental, but the current Ubuntu installer now uses Python 3.11, mirrored Stable Diffusion dependencies, clip import verification/repair, and disables the default SD 1.5 auto-download / repeated environment prep on first launch.
 
 <p align="center">
-  <img width="31%" alt="Termux tools screen" src="https://github.com/user-attachments/assets/7b0a2e06-26b2-4829-ad73-cd29f10fd3c6" />
+  <img width="31%" alt="Termux tools screen" src="assets/readme/termux.webp" />
 </p>
 
 
@@ -166,10 +206,11 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Create custom tools and custom agents
 - Keep project-specific workspace memory and task context
 - Build reusable automation flows around your own projects
+- Review plans in a full-screen editor, inspect approvals, and use Continue to recover interrupted work
+- Return to the previous app page with Back while keeping saved conversations and running work
 
 <p align="center">
-  <img width="31%" alt="AI agent workspace screen" src="https://github.com/user-attachments/assets/cab59f56-eb7f-4d2c-9619-e479c2a8ec8e" />
-  <img width="31%" alt="AI agent session screen" src="https://github.com/user-attachments/assets/5b026fbb-7bc7-4478-9f18-e5f0b7142815" />
+  <img width="31%" alt="AI agent projects screen" src="assets/readme/agent.webp" />
 </p>
 
 
@@ -181,9 +222,8 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Tune prompts, context limits, output length, and related summary parameters per workflow
 
 <p align="center">
-  <img width="31%" alt="PDF summary screen" src="https://github.com/user-attachments/assets/a360e96d-b887-4b35-bf67-99df7d12b5bb" />
-  <img width="31%" alt="Remote summary backend screen" src="https://github.com/user-attachments/assets/bc79cd17-20a7-41f4-a56f-fc33becbc10b" />
-  <img width="31%" alt="Summary output screen" src="https://github.com/user-attachments/assets/5ec398cc-c178-4388-a4c3-802b4edb93a9" />
+  <img width="31%" alt="PDF tools screen" src="assets/readme/pdf-tools.webp" />
+  <img width="31%" alt="Video summary screen" src="assets/readme/video-summary.webp" />
 </p>
 
 
@@ -198,15 +238,38 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Process media directly from Android share intents
 
 
+### Model Downloads, Saved Links, And Bundles
+
+- Manage LLM, Stable Diffusion, ONNX, LiteRT, and Whisper models in separate screens
+- See complete Stable Diffusion filenames, installed counts, and actual occupied storage
+- Paste a Hugging Face file link or direct HTTPS link and download after automatic link validation
+- Use the folder button beside the existing `+` to browse complete Hugging Face repositories, including nested folders and unfamiliar files
+- Keep downloads resumable, with progress, cancellation, retry, and available-space checks
+- Leave uncertain files in Unknown and use the Component type picker when you need to classify them manually
+- Save or edit a model's download source without changing its installed file
+- Create your own bundles from installed models and saved links, including compatible encoders, VAEs, LoRAs, projectors, and companion files
+- Use Download missing to restore a ready bundle while skipping verified installed files
+- Keep saved links and bundle definitions after deleting models, and transfer them through full app backup
+
+<p align="center">
+  <img width="31%" alt="Custom model download and saved sources" src="assets/readme/custom-download.webp" />
+  <img width="31%" alt="Full Hugging Face repository browser" src="assets/readme/repository-browser.webp" />
+  <img width="31%" alt="Custom model bundle with source checks" src="assets/readme/model-bundles.webp" />
+</p>
+
 ### Image And Video Generation
 
 - Generate images with Stable Diffusion workflows directly on Android
-- Generate local `txt2vid` and `img2vid` clips with `stable-diffusion.cpp` video models
-- Tune per-run `stable-diffusion.cpp` caching for `txt2img`, `img2img`, `txt2vid`, and `img2vid` with raw cache options, SCM policy, and SCM mask support
-- Tune video prompts with optional negative prompts, selectable sampling methods, `--cfg-scale`, optional `--flow-shift`, and a `480x832` default output size
-- Manage FLUX diffusion models with a dedicated `vid_gen` badge so video-capable models are easy to spot
-- Save generated videos as AVI + MP4 with metadata, and mirror them to your chosen output folder under `Generated videos`
-- Browse a dedicated video gallery with `txt2vid` / `img2vid` badges, prompt details, sharing, deletion, and copyable generation info
+- Generate local video with supported Wan, HunyuanVideo, LingBot, LTX, MiniMax-H3, and AnimateDiff workflows in the bundled `stable-diffusion.cpp` backend
+- Select T5, LLM, or combined text encoders according to the model family, with compatible vision, VAE, audio, and motion components where supported
+- Tune prompts, seed, dimensions, frames, frame rate, sampling, reference inputs, caching, tiling, and backend placement
+- Add, remove, reorder, enable, and tune LoRAs, including high-noise assignments where supported
+- Try the LingBot Dense 1.3B bundle with Qwen3-VL 4B Q4 and `taew2_1`, plus a phone example profile at `256x144`, 9 frames, 4 fps, and 12 steps
+- Keep generation and cancellation controls visible while the form scrolls
+- Save MP4 output with audio when available, keep supported native formats, and retry conversion without losing usable native output
+- Browse the video gallery with prompts, generation settings, sharing, deletion, and copyable result information
+
+**Note:** Video options depend on the selected model family and the flags supported by the selected binary. The LingBot phone profile is an example configuration, not a guarantee that every phone has enough memory or that generation will be fast. SVD models can be inspected, but generation is unavailable in the bundled backend.
 
 ### Image Generation And Upscaling
 
@@ -220,7 +283,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Experiment with A1111-style web UI workflows through the Termux tools area
 
 <p align="center">
-  <img width="31%" alt="Image generation screen" src="https://github.com/user-attachments/assets/e624aee3-8533-4345-a610-f8931ab89ee7" />
+  <img width="31%" alt="Image generation screen" src="assets/readme/image-generation.png" />
 </p>
 
 ### Offline Knowledge, Sharing, And Utilities
@@ -243,6 +306,13 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 - Talk to your pet and build memories over time
 - Discover different personalities and long-term companionship mechanics
 - Let your pet dream, paint, and keep growing with you over long play sessions
+- Keep the full-height room for your generated scenery and placed decorations
+- Open guides from Tama activities and games without resetting your pet or gameplay
+
+<p align="center">
+  <img width="31%" alt="Tama in its full-height room" src="assets/readme/tama.png" />
+  <img width="31%" alt="Tama farm" src="assets/readme/farm.png" />
+</p>
 
 
 ## Built With
@@ -269,7 +339,7 @@ If you are searching for a local LLM on Android, image generation, AI agents to 
 
 ### Android Stack
 
-- Kotlin with Jetpack Compose for the UI
+- Kotlin with Jetpack Compose and Material 3 for the UI
 - Room for local persistence
 - NanoHTTPD for embedded local servers
 - ZXing for QR code generation
@@ -321,7 +391,7 @@ KEY_PASSWORD=your_key_password \
 
 ### Models And Content
 
-Models and large offline content are managed separately inside the app. The project includes workflows for downloading, importing, and organizing models and ZIM content based on the feature you want to use.
+Models and large offline content are managed separately inside the app. The project includes workflows for downloading, importing, and organizing models and ZIM content based on the feature you want to use. Use Library to find the model managers, Custom download for a file link, or My bundles to save a group of models for later downloads. Local imports work without a download link; bundle entries need working sources before they can be downloaded on another device.
 
 ## Contributing
 

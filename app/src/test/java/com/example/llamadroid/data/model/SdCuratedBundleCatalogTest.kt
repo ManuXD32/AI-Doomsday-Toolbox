@@ -103,6 +103,17 @@ class SdCuratedBundleCatalogTest {
     }
 
     @Test
+    fun lingbotPhoneUsesPinnedDenseModelLlmAndTinyDecoder() {
+        val bundle = requireNotNull(SdCuratedBundleCatalog.byId("lingbot-phone"))
+        assertEquals(5_311_891_894L, bundle.totalSizeBytes)
+        assertEquals(listOf(ModelType.SD_DIFFUSION, ModelType.LLM, ModelType.SD_TAE), bundle.files.map { it.modelType })
+        assertTrue(bundle.files.all { it.revision.matches(Regex("[a-f0-9]{40}")) })
+        assertEquals("dense_1.3b", bundle.files.first().sdVariant)
+        assertTrue(bundle.files.first().localFilename(bundle.installPrefix).contains("lingbot-video-dense-1.3b"))
+        assertTrue(bundle.files.last().transferUrl().startsWith("https://raw.githubusercontent.com/madebyollin/taehv/"))
+    }
+
+    @Test
     fun upscalerBundlesContainOnlyUpscalers() {
         SdCuratedBundleCatalog.bundles
             .filter { it.id.contains("upscale") }

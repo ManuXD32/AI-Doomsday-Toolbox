@@ -29,6 +29,8 @@ import java.nio.charset.StandardCharsets
 import com.example.llamadroid.service.SSHService
 import com.example.llamadroid.data.model.TermuxTools
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 
 /**
@@ -48,6 +50,7 @@ fun TermuxWebViewScreen(
     toolId: String = "none"
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val sshService = remember { SSHService(context) }
     val decodedUrl = remember { URLDecoder.decode(url, StandardCharsets.UTF_8.toString()) }
@@ -82,6 +85,7 @@ fun TermuxWebViewScreen(
         actions = {
             IconButton(
                 onClick = {
+                    walkthroughTargets?.recordEvent("termux.webview")
                     if (webView.canGoBack()) {
                         webView.goBack()
                         canGoBack = webView.canGoBack()
@@ -96,6 +100,7 @@ fun TermuxWebViewScreen(
                 )
             }
             IconButton(onClick = {
+                walkthroughTargets?.recordEvent("termux.webview")
                 isLoading = true
                 hasError = false
                 webView.reload()
@@ -106,6 +111,7 @@ fun TermuxWebViewScreen(
                 Icon(Icons.Default.Home, stringResource(R.string.webview_exit_status))
             }
             IconButton(onClick = {
+                walkthroughTargets?.recordEvent("termux.webview")
                 WebViewHolder.destroy(decodedUrl)
                 if (toolId != "none") {
                     TermuxTools.getTool(toolId)?.let { tool ->
@@ -123,6 +129,7 @@ fun TermuxWebViewScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .walkthroughTarget("termux.webview")
         ) {
             // Persistent WebView
             AndroidView(

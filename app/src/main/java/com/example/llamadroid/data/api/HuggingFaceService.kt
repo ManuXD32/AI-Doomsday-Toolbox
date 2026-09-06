@@ -1,8 +1,11 @@
 package com.example.llamadroid.data.api
 
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.Path
 import retrofit2.http.Query
+import retrofit2.http.Url
+import retrofit2.Response
 import kotlinx.serialization.Serializable
 
 interface HuggingFaceService {
@@ -19,12 +22,34 @@ interface HuggingFaceService {
     suspend fun getRepoInfo(
         @Path("repoId", encoded = true) repoId: String
     ): HfRepoInfoDto
+
+    @GET("models/{repoId}/revision/{revision}")
+    suspend fun getRepoRevisionInfo(
+        @Path("repoId", encoded = true) repoId: String,
+        @Path("revision") revision: String,
+        @Header("Authorization") authorization: String? = null
+    ): Response<HfRepoInfoDto>
     
     @GET("models/{repoId}/tree/main")
     suspend fun getRepoTree(
         @Path("repoId", encoded = true) repoId: String,
         @Query("recursive") recursive: Boolean = false
     ): List<HfTreeItemDto>
+
+    /**
+     * Paged tree endpoint used by saved-source browsing. The URL is supplied by
+     * the caller so repository revisions and folder paths can be encoded without
+     * weakening the existing main-tree API used by current model screens.
+     */
+    @GET
+    suspend fun getRepoTreePage(
+        @Url url: String,
+        @Query("recursive") recursive: Boolean = false,
+        @Query("expand") expand: Boolean = true,
+        @Query("limit") limit: Int = 100,
+        @Query("cursor") cursor: String? = null,
+        @Header("Authorization") authorization: String? = null
+    ): Response<List<HfTreeItemDto>>
 }
 
 @Serializable
@@ -38,7 +63,8 @@ data class HfModelDto(
 @Serializable
 data class HfRepoInfoDto(
     val id: String,
-    val siblings: List<HfSiblingDto>? = null
+    val siblings: List<HfSiblingDto>? = null,
+    val sha: String? = null
 )
 
 @Serializable

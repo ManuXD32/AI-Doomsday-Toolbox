@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.settings
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,6 +23,8 @@ import com.example.llamadroid.data.db.SystemPromptEntity
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 
 /**
@@ -30,6 +34,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SystemPromptsSettingsScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
     val db = remember { AppDatabase.getDatabase(context) }
@@ -51,7 +56,8 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .walkthroughTarget("settings.settings_prompts"),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // PDF Summary Section
@@ -89,6 +95,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
+                                walkthroughTargets?.recordEvent("settings.prompts")
                                 promptCategory = "pdf_summary"
                                 newPromptName = "PDF Summary"
                                 newPromptContent = pdfSummaryPrompt ?: ""
@@ -132,6 +139,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             OutlinedButton(onClick = {
+                                walkthroughTargets?.recordEvent("settings.prompts")
                                 promptCategory = "pdf_unification"
                                 newPromptName = "PDF Unification"
                                 newPromptContent = pdfUnificationPrompt ?: ""
@@ -163,6 +171,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
                         fontWeight = FontWeight.Bold
                     )
                     IconButton(onClick = {
+                        walkthroughTargets?.recordEvent("settings.prompts")
                         promptCategory = "custom"
                         newPromptName = ""
                         newPromptContent = ""
@@ -192,6 +201,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
                             Text(stringResource(R.string.prompts_no_custom), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(modifier = Modifier.height(8.dp))
                             OutlinedButton(onClick = {
+                                walkthroughTargets?.recordEvent("settings.prompts")
                                 promptCategory = "custom"
                                 newPromptName = ""
                                 newPromptContent = ""
@@ -220,6 +230,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
                                 Row {
                                     IconButton(
                                         onClick = { 
+                                            walkthroughTargets?.recordEvent("settings.prompts")
                                             editingPrompt = prompt
                                             promptCategory = "custom"
                                             newPromptName = prompt.name
@@ -232,6 +243,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
                                     }
                                     IconButton(
                                         onClick = {
+                                            walkthroughTargets?.recordEvent("settings.prompts")
                                             scope.launch {
                                                 db.systemPromptDao().deletePrompt(prompt)
                                             }
@@ -334,6 +346,7 @@ fun SystemPromptsSettingsScreen(navController: NavController) {
             confirmButton = {
                 TextButton(
                     onClick = {
+                        walkthroughTargets?.recordEvent("settings.prompts")
                         scope.launch {
                             when (promptCategory) {
                                 "pdf_summary" -> {

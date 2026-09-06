@@ -752,12 +752,9 @@
     
     <!-- Model Manager New Strings -->
     <string name="models_storage_title">Almacenamiento del dispositivo</string>
-    <string name="models_storage_subtitle">Espacio ocupado por modelos locales</string>
     <string name="models_storage_total">Total</string>
     <string name="models_storage_free">Libre</string>
     <string name="models_storage_models">Modelos</string>
-    <string name="models_storage_other">Otros</string>
-    <string name="models_storage_legend_value">%1$s: %2$s</string>
     <string name="models_storage_bar_desc">Almacenamiento del dispositivo: %1$s en total, %2$s libres, %3$s usados por modelos</string>
     <string name="models_tab_installed">Instalados</string>
     <string name="models_tab_downloading">Descargando</string>
@@ -4943,18 +4940,10 @@
     <string name="video_gen_mode_txt2vid">txt2vid</string>
     <string name="video_gen_mode_img2vid">img2vid</string>
     <string name="video_gen_input_image_title">Imagen de entrada</string>
-    <string name="video_gen_input_image_ready">Imagen lista para img2vid</string>
-    <string name="video_gen_select_image">Seleccionar imagen</string>
     <string name="video_gen_model_label">Modelo de video</string>
-    <string name="video_gen_no_models_installed">Todavía no hay modelos de generación de video instalados.</string>
     <string name="video_gen_get_models">Abrir modelos SD</string>
-    <string name="video_gen_select_model">Selecciona un modelo de generación de video</string>
     <string name="video_gen_vae_toggle_label">Usar VAE</string>
-    <string name="video_gen_no_vae_installed">No hay modelos VAE instalados.</string>
-    <string name="video_gen_select_vae">Selecciona un modelo VAE</string>
     <string name="video_gen_t5_toggle_label">Usar T5-XXL</string>
-    <string name="video_gen_no_t5xxl_installed">No hay modelos T5-XXL instalados.</string>
-    <string name="video_gen_select_t5xxl">Selecciona un modelo T5-XXL</string>
     <string name="video_gen_mode_label">Modo</string>
     <string name="video_gen_prompt_label">Prompt</string>
     <string name="video_gen_prompt_placeholder">Describe el movimiento, la escena y el estilo del video...</string>
@@ -5015,7 +5004,6 @@
     <string name="video_gen_status_generating_eta">Generando video… %1$d%% • ETA %2$s</string>
     <string name="video_gen_status_diffusion_eta">Generando video… %1$d%% • ETA de difusion %2$s</string>
     <string name="video_gen_status_vae_eta">Generando video… %1$d%% • ETA de VAE %2$s</string>
-    <string name="video_gen_status_converting">Convirtiendo AVI a MP4…</string>
     <string name="video_gen_status_copying">Copiando el video generado a la carpeta de salida…</string>
     <string name="video_gen_notification_complete">Generación de video completada</string>
     <string name="generation_battery_dialog_title">¿Permitir batería sin restricciones para generar?</string>
@@ -5029,12 +5017,10 @@
     <string name="video_gen_error_ffmpeg_missing">FFmpeg no está disponible.</string>
     <string name="video_gen_error_generation_failed">La generación de video falló con el código de salida %1$d.</string>
     <string name="video_gen_error_conversion_failed">La conversión a MP4 falló con el código de salida %1$d.</string>
-    <string name="video_gen_error_avi_missing">No se encontró el archivo AVI generado.</string>
     <string name="video_gen_error_media_processing_timeout">La generación de video se detuvo porque se agotó la cuota de Android para procesamiento multimedia en segundo plano. Mantén la app en primer plano o reduce fotogramas o pasos y vuelve a iniciar.</string>
     <string name="video_gen_warning_output_not_configured">No hay carpeta de salida configurada, así que el video queda solo en el almacenamiento interno de la app.</string>
     <string name="video_gen_warning_output_unavailable">La carpeta de salida no está disponible, así que el video queda solo en el almacenamiento interno de la app.</string>
     <string name="video_gen_warning_export_failed">El video se generó, pero la exportación falló: %1$s</string>
-    <string name="video_gen_error_shared_image">No se pudo cargar la imagen seleccionada: %1$s</string>
     <string name="video_gen_error_service_unavailable">El servicio de generación de video todavía no está listo.</string>
     <string name="video_gen_error_model_required">Selecciona primero un modelo de generación de video.</string>
     <string name="video_gen_error_prompt_required">Escribe primero un prompt.</string>
@@ -5147,7 +5133,6 @@
 
     <!-- Network Visualization Screen -->
     <string name="net_title">Estado de la red</string>
-    <string name="net_system_status">ESTADO DEL SISTEMA</string>
     <string name="net_inference_server">SERVIDOR_INFERENCIA:</string>
     <string name="net_status_online">[EN LÍNEA]</string>
     <string name="net_status_loading">[CARGANDO]</string>
@@ -5156,27 +5141,17 @@
     <string name="net_status_offline">[DESCONECTADO]</string>
     <string name="net_mode">MODO: %s</string>
     <string name="net_processing">▓▓▓ PROCESANDO ▓▓▓</string>
-    <string name="net_topology">TOPOLOGÍA DE RED</string>
-    <string name="net_master_node">[MAESTRO] 👑 NODO_LOCAL</string>
     <string name="net_master_stats">RAM: %1$dMB | CAPAS: %2$d | CARGA: %3$d%%</string>
-    <string name="net_no_workers">[SIN_TRABAJADORES_CONECTADOS]</string>
     <string name="net_worker_label">[TRABAJADOR_%1$d] 📱 %2$s</string>
     <string name="net_worker_stats">RAM: %1$dMB | CAPAS: ~%2$d | CARGA: %3$s</string>
-    <string name="net_model_metrics">MÉTRICAS DEL MODELO</string>
     <string name="net_total_layers">CAPAS_TOTALES: %d</string>
     <string name="net_model_size">TAMAÑO_MODELO:   %dMB</string>
     <string name="net_local_layers">CAPAS_LOCALES: %d</string>
     <string name="net_rpc_layers">CAPAS_RPC:   %d</string>
-    <string name="net_layer_distribution">DISTRIBUCIÓN_DE_CAPAS:</string>
-    <string name="net_local_label">LOCAL</string>
-    <string name="net_rpc_label">RPC</string>
-    <string name="net_transfer">TRANSFERENCIA</string>
     <string name="net_syncing">SINCRONIZANDO: [%1$s%2$s] %3$d%%</string>
-    <string name="net_memory_allocation">ASIGNACIÓN DE MEMORIA</string>
     <string name="net_total_cluster_ram">RAM_TOTAL_CLUSTER: %dMB</string>
     <string name="net_master_allocation">ASIGNACIÓN_MAESTRO: %dMB</string>
     <string name="net_worker_allocation">ASIGN_TRABAJADOR_%1$d:   %2$dMB</string>
-    <string name="net_controls">CONTROLES</string>
     <string name="net_terminate_server">> TERMINAR_SERVIDOR</string>
     <string name="net_stop_rpc">> DETENER_TRABAJADOR_RPC</string>
     <string name="net_clear_workers">> LIMPIAR_TRABAJADORES</string>
@@ -7774,13 +7749,11 @@
     <string name="sd_dist_gallery_no_metadata">Los ajustes detallados no estan disponibles para este archivo antiguo.</string>
     <string name="sd_dist_run_config_title">Configuracion distribuida</string>
     <string name="sd_dist_run_config_subtitle">Construye flags estructurados de stable-diffusion.cpp antes de lanzar imagen, edicion, escalado o video.</string>
-    <string name="sd_dist_pipeline_title">Carriles del pipeline multimedia</string>
     <string name="sd_dist_module_text_encoder">Codificador de texto</string>
     <string name="sd_dist_module_diffusion">Difusion</string>
     <string name="sd_dist_module_vae">VAE / TAE</string>
     <string name="sd_dist_module_controlnet">ControlNet</string>
     <string name="sd_dist_module_upscaler">Escalador</string>
-    <string name="sd_dist_module_video_frames">Fotogramas de video</string>
     <string name="sd_dist_security_warning">RPC de stable-diffusion.cpp no tiene autenticacion ni cifrado. Usalo solo en una LAN de confianza o hotspot privado.</string>
     <string name="sd_dist_status_running">Worker en ejecucion</string>
     <string name="sd_dist_status_stopped">Worker detenido</string>
@@ -7806,7 +7779,6 @@
     <string name="sd_dist_manual_worker">Worker manual</string>
     <string name="sd_dist_worker_host">Host o IP del worker</string>
     <string name="sd_dist_threads_short">hilos</string>
-    <string name="sd_dist_worker_resource_line">%1$s:%2$d - %3$d MB - %4$d %5$s</string>
     <string name="sd_dist_ram_mb_short">RAM MB</string>
     <string name="sd_dist_add_worker">Anadir worker</string>
     <string name="sd_dist_workers">Workers</string>
@@ -7815,7 +7787,6 @@
     <string name="sd_dist_new_worker">Nuevo worker</string>
     <string name="sd_dist_delete_worker">Eliminar worker</string>
     <string name="sd_dist_worker_budget_line">%1$d MB - %2$d hilos</string>
-    <string name="sd_dist_master_resource_line">Este dispositivo - %1$d MB - %2$d hilos</string>
     <string name="sd_dist_rpc_servers_preview">Vista previa de servidores RPC</string>
     <string name="sd_dist_use_workers">Usar workers</string>
     <string name="sd_dist_view_network">Ver red</string>
@@ -8018,7 +7989,6 @@
     <string name="sd_dist_live">En vivo</string>
     <string name="sd_dist_live_online">En vivo: online</string>
     <string name="sd_dist_live_offline">En vivo: offline</string>
-    <string name="sd_dist_last_seen">Ultima vez visto: %1$s</string>
     <string name="sd_dist_planned_whole_assignment">Planeado: %1$s</string>
     <string name="sd_dist_planned_split_assignment">Planeado: %1$s ~%2$d%% capas</string>
     <string name="sd_dist_worker_notification_running">Escuchando en puerto %1$d</string>

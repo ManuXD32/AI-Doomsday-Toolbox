@@ -49,6 +49,7 @@ sealed class Screen(val route: String) {
     object FileServer : Screen("file_server")                 // Existing LAN file-sharing controls
     // Model screens
     object ModelHub : Screen("model_hub")        // Landing page for model management
+    object ModelSources : Screen("model_sources") // Saved sources, bundles, and pending artifacts
     object LLMModels : Screen("llm_models")      // LlamaCpp model management
     object SDModels : Screen("sd_models")        // SD model management
     object OnnxModels : Screen("onnx_models")    // ONNX model management

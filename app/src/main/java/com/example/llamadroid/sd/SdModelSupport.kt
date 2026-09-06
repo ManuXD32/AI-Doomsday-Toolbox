@@ -20,7 +20,16 @@ enum class SdModelFamily(val storedValue: String) {
     QWEN_IMAGE_EDIT("qwen_image_edit"),
     Z_IMAGE("z_image"),
     OVIS_IMAGE("ovis_image"),
-    ANIMA("anima");
+    ANIMA("anima"),
+    // Video families are appended so existing stored family ordinals and
+    // storedValue strings remain stable for image pipelines.
+    WAN("wan"),
+    HUNYUAN_VIDEO("hunyuan_video"),
+    LINGBOT_VIDEO("lingbot_video"),
+    LTX_VIDEO("ltx_video"),
+    MINIMAX_H3("minimax_h3"),
+    SVD("svd"),
+    ANIMATEDIFF("animatediff");
 
     companion object {
         fun fromStoredValue(value: String?): SdModelFamily? {
@@ -31,6 +40,38 @@ enum class SdModelFamily(val storedValue: String) {
             }
         }
     }
+}
+
+fun SdModelFamily.isVideoFamily(): Boolean = when (this) {
+    SdModelFamily.WAN,
+    SdModelFamily.HUNYUAN_VIDEO,
+    SdModelFamily.LINGBOT_VIDEO,
+    SdModelFamily.LTX_VIDEO,
+    SdModelFamily.MINIMAX_H3,
+    SdModelFamily.SVD,
+    SdModelFamily.ANIMATEDIFF -> true
+    else -> false
+}
+
+fun SdVideoFamily.toSdModelFamily(): SdModelFamily = when (this) {
+    SdVideoFamily.WAN -> SdModelFamily.WAN
+    SdVideoFamily.HUNYUAN_VIDEO -> SdModelFamily.HUNYUAN_VIDEO
+    SdVideoFamily.LINGBOT_VIDEO -> SdModelFamily.LINGBOT_VIDEO
+    SdVideoFamily.LTX_VIDEO -> SdModelFamily.LTX_VIDEO
+    SdVideoFamily.MINIMAX_H3 -> SdModelFamily.MINIMAX_H3
+    SdVideoFamily.SVD -> SdModelFamily.SVD
+    SdVideoFamily.ANIMATEDIFF -> SdModelFamily.ANIMATEDIFF
+}
+
+fun SdModelFamily.toVideoFamily(): SdVideoFamily? = when (this) {
+    SdModelFamily.WAN -> SdVideoFamily.WAN
+    SdModelFamily.HUNYUAN_VIDEO -> SdVideoFamily.HUNYUAN_VIDEO
+    SdModelFamily.LINGBOT_VIDEO -> SdVideoFamily.LINGBOT_VIDEO
+    SdModelFamily.LTX_VIDEO -> SdVideoFamily.LTX_VIDEO
+    SdModelFamily.MINIMAX_H3 -> SdVideoFamily.MINIMAX_H3
+    SdModelFamily.SVD -> SdVideoFamily.SVD
+    SdModelFamily.ANIMATEDIFF -> SdVideoFamily.ANIMATEDIFF
+    else -> null
 }
 
 enum class SdCacheArchitecture {
@@ -198,11 +239,15 @@ fun ModelEntity.sdFamilyEnum(): SdModelFamily? = SdModelFamily.fromStoredValue(s
 
 fun ModelEntity.resolvedSdFamily(): Pair<SdModelFamily?, String?> {
     val explicitFamily = sdFamilyEnum()
+    val inspection = sdArtifactInspection()
+    val detectedFamily = inspection?.detectedFamily ?: SdModelFamily.fromStoredValue(sdDetectedFamily)
+    val detectedVariant = inspection?.detectedVariant ?: sdVariantToken()
     if (explicitFamily != null) {
         val explicitVariant = sdVariantToken()
         if (explicitVariant != null) return explicitFamily to explicitVariant
-        return explicitFamily to inferSdFamily(type, repoId, filename).second
+        return explicitFamily to (detectedVariant ?: inferSdFamily(type, repoId, filename).second)
     }
+    if (detectedFamily != null) return detectedFamily to (detectedVariant ?: inferSdFamily(type, repoId, filename).second)
     return inferSdFamily(type, repoId, filename)
 }
 
@@ -217,8 +262,10 @@ fun ModelEntity.sdVariantToken(): String? = sdVariant?.trim()?.ifBlank { null }?
 
 fun ModelEntity.effectiveSdCompatProfiles(): Set<String> {
     val inferred = inferSdFamily(type, repoId, filename)
-    val family = sdFamilyEnum() ?: inferred.first
-    val variant = sdVariantToken() ?: inferred.second
+    val inspection = sdArtifactInspection()
+    val family = sdFamilyEnum() ?: inspection?.detectedFamily ?:
+        SdModelFamily.fromStoredValue(sdDetectedFamily) ?: inferred.first
+    val variant = sdVariantToken() ?: inspection?.detectedVariant ?: inferred.second
     val resolved = resolveSdCompatProfiles(
         type = type,
         explicitProfiles = sdCompatProfiles,
@@ -235,10 +282,47 @@ fun ModelEntity.isSdImageMainModel(): Boolean {
     if (type != ModelType.SD_CHECKPOINT && type != ModelType.SD_DIFFUSION) {
         return false
     }
+    if (resolvedSdVideoFamily().first != null) return false
     if (hasSdCapability(SD_CAPABILITY_VID_GEN) && !hasSdCapability(SD_CAPABILITY_TXT2IMG) && !hasSdCapability(SD_CAPABILITY_IMG2IMG)) {
         return false
     }
     return true
+}
+
+/**
+ * Resolve only explicit or structurally detected video metadata.  Video
+ * families are deliberately absent from filename inference: an imported
+ * `wan.safetensors` with unrelated tensors remains an Unknown/pending row.
+ */
+fun ModelEntity.resolvedSdVideoFamily(): Pair<SdVideoFamily?, String?> {
+    val (family, variant) = resolvedSdFamily()
+    return family?.toVideoFamily() to variant
+}
+
+fun ModelEntity.isSdVideoMainModel(): Boolean {
+    if (type != ModelType.SD_CHECKPOINT && type != ModelType.SD_DIFFUSION) return false
+    return hasSdCapability(SD_CAPABILITY_VID_GEN) || resolvedSdVideoFamily().first != null
+}
+
+/** True when a row is a family-compatible video component or main model. */
+fun ModelEntity.matchesSdVideoFamily(
+    family: SdVideoFamily,
+    variant: String? = null
+): Boolean {
+    val resolved = resolvedSdVideoFamily()
+    val isMain = type == ModelType.SD_CHECKPOINT || type == ModelType.SD_DIFFUSION
+    if (isMain) {
+        // A main model must have an explicit/structurally detected family. A
+        // generic vid_gen capability alone must not make it match every family.
+        if (!isSdVideoMainModel() || resolved.first != family) return false
+        val requested = variant?.trim()?.lowercase()?.takeIf { it.isNotBlank() }
+        return requested == null || resolved.second.isNullOrBlank() || resolved.second.equals(requested, ignoreCase = true)
+    }
+    val requestedModelFamily = family.toSdModelFamily()
+    val familyMatches = matchesSdFamily(requestedModelFamily, variant)
+    if (!familyMatches) return false
+    val explicitComponentFamily = resolved.first
+    return explicitComponentFamily == null || explicitComponentFamily == family
 }
 
 fun ModelEntity.matchesSdFamily(family: SdModelFamily, variant: String? = null): Boolean {
@@ -259,10 +343,20 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.Z_IMAGE.storedValue,
         SdModelFamily.OVIS_IMAGE.storedValue,
         SdModelFamily.ANIMA.storedValue
+    ) + setOf(
+        SdModelFamily.WAN.storedValue,
+        SdModelFamily.HUNYUAN_VIDEO.storedValue,
+        SdModelFamily.LINGBOT_VIDEO.storedValue,
+        SdModelFamily.LTX_VIDEO.storedValue,
+        SdModelFamily.MINIMAX_H3.storedValue,
+        SdModelFamily.SVD.storedValue,
+        SdModelFamily.ANIMATEDIFF.storedValue
     )
     ModelType.SD_TAE -> setOf(
         SdModelFamily.QWEN_IMAGE.storedValue,
-        SdModelFamily.QWEN_IMAGE_EDIT.storedValue
+        SdModelFamily.QWEN_IMAGE_EDIT.storedValue,
+        SdModelFamily.WAN.storedValue,
+        SdModelFamily.LINGBOT_VIDEO.storedValue
     )
     ModelType.SD_CLIP_L -> setOf(
         SdModelFamily.FLUX_1.storedValue,
@@ -275,9 +369,22 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.FLUX_KONTEXT.storedValue,
         SdModelFamily.SD3.storedValue,
         SdModelFamily.CHROMA.storedValue,
-        SdModelFamily.CHROMA_RADIANCE.storedValue
+        SdModelFamily.CHROMA_RADIANCE.storedValue,
+        SdModelFamily.WAN.storedValue,
+        SdModelFamily.HUNYUAN_VIDEO.storedValue
     )
-    ModelType.SD_CONTROLNET -> setOf(SdModelFamily.CHECKPOINT.storedValue)
+    ModelType.LLM,
+    ModelType.VISION_PROJECTOR,
+    ModelType.MMPROJ -> setOf(
+        SdModelFamily.LTX_VIDEO.storedValue,
+        SdModelFamily.MINIMAX_H3.storedValue,
+        SdModelFamily.LINGBOT_VIDEO.storedValue,
+        SdModelFamily.HUNYUAN_VIDEO.storedValue
+    )
+    ModelType.SD_CONTROLNET -> setOf(
+        SdModelFamily.CHECKPOINT.storedValue,
+        SdModelFamily.WAN.storedValue
+    )
     ModelType.SD_LORA -> setOf(
         SdModelFamily.CHECKPOINT.storedValue,
         SdModelFamily.FLUX_1.storedValue,
@@ -285,16 +392,43 @@ fun defaultCompatProfilesFor(type: ModelType): Set<String> = when (type) {
         SdModelFamily.FLUX_2.storedValue,
         SdModelFamily.CHROMA.storedValue,
         SdModelFamily.CHROMA_RADIANCE.storedValue,
-        SdModelFamily.SD3.storedValue
+        SdModelFamily.SD3.storedValue,
+        SdModelFamily.WAN.storedValue,
+        SdModelFamily.HUNYUAN_VIDEO.storedValue,
+        SdModelFamily.LINGBOT_VIDEO.storedValue,
+        SdModelFamily.LTX_VIDEO.storedValue,
+        SdModelFamily.MINIMAX_H3.storedValue,
+        SdModelFamily.SVD.storedValue,
+        SdModelFamily.ANIMATEDIFF.storedValue
     )
     ModelType.SD_TEXTUAL_INVERSION -> setOf(
         SdModelFamily.CHECKPOINT.storedValue
     )
     ModelType.SD_PHOTOMAKER -> setOf("${SdModelFamily.CHECKPOINT.storedValue}:sdxl")
-    ModelType.SD_CLIP_VISION,
+    ModelType.SD_CLIP_VISION -> setOf(
+        "${SdModelFamily.CHECKPOINT.storedValue}:sd1",
+        "${SdModelFamily.CHECKPOINT.storedValue}:sdxl",
+        SdModelFamily.WAN.storedValue,
+        SdModelFamily.SVD.storedValue
+    )
     ModelType.SD_IP_ADAPTER -> setOf(
         "${SdModelFamily.CHECKPOINT.storedValue}:sd1",
         "${SdModelFamily.CHECKPOINT.storedValue}:sdxl"
+    )
+    ModelType.SD_AUDIO_VAE -> setOf(
+        SdModelFamily.LTX_VIDEO.storedValue,
+        SdModelFamily.MINIMAX_H3.storedValue
+    )
+    ModelType.SD_EMBEDDINGS_CONNECTORS -> setOf(SdModelFamily.LTX_VIDEO.storedValue)
+    ModelType.SD_MOTION_MODULE -> setOf(SdModelFamily.ANIMATEDIFF.storedValue)
+    ModelType.SD_DIFFUSION -> setOf(
+        SdModelFamily.WAN.storedValue,
+        SdModelFamily.HUNYUAN_VIDEO.storedValue,
+        SdModelFamily.LINGBOT_VIDEO.storedValue,
+        SdModelFamily.LTX_VIDEO.storedValue,
+        SdModelFamily.MINIMAX_H3.storedValue,
+        SdModelFamily.SVD.storedValue,
+        SdModelFamily.ANIMATEDIFF.storedValue
     )
     ModelType.SD_UPSCALER -> setOf(SdComponentRole.UPSCALER.compatToken)
     else -> emptySet()
@@ -408,6 +542,13 @@ fun defaultCapabilitiesForFamily(
         SdModelFamily.FLUX_KONTEXT,
         SdModelFamily.FLUX_2,
         SdModelFamily.QWEN_IMAGE_EDIT -> buildSdCapabilities(SD_CAPABILITY_TXT2IMG, SD_CAPABILITY_IMG2IMG)
+        SdModelFamily.WAN,
+        SdModelFamily.HUNYUAN_VIDEO,
+        SdModelFamily.LINGBOT_VIDEO,
+        SdModelFamily.LTX_VIDEO,
+        SdModelFamily.MINIMAX_H3,
+        SdModelFamily.SVD,
+        SdModelFamily.ANIMATEDIFF -> buildSdCapabilities(SD_CAPABILITY_VID_GEN)
         null -> null
     }
 }
@@ -607,4 +748,72 @@ fun resolveSdFamilySpec(
         supportsDiffusionFa = true,
         supportsVaeConvDirect = true
     )
+    SdModelFamily.WAN -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        requiredRoles = setOf(SdComponentRole.T5XXL),
+        optionalRoles = setOf(
+            SdComponentRole.VAE,
+            SdComponentRole.TAE,
+            SdComponentRole.CLIP_VISION,
+            SdComponentRole.CONTROLNET,
+            SdComponentRole.LORA
+        ),
+        supportsFlowShift = true
+    )
+    SdModelFamily.HUNYUAN_VIDEO -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        requiredRoles = setOf(SdComponentRole.LLM, SdComponentRole.T5XXL),
+        optionalRoles = setOf(SdComponentRole.VAE, SdComponentRole.LORA)
+    )
+    SdModelFamily.LINGBOT_VIDEO -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        requiredRoles = setOf(SdComponentRole.LLM),
+        optionalRoles = setOf(SdComponentRole.VAE, SdComponentRole.TAE, SdComponentRole.LORA)
+    )
+    SdModelFamily.LTX_VIDEO -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        requiredRoles = setOf(SdComponentRole.LLM, SdComponentRole.VAE),
+        optionalRoles = setOf(SdComponentRole.LORA)
+    )
+    SdModelFamily.MINIMAX_H3 -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        requiredRoles = setOf(SdComponentRole.LLM, SdComponentRole.VAE),
+        optionalRoles = setOf(SdComponentRole.LLM_VISION, SdComponentRole.LORA)
+    )
+    SdModelFamily.SVD -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        requiredRoles = setOf(SdComponentRole.VAE),
+        optionalRoles = setOf(SdComponentRole.LORA)
+    )
+    SdModelFamily.ANIMATEDIFF -> videoFamilySpec(
+        family = family,
+        variant = variant,
+        optionalRoles = setOf(SdComponentRole.VAE, SdComponentRole.LORA)
+    )
 }
+
+private fun videoFamilySpec(
+    family: SdModelFamily,
+    variant: String?,
+    requiredRoles: Set<SdComponentRole> = emptySet(),
+    optionalRoles: Set<SdComponentRole> = emptySet(),
+    supportsFlowShift: Boolean = false
+): SdModelFamilySpec = SdModelFamilySpec(
+    family = family,
+    variant = variant,
+    cacheArchitecture = SdCacheArchitecture.DIT,
+    defaultCapabilities = buildSdCapabilities(SD_CAPABILITY_VID_GEN),
+    requiredRoles = requiredRoles,
+    optionalRoles = optionalRoles,
+    supportsFlowShift = supportsFlowShift,
+    supportsDiffusionFa = true,
+    supportsMmap = true,
+    supportsVaeConvDirect = true,
+    supportsLoraApplyMode = true
+)

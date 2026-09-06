@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -72,6 +74,7 @@ import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.WhisperVadInlineControl
 import com.example.llamadroid.ui.settings.PdfTranslationQualityModeSelector
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.FormatUtils
 import kotlinx.coroutines.Dispatchers
@@ -92,6 +95,7 @@ import org.json.JSONObject
 @Composable
 fun WorkflowsScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { SettingsRepository(context) }
@@ -663,6 +667,7 @@ fun WorkflowsScreen(navController: NavController) {
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
         }
         
         Column(
@@ -759,8 +764,10 @@ fun WorkflowsScreen(navController: NavController) {
                         description = stringResource(R.string.soft_studio_workflow_transcribe_summary_description),
                         onClick = { 
                             // Binaries are now in base, no need to download
+                            walkthroughTargets?.recordEvent("documents.workflow.canvas")
                             selectedWorkflow = 1 
-                        }
+                        },
+                        modifier = Modifier.walkthroughTarget("documents.workflow.canvas")
                     )
                     
                     Spacer(modifier = Modifier.height(12.dp))
@@ -5787,11 +5794,13 @@ private fun WorkflowCard(
     icon: ImageVector,
     title: String,
     description: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .then(modifier)
             .clickable { onClick() },
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),

@@ -111,3 +111,16 @@ data class WorkerMemoryBudget(
             value / divisor + if (value % divisor == 0L) 0L else 1L
     }
 }
+
+/**
+ * Keeps SharedPreferences writes proportional to effective user-visible changes. A changing
+ * available-memory sample may update the in-memory budget without rewriting the same contribution.
+ */
+object WorkerRamPersistencePolicy {
+    fun shouldPersist(
+        previousContributionMiB: Long?,
+        effectiveContributionMiB: Long,
+        hasUsableSnapshot: Boolean
+    ): Boolean = hasUsableSnapshot &&
+        previousContributionMiB != effectiveContributionMiB.coerceAtLeast(0L)
+}

@@ -4,9 +4,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
@@ -25,7 +27,12 @@ import com.example.llamadroid.ui.components.AppContentColumn
 import com.example.llamadroid.ui.components.AppHeroCard
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.components.rememberModelStorageInventory
+import com.example.llamadroid.ui.components.ModelStorageCount
+import com.example.llamadroid.data.model.StorageUsage
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Model Hub - Landing page for model management
@@ -34,6 +41,8 @@ import com.example.llamadroid.ui.navigation.Screen
 @Composable
 fun ModelHubScreen(navController: NavController) {
     val scrollState = rememberScrollState()
+    val storage = rememberModelStorageInventory()
+    val guideTargets = LocalWalkthroughTargets.current
     
     AppScreenScaffold(title = stringResource(R.string.models_hub), onBack = { navController.popBackStack() }) {
         AppContentColumn(
@@ -45,42 +54,69 @@ fun ModelHubScreen(navController: NavController) {
                 title = stringResource(R.string.models_llm),
                 description = stringResource(R.string.models_llm_desc),
                 icon = Icons.Default.Memory,
-                onClick = { navController.navigate(Screen.LLMModels.route) }
+                onClick = { guideTargets?.recordEvent("models.download"); navController.navigate(Screen.LLMModels.route) },
+                modifier = Modifier.walkthroughTarget("models.download"),
+                usage = storage.usage("llm"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
                 title = stringResource(R.string.models_sd),
                 description = stringResource(R.string.models_sd_desc),
                 icon = Icons.Default.Image,
-                onClick = { navController.navigate(Screen.SDModels.route) }
+                onClick = { navController.navigate(Screen.SDModels.route) },
+                usage = storage.usage("sd"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
                 title = stringResource(R.string.models_onnx),
                 description = stringResource(R.string.models_onnx_desc),
                 icon = Icons.Default.Hub,
-                onClick = { navController.navigate(Screen.OnnxModels.route) }
+                onClick = { navController.navigate(Screen.OnnxModels.route) },
+                usage = storage.usage("onnx"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
                 title = stringResource(R.string.models_litert),
                 description = stringResource(R.string.models_litert_desc),
                 icon = Icons.Default.Memory,
-                onClick = { navController.navigate(Screen.LiteRtModels.route) }
+                onClick = { navController.navigate(Screen.LiteRtModels.route) },
+                usage = storage.usage("litert"),
+                storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
                 title = stringResource(R.string.models_whisper),
                 description = stringResource(R.string.models_whisper_desc),
                 icon = Icons.Default.GraphicEq,
-                onClick = { navController.navigate(Screen.WhisperModels.route) }
+                onClick = { navController.navigate(Screen.WhisperModels.route) },
+                usage = storage.usage("whisper"),
+                storageLoaded = storage.loaded
+            )
+
+            ModelFeatureCard(
+                title = stringResource(R.string.model_library_hub_title),
+                description = stringResource(R.string.model_library_hub_desc),
+                icon = Icons.Default.Link,
+                onClick = { navController.navigate(Screen.ModelSources.route) }
+            )
+
+            ModelFeatureCard(
+                title = stringResource(R.string.model_storage_unknown_title),
+                description = stringResource(R.string.model_storage_unknown_desc),
+                icon = Icons.Default.HelpOutline,
+                onClick = { navController.navigate("${Screen.ModelSources.route}?tab=unknown") },
+                usage = storage.usage("unknown"), storageLoaded = storage.loaded
             )
 
             ModelFeatureCard(
                 title = stringResource(R.string.models_share),
                 description = stringResource(R.string.models_share_desc),
                 icon = Icons.Default.Share,
-                onClick = { navController.navigate("model_share") }
+                onClick = { guideTargets?.recordEvent("models.share"); navController.navigate("model_share") },
+                modifier = Modifier.walkthroughTarget("models.share")
             )
 
             Text(
@@ -98,10 +134,13 @@ private fun ModelFeatureCard(
     title: String,
     description: String,
     icon: ImageVector,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    usage: StorageUsage? = null,
+    storageLoaded: Boolean = true
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(20.dp),
@@ -144,6 +183,10 @@ private fun ModelFeatureCard(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                usage?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ModelStorageCount(it, loaded = storageLoaded)
+                }
             }
         }
     }

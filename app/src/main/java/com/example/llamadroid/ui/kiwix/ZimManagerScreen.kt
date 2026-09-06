@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.kiwix
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,6 +53,7 @@ import com.example.llamadroid.util.AssetPackManagerUtil.AssetPack
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -58,6 +61,7 @@ import java.io.File
 fun ZimManagerScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val db = remember { AppDatabase.getDatabase(context) }
     val repo = remember { ZimRepository(context, db.zimDao()) }
     val settings = remember { SettingsRepository(context) }
@@ -71,6 +75,7 @@ fun ZimManagerScreen(navController: NavController) {
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.zim_title)) },
                 navigationIcon = {
                     IconButton(
@@ -94,12 +99,16 @@ fun ZimManagerScreen(navController: NavController) {
             )
             AppScrollableTabRow(
                 selectedTabIndex = selectedTab,
-                edgePadding = 0.dp
+                edgePadding = 0.dp,
+                modifier = Modifier.walkthroughTarget("kiwix.catalog")
             ) {
                 tabs.forEachIndexed { index, title ->
                     Tab(
                         selected = selectedTab == index,
-                        onClick = { selectedTab = index },
+                        onClick = {
+                            selectedTab = index
+                            if (index == 1) walkthroughTargets?.recordEvent("kiwix.catalog")
+                        },
                         text = { Text(title) }
                     )
                 }

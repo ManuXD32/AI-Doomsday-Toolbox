@@ -1,6 +1,10 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughActive
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 import android.content.Context
 import android.net.Uri
@@ -54,7 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.res.stringResource
 import com.example.llamadroid.R
 import androidx.navigation.NavController
@@ -2056,7 +2060,9 @@ fun AgentScreen(
                                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                     )
                                 }
-                            }
+                            },
+                            walkthroughTargetId = "agent.workspace",
+                            walkthroughEventId = "agent.workspace"
                         )
                 }
             }
@@ -3130,6 +3136,7 @@ private fun AgentProjectDashboard(
     onDeleteProjects: (List<AgentConversationEntity>) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var currentFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     var actionTarget by remember { mutableStateOf<AgentDashboardActionTarget?>(null) }
     var selectionMode by rememberSaveable { mutableStateOf(false) }
@@ -3399,11 +3406,17 @@ private fun AgentProjectDashboard(
                 )
                 AgentDashboardActionItem(Icons.Default.Description, R.string.action_open) {
                     actionTarget = null
+                    walkthroughTargets?.recordEvent("agent.project")
                     onOpenProject(project)
                 }
                 if (resumable) {
-                    AgentDashboardActionItem(Icons.Default.PlayArrow, R.string.action_continue) {
+                    AgentDashboardActionItem(
+                        icon = Icons.Default.PlayArrow,
+                        labelRes = R.string.action_continue,
+                        targetId = "agent.continue"
+                    ) {
                         actionTarget = null
+                        walkthroughTargets?.recordEvent("agent.continue")
                         onContinueProject(project)
                     }
                 }
@@ -3467,6 +3480,7 @@ private fun AgentDashboardActionItem(
     icon: ImageVector,
     labelRes: Int,
     tint: Color = MaterialTheme.colorScheme.onSurface,
+    targetId: String? = null,
     onClick: () -> Unit
 ) {
     ListItem(
@@ -3474,6 +3488,7 @@ private fun AgentDashboardActionItem(
         leadingContent = { Icon(icon, contentDescription = null, tint = tint) },
         modifier = Modifier
             .heightIn(min = 48.dp)
+            .then(targetId?.let { Modifier.walkthroughTarget(it) } ?: Modifier)
             .clickable(onClick = onClick)
     )
 }

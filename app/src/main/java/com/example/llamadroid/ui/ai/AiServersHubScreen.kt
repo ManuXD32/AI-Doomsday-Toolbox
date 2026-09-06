@@ -42,7 +42,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -104,6 +104,8 @@ import com.example.llamadroid.ui.components.AppInsetDivider
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
 import com.example.llamadroid.ui.components.AppSectionTitle
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +116,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AiServersHubScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
@@ -214,7 +217,9 @@ fun AiServersHubScreen(navController: NavController) {
         }
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .walkthroughTarget("servers.cards"),
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -317,11 +322,13 @@ fun AiServersHubScreen(navController: NavController) {
                         onSave = { saveConfig(config, startAfterSave = false) },
                         onStart = { saveConfig(config, startAfterSave = true) },
                         onStop = {
+                            walkthroughTargets?.recordEvent("servers.card")
                             boundService?.stopServer(config.serverType)
                             statusMessage = resources.getString(R.string.ai_servers_server_stopped)
                         },
                         onCopy = ::copy,
                         onToggleLogs = {
+                            walkthroughTargets?.recordEvent("servers.card")
                             logsExpanded[config.serverType] = logsExpanded[config.serverType] != true
                         },
                         onClearLogs = { AiServerLogStore.clear(config.serverType) }

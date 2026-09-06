@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.chat
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
@@ -35,6 +37,8 @@ import com.example.llamadroid.ui.ai.injectKeyboardViewportFix
 import com.example.llamadroid.ui.ai.llama.RunningLlamaChatServerUi
 import com.example.llamadroid.ui.ai.llama.rememberRunningLlamaChatServers
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.lifecycle.LifecycleEventObserver
 import java.net.URI
 
@@ -69,6 +73,7 @@ fun ChatScreen(
     serverPortOverride: Int? = null
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val settingsRepository = remember(context) { SettingsRepository(context.applicationContext) }
     val configuredServerPort by settingsRepository.serverPort.collectAsState()
@@ -265,8 +270,14 @@ fun ChatScreen(
             TopAppBar(
                 title = {
                     OutlinedButton(
-                        onClick = { showServerPicker = true },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                        onClick = {
+                            showServerPicker = true
+                            walkthroughTargets?.recordEvent("chat.server_selection")
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .walkthroughTarget("chat.server_selection"),
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
@@ -295,6 +306,7 @@ fun ChatScreen(
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     TooltipBox(
                         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                         tooltip = {

@@ -3453,6 +3453,23 @@ object Migrations {
         }
     }
 
+    val MIGRATION_112_113 = object : Migration(112, 113) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            createModelLibraryTables(database)
+            listOf("sourceId", "artifactFamily", "artifactRole", "pendingArtifactId").forEach { column ->
+                if (!columnExists(database, "download_tasks", column)) {
+                    database.execSQL("ALTER TABLE `download_tasks` ADD COLUMN `$column` TEXT")
+                }
+            }
+            if (!columnExists(database, "download_tasks", "stageOnly")) {
+                database.execSQL("ALTER TABLE `download_tasks` ADD COLUMN `stageOnly` INTEGER NOT NULL DEFAULT 0")
+            }
+            if (!columnExists(database, "sd_distributed_master_settings", "videoAdvancedJson")) {
+                database.execSQL("ALTER TABLE `sd_distributed_master_settings` ADD COLUMN `videoAdvancedJson` TEXT NOT NULL DEFAULT '{}'")
+            }
+        }
+    }
+
     val ALL_MIGRATIONS: Array<Migration> = arrayOf(
         MIGRATION_27_28,
         MIGRATION_28_29,
@@ -3538,7 +3555,8 @@ object Migrations {
         MIGRATION_108_109,
         MIGRATION_109_110,
         MIGRATION_110_111,
-        MIGRATION_111_112
+        MIGRATION_111_112,
+        MIGRATION_112_113
     )
     /**
      * Check if a column exists in a table.

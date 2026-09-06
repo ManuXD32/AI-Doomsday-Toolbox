@@ -1,5 +1,7 @@
 package com.example.llamadroid.tama.ui
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.widget.Toast
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -36,7 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import coil.compose.AsyncImage
 import com.example.llamadroid.tama.data.*
 import com.example.llamadroid.tama.game.FarmRepository
@@ -57,6 +59,7 @@ import com.example.llamadroid.tama.game.wellCapacityForLevel
 import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -95,6 +98,7 @@ fun FarmScreen(
     var currentTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val context = LocalContext.current
     val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val wellUpgrade = upgrades.find { u -> u.type == "well" }
     val composterUpgrade = upgrades.find { u -> u.type == "composter" }
     val farmlandUpgrade = upgrades.find { u -> u.type == FARMLAND_UPGRADE_ID }
@@ -148,6 +152,7 @@ fun FarmScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.tama_farm_title)) },
                     navigationIcon = {
                         IconButton(
@@ -191,6 +196,7 @@ fun FarmScreen(
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     Row(
                         modifier = Modifier.padding(end = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -281,7 +287,8 @@ fun FarmScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .walkthroughTarget("tama.farm"),
                     contentAlignment = Alignment.Center
                 ) {
                     val controlsReserve = if (unlockedFarmPages > 1) 48.dp else 0.dp
@@ -316,6 +323,7 @@ fun FarmScreen(
                                                 scope.launch { farmRepository.saveTile(pet.id, updated) }
                                             }
                                         )
+                                        walkthroughTargets?.recordEvent("tama.farm")
                                     },
                                     onLongPress = {
                                         if (tile.crop != null) inspectedCropTile = tile

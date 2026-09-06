@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_artifact_details">File details</string>
+    <string name="model_artifact_inspection_record">Technical inspection record</string>
+    <string name="model_artifact_no_inspection">This file has not been inspected yet.</string>
+</resources>

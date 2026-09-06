@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_source_import_heading">Download source (optional)</string>
+    <string name="model_source_import_help">Local files can run without a source. Add a direct HTTPS or Hugging Face file link so this model can be reused in bundles.</string>
+    <string name="model_source_url_label">Download source URL</string>
+    <string name="model_source_url_hint">https://huggingface.co/owner/repository/resolve/main/file.gguf</string>
+    <string name="model_source_label">Source label</string>
+    <string name="model_source_label_hint">Optional display name</string>
+    <string name="model_source_attach_title">Attach download source</string>
+    <string name="model_source_saved_heading">Saved links</string>
+    <string name="model_source_no_saved_links">No compatible saved links yet.</string>
+    <string name="model_source_new_link">Add a new source link</string>
+    <string name="model_source_current">Current source: %1$s</string>
+    <string name="model_source_current_missing">Current source is unavailable: %1$s</string>
+    <string name="model_source_role_label">Bundle role (optional)</string>
+    <string name="model_source_role_hint">For example: checkpoint, encoder, or whisper</string>
+    <string name="model_source_local_file_unchanged">Saving a source changes metadata only. The installed file stays untouched.</string>
+    <string name="model_source_invalid_link">Enter a valid HTTPS or Hugging Face file link.</string>
+    <string name="model_source_choose_link">Choose a saved link or add a new source.</string>
+    <string name="model_source_save_link">Save source</string>
+    <string name="model_source_saved">Source saved</string>
+    <string name="model_source_save_failed">The source could not be saved: %1$s</string>
+    <string name="whisper_import_options_title">Import Whisper model</string>
+    <string name="whisper_import_options_desc">Choose an optional download source for %1$s before importing the local file.</string>
+    <string name="onnx_import_options_title">Import ONNX bundle</string>
+    <string name="onnx_import_options_desc">Choose how to record this directory package before importing %1$s.</string>
+    <string name="onnx_directory_mapping_required">A directory contains multiple files. Select one installed member before attaching a file link; each companion keeps its own source.</string>
+    <string name="onnx_import_source_mapping_heading">Map this source to one installed file</string>
+    <string name="onnx_import_source_mapping_help">A directory contains multiple files. Select the exact relative member represented by this direct file link.</string>
+    <string name="onnx_import_source_member_empty">No regular files are available to map.</string>
+    <string name="onnx_import_source_member_choose">Source file member</string>
+    <string name="onnx_import_source_member_required">Select the installed file represented by this source link.</string>
+    <string name="onnx_import_source_member_truncated">This directory has more than 512 files; showing the first 512. Use a smaller import directory to map another member.</string>
+    <string name="model_source_directory_empty">No regular files were found in this model directory.</string>
+    <string name="model_source_directory_choose_file">Select the installed file whose source you want to edit.</string>
+    <string name="model_source_directory_truncated">This directory has more than 512 files; showing the first 512. Import or attach individual files from a smaller directory when needed.</string>
+</resources>

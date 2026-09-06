@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
@@ -37,6 +39,8 @@ import com.example.llamadroid.data.model.TermuxTool
 import com.example.llamadroid.data.model.TermuxTools
 import com.example.llamadroid.service.SSHService
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.io.File
 import java.io.InputStream
 import java.io.IOException
@@ -93,6 +97,7 @@ enum class SortOption(val labelResId: Int) {
 @Composable
 fun TermuxFileManagerScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val sshService = remember { SSHService(context) }
@@ -480,6 +485,7 @@ fun TermuxFileManagerScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp)
+                .walkthroughTarget("termux.files")
         ) {
             // Not connected warning
             if (!isConnected) {
@@ -661,7 +667,10 @@ fun TermuxFileManagerScreen(navController: NavController) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 OutlinedButton(
-                    onClick = { uploadPicker.launch(arrayOf("*/*")) },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("termux.files")
+                        uploadPicker.launch(arrayOf("*/*"))
+                    },
                     modifier = Modifier.weight(1f),
                     enabled = !isDownloading && !isUploading
                 ) {
@@ -677,7 +686,10 @@ fun TermuxFileManagerScreen(navController: NavController) {
                 }
 
                 Button(
-                    onClick = { showDownloadDialog = true },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("termux.files")
+                        showDownloadDialog = true
+                    },
                     modifier = Modifier.weight(1f),
                     enabled = !isDownloading && !isUploading
                 ) {

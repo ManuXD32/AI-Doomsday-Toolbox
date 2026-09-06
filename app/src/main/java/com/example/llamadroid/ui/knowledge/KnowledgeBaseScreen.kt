@@ -46,7 +46,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -105,6 +105,8 @@ import com.example.llamadroid.ui.components.AppTextDetailsDialog
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.IntSliderWithInput
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.LogEntry
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.CancellationException
@@ -119,6 +121,7 @@ import java.util.Locale
 fun KnowledgeBaseScreen(navController: NavController) {
     val context = LocalContext.current
     val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
     val repository = remember { KnowledgeBaseRepository(context, database) }
@@ -272,7 +275,10 @@ fun KnowledgeBaseScreen(navController: NavController) {
                 // zero height, making the embedding prerequisite and actions unreachable.
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .walkthroughTarget("knowledge.sources")
+                    .walkthroughTarget("knowledge.search")
+                    .walkthroughTarget("knowledge.chunk"),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)
             ) {
@@ -434,7 +440,10 @@ fun KnowledgeBaseScreen(navController: NavController) {
                         items(bases, key = { it.id }) { base ->
                             KnowledgeFolderCard(
                                 base = base,
-                                onOpen = { selectedBaseId = base.id }
+                                onOpen = {
+                                    selectedBaseId = base.id
+                                    walkthroughTargets?.recordEvent("knowledge.sources")
+                                }
                             )
                         }
                     }
@@ -512,6 +521,7 @@ fun KnowledgeBaseScreen(navController: NavController) {
                             canSearch = embeddingConfig.isConfigured && sources.any { it.embeddedChunkCount > 0 },
                             onQueryChange = { query = it },
                             onSearch = {
+                                walkthroughTargets?.recordEvent("knowledge.search")
                                 launchBusy(resources.getString(R.string.kb_searching)) {
                                     searchResult = repository.search(query, listOf(selectedBase.id))
                                         .joinToString("\n\n") { result ->

@@ -7,6 +7,7 @@ import android.view.ContextThemeWrapper
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.test.platform.app.InstrumentationRegistry
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
@@ -23,6 +24,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
@@ -91,15 +93,66 @@ class SoftStudioFeatureFlowsTest {
         val title = marker + "a long project title for the compact organizer"
         val body = (1..75).joinToString("\n") { "Line $it: drafts remain intact when the editor scrolls." }
         rule.setContent { LlamaDroidTheme { NotesManagerScreen(rememberNavController()) } }
-        rule.onNodeWithContentDescription(rule.activity.getString(R.string.notes_new)).performClick()
-        rule.onNode(hasSetTextAction() and hasText(rule.activity.getString(R.string.notes_field_title)))
-            .performTextInput(title)
-        rule.onNode(hasSetTextAction() and hasText(rule.activity.getString(R.string.notes_field_content)))
-            .performScrollTo().performTextInput(body)
-        rule.onNodeWithText(rule.activity.getString(R.string.action_save)).assertIsDisplayed().performClick()
+        try {
+            rule.onNodeWithContentDescription(rule.activity.getString(R.string.notes_new)).performClick()
+            val titleField = rule.onNode(
+                hasSetTextAction() and hasText(rule.activity.getString(R.string.notes_field_title))
+            )
+            titleField.performTextInput(title)
+            titleField.assertTextContains(title, substring = true)
+
+            val contentField = rule.onNode(
+                hasSetTextAction() and hasText(rule.activity.getString(R.string.notes_field_content))
+            )
+            contentField.performScrollTo().performTextInput(body)
+            contentField.assertTextContains(body, substring = true)
+
+            rule.onNodeWithText(rule.activity.getString(R.string.action_save))
+                .assertIsDisplayed()
+                .assertIsEnabled()
+                .performClick()
+        } catch (error: Throwable) {
+            captureNoteSaveFailure("editor-input-or-save", title, body, error)
+            throw error
+        }
         val dao = AppDatabase.getDatabase(rule.activity).noteDao()
-        rule.waitUntil(10_000) { runBlocking { dao.getAllNotesOnce().any { it.title == title } } }
-        assertEquals(body, runBlocking { dao.getAllNotesOnce().single { it.title == title }.content })
+        try {
+            rule.waitUntil(10_000) {
+                rule.onAllNodesWithText(rule.activity.getString(R.string.action_save))
+                    .fetchSemanticsNodes()
+                    .isEmpty()
+            }
+            rule.waitUntil(10_000) { runBlocking { dao.getAllNotesOnce().any { it.title == title } } }
+            assertEquals(body, runBlocking { dao.getAllNotesOnce().single { it.title == title }.content })
+        } catch (error: Throwable) {
+            captureNoteSaveFailure("database-after-save", title, body, error)
+            throw error
+        }
+    }
+
+    private fun captureNoteSaveFailure(
+        stage: String,
+        title: String,
+        body: String,
+        error: Throwable
+    ) {
+        runCatching {
+            rule.waitForIdle()
+            val bitmap = requireNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            try {
+                val directory = File(rule.activity.getExternalFilesDir(null), "soft-studio-editor-qa").apply { mkdirs() }
+                File(directory, "note-save-failure-$stage.png").outputStream().use {
+                    check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it))
+                }
+                File(directory, "note-save-failure-$stage.txt").writeText(
+                    "title_length=${title.length}\n" +
+                        "body_length=${body.length}\n" +
+                        "error=${error::class.qualifiedName}: ${error.message}\n"
+                )
+            } finally {
+                bitmap.recycle()
+            }
+        }
     }
     private fun largeTextDialog(content: @Composable () -> Unit) {
         val configuration = Configuration(rule.activity.resources.configuration).apply { fontScale = 2f }

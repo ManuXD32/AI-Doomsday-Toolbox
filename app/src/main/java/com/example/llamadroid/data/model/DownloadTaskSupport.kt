@@ -47,6 +47,11 @@ fun PendingDownload.toDownloadTaskEntity(
         liteRtSupportsAudio = liteRtSupportsAudio,
         liteRtSupportsEmbedding = liteRtSupportsEmbedding,
         liteRtMaxContextTokens = liteRtMaxContextTokens,
+        sourceId = sourceId,
+        artifactFamily = artifactFamily,
+        artifactRole = artifactRole,
+        pendingArtifactId = pendingArtifactId,
+        stageOnly = stageOnly,
         status = status,
         bytesDownloaded = partFile.length().coerceAtLeast(0L),
         totalBytes = null,
@@ -84,7 +89,12 @@ fun DownloadTaskEntity.toPendingDownload(): PendingDownload {
         liteRtSupportsVision = liteRtSupportsVision,
         liteRtSupportsAudio = liteRtSupportsAudio,
         liteRtSupportsEmbedding = liteRtSupportsEmbedding,
-        liteRtMaxContextTokens = liteRtMaxContextTokens
+        liteRtMaxContextTokens = liteRtMaxContextTokens,
+        sourceId = sourceId,
+        artifactFamily = artifactFamily,
+        artifactRole = artifactRole,
+        pendingArtifactId = pendingArtifactId,
+        stageOnly = stageOnly
     )
 }
 

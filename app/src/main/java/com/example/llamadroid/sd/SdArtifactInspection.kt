@@ -48,7 +48,11 @@ enum class SdArtifactRole(val storedValue: String) {
     LLM_VISION("llm_vision"),
     LORA("lora"),
     CONTROLNET("controlnet"),
-    UNKNOWN("unknown");
+    UNKNOWN("unknown"),
+    // Append video companion roles. UNKNOWN retains its historical ordinal.
+    AUDIO_VAE("audio_vae"),
+    EMBEDDINGS_CONNECTORS("embeddings_connectors"),
+    MOTION_MODULE("motion_module");
 
     companion object {
         /** Compatibility spelling for the standalone diffusion role. */
@@ -120,6 +124,12 @@ data class SdArtifactInspection(
     val containsClipG: Boolean = false,
     val containsT5xxl: Boolean = false,
     val containsLlm: Boolean = false,
+    /** Video-family components found in bounded tensor/header evidence. */
+    val containsAudioVae: Boolean = false,
+    val containsEmbeddingsConnectors: Boolean = false,
+    val containsMotionModule: Boolean = false,
+    /** Structural/metadata variant evidence; never inferred from filenames. */
+    val detectedVariant: String? = null,
     val tensorCount: Long? = null,
     val confidence: SdInspectionConfidence = SdInspectionConfidence.UNKNOWN,
     val warnings: List<String> = emptyList(),
@@ -153,6 +163,10 @@ data class SdArtifactInspection(
     val fingerprint: String?
         get() = headerFingerprint
 
+    /** A video family uses the shared model-family storage namespace. */
+    val detectedVideoFamily: SdVideoFamily?
+        get() = detectedFamily?.toVideoFamily()
+
     val isInspected: Boolean
         get() = inspectionVersion > 0 && format != SdArtifactFormat.UNKNOWN && headerValid
 
@@ -178,6 +192,10 @@ data class SdArtifactInspection(
         put("containsClipG", containsClipG)
         put("containsT5xxl", containsT5xxl)
         put("containsLlm", containsLlm)
+        put("containsAudioVae", containsAudioVae)
+        put("containsEmbeddingsConnectors", containsEmbeddingsConnectors)
+        put("containsMotionModule", containsMotionModule)
+        put("detectedVariant", detectedVariant ?: JSONObject.NULL)
         tensorCount?.let { put("tensorCount", it) } ?: put("tensorCount", JSONObject.NULL)
         put("confidence", confidence.storedValue)
         put("headerFingerprint", headerFingerprint ?: JSONObject.NULL)
@@ -195,7 +213,7 @@ data class SdArtifactInspection(
     }.toString()
 
     companion object {
-        const val CURRENT_INSPECTION_VERSION: Int = 1
+        const val CURRENT_INSPECTION_VERSION: Int = 2
         const val MAX_PERSISTED_WARNINGS: Int = 32
         const val MAX_PERSISTED_METADATA: Int = 64
         const val MAX_PERSISTED_PREFIXES: Int = 64
@@ -244,6 +262,10 @@ data class SdArtifactInspection(
                     containsClipG = root.optBoolean("containsClipG", false),
                     containsT5xxl = root.optBoolean("containsT5xxl", false),
                     containsLlm = root.optBoolean("containsLlm", false),
+                    containsAudioVae = root.optBoolean("containsAudioVae", false),
+                    containsEmbeddingsConnectors = root.optBoolean("containsEmbeddingsConnectors", false),
+                    containsMotionModule = root.optBoolean("containsMotionModule", false),
+                    detectedVariant = root.optString("detectedVariant", null)?.takeIf { it.isNotBlank() },
                     tensorCount = if (root.isNull("tensorCount")) null else root.optLong("tensorCount"),
                     confidence = SdInspectionConfidence.fromStoredValue(root.optString("confidence", null)),
                     warnings = warnings,
@@ -272,6 +294,9 @@ fun com.example.llamadroid.data.db.ModelEntity.withSdArtifactInspection(
 ): com.example.llamadroid.data.db.ModelEntity = copy(
     sdDetectedFamily = inspection.detectedFamily?.storedValue,
     sdDetectedRole = inspection.detectedRole?.storedValue,
+    // Keep an explicit edited variant authoritative, while allowing a
+    // structurally detected video variant to participate in selectors.
+    sdVariant = sdVariant ?: inspection.detectedVariant,
     sdArtifactLayout = inspection.artifactLayout.storedValue.takeUnless { it == SdMainLayout.UNKNOWN.storedValue },
     sdInspectionConfidence = inspection.confidence.storedValue,
     sdInspectionVersion = inspection.inspectionVersion,

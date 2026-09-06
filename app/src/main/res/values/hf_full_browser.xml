@@ -1,0 +1,9 @@
+<resources>
+    <string name="hf_full_browse">Browse all repository files</string>
+    <string name="hf_full_root">Repository root</string>
+    <string name="hf_full_explanation">Open folders and select individual files. File names and folder layouts are preserved. Downloaded files are inspected; unfamiliar or incomplete models stay in Unknown for classification.</string>
+    <string name="hf_full_queued">Files queued: %1$d. Progress, cancellation and retry are available in Downloads.</string>
+    <string name="hf_full_selection">Selected files</string>
+    <string name="hf_full_remove_selection">Remove %1$s from selection</string>
+    <string name="hf_full_download_selected">Download selected (%1$d)</string>
+</resources>

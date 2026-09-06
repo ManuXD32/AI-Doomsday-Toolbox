@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="worker_topology_memory_live">Muestra de memoria en vivo · se actualiza cada 2 segundos</string>
+    <string name="worker_topology_notification_memory">RAM: %1$.1f GB libres / %2$.1f GB totales</string>
+    <string name="worker_topology_worker_listening">Escuchando en %1$s:%2$d · anunciando como %3$s</string>
+
+    <string name="worker_topology_graph_title">Topología del clúster</string>
+    <string name="worker_topology_graph_subtitle">Conexiones RPC del maestro a los workers</string>
+    <string name="worker_topology_master_name">Maestro local</string>
+    <string name="worker_topology_master_endpoint">Este dispositivo · coordinador local</string>
+    <string name="worker_topology_master_metrics">RAM configurada: %1$d MB · proporción estimada: %2$d%% · capas locales: %3$d</string>
+    <string name="worker_topology_worker_name">Worker %1$d · %2$s</string>
+    <string name="worker_topology_endpoint">Endpoint</string>
+    <string name="worker_topology_metrics">Capacidad: %1$d MB · reparto estimado: %2$d%% · %3$s</string>
+    <string name="worker_topology_real_ram">RAM en vivo %s</string>
+    <string name="worker_topology_estimated_ram">RAM estimada %s</string>
+    <string name="worker_topology_layers">Capas asignadas: %s</string>
+    <string name="worker_topology_identifier">Identificador del worker</string>
+    <string name="worker_topology_saved_identifier">Worker guardado #%d</string>
+    <string name="worker_topology_derived_identifier">Derivado del endpoint</string>
+    <string name="worker_topology_last_confirmed">Última confirmación: %s</string>
+    <string name="worker_topology_status_detail">Detalles: %s</string>
+    <string name="worker_topology_no_workers_title">No hay workers conectados</string>
+    <string name="worker_topology_no_workers_body">Añade y activa un worker RPC para ver aquí su conexión y capacidad.</string>
+    <string name="worker_topology_model_title">Asignación del modelo</string>
+    <string name="worker_topology_model_metrics">Capas totales: %1$d · modelo: %2$d MB · locales: %3$d · RPC: %4$d</string>
+    <string name="worker_topology_allocation_master">Maestro %d%%</string>
+    <string name="worker_topology_allocation_workers">Workers %d%%</string>
+    <string name="worker_topology_transfer_title">Transferencia de capas</string>
+    <string name="worker_topology_transfer_progress">Sincronizando capas · %d%%</string>
+    <string name="worker_topology_memory_title">Memoria del clúster</string>
+    <string name="worker_topology_cluster_memory">Capacidad del clúster: %d MB</string>
+    <string name="worker_topology_master_memory">Asignación del maestro: %d MB</string>
+    <string name="worker_topology_worker_memory">Worker %1$d · asignación: %2$d MB</string>
+    <string name="worker_topology_logs_title">Logs RPC recientes</string>
+    <string name="worker_topology_logs_empty">Aún no hay líneas de log RPC.</string>
+    <string name="worker_topology_logs_bound">Últimas líneas del registro: %d</string>
+    <string name="worker_topology_command_title">Comando de inicio</string>
+    <string name="worker_topology_controls_title">Controles</string>
+</resources>

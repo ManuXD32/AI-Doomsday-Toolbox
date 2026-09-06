@@ -52,5 +52,5 @@
     <string name="tour_show_guide">Show guide</string>
     <!-- The native-Llama lesson opens the same server-list state as chat; retain its stable
          drawable ID while resolving the locale-specific chat capture. -->
-    <item name="tour_lesson_native_llama" type="drawable">@drawable/tour_lesson_chat</item>
+    <item name="tour_lesson_native_llama" type="drawable">@drawable/tour_lesson_conversations_native_management</item>
 </resources>

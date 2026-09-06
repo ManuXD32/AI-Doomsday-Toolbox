@@ -37,7 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -82,12 +82,13 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
 import com.example.llamadroid.R
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.tama.data.FarmTradeItemCatalog
 import com.example.llamadroid.tama.data.InventoryItem
@@ -165,6 +166,7 @@ fun AdventureGateScreen(
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val repository = remember(database) { AdventureGateRepository(database) }
     val tamaDao = database.tamaDao()
     val activePet by tamaDao.observeActivePet().collectAsState(initial = null)
@@ -270,6 +272,7 @@ fun AdventureGateScreen(
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { showInfoDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = stringResource(R.string.adventure_gate_info_title))
                     }
@@ -300,6 +303,9 @@ fun AdventureGateScreen(
                 .fillMaxSize()
                 .padding(padding)
                 .background(GateDark)
+                .walkthroughTarget(
+                    if (mode == AdventureGateScreenMode.NIGHT_ARENA) "tama.arena" else "tama.gate"
+                )
         ) {
             when {
                 pet == null -> AdventureGateInfo(stringResource(R.string.adventure_gate_no_pet))
@@ -329,6 +335,7 @@ fun AdventureGateScreen(
                     onOpenLoadout = { showLoadoutDialog = true },
                     onOpenGear = { showGearClosetDialog = true },
                     onSelectLevel = { level ->
+                        walkthroughTargets?.recordEvent("tama.arena")
                         val id = petId
                         if (id != null) {
                             scope.launch {
@@ -345,7 +352,10 @@ fun AdventureGateScreen(
                     pet = pet,
                     progressRows = progressRows,
                     selectedWorldId = selectedWorldId,
-                    onSelectWorld = { world -> selectedWorldId = world.id },
+                    onSelectWorld = { world ->
+                        selectedWorldId = world.id
+                        walkthroughTargets?.recordEvent("tama.gate")
+                    },
                     onOpenLoadout = { showLoadoutDialog = true },
                     onOpenShop = { showShopDialog = true },
                     onSelectPhase = { phase -> pendingStoryPhase = phase }

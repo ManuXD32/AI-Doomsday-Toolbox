@@ -28,6 +28,30 @@ internal class WalkthroughTargets {
     var drawerOpen by mutableStateOf(false)
     var active by mutableStateOf(false)
     var retryKey by mutableIntStateOf(0)
+    val events = mutableStateMapOf<String, Int>()
+    val modalOwners = mutableStateListOf<Any>()
+    fun recordEvent(id: String) {
+        if (active) events[id] = (events[id] ?: 0) + 1
+    }
+    internal val scrollOwners = mutableMapOf<String, Pair<Any, suspend () -> Unit>>()
+}
+
+/** Register an owning lazy list even when its target item has not been composed yet. */
+@Composable
+internal fun WalkthroughScrollOwner(targetIds: Set<String>, scrollToTarget: suspend (String) -> Unit) {
+    val registry = LocalWalkthroughTargets.current ?: return
+    val owner = remember { Any() }
+    val scroll by rememberUpdatedState(scrollToTarget)
+    DisposableEffect(registry, targetIds) {
+        targetIds.forEach { id -> registry.scrollOwners[id] = owner to { scroll(id) } }
+        onDispose { targetIds.forEach { id ->
+            if (registry.scrollOwners[id]?.first === owner) registry.scrollOwners.remove(id)
+        } }
+    }
+    LaunchedEffect(registry.requestedId, registry.retryKey, registry.active) {
+        val id = registry.requestedId
+        if (registry.active && id in targetIds && id != null) scroll(id)
+    }
 }
 
 /** Presentation state is available during first composition, before measured targets are committed. */
@@ -59,13 +83,13 @@ internal fun Modifier.walkthroughTarget(id: String): Modifier = composed {
 
 /** A non-intercepting drawing layer. Insets and scroll are reflected in measured window bounds. */
 @Composable
-internal fun WalkthroughHighlight(registry: WalkthroughTargets, content: @Composable () -> Unit) {
+internal fun WalkthroughHighlight(registry: WalkthroughTargets, expand: Boolean = true, content: @Composable () -> Unit) {
     var origin by remember { mutableStateOf(Offset.Zero) }
     val color = MaterialTheme.colorScheme.primary
     val bounds = registry.requestedId?.let { registry.targets[it]?.bounds }
-    Box(Modifier.fillMaxSize().onGloballyPositioned { origin = it.positionInWindow() }) {
+    Box((if (expand) Modifier.fillMaxSize() else Modifier).onGloballyPositioned { origin = it.positionInWindow() }) {
         content()
-        if (bounds != null && bounds.width > 0f && bounds.height > 0f) Canvas(Modifier.fillMaxSize()) {
+        if ((!expand || registry.modalOwners.isEmpty()) && bounds != null && bounds.width > 0f && bounds.height > 0f) Canvas(Modifier.matchParentSize()) {
             val margin = 3.dp.toPx()
             drawRoundRect(color, bounds.topLeft - origin - Offset(margin, margin),
                 Size(bounds.width + margin * 2, bounds.height + margin * 2),

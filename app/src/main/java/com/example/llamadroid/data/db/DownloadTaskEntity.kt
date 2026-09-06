@@ -47,6 +47,11 @@ data class DownloadTaskEntity(
     val liteRtSupportsAudio: Boolean? = null,
     val liteRtSupportsEmbedding: Boolean? = null,
     val liteRtMaxContextTokens: Int? = null,
+    val sourceId: String? = null,
+    val artifactFamily: String? = null,
+    val artifactRole: String? = null,
+    val pendingArtifactId: String? = null,
+    @androidx.room.ColumnInfo(defaultValue = "0") val stageOnly: Boolean = false,
     val status: String = DOWNLOAD_TASK_STATUS_ACTIVE,
     val bytesDownloaded: Long = 0L,
     val totalBytes: Long? = null,
@@ -70,6 +75,9 @@ interface DownloadTaskDao {
 
     @Query("SELECT * FROM download_tasks WHERE modelType IN (:modelTypes) ORDER BY updatedAt DESC")
     fun observeByModelTypes(modelTypes: List<String>): Flow<List<DownloadTaskEntity>>
+
+    @Query("SELECT * FROM download_tasks WHERE (artifactFamily IS NULL AND modelType IN (:modelTypes)) OR artifactFamily = :family ORDER BY updatedAt DESC")
+    fun observeByLibraryFamily(modelTypes: List<String>, family: String): Flow<List<DownloadTaskEntity>>
 
     @Query("SELECT * FROM download_tasks WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): DownloadTaskEntity?

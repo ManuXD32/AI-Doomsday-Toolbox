@@ -15,7 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -50,6 +50,8 @@ import com.example.llamadroid.data.db.TestedModel
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppSectionCard
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import java.text.DateFormat
 import java.util.Date
@@ -63,6 +65,7 @@ private enum class BenchmarkCompareMetric {
 @Composable
 fun BenchmarkHistoryScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val db = remember { AppDatabase.getDatabase(context) }
     val scope = rememberCoroutineScope()
     val allResults by db.benchmarkDao().getAllResults().collectAsState(initial = emptyList())
@@ -112,7 +115,8 @@ fun BenchmarkHistoryScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = AppChromeDefaults.ScreenPadding),
+                .padding(horizontal = AppChromeDefaults.ScreenPadding)
+                .walkthroughTarget("benchmark.history"),
             contentPadding = PaddingValues(top = 8.dp, bottom = AppChromeDefaults.ScreenPadding),
             verticalArrangement = Arrangement.spacedBy(AppChromeDefaults.SectionSpacing)
         ) {
@@ -125,7 +129,10 @@ fun BenchmarkHistoryScreen(navController: NavController) {
                     metric = compareMetric,
                     onFirstModelSelected = { firstModelPath = it },
                     onSecondModelSelected = { secondModelPath = it },
-                    onMetricSelected = { compareMetric = it }
+                    onMetricSelected = {
+                        walkthroughTargets?.recordEvent("benchmark.history")
+                        compareMetric = it
+                    }
                 )
             }
             
@@ -133,7 +140,10 @@ fun BenchmarkHistoryScreen(navController: NavController) {
                 BenchmarkHistoryFilter(
                     models = testedModels,
                     selectedModelPath = filterModelPath,
-                    onSelected = { filterModelPath = it }
+                    onSelected = {
+                        walkthroughTargets?.recordEvent("benchmark.history")
+                        filterModelPath = it
+                    }
                 )
             }
 
@@ -142,9 +152,13 @@ fun BenchmarkHistoryScreen(navController: NavController) {
                     runs = filteredRunSummaries.map { it.toChartRun() },
                     selectedRunKeys = selectedChartRunKeys,
                     onSelectVisible = {
+                        walkthroughTargets?.recordEvent("benchmark.history")
                         selectedChartRunKeys = selectedChartRunKeys + filteredRunSummaries.map { it.chartKey }
                     },
-                    onClearSelection = { selectedChartRunKeys = emptySet() }
+                    onClearSelection = {
+                        walkthroughTargets?.recordEvent("benchmark.history")
+                        selectedChartRunKeys = emptySet()
+                    }
                 )
             }
             
@@ -199,10 +213,14 @@ fun BenchmarkHistoryScreen(navController: NavController) {
                             }
                         },
                         onRename = {
+                            walkthroughTargets?.recordEvent("benchmark.history")
                             renameTarget = summary
                             renameText = summary.runName
                         },
-                        onDelete = { deleteTarget = summary }
+                        onDelete = {
+                            walkthroughTargets?.recordEvent("benchmark.history")
+                            deleteTarget = summary
+                        }
                     )
                 }
             }

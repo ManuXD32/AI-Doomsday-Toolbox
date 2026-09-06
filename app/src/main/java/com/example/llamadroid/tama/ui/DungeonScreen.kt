@@ -30,6 +30,8 @@ import com.example.llamadroid.tama.adventure.localizedName
 import com.example.llamadroid.tama.db.TamaDatabase
 import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.data.SettingsRepository
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 
 // Dark fantasy color scheme
@@ -48,6 +50,7 @@ fun DungeonScreen(
     settingsRepository: SettingsRepository
 ) {
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var completedDungeonCount by remember { mutableStateOf(0) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     
@@ -80,6 +83,7 @@ fun DungeonScreen(
                     }
                 },
                 actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.action_settings))
                     }
@@ -109,6 +113,7 @@ fun DungeonScreen(
             
             // Dungeon list
             LazyColumn(
+                modifier = Modifier.walkthroughTarget("tama.dungeon"),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 items(DungeonType.entries.toList()) { dungeon ->
@@ -118,6 +123,7 @@ fun DungeonScreen(
                         isUnlocked = isUnlocked,
                         onClick = {
                             if (isUnlocked) {
+                                walkthroughTargets?.recordEvent("tama.dungeon")
                                 navController.navigate(Screen.Adventure.createRoute(dungeon.name))
                             }
                         }

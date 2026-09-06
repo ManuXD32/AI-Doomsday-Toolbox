@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.distributed
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.app.ActivityManager
 import android.content.Context
 
@@ -78,6 +80,8 @@ import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppChromeDefaults
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -116,6 +120,7 @@ private sealed interface ModelProbeUiState {
 @Composable
 fun MasterModeScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val db = remember { AppDatabase.getDatabase(context) }
     val settingsRepo = remember { com.example.llamadroid.data.SettingsRepository(context) }
@@ -622,7 +627,8 @@ fun MasterModeScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .walkthroughTarget("distributed.master"),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
         ) {
@@ -642,7 +648,10 @@ fun MasterModeScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(12.dp))
                         
                         OutlinedCard(
-                            onClick = { showModelPicker = true },
+                            onClick = {
+                                walkthroughTargets?.recordEvent("distributed.master")
+                                showModelPicker = true
+                            },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
@@ -2670,6 +2679,7 @@ fun MasterModeScreen(navController: NavController) {
                 
                 Button(
                     onClick = {
+                        walkthroughTargets?.recordEvent("distributed.master")
                         if (isServerRunning) {
                             context.startService(Intent(context, DistributedMasterLlamaService::class.java).apply {
                                 action = DistributedMasterLlamaService.ACTION_STOP
@@ -2823,7 +2833,10 @@ fun MasterModeScreen(navController: NavController) {
                 
                 // View Network Status Button
                 OutlinedButton(
-                    onClick = { navController.navigate(Screen.NetworkVisualization.route) },
+                    onClick = {
+                        walkthroughTargets?.recordEvent("distributed.master")
+                        navController.navigate(Screen.NetworkVisualization.route)
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.Info, contentDescription = null)

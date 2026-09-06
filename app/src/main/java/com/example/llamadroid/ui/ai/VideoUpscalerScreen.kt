@@ -36,6 +36,8 @@ import com.example.llamadroid.ui.components.AppTaskActionFooter
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppStatePanel
 import com.example.llamadroid.ui.components.AppStateKind
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 
 /**
  * Video Upscaler Screen using realsr-ncnn/realcugan-ncnn
@@ -44,6 +46,7 @@ import com.example.llamadroid.ui.components.AppStateKind
 @Composable
 fun VideoUpscalerScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
@@ -227,6 +230,7 @@ fun VideoUpscalerScreen(navController: NavController) {
             procThreads = procThreads,
             saveThreads = saveThreads
         )
+        walkthroughTargets?.recordEvent("video.upscale.options")
         ContextCompat.startForegroundService(
             context,
             VideoUpscalerService.createStartIntent(context, config)
@@ -302,6 +306,7 @@ fun VideoUpscalerScreen(navController: NavController) {
         modifier = Modifier.imePadding(),
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.upscaler_title)) },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
@@ -372,7 +377,9 @@ fun VideoUpscalerScreen(navController: NavController) {
             
             // Engine Selection
             Card(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .walkthroughTarget("video.upscale.options"),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {

@@ -35,7 +35,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -106,6 +106,9 @@ import com.example.llamadroid.service.UpscalerModelFiles
 import com.example.llamadroid.util.UpscalerAssetPackSupport
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.ui.components.AppTaskActionFooter
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -115,6 +118,7 @@ import java.io.File
 @Composable
 fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boolean = false) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
@@ -169,6 +173,9 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
     var crf by remember { mutableIntStateOf(20) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var selectedTab by remember { mutableIntStateOf(0) }
+    WalkthroughScrollOwner(setOf("video.interpolation.options")) { target ->
+        if (target == "video.interpolation.options" && selectedTab != 0) selectedTab = 0
+    }
     val combinedWorkflow = embeddedWorkflow
     var combinedUpscaleEngine by remember { mutableStateOf(UpscalerEngine.REALSR) }
     var combinedUpscaleModel by remember {
@@ -368,11 +375,13 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                                 denoise = if (model.engine == UpscalerEngine.REALCUGAN) combinedUpscaleDenoise else -1
                             )
                         )
+                        walkthroughTargets?.recordEvent("video.interpolation.options")
                         context.startForegroundService(
                             VideoInterpolationService.createStartInterpolateUpscaleIntent(context, combinedConfig)
                         )
                         return@StartInterpolationCard
                     }
+                    walkthroughTargets?.recordEvent("video.interpolation.options")
                     scope.launch {
                         interpolationService?.interpolate(config)?.fold(
                             onSuccess = { generatedPath ->
@@ -418,6 +427,7 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
         topBar = {
             if (!embeddedWorkflow) {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.interpolation_title)) },
                     navigationIcon = {
                         IconButton(onClick = { navController.popBackStack() }) {
@@ -560,7 +570,8 @@ fun VideoInterpolationScreen(navController: NavController, embeddedWorkflow: Boo
                 onCodec = { selectedCodec = it },
                 crf = crf,
                 onCrf = { crf = it },
-                videoInfo = videoInfo
+                videoInfo = videoInfo,
+                modifier = Modifier.walkthroughTarget("video.interpolation.options")
             )
 
             if (combinedWorkflow && videoInfo != null) {
@@ -788,9 +799,10 @@ private fun InterpolationOptionsCard(
     onCodec: (VideoInterpolationCodec) -> Unit,
     crf: Int,
     onCrf: (Int) -> Unit,
-    videoInfo: VideoInterpolationInfo?
+    videoInfo: VideoInterpolationInfo?,
+    modifier: Modifier = Modifier
 ) {
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+    Card(modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(stringResource(R.string.interpolation_options), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.interpolation_multiplier_label), style = MaterialTheme.typography.labelLarge)

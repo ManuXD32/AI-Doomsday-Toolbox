@@ -4752,18 +4752,10 @@
     <string name="video_gen_mode_txt2vid">txt2vid</string>
     <string name="video_gen_mode_img2vid">img2vid</string>
     <string name="video_gen_input_image_title">Input image</string>
-    <string name="video_gen_input_image_ready">Image ready for img2vid</string>
-    <string name="video_gen_select_image">Select image</string>
     <string name="video_gen_model_label">Video model</string>
-    <string name="video_gen_no_models_installed">No video generation models installed yet.</string>
     <string name="video_gen_get_models">Open SD Models</string>
-    <string name="video_gen_select_model">Select a video generation model</string>
     <string name="video_gen_vae_toggle_label">Use VAE</string>
-    <string name="video_gen_no_vae_installed">No VAE models installed.</string>
-    <string name="video_gen_select_vae">Select a VAE model</string>
     <string name="video_gen_t5_toggle_label">Use T5-XXL</string>
-    <string name="video_gen_no_t5xxl_installed">No T5-XXL models installed.</string>
-    <string name="video_gen_select_t5xxl">Select a T5-XXL model</string>
     <string name="video_gen_mode_label">Mode</string>
     <string name="video_gen_prompt_label">Prompt</string>
     <string name="video_gen_prompt_placeholder">Describe the motion, scene, and style for the video...</string>
@@ -4824,7 +4816,6 @@
     <string name="video_gen_status_generating_eta">Generating video… %1$d%% • ETA %2$s</string>
     <string name="video_gen_status_diffusion_eta">Generating video… %1$d%% • Diffusion ETA %2$s</string>
     <string name="video_gen_status_vae_eta">Generating video… %1$d%% • VAE ETA %2$s</string>
-    <string name="video_gen_status_converting">Converting AVI to MP4…</string>
     <string name="video_gen_status_copying">Copying generated video to the output folder…</string>
     <string name="video_gen_notification_complete">Video generation complete</string>
     <string name="generation_battery_dialog_title">Allow unrestricted battery for generation?</string>
@@ -4838,12 +4829,10 @@
     <string name="video_gen_error_ffmpeg_missing">FFmpeg is not available.</string>
     <string name="video_gen_error_generation_failed">Video generation failed with exit code %1$d.</string>
     <string name="video_gen_error_conversion_failed">MP4 conversion failed with exit code %1$d.</string>
-    <string name="video_gen_error_avi_missing">The generated AVI file was not found.</string>
     <string name="video_gen_error_media_processing_timeout">Video generation stopped because the Android background media-processing quota was exhausted. Keep the app in the foreground or reduce frames or steps, then start again.</string>
     <string name="video_gen_warning_output_not_configured">No output folder is configured, so the video stays in app storage only.</string>
     <string name="video_gen_warning_output_unavailable">The output folder is unavailable, so the video stays in app storage only.</string>
     <string name="video_gen_warning_export_failed">The video was generated, but exporting it failed: %1$s</string>
-    <string name="video_gen_error_shared_image">Could not load the selected image: %1$s</string>
     <string name="video_gen_error_service_unavailable">The video generation service is not ready yet.</string>
     <string name="video_gen_error_model_required">Select a video generation model first.</string>
     <string name="video_gen_error_prompt_required">Enter a prompt first.</string>
@@ -4954,7 +4943,6 @@
 
     <!-- Network Visualization Screen -->
     <string name="net_title">Network status</string>
-    <string name="net_system_status">SYSTEM STATUS</string>
     <string name="net_inference_server">INFERENCE_SERVER:</string>
     <string name="net_status_online">[ONLINE]</string>
     <string name="net_status_loading">[LOADING]</string>
@@ -4963,27 +4951,17 @@
     <string name="net_status_offline">[OFFLINE]</string>
     <string name="net_mode">MODE: %s</string>
     <string name="net_processing">▓▓▓ PROCESSING ▓▓▓</string>
-    <string name="net_topology">NETWORK TOPOLOGY</string>
-    <string name="net_master_node">[MASTER] 👑 LOCAL_NODE</string>
     <string name="net_master_stats">RAM: %1$dMB | LAYERS: %2$d | LOAD: %3$d%%</string>
-    <string name="net_no_workers">[NO_WORKERS_CONNECTED]</string>
     <string name="net_worker_label">[WORKER_%1$d] 📱 %2$s</string>
     <string name="net_worker_stats">RAM: %1$dMB | LAYERS: ~%2$d | LOAD: %3$s</string>
-    <string name="net_model_metrics">MODEL METRICS</string>
     <string name="net_total_layers">TOTAL_LAYERS: %d</string>
     <string name="net_model_size">MODEL_SIZE:   %dMB</string>
     <string name="net_local_layers">LOCAL_LAYERS: %d</string>
     <string name="net_rpc_layers">RPC_LAYERS:   %d</string>
-    <string name="net_layer_distribution">LAYER_DISTRIBUTION:</string>
-    <string name="net_local_label">LOCAL</string>
-    <string name="net_rpc_label">RPC</string>
-    <string name="net_transfer">TRANSFER</string>
     <string name="net_syncing">SYNCING: [%1$s%2$s] %3$d%%</string>
-    <string name="net_memory_allocation">MEMORY ALLOCATION</string>
     <string name="net_total_cluster_ram">TOTAL_CLUSTER_RAM: %dMB</string>
     <string name="net_master_allocation">MASTER_ALLOCATION: %dMB</string>
     <string name="net_worker_allocation">WORKER_%1$d_ALLOC:   %2$dMB</string>
-    <string name="net_controls">CONTROLS</string>
     <string name="net_terminate_server">> TERMINATE_SERVER</string>
     <string name="net_stop_rpc">> STOP_RPC_WORKER</string>
     <string name="net_clear_workers">> CLEAR_WORKERS</string>
@@ -6987,10 +6965,7 @@
     <string name="models_kb_embedding_cleared">Knowledge-base embedding model was cleared.</string>
     <string name="models_storage_bar_desc">Device storage: %1$s total, %2$s free, %3$s used by models</string>
     <string name="models_storage_free">Free</string>
-    <string name="models_storage_legend_value">%1$s: %2$s</string>
     <string name="models_storage_models">Models</string>
-    <string name="models_storage_other">Other</string>
-    <string name="models_storage_subtitle">Local model footprint</string>
     <string name="models_storage_title">Device storage</string>
     <string name="models_storage_total">Total</string>
     <string name="models_type_quadtrix">Quadtrix checkpoint</string>
@@ -7776,13 +7751,11 @@
     <string name="sd_dist_gallery_no_metadata">Detailed settings are unavailable for this older file.</string>
     <string name="sd_dist_run_config_title">Distributed Run Config</string>
     <string name="sd_dist_run_config_subtitle">Build structured stable-diffusion.cpp runtime flags before launching image, edit, upscale, or video generation.</string>
-    <string name="sd_dist_pipeline_title">Media pipeline lanes</string>
     <string name="sd_dist_module_text_encoder">Text Encoder</string>
     <string name="sd_dist_module_diffusion">Diffusion</string>
     <string name="sd_dist_module_vae">VAE / TAE</string>
     <string name="sd_dist_module_controlnet">ControlNet</string>
     <string name="sd_dist_module_upscaler">Upscaler</string>
-    <string name="sd_dist_module_video_frames">Video frames</string>
     <string name="sd_dist_security_warning">stable-diffusion.cpp RPC has no authentication or encryption. Use it only on a trusted LAN or private hotspot.</string>
     <string name="sd_dist_status_running">Worker running</string>
     <string name="sd_dist_status_stopped">Worker stopped</string>
@@ -7808,7 +7781,6 @@
     <string name="sd_dist_manual_worker">Manual worker</string>
     <string name="sd_dist_worker_host">Worker host or IP</string>
     <string name="sd_dist_threads_short">threads</string>
-    <string name="sd_dist_worker_resource_line">%1$s:%2$d - %3$d MB - %4$d %5$s</string>
     <string name="sd_dist_ram_mb_short">RAM MB</string>
     <string name="sd_dist_add_worker">Add worker</string>
     <string name="sd_dist_workers">Workers</string>
@@ -7817,7 +7789,6 @@
     <string name="sd_dist_new_worker">New worker</string>
     <string name="sd_dist_delete_worker">Delete worker</string>
     <string name="sd_dist_worker_budget_line">%1$d MB - %2$d threads</string>
-    <string name="sd_dist_master_resource_line">This device - %1$d MB - %2$d threads</string>
     <string name="sd_dist_rpc_servers_preview">RPC servers preview</string>
     <string name="sd_dist_use_workers">Use workers</string>
     <string name="sd_dist_view_network">View network</string>
@@ -8020,7 +7991,6 @@
     <string name="sd_dist_live">Live</string>
     <string name="sd_dist_live_online">Live: online</string>
     <string name="sd_dist_live_offline">Live: offline</string>
-    <string name="sd_dist_last_seen">Last seen: %1$s</string>
     <string name="sd_dist_planned_whole_assignment">Planned: %1$s</string>
     <string name="sd_dist_planned_split_assignment">Planned: %1$s ~%2$d%% layers</string>
     <string name="sd_dist_worker_notification_running">Listening on port %1$d</string>

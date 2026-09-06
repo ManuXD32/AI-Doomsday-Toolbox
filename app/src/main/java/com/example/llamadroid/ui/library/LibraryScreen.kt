@@ -1,6 +1,8 @@
 package com.example.llamadroid.ui.library
 
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.WalkthroughScrollOwner
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -55,6 +57,8 @@ import com.example.llamadroid.ui.navigation.Screen
 @Composable
 fun LibraryScreen(navController: NavController) {
     val scrollState = rememberScrollState()
+    val walkthroughTargets = LocalWalkthroughTargets.current
+    WalkthroughScrollOwner(setOf("library.resources")) { scrollState.animateScrollTo(0) }
 
     AppPageBackground {
         AppContentColumn(
@@ -64,8 +68,7 @@ fun LibraryScreen(navController: NavController) {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             AppPageHeader(
-                title = stringResource(R.string.soft_studio_library_title),
-                modifier = Modifier.walkthroughTarget("library.resources")
+                title = stringResource(R.string.soft_studio_library_title)
             )
 
             AppSectionCard {
@@ -77,19 +80,29 @@ fun LibraryScreen(navController: NavController) {
                     icon = Icons.Default.Folder,
                     title = stringResource(R.string.soft_studio_library_open_models),
                     supporting = stringResource(R.string.soft_studio_library_models_desc),
-                    onClick = { navController.navigate(Screen.ModelHub.route) }
+                    modifier = Modifier.walkthroughTarget("library.resources"),
+                    onClick = {
+                        walkthroughTargets?.recordEvent("library.resources")
+                        navController.navigate(Screen.ModelHub.route)
+                    }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Collections,
                     title = stringResource(R.string.soft_studio_library_open_knowledge),
                     supporting = stringResource(R.string.soft_studio_library_knowledge_desc),
-                    onClick = { navController.navigate(Screen.KnowledgeBase.route) }
+                    onClick = {
+                        walkthroughTargets?.recordEvent("library.resources")
+                        navController.navigate(Screen.KnowledgeBase.route)
+                    }
                 )
                 LibraryActionRow(
                     icon = Icons.Default.Description,
                     title = stringResource(R.string.soft_studio_library_open_offline),
                     supporting = stringResource(R.string.soft_studio_library_offline_desc),
-                    onClick = { navController.navigate(Screen.ZimManager.route) }
+                    onClick = {
+                        walkthroughTargets?.recordEvent("library.resources")
+                        navController.navigate(Screen.ZimManager.route)
+                    }
                 )
             }
 
@@ -174,11 +187,12 @@ private fun LibrarySectionHeader(
 private fun LibraryActionRow(
     icon: ImageVector,
     title: String,
+    modifier: Modifier = Modifier,
     supporting: String? = null,
     onClick: () -> Unit
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = AppChromeDefaults.InnerCardShape,

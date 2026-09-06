@@ -1,6 +1,9 @@
 package com.example.llamadroid.tama.ui
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughActive
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -37,7 +40,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.data.SettingsRepository
@@ -83,6 +86,7 @@ import com.example.llamadroid.ui.components.pressAndHoldRepeat
 import com.example.llamadroid.ui.components.RemoteSummaryBackendEditor
 import com.example.llamadroid.ui.components.rememberPressAndHoldRepeatState
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.navigation.NavController
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.flowOf
@@ -189,6 +193,7 @@ fun TamaScreen(
 
     var showNameDialog by remember { mutableStateOf(false) }
     val activeWalkthrough = LocalWalkthroughActive.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val guidedVisit = remember { activeWalkthrough }
     var showMenu by remember { mutableStateOf(false) }
 
@@ -564,7 +569,10 @@ fun TamaScreen(
                     val roomLabel = stringResource(R.string.soft_studio_tama_room)
                     val mapLabel = stringResource(R.string.soft_studio_tama_map)
                     IconButton(
-                        onClick = { showMap = false },
+                        onClick = {
+                            showMap = false
+                            walkthroughTargets?.recordEvent("tama.room")
+                        },
                         modifier = Modifier.size(48.dp).semantics {
                             contentDescription = roomLabel
                             selected = !showMap
@@ -573,7 +581,10 @@ fun TamaScreen(
                         TamaEmojiIcon(TAMA_PET_VIEW_EMOJI, fontSize = 16.sp)
                     }
                     IconButton(
-                        onClick = { showMap = true },
+                        onClick = {
+                            showMap = true
+                            walkthroughTargets?.recordEvent("tama.room")
+                        },
                         modifier = Modifier.size(48.dp).semantics {
                             contentDescription = mapLabel
                             selected = showMap
@@ -605,6 +616,7 @@ fun TamaScreen(
                 .aspectRatio(1f)
                 .padding(16.dp)
                 .testTag("soft_studio_tama_room_viewport")
+                .walkthroughTarget("tama.room")
                 .clip(RoundedCornerShape(8.dp))
                 .background(TamaLight)
                 .border(4.dp, TamaDark, RoundedCornerShape(8.dp))
@@ -5697,6 +5709,7 @@ fun TamaControls(
     onFreezeToggle: () -> Unit = {},
     onMenu: () -> Unit
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val isFrozen = pet?.cycleFrozen == true
     val canAct = pet != null && pet.stage != GrowthStage.EGG && !isSleeping && !isBusy && !isFrozen
     val isDoingActivity = pet?.currentActivity != ActivityType.NONE
@@ -5718,7 +5731,7 @@ fun TamaControls(
             if (pet != null) {
                 add(TamaControlConfig(icon = "❄", label = stringResource(R.string.tama_btn_freeze), enabled = !isBusy, onClick = onFreezeToggle))
             }
-            add(TamaControlConfig(icon = TAMA_FEED_EMOJI, label = stringResource(R.string.tama_btn_feed), enabled = canAct, onClick = onFeed))
+            add(TamaControlConfig(icon = TAMA_FEED_EMOJI, label = stringResource(R.string.tama_btn_feed), enabled = canAct, onClick = onFeed, targetId = "tama.care", eventId = "tama.care"))
             add(TamaControlConfig(icon = "🧽", label = stringResource(R.string.tama_btn_clean), enabled = canAct, onClick = onClean))
             add(TamaControlConfig(icon = "🎾", label = stringResource(R.string.tama_btn_play), enabled = canAct, onClick = onPlay))
             add(TamaControlConfig(icon = TAMA_CHAT_EMOJI, label = stringResource(R.string.tama_btn_chat), enabled = canAct, onClick = onChat))
@@ -5804,7 +5817,11 @@ fun TamaControls(
                     assetPath = action.assetPath,
                     label = action.label,
                     enabled = action.enabled,
-                    onClick = action.onClick
+                    onClick = {
+                        action.onClick()
+                        action.eventId?.let { eventId -> walkthroughTargets?.recordEvent(eventId) }
+                    },
+                    modifier = action.targetId?.let { Modifier.walkthroughTarget(it) } ?: Modifier
                 )
             }
         }
@@ -5813,14 +5830,15 @@ fun TamaControls(
 
 @Composable
 fun TamaButton(
-    icon: String? = null,
-    assetPath: String? = null,
     label: String,
     enabled: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: String? = null,
+    assetPath: String? = null
 ) {
     Surface(
-        modifier = Modifier
+        modifier = modifier
             .width(if (LocalDensity.current.fontScale >= 1.3f) 144.dp else 100.dp)
             .heightIn(min = 76.dp)
             .clickable(enabled = enabled) { onClick() }
@@ -5868,7 +5886,9 @@ private data class TamaControlConfig(
     val assetPath: String? = null,
     val label: String,
     val enabled: Boolean,
-    val onClick: () -> Unit
+    val onClick: () -> Unit,
+    val targetId: String? = null,
+    val eventId: String? = null
 )
 
 @Composable

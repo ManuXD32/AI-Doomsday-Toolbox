@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.dataset
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -50,6 +52,8 @@ import com.example.llamadroid.service.normalizeDatasetBackend
 import com.example.llamadroid.ui.components.SliderWithInput
 import com.example.llamadroid.ui.components.IntSliderWithInput
 import com.example.llamadroid.ui.components.AppScreenScaffold
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -107,6 +111,7 @@ fun DatasetProjectScreen(
     projectId: Long
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
@@ -207,12 +212,17 @@ fun DatasetProjectScreen(
             ScrollableTabRow(
                 selectedTabIndex = selectedTab,
                 edgePadding = 8.dp,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .walkthroughTarget("documents.dataset.tabs")
             ) {
                 tabs.forEachIndexed { index, tab ->
                     Tab(
                         selected = selectedTab == index,
-                        onClick = { viewModel.setTab(index) },
+                        onClick = {
+                            walkthroughTargets?.recordEvent("documents.dataset.tabs")
+                            viewModel.setTab(index)
+                        },
                         icon = { Icon(tab.icon, contentDescription = tab.label) },
                         text = { Text(tab.label, fontSize = 11.sp, maxLines = 1) }
                     )

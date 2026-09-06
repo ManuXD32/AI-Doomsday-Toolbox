@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.ai.llama
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.foundation.clickable
@@ -38,6 +40,8 @@ import com.example.llamadroid.data.model.LlamaChatPromptProfileEntity
 import com.example.llamadroid.data.model.LlamaServerEntity
 import com.example.llamadroid.data.repository.LlamaRepository
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.text.SimpleDateFormat
 import java.util.*
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -71,6 +75,7 @@ fun LlamaChatListScreen(
     initialFolderId: Long? = null
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val importedChatTitleText = stringResource(R.string.llama_imported_chat_title)
     val importedNotesChatTitleText = stringResource(R.string.llama_imported_notes_chat_title)
     val notesImportDefaultTitleFormat = stringResource(R.string.notes_import_default_title)
@@ -260,6 +265,7 @@ fun LlamaChatListScreen(
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                     if (currentFolder != null) {
                         IconButton(
                             onClick = {
@@ -361,7 +367,9 @@ fun LlamaChatListScreen(
                 }
             } else {
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .walkthroughTarget("llama.history"),
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -418,6 +426,7 @@ fun LlamaChatListScreen(
                             showFolderName = selectedFolderFilter == LLAMA_FOLDER_FILTER_ALL,
                             onClick = {
                                 // If we pass -1, LlamaChatScreen can look up "Last Used Server"
+                                walkthroughTargets?.recordEvent("llama.history")
                                 navController.navigate(Screen.LlamaChat.createRoute(chat.id, -1))
                             },
                             onEdit = { chatToEdit = chat },

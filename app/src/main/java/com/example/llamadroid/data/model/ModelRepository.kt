@@ -4,13 +4,18 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import androidx.room.withTransaction
 
+import com.example.llamadroid.R
 import com.example.llamadroid.data.api.HfModelDto
 import com.example.llamadroid.data.api.HuggingFaceService
+import com.example.llamadroid.data.db.AppDatabase
 import com.example.llamadroid.data.db.ModelBackupPolicy
 import com.example.llamadroid.data.db.ModelDao
 import com.example.llamadroid.data.db.ModelEntity
 import com.example.llamadroid.data.db.ModelType
+import com.example.llamadroid.data.db.ModelProvenanceEntity
+import com.example.llamadroid.data.db.PendingModelArtifactEntity
 import com.example.llamadroid.data.db.parseOnnxCapabilities
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_TXT2IMG
 import com.example.llamadroid.sd.defaultCapabilitiesForFamily
@@ -34,18 +39,22 @@ import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_ARCHIVE_BUNDLE
 import com.example.llamadroid.onnx.ONNX_INSTALL_KIND_HF_TREE_BUNDLE
 import com.example.llamadroid.onnx.ONNX_PIPELINE_FAMILY_SDAI_LOCAL_DIFFUSION
 import com.example.llamadroid.onnx.OnnxCatalogEntry
-import com.example.llamadroid.onnx.OnnxImportSupport
 import com.example.llamadroid.onnx.OnnxStorage
 import com.example.llamadroid.onnx.buildOnnxCatalogStableId
 import com.example.llamadroid.onnx.buildOnnxImageGenModelEntity
+import com.example.llamadroid.data.model.library.ModelArtifactLifecycle
+import com.example.llamadroid.data.model.library.ModelLibraryErrorCode
+import com.example.llamadroid.data.model.library.ModelLibraryException
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.Downloader
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,6 +73,13 @@ class ModelRepository(
     private val context: Context,
     private val modelDao: ModelDao
 ) {
+    private data class LifecycleProtectionSnapshot(
+        val pendingArtifacts: List<PendingModelArtifactEntity>,
+        val allProvenance: List<ModelProvenanceEntity>,
+        val otherRuntimePaths: List<String>,
+        val otherLiteRtPaths: List<String>
+    )
+
     // Use kotlinx.serialization for API responses to avoid reflection issues with R8
     private val json = Json { 
         ignoreUnknownKeys = true 
@@ -226,6 +242,9 @@ class ModelRepository(
             ModelType.SD_CLIP_VISION -> "sd/clip_vision"
             ModelType.SD_IP_ADAPTER -> "sd/ip_adapter"
             ModelType.SD_ADETAILER -> "sd/adetailer"
+            ModelType.SD_AUDIO_VAE -> "sd/audio_vae"
+            ModelType.SD_EMBEDDINGS_CONNECTORS -> "sd/connectors"
+            ModelType.SD_MOTION_MODULE -> "sd/motion_module"
             ModelType.ONNX_IMAGE_GEN,
             ModelType.ONNX_TTS,
             ModelType.ONNX_BACKGROUND_REMOVAL,
@@ -530,11 +549,17 @@ class ModelRepository(
     
     suspend fun deleteModel(model: ModelEntity) {
         reconcileManagedModelCopiesIfNeeded()
-        deleteModelArtifacts(model)
-        modelDao.deleteModel(model)
+        deleteModelArtifactsInternal(model, removeRuntimeRow = true)
     }
 
     suspend fun deleteModelArtifacts(model: ModelEntity) {
+        deleteModelArtifactsInternal(model, removeRuntimeRow = false)
+    }
+
+    private suspend fun deleteModelArtifactsInternal(
+        model: ModelEntity,
+        removeRuntimeRow: Boolean
+    ) = withContext(Dispatchers.IO) {
         val managedPaths = linkedSetOf<File>()
         val directPaths = linkedSetOf<File>()
         val currentPath = File(model.path)
@@ -552,24 +577,59 @@ class ModelRepository(
         if (ModelLibraryManager.requiresRuntimeMirror(model.type)) {
             managedPaths += File(getModelDir(model.type), ModelLibraryManager.canonicalFilename(model.filename))
         }
-        managedPaths.forEach { file ->
-            if (file.exists() && isManagedModelPath(file)) {
-                if (file.isDirectory) {
-                    OnnxImportSupport.deleteRecursively(file)
-                } else {
-                    file.delete()
-                }
-            }
+
+        val database = AppDatabase.getDatabase(context)
+        val libraryDao = database.modelLibraryDao()
+        val lifecycle = try {
+            LifecycleProtectionSnapshot(
+                pendingArtifacts = libraryDao.observePendingArtifacts().first(),
+                allProvenance = libraryDao.observeProvenance().first(),
+                otherRuntimePaths = modelDao.getAllModels().first()
+                    .filter { it.filename != model.filename }
+                    .map { it.path },
+                otherLiteRtPaths = database.liteRtModelDao().getAllOnce().map { it.path }
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // Protection data is a safety boundary. Never continue with an
+            // empty set after a Room read failure because that could remove a
+            // companion still referenced by another runtime row.
+            throw IllegalStateException(context.getString(R.string.error_generic), error)
         }
-        directPaths.forEach { file ->
-            if (file.exists()) {
-                if (file.isDirectory) {
-                    OnnxImportSupport.deleteRecursively(file)
-                } else {
-                    file.delete()
-                }
-            }
+        val pendingArtifacts = lifecycle.pendingArtifacts
+        val allProvenance = lifecycle.allProvenance
+        val otherRuntimePaths = lifecycle.otherRuntimePaths
+        val otherLiteRtPaths = lifecycle.otherLiteRtPaths
+        val protectedPaths = buildList {
+            addAll(otherRuntimePaths)
+            addAll(otherLiteRtPaths)
+            addAll(allProvenance.filter { it.modelKey != model.filename }.mapNotNull { it.localPath })
         }
+
+        val ownedCandidates = linkedSetOf<File>()
+        managedPaths.filter(::isManagedModelPath).forEach(ownedCandidates::add)
+        directPaths.forEach(ownedCandidates::add)
+        // Promoted companion rows keep their own paths. Include only paths in
+        // app-managed storage; a source file outside the app remains user-owned.
+        pendingArtifacts
+            .filter { it.promotedModelKey == model.filename }
+            .flatMap { listOfNotNull(it.stagingPath, it.destinationPath) }
+            .map(::File)
+            .filter { it.exists() && isManagedModelPath(it) }
+            .forEach(ownedCandidates::add)
+        allProvenance
+            .filter { it.modelKey == model.filename }
+            .mapNotNull { it.localPath?.let(::File) }
+            .filter { it.exists() && isManagedModelPath(it) }
+            .forEach(ownedCandidates::add)
+        ModelArtifactLifecycle.deleteOwnedPaths(ownedCandidates, protectedPaths)
+        val currentPathIsShared = protectedPaths.any { protected ->
+            // A failed canonicalization is treated as shared.  Deletion must
+            // fail closed when a protection path cannot be resolved.
+            runCatching { File(protected).canonicalFile == currentPath.canonicalFile }.getOrDefault(true)
+        }
+
         if (
             model.type == ModelType.ONNX_IMAGE_GEN ||
             model.type == ModelType.ONNX_TTS ||
@@ -577,12 +637,30 @@ class ModelRepository(
             model.type == ModelType.ONNX_IMAGE_UPSCALER
         ) {
             // ONNX payloads are now internal-only and no longer mirrored to a shared model library folder.
-        } else {
+        } else if (!currentPathIsShared && protectedPaths.none {
+                File(it).name == ModelLibraryManager.canonicalFilename(model.filename)
+            }) {
             ModelLibraryManager.deleteFromLibrary(
                 context = context,
                 relativeDir = ModelLibraryManager.relativeDirFor(model.type),
                 filename = model.filename
             )
+        }
+
+        // Source and bundle definitions are reusable records. Only the
+        // installed provenance edge is removed; promoted pending rows become
+        // CANCELLED so startup recovery cannot resurrect a deleted model and
+        // an explicit bundle retry can recreate it.
+        val detached = ModelArtifactLifecycle.detachPromotedPendingArtifacts(
+            artifacts = pendingArtifacts,
+            modelKey = model.filename,
+            now = System.currentTimeMillis()
+        )
+        val changed = detached.filterIndexed { index, artifact -> artifact != pendingArtifacts[index] }
+        database.withTransaction {
+            libraryDao.deleteByModelKey(model.filename)
+            libraryDao.upsertPendingArtifactsAtomically(changed)
+            if (removeRuntimeRow) database.modelDao().deleteModel(model)
         }
     }
     
@@ -773,6 +851,29 @@ class ModelRepository(
                 null
             }
             val isManagedSource = isManagedModelPath(sourceFile)
+            val changesFilesystemIdentity = normalizedFilename != original.filename ||
+                isManagedSource && newType != original.type
+            if (changesFilesystemIdentity) {
+                val libraryDao = AppDatabase.getDatabase(context).modelLibraryDao()
+                val pendingArtifacts = runCatching { libraryDao.observePendingArtifacts().first() }
+                    .getOrElse { return@withContext Result.failure(it) }
+                val provenance = runCatching { libraryDao.getByModelKey(original.filename) }
+                    .getOrElse { return@withContext Result.failure(it) }
+                if (ModelArtifactLifecycle.isGroupedArtifact(
+                        modelPath = original.path,
+                        modelKey = original.filename,
+                        pendingArtifacts = pendingArtifacts,
+                        provenance = provenance
+                    )
+                ) {
+                    return@withContext Result.failure(
+                        ModelLibraryException(
+                            code = ModelLibraryErrorCode.GROUPED_ARTIFACT_RENAME_UNSUPPORTED,
+                            message = context.getString(R.string.model_library_error_grouped_rename)
+                        )
+                    )
+                }
+            }
 
             val finalFile = if (isManagedSource) {
                 val targetDir = if (newType == original.type) {
@@ -840,6 +941,37 @@ class ModelRepository(
             modelDao.insertModel(updated)
             if (original.filename != updated.filename) {
                 modelDao.deleteByFilename(original.filename)
+            }
+            if (original.filename != updated.filename || original.path != updated.path) {
+                val database = AppDatabase.getDatabase(context)
+                try {
+                    database.withTransaction {
+                        val libraryDao = database.modelLibraryDao()
+                        libraryDao.updateProvenanceReference(
+                            oldModelKey = original.filename,
+                            oldPath = original.path,
+                            newModelKey = updated.filename,
+                            newPath = updated.path
+                        )
+                        val pendingArtifacts = libraryDao.observePendingArtifacts().first()
+                        val rekeyed = pendingArtifacts.map { artifact ->
+                            ModelArtifactLifecycle.rekeyPendingArtifact(
+                                artifact = artifact,
+                                oldModelKey = original.filename,
+                                newModelKey = updated.filename,
+                                oldPath = original.path,
+                                newPath = updated.path,
+                                now = System.currentTimeMillis()
+                            )
+                        }
+                        val changed = rekeyed.filterIndexed { index, artifact -> artifact != pendingArtifacts[index] }
+                        libraryDao.upsertPendingArtifactsAtomically(changed)
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    return@withContext Result.failure(error)
+                }
             }
 
             val syncLibrary =
@@ -1079,7 +1211,10 @@ class ModelRepository(
                 ModelType.SD_PHOTOMAKER,
                 ModelType.SD_CLIP_VISION,
                 ModelType.SD_IP_ADAPTER,
-                ModelType.SD_ADETAILER
+                ModelType.SD_ADETAILER,
+                ModelType.SD_AUDIO_VAE,
+                ModelType.SD_EMBEDDINGS_CONNECTORS,
+                ModelType.SD_MOTION_MODULE
             )
             modelDao.getModelsByTypesSync(relevantTypes).forEach { model ->
                 runCatching {
@@ -1257,7 +1392,10 @@ fun ModelType.isStableDiffusionArtifact(): Boolean = when (this) {
     ModelType.SD_CONTROLNET,
     ModelType.SD_PHOTOMAKER,
     ModelType.SD_CLIP_VISION,
-    ModelType.SD_IP_ADAPTER -> true
+    ModelType.SD_IP_ADAPTER,
+    ModelType.SD_AUDIO_VAE,
+    ModelType.SD_EMBEDDINGS_CONNECTORS,
+    ModelType.SD_MOTION_MODULE -> true
     // Textual-inversion .pt files, native upscalers, and ADetailer ONNX
     // detectors are SD features but not SafeTensors/GGUF pipeline artifacts.
     // Keep their established validators instead of treating their formats as
@@ -1265,6 +1403,8 @@ fun ModelType.isStableDiffusionArtifact(): Boolean = when (this) {
     ModelType.SD_TEXTUAL_INVERSION,
     ModelType.SD_UPSCALER,
     ModelType.SD_ADETAILER -> false
+    // Video companion artifacts are structurally inspectable native model
+    // files and use the appended SdArtifactRole values below.
     else -> false
 }
 
@@ -1278,6 +1418,9 @@ private fun ModelType.sdArtifactRole(): SdArtifactRole? = when (this) {
     ModelType.SD_T5XXL -> SdArtifactRole.T5XXL
     ModelType.SD_LORA -> SdArtifactRole.LORA
     ModelType.SD_CONTROLNET -> SdArtifactRole.CONTROLNET
+    ModelType.SD_AUDIO_VAE -> SdArtifactRole.AUDIO_VAE
+    ModelType.SD_EMBEDDINGS_CONNECTORS -> SdArtifactRole.EMBEDDINGS_CONNECTORS
+    ModelType.SD_MOTION_MODULE -> SdArtifactRole.MOTION_MODULE
     else -> null
 }
 
@@ -1414,7 +1557,15 @@ data class PendingDownload(
     val liteRtSupportsVision: Boolean? = null,
     val liteRtSupportsAudio: Boolean? = null,
     val liteRtSupportsEmbedding: Boolean? = null,
-    val liteRtMaxContextTokens: Int? = null
+    val liteRtMaxContextTokens: Int? = null,
+    /** Durable source/provenance identity; nullable for legacy downloads. */
+    val sourceId: String? = null,
+    /** Bounded library family hint; does not replace the existing ModelType. */
+    val artifactFamily: String? = null,
+    val artifactRole: String? = null,
+    /** Pending staged-artifact row used when a custom file needs inspection. */
+    val pendingArtifactId: String? = null,
+    val stageOnly: Boolean = false
 )
 
 object PendingDownloadHolder {
@@ -1448,7 +1599,12 @@ object PendingDownloadHolder {
         liteRtSupportsVision: Boolean? = null,
         liteRtSupportsAudio: Boolean? = null,
         liteRtSupportsEmbedding: Boolean? = null,
-        liteRtMaxContextTokens: Int? = null
+        liteRtMaxContextTokens: Int? = null,
+        sourceId: String? = null,
+        artifactFamily: String? = null,
+        artifactRole: String? = null,
+        pendingArtifactId: String? = null,
+        stageOnly: Boolean = false
     ) {
         val taskId = downloadId ?: progressKey
         val pending = PendingDownload(
@@ -1478,7 +1634,12 @@ object PendingDownloadHolder {
             liteRtSupportsVision = liteRtSupportsVision,
             liteRtSupportsAudio = liteRtSupportsAudio,
             liteRtSupportsEmbedding = liteRtSupportsEmbedding,
-            liteRtMaxContextTokens = liteRtMaxContextTokens
+            liteRtMaxContextTokens = liteRtMaxContextTokens,
+            sourceId = sourceId,
+            artifactFamily = artifactFamily,
+            artifactRole = artifactRole,
+            pendingArtifactId = pendingArtifactId,
+            stageOnly = stageOnly
         )
         pendingDownloads[taskId] = pending
         if (taskId != filename) {

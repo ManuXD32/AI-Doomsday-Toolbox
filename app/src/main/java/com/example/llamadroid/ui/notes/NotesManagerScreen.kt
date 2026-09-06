@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.notes
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.text.format.DateFormat
@@ -52,7 +54,9 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.ui.window.DialogProperties
 import androidx.navigation.NavController
 import com.example.llamadroid.data.db.AppDatabase
@@ -100,6 +104,7 @@ import java.util.*
 fun NotesManagerScreen(navController: NavController) {
     val context = LocalContext.current
     val resources = LocalResources.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val clipboardManager = LocalClipboardManager.current
@@ -302,7 +307,13 @@ fun NotesManagerScreen(navController: NavController) {
                 ) {
                     Icon(Icons.Default.Upload, stringResource(R.string.notes_import_note))
                 }
-                IconButton(onClick = { showAddDialog = true }) {
+                IconButton(
+                    onClick = {
+                        showAddDialog = true
+                        walkthroughTargets?.recordEvent("organizer.editor")
+                    },
+                    modifier = Modifier.walkthroughTarget("organizer.editor")
+                ) {
                     Icon(Icons.Default.Add, stringResource(R.string.notes_new))
                 }
             } else if (selectedOrganizerTab == 1) {
@@ -330,7 +341,11 @@ fun NotesManagerScreen(navController: NavController) {
             AppScrollableTabRow(
                 selectedTabIndex = selectedOrganizerTab,
                 edgePadding = 12.dp,
-                containerColor = Color.Transparent
+                containerColor = Color.Transparent,
+                modifier = Modifier
+                    .walkthroughTarget("organizer.notes")
+                    .walkthroughTarget("organizer.calendar")
+                    .walkthroughTarget("organizer.alarms")
             ) {
                 listOf(
                     R.string.organizer_tab_notes,
@@ -342,6 +357,13 @@ fun NotesManagerScreen(navController: NavController) {
                         onClick = {
                             selectedOrganizerTab = index
                             selectedNoteIds = emptySet()
+                            walkthroughTargets?.recordEvent(
+                                when (index) {
+                                    0 -> "organizer.notes"
+                                    1 -> "organizer.calendar"
+                                    else -> "organizer.alarms"
+                                }
+                            )
                         },
                         text = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1549,7 +1571,8 @@ private fun NoteEditDialog(
         Scaffold(
             modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
             topBar = {
-                TopAppBar(title = { Text(stringResource(if (note == null) R.string.notes_new_title else R.string.notes_edit_title)) },
+                TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },title = { Text(stringResource(if (note == null) R.string.notes_new_title else R.string.notes_edit_title)) },
                     navigationIcon = {
                         IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, stringResource(R.string.action_cancel)) }
                     })
@@ -1824,6 +1847,7 @@ private fun OrganizerEventColorPickerDialog(
             modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.organizer_color_dialog_title),
                         maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
@@ -2237,6 +2261,7 @@ private fun NoteFullScreenDialog(
                         }
                     },
                     actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                         IconButton(onClick = onEdit) {
                             Icon(Icons.Default.Edit, stringResource(R.string.action_edit))
                         }

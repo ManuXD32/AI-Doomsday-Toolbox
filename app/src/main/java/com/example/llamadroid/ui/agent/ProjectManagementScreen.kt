@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -114,6 +116,7 @@ fun ProjectManagementScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                 title = { Text(stringResource(R.string.agent_project_mgmt_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {

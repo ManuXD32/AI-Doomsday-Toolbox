@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.agent
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.webkit.WebResourceRequest
@@ -44,7 +46,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import androidx.navigation.NavController
@@ -118,6 +122,7 @@ private fun isAllowedAgentPreviewUrl(url: String, origin: AgentPreviewOrigin): B
 @Composable
 fun AgentWorkspaceScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val statusDownloadingText = stringResource(R.string.status_downloading)
     val statusCompleteText = stringResource(R.string.status_complete)
     val agentErrorPrefixFormat = stringResource(R.string.agent_error_prefix)
@@ -334,6 +339,7 @@ fun AgentWorkspaceScreen(navController: NavController) {
         topBar = {
             Column {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = {
                         Column {
                             Text(
@@ -470,29 +476,42 @@ fun AgentWorkspaceScreen(navController: NavController) {
                     "agents" -> 3
                     else -> 0
                 },
-                edgePadding = 12.dp
+                edgePadding = 12.dp,
+                modifier = Modifier.walkthroughTarget("agent.projects")
             ) {
                 Tab(
                     selected = selectedWorkspaceTab == "files",
-                    onClick = { selectedWorkspaceTab = "files" },
+                    onClick = {
+                        selectedWorkspaceTab = "files"
+                        walkthroughTargets?.recordEvent("agent.projects")
+                    },
                     text = { Text(stringResource(R.string.agent_workspace_tab_files), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     icon = { Icon(Icons.Default.Folder, contentDescription = null) }
                 )
                 Tab(
                     selected = selectedWorkspaceTab == "run",
-                    onClick = { selectedWorkspaceTab = "run" },
+                    onClick = {
+                        selectedWorkspaceTab = "run"
+                        walkthroughTargets?.recordEvent("agent.projects")
+                    },
                     text = { Text(stringResource(R.string.agent_workspace_tab_run), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     icon = { Icon(Icons.Default.PlayArrow, contentDescription = null) }
                 )
                 Tab(
                     selected = selectedWorkspaceTab == "preview",
-                    onClick = { selectedWorkspaceTab = "preview" },
+                    onClick = {
+                        selectedWorkspaceTab = "preview"
+                        walkthroughTargets?.recordEvent("agent.projects")
+                    },
                     text = { Text(stringResource(R.string.agent_workspace_tab_preview), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     icon = { Icon(Icons.Default.Web, contentDescription = null) }
                 )
                 Tab(
                     selected = selectedWorkspaceTab == "agents",
-                    onClick = { selectedWorkspaceTab = "agents" },
+                    onClick = {
+                        selectedWorkspaceTab = "agents"
+                        walkthroughTargets?.recordEvent("agent.projects")
+                    },
                     text = { Text(stringResource(R.string.agent_workspace_tab_agents), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     icon = { Icon(Icons.Default.Groups, contentDescription = null) }
                 )
@@ -2089,6 +2108,7 @@ fun AgentInvocationDetailScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },
                     title = { Text(stringResource(R.string.agent_workspace_tab_agents)) },
                     navigationIcon = {
                         IconButton(onClick = { navController.popBackStack() }) {
@@ -2153,6 +2173,7 @@ private fun AgentInvocationDetailContent(
                             }
                         },
                         actions = {
+                            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                             val contextPercent = invocation.contextPercent ?: 0
                             Box(
                                 modifier = Modifier.size(52.dp).clickable { showContextDetails = true },

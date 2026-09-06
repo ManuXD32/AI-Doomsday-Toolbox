@@ -282,6 +282,91 @@ class SdArtifactInspectorTest {
         file.delete()
     }
 
+    @Test
+    fun nativeVideoSignaturesResolveFamilyWithoutFilenameHints() {
+        val cases = listOf(
+            "arbitrary.safetensors" to (
+                "model.diffusion_model.blocks.0.cross_attn.norm_k.weight" to SdModelFamily.WAN
+            ),
+            "random.safetensors" to (
+                "model.diffusion_model.txt_in.individual_token_refiner.blocks.0.adaLN_modulation.1.weight" to
+                    SdModelFamily.HUNYUAN_VIDEO
+            ),
+            "weights.safetensors" to (
+                "model.diffusion_model.patch_embedder.weight" to SdModelFamily.LINGBOT_VIDEO
+            ),
+            "component.safetensors" to (
+                "model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias" to
+                    SdModelFamily.LTX_VIDEO
+            ),
+            "model.safetensors" to (
+                "model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor" to SdModelFamily.SVD
+            )
+        )
+
+        cases.forEach { (filename, evidence) ->
+            val file = tempFile(filename)
+            writeSafeTensors(file, listOf(evidence.first))
+            val inspection = SdArtifactInspector.inspect(file)
+
+            assertEquals(evidence.second, inspection.detectedFamily)
+            assertTrue(inspection.detectedVideoFamily != null)
+            assertTrue(inspection.confidence == SdInspectionConfidence.HIGH)
+            assertTrue(inspection.detectedRole != null)
+            file.delete()
+        }
+    }
+
+    @Test
+    fun videoVariantComesFromCapturedMetadataAndRoundTrips() {
+        val file = tempFile("neutral.safetensors")
+        writeSafeTensors(file, listOf("model.diffusion_model.blocks.0.cross_attn.norm_k.weight"))
+        // SafeTensors metadata is intentionally not synthesized by the helper;
+        // a persisted summary still verifies that the variant is durable.
+        val original = SdArtifactInspection(
+            format = SdArtifactFormat.SAFETENSORS,
+            detectedFamily = SdModelFamily.WAN,
+            detectedRole = SdArtifactRole.STANDALONE_DIFFUSION,
+            detectedVariant = "wan2_2_ti2v",
+            containsDiffusion = true,
+            tensorCount = 1L,
+            confidence = SdInspectionConfidence.HIGH
+        )
+        val restored = SdArtifactInspection.fromJson(original.toJson())
+
+        assertEquals("wan2_2_ti2v", restored?.detectedVariant)
+        assertEquals(SdVideoFamily.WAN, restored?.detectedVideoFamily)
+        file.delete()
+    }
+
+    @Test
+    fun videoFilenameAloneDoesNotClassifyUnrelatedTensorHeader() {
+        val file = tempFile("wan2.2.safetensors")
+        writeSafeTensors(file, listOf("unrelated.layer.weight"))
+
+        val inspection = SdArtifactInspector.inspect(file)
+
+        assertNull(inspection.detectedFamily)
+        assertNull(inspection.detectedVideoFamily)
+        assertNull(inspection.detectedRole)
+        file.delete()
+    }
+
+    @Test
+    fun videoCompanionSignaturesResolveAppendedArtifactRoles() {
+        val cases = listOf(
+            "audio_vae.encoder.conv.weight" to SdArtifactRole.AUDIO_VAE,
+            "video_embeddings_connector.transformer_1d_blocks.0.attn1.to_q.weight" to SdArtifactRole.EMBEDDINGS_CONNECTORS,
+            "model.diffusion_model.motion_module.temporal_transformer.weight" to SdArtifactRole.MOTION_MODULE
+        )
+        cases.forEach { (tensor, role) ->
+            val file = tempFile("component.safetensors")
+            writeSafeTensors(file, listOf(tensor))
+            assertEquals(role, SdArtifactInspector.inspect(file).detectedRole)
+            file.delete()
+        }
+    }
+
     private fun tempFile(name: String): File = Files.createTempFile("sd-inspector-", name).toFile()
 
     private fun writeSafeTensors(file: File, tensorNames: List<String>) {

@@ -25,7 +25,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -194,6 +194,7 @@ fun OnnxTtsGalleryScreen(navController: NavController) {
                         }
                     },
                     actions = {
+                        com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                         if (selectionMode) {
                             IconButton(onClick = { selectedPaths = items.map { it.file.absolutePath }.toSet() }) {
                                 Icon(Icons.Default.SelectAll, contentDescription = stringResource(R.string.onnx_tts_gallery_select_all))

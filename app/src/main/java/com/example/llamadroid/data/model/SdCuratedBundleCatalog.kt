@@ -218,6 +218,47 @@ private val WAN22_VAE = SdCuratedBundleFile(
     sdCompatProfiles = "wan2.2"
 )
 
+private val LINGBOT_DENSE_13B = SdCuratedBundleFile(
+    id = "lingbot-dense-13b",
+    repoId = "robbyant/lingbot-video-dense-1.3b",
+    revision = "f9789a7d9b4772a47aba62d4eb5282ddefd1da21",
+    remotePath = "transformer/diffusion_pytorch_model.safetensors",
+    localFilenameOverride = "lingbot-video-dense-1.3b.safetensors",
+    modelType = ModelType.SD_DIFFUSION,
+    sizeBytes = 2_791_967_328L,
+    sha256 = "948b15845c0fe24fdfa598204ffc2d80b96a4ad2ab5b03d303f0b6d8b0e9b494",
+    licenseLabel = "Apache-2.0",
+    sdCapabilities = buildSdCapabilities(SD_CAPABILITY_VID_GEN),
+    sdFamily = "lingbot_video",
+    sdVariant = "dense_1.3b",
+    sdCompatProfiles = "lingbot_video:dense_1.3b"
+)
+
+private val LINGBOT_QWEN3_VL_4B_Q4 = SdCuratedBundleFile(
+    id = "lingbot-qwen3-vl-4b-q4",
+    repoId = "Qwen/Qwen3-VL-4B-Instruct-GGUF",
+    revision = "1cd86afb9a95c410a6038ab3b40d8b578c892266",
+    remotePath = "Qwen3VL-4B-Instruct-Q4_K_M.gguf",
+    modelType = ModelType.LLM,
+    sizeBytes = 2_497_281_664L,
+    sha256 = "66358cb18bb6b3b1b6675aa412c7a88ef01d228f481184d13668e5201c730a0a",
+    licenseLabel = "Apache-2.0",
+    sdCompatProfiles = "lingbot_video:dense_1.3b"
+)
+
+private val LINGBOT_TAEW21 = SdCuratedBundleFile(
+    id = "lingbot-taew21",
+    repoId = "ionden/taew2.1",
+    revision = "2ac5ae1c3291a8607a2d6c423b9a0337cef45f2b",
+    remotePath = "taew2_1.safetensors",
+    modelType = ModelType.SD_TAE,
+    sizeBytes = 22_642_902L,
+    sha256 = "04766eac0221b5390b985ae3fdcca652cbb4b1e8b82b28ea7ff89dfad1b1a93f",
+    licenseLabel = "MIT",
+    sdCompatProfiles = "lingbot_video:dense_1.3b,wan2.1",
+    downloadUrlOverride = "https://raw.githubusercontent.com/madebyollin/taehv/a1c8e6a2ba77b91f284ef98935ec5bd21a41d786/safetensors/taew2_1.safetensors"
+)
+
 private val REALESRGAN_PHOTO_2X = SdCuratedBundleFile(
     id = "realesrgan-photo-2x",
     repoId = "leonelhs/realesrgan",
@@ -294,6 +335,13 @@ object SdCuratedBundleCatalog {
             descriptionRes = R.string.sd_bundle_video_desc,
             installPrefix = "Local-Video",
             files = listOf(WAN22_Q4, WAN22_UMT5_Q4, WAN22_VAE)
+        ),
+        SdCuratedBundle(
+            id = "lingbot-phone",
+            titleRes = R.string.sd_bundle_lingbot_phone_title,
+            descriptionRes = R.string.sd_bundle_lingbot_phone_desc,
+            installPrefix = "LingBot-Phone",
+            files = listOf(LINGBOT_DENSE_13B, LINGBOT_QWEN3_VL_4B_Q4, LINGBOT_TAEW21)
         ),
         SdCuratedBundle(
             id = "photo-upscale-2x",

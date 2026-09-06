@@ -17,7 +17,7 @@ data class AppRoutePresentation(val parent: AppRootDestination?, val isRoot: Boo
 
 object AppRoutePresentations {
     private val libraryRoutes = setOf(
-        "models", "model_hub", "llm_models", "sd_models", "onnx_models", "whisper_models",
+        "models", "model_hub", "model_sources", "llm_models", "sd_models", "onnx_models", "whisper_models",
         "litert_models", "model_share", "knowledge_base", "knowledge_chunk", "kiwix_hub",
         "zim_manager", "kiwix_viewer", "onnx_tts_gallery", "fastsd_gallery", "sd_distributed_gallery"
     )

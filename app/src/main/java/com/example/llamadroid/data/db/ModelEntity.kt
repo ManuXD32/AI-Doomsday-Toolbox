@@ -130,5 +130,9 @@ enum class ModelType {
     SD_CLIP_VISION,   // CLIP-Vision image encoder for IP-Adapter
     SD_IP_ADAPTER,     // Classic or Plus IP-Adapter weights
     LLM_DRAFT,
-    SD_ADETAILER
+    SD_ADETAILER,
+    // Video companion roles. Append only: legacy persisted enum values stay stable.
+    SD_AUDIO_VAE,
+    SD_EMBEDDINGS_CONNECTORS,
+    SD_MOTION_MODULE
 }

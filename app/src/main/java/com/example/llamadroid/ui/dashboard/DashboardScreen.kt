@@ -135,7 +135,8 @@ fun DashboardScreen(navController: NavController) {
         ) {
             AppPageHeader(
                 title = stringResource(R.string.soft_studio_home_title),
-                modifier = Modifier.walkthroughTarget("home.summary")
+                modifier = Modifier.walkthroughTarget("home.summary"),
+                trailing = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() }
             )
 
             val pinnedTools = ToolCatalog.tools.filter { it.id in pinnedToolIds }

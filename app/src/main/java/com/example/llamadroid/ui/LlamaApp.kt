@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import com.example.llamadroid.ui.walkthrough.*
 import com.example.llamadroid.ui.navigation.AppNavigationLayout
 import com.example.llamadroid.ui.navigation.appNavigationLayout
@@ -31,6 +33,7 @@ import androidx.navigation.compose.rememberNavController
 import com.example.llamadroid.ui.dashboard.DashboardScreen
 import com.example.llamadroid.ui.models.ModelManagerScreen
 import com.example.llamadroid.ui.models.ModelHubScreen
+import com.example.llamadroid.ui.models.ModelLibraryScreen
 import com.example.llamadroid.ui.chat.ChatScreen
 import com.example.llamadroid.ui.chat.ChatWebViewHolder
 import com.example.llamadroid.ui.settings.DailySupportPrompt
@@ -509,7 +512,19 @@ fun LlamaApp(
             pendingNavigationRoute == ExternalRouteResolution.NoRoute
     )
 
-    CompositionLocalProvider(LocalWalkthroughTargets provides tourTargets, LocalWalkthroughActive provides (tourSession != null)) {
+    val featureGuide = FeatureGuideCatalog.forRoute(currentRoute)
+    val openTourRoute: (String) -> Unit = { route ->
+        val root = AppRootDestination.entries.firstOrNull { it.route == route }
+        if (root != null) navigateFromAppNavigation(root)
+        else if ('{' !in route && '}' !in route) {
+            navController.navigate(if (route == Screen.Chat.route) Screen.LlamaServers.route else route) { launchSingleTop = true }
+        }
+    }
+    CompositionLocalProvider(LocalWalkthroughTargets provides tourTargets,
+        LocalWalkthroughActive provides (tourSession != null),
+        LocalWalkthroughPresentation provides WalkthroughPresentation(tour, tourTargets, currentRoute, openTourRoute),
+        LocalFeatureGuideEntry provides featureGuide?.let { FeatureGuideEntry(it.id, tour::openFeatureGuide) }) {
+    FeatureGuideChooser(tour, currentRoute)
     WalkthroughHighlight(tourTargets) {
     SoftStudioAppScaffold(
         currentRoute = currentRoute,
@@ -522,12 +537,7 @@ fun LlamaApp(
         },
         onCloseTour = if (tour.session != null) ({ tour.dismiss() }) else null,
         walkthroughBar = {
-            WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = { route ->
-                // Explicit fallback navigation remains user initiated and never starts a tool job.
-                val root = AppRootDestination.entries.firstOrNull { it.route == route }
-                if (root != null) navigateFromAppNavigation(root)
-                else navController.navigate(if (route == Screen.Chat.route) Screen.LlamaServers.route else route) { launchSingleTop = true }
-            })
+            if (tourTargets.modalOwners.isEmpty()) WalkthroughCoach(tour, tourTargets, currentRoute, onOpen = openTourRoute)
         }
     ) { innerPadding ->
         NavHost(
@@ -643,6 +653,10 @@ fun LlamaApp(
             composable(Screen.Workflows.route) { WorkflowsScreen(navController) }
             // Model screens
             composable(Screen.ModelHub.route) { ModelHubScreen(navController) }
+            composable("${Screen.ModelSources.route}?family={family}&tab={tab}", arguments = listOf(
+                navArgument("family") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("tab") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )) { entry -> ModelLibraryScreen(navController, entry.arguments?.getString("family"), entry.arguments?.getString("tab")) }
             composable(Screen.LLMModels.route) { ModelManagerScreen(navController) }
             composable(Screen.SDModels.route) { SDModelsScreen(navController) }
             composable(Screen.OnnxModels.route) { OnnxModelsScreen(navController) }

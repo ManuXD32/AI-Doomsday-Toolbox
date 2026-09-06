@@ -48,6 +48,12 @@ internal fun WalkthroughGuide(state: WalkthroughState, onBack: () -> Unit, onSta
                 GuideChapterCard(chapter.id, chapter.titleRes, chapter.descriptionRes,
                     state.preferences.progress(chapter.id) != null, state.preferences.isCompleted(chapter.id), onStart)
             }
+            item { Text(stringResource(R.string.feature_guide_title), style = MaterialTheme.typography.titleLarge) }
+            items(FeatureGuideCatalog.guides, key = { "feature:${it.id}" }) { guide ->
+                OutlinedButton(onClick = { state.openFeatureGuide(guide.id) }, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+                    Text(stringResource(guide.titleRes))
+                }
+            }
             item { IconGuide() }
             item { Text(stringResource(R.string.tour_no_setup_required), style = MaterialTheme.typography.bodySmall) }
         }
@@ -82,11 +88,23 @@ private fun GuideChapterCard(id: String, title: Int, description: Int, hasProgre
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun WalkthroughCoach(state: WalkthroughState, registry: WalkthroughTargets, currentRoute: String?,
-    onOpen: (String) -> Unit) {
+    onOpen: (String) -> Unit, availableHeightDp: Float? = null) {
     val session = state.session ?: return
     val step = state.step ?: return
     val progressText = stringResource(R.string.tour_progress, session.index + 1, state.steps(session.chapterId).size)
     val arrived = tourHasArrived(step, currentRoute)
+    var visitedExpectedRoute by remember(session.chapterId, step.id) { mutableStateOf(arrived) }
+    val eventBaseline = remember(session.chapterId, step.id) { step.eventId?.let { registry.events[it] } ?: 0 }
+    val eventCount = step.eventId?.let { registry.events[it] } ?: 0
+    LaunchedEffect(session.chapterId, step.id, eventCount, currentRoute) {
+        if (arrived) visitedExpectedRoute = true
+        // A real action may navigate immediately. Its event must remain observable after
+        // the origin page leaves composition; explanatory steps stay at the resulting page.
+        if (step.eventId != null && eventCount > eventBaseline && visitedExpectedRoute) {
+            withFrameNanos { }
+            state.move(1, observedRoute = currentRoute)
+        }
+    }
     val targetId = registry.requestedId
     val bounds = targetId?.let { registry.targets[it]?.bounds }
     var unavailable by remember(step.id, targetId, currentRoute) { mutableStateOf(targetId == null && !arrived) }
@@ -118,11 +136,11 @@ internal fun WalkthroughCoach(state: WalkthroughState, registry: WalkthroughTarg
         }
         return
     }
-    val heightDp = LocalWindowInfo.current.containerSize.height / density.density
+    val heightDp = availableHeightDp ?: (LocalWindowInfo.current.containerSize.height / density.density)
     val shortWindow = heightDp < 480f
     val limit = (heightDp * if (density.fontScale >= 1.3f) .44f else .37f).coerceIn(140f, 340f).dp
     val decisionLabelRes = when {
-        !arrived -> R.string.tour_skip_step
+        !arrived || step.eventId != null || unavailable -> R.string.tour_skip_step
         session.index == state.steps(session.chapterId).lastIndex -> R.string.tour_finish
         else -> R.string.tour_next
     }
@@ -219,9 +237,9 @@ internal fun WalkthroughCoach(state: WalkthroughState, registry: WalkthroughTarg
                 Row(Modifier.fillMaxWidth().clickable { preview = true }.padding(vertical = 6.dp)
                     .semantics { role = Role.Button }.testTag("tour_preview"), verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Image(painterResource(lessonPreviewResource(step.id) ?: previewResource(step.previewKey)), null,
+                    if (step.previewKey.isNotBlank()) Image(painterResource(lessonPreviewResource(step.id) ?: lessonPreviewResource(step.previewKey) ?: previewResource(step.previewKey)), null,
                         Modifier.size(width = 48.dp, height = 72.dp), contentScale = ContentScale.Fit)
-                    Text(stringResource(R.string.tour_preview), color = MaterialTheme.colorScheme.primary)
+                    Text(stringResource(if (step.previewKey.isBlank()) R.string.tour_show_guide else R.string.tour_preview), color = MaterialTheme.colorScheme.primary)
                 }
             }
             FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -275,9 +293,11 @@ private fun TourPreview(
                             }
                         }
                     }
-                    Text(stringResource(R.string.tour_preview_caption), style = MaterialTheme.typography.bodySmall)
-                    Image(painterResource(lessonPreviewResource(step.id) ?: previewResource(step.previewKey)), stringResource(step.titleRes),
-                        Modifier.fillMaxWidth().heightIn(max = 440.dp), contentScale = ContentScale.Fit)
+                    if (step.previewKey.isNotBlank()) {
+                        Text(stringResource(R.string.tour_preview_caption), style = MaterialTheme.typography.bodySmall)
+                        Image(painterResource(lessonPreviewResource(step.id) ?: lessonPreviewResource(step.previewKey) ?: previewResource(step.previewKey)), stringResource(step.titleRes),
+                            Modifier.fillMaxWidth().heightIn(max = 440.dp), contentScale = ContentScale.Fit)
+                    }
                     IconGuide()
                 }
             }

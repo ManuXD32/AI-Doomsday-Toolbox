@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.models
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.widget.Toast
@@ -34,10 +36,12 @@ import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
 import com.example.llamadroid.data.model.PendingDownloadHolder
+import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.service.DownloadService
 import com.example.llamadroid.service.WhisperModel
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.ui.components.AppPageBackground
+import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.DebugLog
 import com.example.llamadroid.util.FormatUtils
@@ -59,6 +63,9 @@ fun WhisperModelsScreen(navController: NavController) {
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
     val settingsRepo = remember { SettingsRepository(context) }
+    val sourceRepository = rememberModelSourceRepository(context)
+    val savedSources by sourceRepository.sources.collectAsState(initial = emptyList())
+    val sourceProvenance by sourceRepository.provenance.collectAsState(initial = emptyList())
     
     // Downloaded models from database
     val downloadedModels by db.modelDao().getModelsByType(ModelType.WHISPER).collectAsState(initial = emptyList())
@@ -77,6 +84,12 @@ fun WhisperModelsScreen(navController: NavController) {
     var isImporting by remember { mutableStateOf(false) }
     var importProgress by remember { mutableFloatStateOf(0f) }
     var importFileName by remember { mutableStateOf("") }
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingImportFilename by remember { mutableStateOf("") }
+    var importSourceUrl by remember { mutableStateOf("") }
+    var importSourceLabel by remember { mutableStateOf("") }
+    var importSourceError by remember { mutableStateOf<String?>(null) }
+    var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     var pendingExportModel by remember { mutableStateOf<ModelEntity?>(null) }
     
     // Models directory
@@ -116,41 +129,11 @@ fun WhisperModelsScreen(navController: NavController) {
     ) { uri ->
         if (uri != null) {
             val filename = resolveDisplayName(context, uri)
-            importFileName = filename
-            importProgress = 0f
-            isImporting = true
-            scope.launch {
-                importWhisperModel(
-                    context = context,
-                    db = db,
-                    uri = uri,
-                    filename = filename,
-                    onProgress = { progress -> importProgress = progress }
-                ).onSuccess { result ->
-                    Toast.makeText(
-                        context,
-                        resources.getString(
-                            if (result.didCopy) {
-                                R.string.whisper_import_success_copied
-                            } else {
-                                R.string.whisper_import_success_linked
-                            },
-                            result.filename
-                        ),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }.onFailure { error ->
-                    Toast.makeText(
-                        context,
-                        resources.getString(
-                            R.string.whisper_import_failed,
-                            error.message ?: resources.getString(R.string.error_generic)
-                        ),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                isImporting = false
-            }
+            pendingImportUri = uri
+            pendingImportFilename = filename
+            importSourceUrl = ""
+            importSourceLabel = ""
+            importSourceError = null
         }
     }
     
@@ -177,6 +160,165 @@ fun WhisperModelsScreen(navController: NavController) {
     fun exportModel(model: ModelEntity) {
         pendingExportModel = model
         exportPicker.launch(null)
+    }
+
+    pendingImportUri?.let { uri ->
+        val invalidSourceText = stringResource(R.string.model_source_invalid_link)
+        AlertDialog(
+            onDismissRequest = {
+                pendingImportUri = null
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
+            },
+            title = { Text(stringResource(R.string.whisper_import_options_title)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.whisper_import_options_desc, pendingImportFilename),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OptionalModelSourceFields(
+                        family = ModelFamily.WHISPER,
+                        url = importSourceUrl,
+                        onUrlChange = {
+                            importSourceUrl = it
+                            importSourceError = null
+                        },
+                        label = importSourceLabel,
+                        onLabelChange = { importSourceLabel = it },
+                        error = importSourceError
+                    )
+                    Text(
+                        stringResource(R.string.model_source_local_file_unchanged),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val sourceDraft = optionalModelSourceDraft(
+                        ModelFamily.WHISPER,
+                        importSourceUrl,
+                        importSourceLabel
+                    )
+                    if (sourceDraft.isFailure) {
+                        importSourceError = invalidSourceText
+                        return@TextButton
+                    }
+                    val selectedUri = uri
+                    val filename = pendingImportFilename
+                    pendingImportUri = null
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
+                    importFileName = filename
+                    importProgress = 0f
+                    isImporting = true
+                    scope.launch {
+                        val result = importWhisperModel(
+                            context = context,
+                            db = db,
+                            uri = selectedUri,
+                            filename = filename,
+                            onProgress = { progress -> importProgress = progress }
+                        )
+                        if (result.isSuccess) {
+                            val imported = result.getOrThrow()
+                            sourceDraft.getOrNull()?.let { draft ->
+                                attachModelSource(
+                                    sourceRepository,
+                                    ModelSourceAttachmentRequest(
+                                        asset = installedAssetForModel(imported.model),
+                                        newSource = draft,
+                                        role = "whisper"
+                                    )
+                                ).onFailure { error ->
+                                    Toast.makeText(
+                                        context,
+                                        resources.getString(
+                                            R.string.model_source_save_failed,
+                                            error.message ?: resources.getString(R.string.error_generic)
+                                        ),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                            Toast.makeText(
+                                context,
+                                resources.getString(
+                                    if (imported.didCopy) {
+                                        R.string.whisper_import_success_copied
+                                    } else {
+                                        R.string.whisper_import_success_linked
+                                    },
+                                    imported.filename
+                                ),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            val error = result.exceptionOrNull()
+                            Toast.makeText(
+                                context,
+                                resources.getString(
+                                    R.string.whisper_import_failed,
+                                    error?.message ?: resources.getString(R.string.error_generic)
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                        isImporting = false
+                    }
+                }) { Text(stringResource(R.string.action_import)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingImportUri = null
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
+                }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        )
+    }
+
+    sourceAsset?.let { asset ->
+        ModelSourceAttachmentDialog(
+            asset = asset,
+            sources = savedSources,
+            provenance = sourceProvenance,
+            onDismiss = { sourceAsset = null },
+            onSave = { request ->
+                sourceAsset = null
+                scope.launch {
+                    attachModelSource(sourceRepository, request)
+                        .onSuccess {
+                            Toast.makeText(
+                                context,
+                                resources.getString(R.string.model_source_saved),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        .onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                resources.getString(
+                                    R.string.model_source_save_failed,
+                                    error.message ?: resources.getString(R.string.error_generic)
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+            }
+        )
     }
 
     if (isImporting) {
@@ -224,6 +366,13 @@ fun WhisperModelsScreen(navController: NavController) {
                     }
                 },
                 actions = {
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+                    IconButton(
+                        onClick = { navController.navigate("${Screen.ModelSources.route}?family=WHISPER&tab=download") },
+                        modifier = Modifier.walkthroughTarget("models.download")
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
+                    }
                     IconButton(onClick = { importPicker.launch(arrayOf("*/*")) }) {
                         Icon(
                             Icons.Default.Add,
@@ -241,6 +390,14 @@ fun WhisperModelsScreen(navController: NavController) {
                     .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
+            com.example.llamadroid.ui.components.ModelStorageOverviewCard(
+                com.example.llamadroid.ui.components.rememberModelStorageInventory(), "whisper")
+            Spacer(modifier = Modifier.height(16.dp))
+            ModelManagerShortcutRow(
+                navController = navController,
+                family = ModelFamily.WHISPER
+            )
+            Spacer(modifier = Modifier.height(16.dp))
             // Info Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -298,13 +455,15 @@ fun WhisperModelsScreen(navController: NavController) {
                         scope.launch {
                             repository.deleteModel(model)
                         }
-                    }
+                    },
+                    onSource = { sourceAsset = installedAssetForModel(it) }
                 )
             }
 
             DownloadTaskSection(
                 modelTypes = listOf(ModelType.WHISPER),
-                includeTask = { it.id.startsWith("whisper_") }
+                includeTask = { it.id.startsWith("whisper_") },
+                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.WHISPER
             )
             Spacer(modifier = Modifier.height(16.dp))
             
@@ -316,6 +475,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 downloadProgressMap = downloadProgressMap,
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
+                onSource = { sourceAsset = installedAssetForModel(it) },
                 onDelete = { model ->
                     scope.launch {
                         repository.deleteModel(model)
@@ -330,6 +490,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 downloadProgressMap = downloadProgressMap,
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
+                onSource = { sourceAsset = installedAssetForModel(it) },
                 onDelete = { model -> scope.launch { repository.deleteModel(model) } }
             )
             
@@ -340,6 +501,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 downloadProgressMap = downloadProgressMap,
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
+                onSource = { sourceAsset = installedAssetForModel(it) },
                 onDelete = { model -> scope.launch { repository.deleteModel(model) } }
             )
             
@@ -350,6 +512,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 downloadProgressMap = downloadProgressMap,
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
+                onSource = { sourceAsset = installedAssetForModel(it) },
                 onDelete = { model -> scope.launch { repository.deleteModel(model) } }
             )
             
@@ -360,6 +523,7 @@ fun WhisperModelsScreen(navController: NavController) {
                 downloadProgressMap = downloadProgressMap,
                 onDownload = { model -> startModelDownload(model) },
                 onExport = ::exportModel,
+                onSource = { sourceAsset = installedAssetForModel(it) },
                 onDelete = { model -> scope.launch { repository.deleteModel(model) } }
             )
             }
@@ -375,6 +539,7 @@ private fun WhisperModelCategory(
     downloadProgressMap: Map<String, Float>,
     onDownload: (WhisperModel) -> Unit,
     onExport: (ModelEntity) -> Unit,
+    onSource: (ModelEntity) -> Unit,
     onDelete: (ModelEntity) -> Unit
 ) {
     Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
@@ -475,6 +640,13 @@ private fun WhisperModelCategory(
                                     )
                                 }
                             }
+                            IconButton(onClick = { installedModel?.let(onSource) }) {
+                                Icon(
+                                    Icons.Default.Link,
+                                    contentDescription = stringResource(R.string.model_source_attach_title),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             IconButton(onClick = { installedModel?.let(onDelete) }) {
                                 Icon(
                                     Icons.Default.Delete,
@@ -500,7 +672,8 @@ private fun WhisperModelCategory(
 @Composable
 private fun ImportedWhisperModelsSection(
     models: List<ModelEntity>,
-    onDelete: (ModelEntity) -> Unit
+    onDelete: (ModelEntity) -> Unit,
+    onSource: (ModelEntity) -> Unit
 ) {
     Text(
         stringResource(R.string.whisper_imported_models_title),
@@ -549,6 +722,13 @@ private fun ImportedWhisperModelsSection(
                     )
                 }
 
+                IconButton(onClick = { onSource(model) }) {
+                    Icon(
+                        Icons.Default.Link,
+                        contentDescription = stringResource(R.string.model_source_attach_title),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
                 IconButton(onClick = { onDelete(model) }) {
                     Icon(
                         Icons.Default.Delete,
@@ -565,7 +745,8 @@ private fun ImportedWhisperModelsSection(
 
 private data class WhisperImportResult(
     val filename: String,
-    val didCopy: Boolean
+    val didCopy: Boolean,
+    val model: ModelEntity
 )
 
 private fun resolveDisplayName(
@@ -631,18 +812,17 @@ private suspend fun importWhisperModel(
 
         val finalFile = File(finalPath)
         val sizeBytes = if (finalFile.exists()) finalFile.length() else 0L
-        db.modelDao().insertModel(
-            ModelEntity(
-                filename = targetFilename,
-                path = finalPath,
-                sizeBytes = sizeBytes,
-                type = ModelType.WHISPER,
-                repoId = ModelBackupPolicy.LOCAL_IMPORT_REPO_ID,
-                isDownloaded = false
-            )
+        val model = ModelEntity(
+            filename = targetFilename,
+            path = finalPath,
+            sizeBytes = sizeBytes,
+            type = ModelType.WHISPER,
+            repoId = ModelBackupPolicy.LOCAL_IMPORT_REPO_ID,
+            isDownloaded = false
         )
+        db.modelDao().insertModel(model)
 
-        WhisperImportResult(filename = targetFilename, didCopy = true)
+        WhisperImportResult(filename = targetFilename, didCopy = true, model = model)
     }.onFailure {
         tempFile?.takeIf { file -> file.exists() }?.delete()
     }

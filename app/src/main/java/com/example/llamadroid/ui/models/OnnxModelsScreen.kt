@@ -5,6 +5,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -27,7 +29,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.filled.Link
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -59,6 +62,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -72,6 +76,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.navigation.NavController
 import com.example.llamadroid.ui.components.AppScrollableTabRow
 import com.example.llamadroid.R
+import com.example.llamadroid.ui.navigation.Screen
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.data.SettingsRepository
 import com.example.llamadroid.data.db.AppDatabase
@@ -80,6 +85,7 @@ import com.example.llamadroid.data.db.ModelType
 import com.example.llamadroid.data.model.DownloadProgressHolder
 import com.example.llamadroid.data.model.ModelLibraryManager
 import com.example.llamadroid.data.model.ModelRepository
+import com.example.llamadroid.data.model.library.ModelFamily
 import com.example.llamadroid.ui.components.DownloadTaskSection
 import com.example.llamadroid.ui.components.AppPageBackground
 import com.example.llamadroid.data.db.ONNX_CAPABILITY_BACKGROUND_REMOVAL
@@ -111,6 +117,22 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.roundToInt
 
+private const val ONNX_IMPORT_SOURCE_MEMBER_LIMIT = 512
+
+private data class OnnxImportSourceMember(
+    val relativePath: String
+)
+
+private data class OnnxImportSourceListing(
+    val members: List<OnnxImportSourceMember>,
+    val truncated: Boolean
+)
+
+private data class OnnxImportResult(
+    val bundleId: String,
+    val message: String
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnnxModelsScreen(navController: NavController) {
@@ -119,6 +141,9 @@ fun OnnxModelsScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val db = remember { AppDatabase.getDatabase(context) }
     val repository = remember { ModelRepository(context, db.modelDao()) }
+    val sourceRepository = rememberModelSourceRepository(context)
+    val savedSources by sourceRepository.sources.collectAsState(initial = emptyList())
+    val sourceProvenance by sourceRepository.provenance.collectAsState(initial = emptyList())
     val settingsRepo = remember { SettingsRepository(context) }
     val installedModels by db.modelDao().getModelsByTypes(
         listOf(ModelType.ONNX_IMAGE_GEN, ModelType.ONNX_TTS, ModelType.ONNX_BACKGROUND_REMOVAL)
@@ -145,6 +170,15 @@ fun OnnxModelsScreen(navController: NavController) {
     var isImporting by remember { mutableStateOf(false) }
     var importProgress by remember { mutableFloatStateOf(0f) }
     var importLabel by remember { mutableStateOf("") }
+    var pendingImportTreeUri by remember { mutableStateOf<android.net.Uri?>(null) }
+    var pendingImportName by remember { mutableStateOf("") }
+    var importSourceUrl by remember { mutableStateOf("") }
+    var importSourceLabel by remember { mutableStateOf("") }
+    var importSourceError by remember { mutableStateOf<String?>(null) }
+    var importSourceMembers by remember { mutableStateOf<List<OnnxImportSourceMember>>(emptyList()) }
+    var importSourceMembersTruncated by remember { mutableStateOf(false) }
+    var selectedImportSourceMember by rememberSaveable { mutableStateOf<String?>(null) }
+    var sourceAsset by remember { mutableStateOf<com.example.llamadroid.data.model.library.InstalledModelAsset?>(null) }
     var pendingDeleteModel by remember { mutableStateOf<ModelEntity?>(null) }
     var huggingFaceToken by remember { mutableStateOf(repository.huggingFaceToken()) }
 
@@ -175,29 +209,253 @@ fun OnnxModelsScreen(navController: NavController) {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
         }
-        scope.launch(Dispatchers.IO) {
-            isImporting = true
-            importProgress = 0f
-            importLabel = resources.getString(R.string.onnx_models_importing)
-            val result = importOnnxBundleFromTree(
-                context = context,
-                repository = repository,
-                treeUri = treeUri,
-                existingIds = onnxModels.map { it.filename }.toSet(),
-                onProgress = { progress, label ->
-                    importProgress = progress
-                    importLabel = label
-                }
-            )
-            isImporting = false
-            withContext(Dispatchers.Main) {
-                Toast.makeText(
-                    context,
-                    result.getOrElse { it.message ?: resources.getString(R.string.error_generic) },
-                    Toast.LENGTH_LONG
-                ).show()
+        pendingImportTreeUri = treeUri
+        pendingImportName = DocumentFile.fromTreeUri(context, treeUri)?.name
+            ?: resources.getString(R.string.onnx_models_import_bundle)
+        importSourceUrl = ""
+        importSourceLabel = ""
+        importSourceError = null
+        selectedImportSourceMember = null
+    }
+
+    LaunchedEffect(pendingImportTreeUri) {
+        val treeUri = pendingImportTreeUri
+        if (treeUri == null) {
+            importSourceMembers = emptyList()
+            importSourceMembersTruncated = false
+            selectedImportSourceMember = null
+        } else {
+            val listing = withContext(Dispatchers.IO) {
+                listOnnxImportSourceMembers(context, treeUri)
+            }
+            importSourceMembers = listing.members
+            importSourceMembersTruncated = listing.truncated
+            if (selectedImportSourceMember !in listing.members.map { it.relativePath }) {
+                selectedImportSourceMember = null
             }
         }
+    }
+
+    pendingImportTreeUri?.let { treeUri ->
+        val invalidSourceText = stringResource(R.string.model_source_invalid_link)
+        val directoryMappingText = stringResource(R.string.onnx_directory_mapping_required)
+        AlertDialog(
+            onDismissRequest = {
+                pendingImportTreeUri = null
+                importSourceUrl = ""
+                importSourceLabel = ""
+                importSourceError = null
+                selectedImportSourceMember = null
+            },
+            title = { Text(stringResource(R.string.onnx_import_options_title)) },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.onnx_import_options_desc, pendingImportName),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    OptionalModelSourceFields(
+                        family = ModelFamily.ONNX,
+                        url = importSourceUrl,
+                        onUrlChange = {
+                            importSourceUrl = it
+                            importSourceError = null
+                        },
+                        label = importSourceLabel,
+                        onLabelChange = { importSourceLabel = it },
+                        error = importSourceError
+                    )
+                    Text(
+                        directoryMappingText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                    if (importSourceUrl.trim().isNotEmpty()) {
+                        Text(
+                            stringResource(R.string.onnx_import_source_mapping_heading),
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Text(
+                            stringResource(R.string.onnx_import_source_mapping_help),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (importSourceMembers.isEmpty()) {
+                            Text(
+                                stringResource(R.string.onnx_import_source_member_empty),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else {
+                            Text(
+                                stringResource(R.string.onnx_import_source_member_choose),
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                            if (importSourceMembersTruncated) {
+                                Text(
+                                    stringResource(R.string.onnx_import_source_member_truncated),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.tertiary
+                                )
+                            }
+                            importSourceMembers.forEach { member ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { selectedImportSourceMember = member.relativePath }
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    androidx.compose.material3.RadioButton(
+                                        selected = selectedImportSourceMember == member.relativePath,
+                                        onClick = { selectedImportSourceMember = member.relativePath }
+                                    )
+                                    Text(
+                                        member.relativePath,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val sourceDraft = optionalModelSourceDraft(
+                        ModelFamily.ONNX,
+                        importSourceUrl,
+                        importSourceLabel
+                    )
+                    if (sourceDraft.isFailure) {
+                        importSourceError = invalidSourceText
+                        return@TextButton
+                    }
+                    if (sourceDraft.getOrNull() != null) {
+                        if (selectedImportSourceMember == null) {
+                            importSourceError = resources.getString(R.string.onnx_import_source_member_required)
+                            return@TextButton
+                        }
+                    }
+                    val selectedTreeUri = treeUri
+                    val selectedSourceDraft = sourceDraft.getOrNull()
+                    val selectedSourceMember = selectedImportSourceMember
+                    pendingImportTreeUri = null
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
+                    selectedImportSourceMember = null
+                    scope.launch(Dispatchers.IO) {
+                        isImporting = true
+                        importProgress = 0f
+                        importLabel = resources.getString(R.string.onnx_models_importing)
+                        val result = importOnnxBundleFromTree(
+                            context = context,
+                            repository = repository,
+                            treeUri = selectedTreeUri,
+                            existingIds = onnxModels.map { it.filename }.toSet(),
+                            onProgress = { progress, label ->
+                                importProgress = progress
+                                importLabel = label
+                            }
+                        )
+                        val sourceResult = if (result.isSuccess &&
+                            selectedSourceDraft != null && selectedSourceMember != null
+                        ) {
+                            val imported = result.getOrThrow()
+                            val importedModel = db.modelDao().getModelByFilename(imported.bundleId)
+                            val memberFile = importedModel?.let {
+                                resolveImportedOnnxMember(it, selectedSourceMember)
+                            }
+                            if (importedModel != null && memberFile != null) {
+                                val baseAsset = installedAssetForModel(importedModel)
+                                attachModelSource(
+                                    sourceRepository,
+                                    ModelSourceAttachmentRequest(
+                                        asset = baseAsset.copy(
+                                            displayName = "${baseAsset.displayName}/$selectedSourceMember",
+                                            path = memberFile.absolutePath,
+                                            filename = memberFile.name
+                                        ),
+                                        newSource = selectedSourceDraft,
+                                        role = baseAsset.role
+                                    )
+                                )
+                            } else {
+                                Result.failure(IllegalStateException("ONNX source member was not copied"))
+                            }
+                        } else {
+                            null
+                        }
+                        isImporting = false
+                        withContext(Dispatchers.Main) {
+                            sourceResult?.onFailure {
+                                Toast.makeText(
+                                    context,
+                                    resources.getString(R.string.model_source_save_failed, resources.getString(R.string.error_generic)),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            Toast.makeText(
+                                context,
+                                result.fold(
+                                    onSuccess = { it.message },
+                                    onFailure = { it.message ?: resources.getString(R.string.error_generic) }
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                }) { Text(stringResource(R.string.action_import)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingImportTreeUri = null
+                    importSourceUrl = ""
+                    importSourceLabel = ""
+                    importSourceError = null
+                    selectedImportSourceMember = null
+                }) { Text(stringResource(R.string.action_cancel)) }
+            }
+        )
+    }
+
+    sourceAsset?.let { asset ->
+        ModelSourceAttachmentDialog(
+            asset = asset,
+            sources = savedSources,
+            provenance = sourceProvenance,
+            onDismiss = { sourceAsset = null },
+            onSave = { request ->
+                sourceAsset = null
+                scope.launch {
+                    attachModelSource(sourceRepository, request)
+                        .onSuccess {
+                            Toast.makeText(
+                                context,
+                                resources.getString(R.string.model_source_saved),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        .onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                resources.getString(
+                                    R.string.model_source_save_failed,
+                                    error.message ?: resources.getString(R.string.error_generic)
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -224,10 +482,18 @@ fun OnnxModelsScreen(navController: NavController) {
                     }
                     Text(
                         stringResource(R.string.onnx_models_title),
+                        modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
+                    IconButton(
+                        onClick = { navController.navigate("${Screen.ModelSources.route}?family=ONNX&tab=download") },
+                        modifier = Modifier.walkthroughTarget("models.download")
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = stringResource(R.string.model_library_custom_download_heading))
+                    }
                 }
                 Text(
                     stringResource(R.string.onnx_models_subtitle),
@@ -238,6 +504,12 @@ fun OnnxModelsScreen(navController: NavController) {
                     overflow = TextOverflow.Ellipsis
                 )
             }
+
+            ModelManagerShortcutRow(
+                navController = navController,
+                family = ModelFamily.ONNX,
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
 
 
             AppScrollableTabRow(selectedTabIndex = selectedTab) {
@@ -270,7 +542,8 @@ fun OnnxModelsScreen(navController: NavController) {
                 0 -> InstalledOnnxModelsTab(
                     models = onnxModels.sortedBy { (resolveOnnxCatalogEntry(it)?.title ?: it.filename).lowercase() },
                     validationMap = validationMap,
-                    onDeleteRequest = { pendingDeleteModel = it }
+                    onDeleteRequest = { pendingDeleteModel = it },
+                    onSourceRequest = { sourceAsset = installedAssetForModel(it) }
                 )
                 1 -> DownloadingOnnxModelsTab(
                     downloadProgress = activeOnnxDownloads,
@@ -355,25 +628,20 @@ fun OnnxModelsScreen(navController: NavController) {
 private fun InstalledOnnxModelsTab(
     models: List<ModelEntity>,
     validationMap: Map<String, OnnxBundleValidationResult>,
-    onDeleteRequest: (ModelEntity) -> Unit
+    onDeleteRequest: (ModelEntity) -> Unit,
+    onSourceRequest: (ModelEntity) -> Unit
 ) {
-    if (models.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
-            .padding(start = 20.dp, top = 20.dp, end = 20.dp, bottom = 96.dp),
-            contentAlignment = Alignment.Center) {
-            Text(
-                stringResource(R.string.onnx_models_empty),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        return
-    }
+    val storage = com.example.llamadroid.ui.components.rememberModelStorageInventory()
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        item { com.example.llamadroid.ui.components.ModelStorageOverviewCard(storage, "onnx") }
+        if (models.isEmpty()) item {
+            Text(stringResource(R.string.onnx_models_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         items(models, key = { it.path }) { model ->
             val validation = validationMap[model.filename]
             val catalogEntry = resolveOnnxCatalogEntry(model)
@@ -407,10 +675,19 @@ private fun InstalledOnnxModelsTab(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        OutlinedButton(onClick = { onDeleteRequest(model) }) {
-                            Icon(Icons.Default.Delete, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(stringResource(R.string.action_delete))
+                        Row {
+                            IconButton(onClick = { onSourceRequest(model) }) {
+                                Icon(
+                                    Icons.Default.Link,
+                                    contentDescription = stringResource(R.string.model_source_attach_title),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            OutlinedButton(onClick = { onDeleteRequest(model) }) {
+                                Icon(Icons.Default.Delete, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(stringResource(R.string.action_delete))
+                            }
                         }
                     }
                     Spacer(modifier = Modifier.height(12.dp))
@@ -521,7 +798,8 @@ private fun DownloadingOnnxModelsTab(
                     ModelType.ONNX_BACKGROUND_REMOVAL,
                     ModelType.ONNX_IMAGE_UPSCALER
                 ),
-                includeTask = { it.id.startsWith("onnx:") }
+                includeTask = { it.id.startsWith("onnx:") },
+                artifactFamily = com.example.llamadroid.data.model.library.ModelFamily.ONNX
             )
         }
         if (items.isEmpty()) {
@@ -964,7 +1242,7 @@ private suspend fun importOnnxBundleFromTree(
     treeUri: android.net.Uri,
     existingIds: Set<String>,
     onProgress: (Float, String) -> Unit
-): Result<String> = runCatching {
+): Result<OnnxImportResult> = runCatching {
     val sourceRoot = DocumentFile.fromTreeUri(context, treeUri)
         ?: error(context.getString(R.string.onnx_models_import_error_invalid_tree))
 
@@ -1023,8 +1301,56 @@ private suspend fun importOnnxBundleFromTree(
         }
     )
 
-    context.getString(R.string.onnx_models_import_success_copied, bundleId)
+    OnnxImportResult(
+        bundleId = bundleId,
+        message = context.getString(R.string.onnx_models_import_success_copied, bundleId)
+    )
 }
+
+private fun listOnnxImportSourceMembers(
+    context: android.content.Context,
+    treeUri: android.net.Uri
+): OnnxImportSourceListing {
+    val root = DocumentFile.fromTreeUri(context, treeUri) ?: return OnnxImportSourceListing(emptyList(), false)
+    val collected = mutableListOf<OnnxImportSourceMember>()
+
+    fun visit(directory: DocumentFile, prefix: String) {
+        if (collected.size > ONNX_IMPORT_SOURCE_MEMBER_LIMIT) return
+        val children = runCatching { directory.listFiles().toList() }.getOrDefault(emptyList())
+            .sortedBy { it.name.orEmpty().lowercase() }
+        for (child in children) {
+            if (collected.size > ONNX_IMPORT_SOURCE_MEMBER_LIMIT) return
+            val name = child.name?.trim().orEmpty()
+            if (name.isBlank() || name == "." || name == ".." || name.contains('/')) continue
+            val relative = if (prefix.isBlank()) name else "$prefix/$name"
+            when {
+                child.isDirectory -> visit(child, relative)
+                child.isFile -> collected += OnnxImportSourceMember(relative)
+            }
+        }
+    }
+
+    visit(root, "")
+    return OnnxImportSourceListing(
+        members = collected.take(ONNX_IMPORT_SOURCE_MEMBER_LIMIT),
+        truncated = collected.size > ONNX_IMPORT_SOURCE_MEMBER_LIMIT
+    )
+}
+
+private fun resolveImportedOnnxMember(model: ModelEntity, relativePath: String): File? {
+    val normalized = relativePath.trim()
+    if (normalized.isBlank() || File(normalized).isAbsolute) return null
+    val segments = normalized.split('/')
+    if (segments.any { it.isBlank() || it == "." || it == ".." || '\\' in it }) {
+        return null
+    }
+    val root = runCatching { File(model.path).canonicalFile }.getOrNull() ?: return null
+    if (!root.isDirectory) return null
+    val candidate = runCatching { File(root, normalized).canonicalFile }.getOrNull() ?: return null
+    if (!candidate.path.startsWith(root.path + File.separator)) return null
+    return candidate.takeIf { it.isFile }
+}
+
 private fun validateAnyOnnxBundle(root: File): OnnxBundleValidationResult {
     val imageValidation = com.example.llamadroid.onnx.OnnxBundleValidator.validateDirectory(root)
     if (imageValidation.isValid) return imageValidation

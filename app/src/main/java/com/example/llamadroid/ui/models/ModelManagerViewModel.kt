@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.llamadroid.util.DebugLog
 import java.io.File
 
@@ -206,7 +208,7 @@ class ModelManagerViewModel(
     /**
      * Import a local model file with user-specified type and badges
      */
-    fun importLocalModel(
+    suspend fun importLocalModel(
         path: String,
         filename: String,
         modelType: ModelType,
@@ -214,9 +216,8 @@ class ModelManagerViewModel(
         hasEmbedding: Boolean = false,
         sdCapabilities: String? = null,
         layerCount: Int = 0  // Number of layers from GGUF parsing
-    ) {
-        viewModelScope.launch {
-            try {
+    ): Result<ModelEntity> = withContext(Dispatchers.IO) {
+            runCatching {
                 val modelEntity = buildLocalModelEntity(
                     path = path,
                     filename = filename,
@@ -229,10 +230,8 @@ class ModelManagerViewModel(
                 
                 repository.insertModel(modelEntity)
                 DebugLog.log("Imported local model: $filename as ${modelEntity.type.name} (vision=$hasVision, layers=$layerCount)")
-            } catch (e: Exception) {
-                DebugLog.log("Failed to import model: ${e.message}")
+                modelEntity
             }
-        }
     }
 }
 

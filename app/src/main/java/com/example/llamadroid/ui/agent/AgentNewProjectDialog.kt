@@ -7,7 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.llamadroid.R
 import com.example.llamadroid.service.AgentWorkspaceBackendType
@@ -28,7 +28,8 @@ fun AgentNewProjectDialog(
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         Scaffold(
             modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
-            topBar = { TopAppBar(title = { Text(stringResource(R.string.agent_new_project_title)) }) },
+            topBar = { TopAppBar(
+                    actions = { com.example.llamadroid.ui.walkthrough.FeatureGuideAction() },title = { Text(stringResource(R.string.agent_new_project_title)) }) },
             bottomBar = {
                 AppTaskActionFooter {
                     Button(onClick = onCreate, modifier = Modifier.fillMaxWidth()) {

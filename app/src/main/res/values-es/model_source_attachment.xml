@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="model_source_import_heading">Fuente de descarga (opcional)</string>
+    <string name="model_source_import_help">Los archivos locales pueden ejecutarse sin fuente. Añade un enlace directo HTTPS o a un archivo de Hugging Face para reutilizar este modelo en paquetes.</string>
+    <string name="model_source_url_label">URL de la fuente de descarga</string>
+    <string name="model_source_url_hint">https://huggingface.co/propietario/repositorio/resolve/main/archivo.gguf</string>
+    <string name="model_source_label">Etiqueta de la fuente</string>
+    <string name="model_source_label_hint">Nombre visible opcional</string>
+    <string name="model_source_attach_title">Vincular fuente de descarga</string>
+    <string name="model_source_saved_heading">Enlaces guardados</string>
+    <string name="model_source_no_saved_links">Todavía no hay enlaces guardados compatibles.</string>
+    <string name="model_source_new_link">Añadir una fuente nueva</string>
+    <string name="model_source_current">Fuente actual: %1$s</string>
+    <string name="model_source_current_missing">La fuente actual no está disponible: %1$s</string>
+    <string name="model_source_role_label">Rol del paquete (opcional)</string>
+    <string name="model_source_role_hint">Por ejemplo: checkpoint, encoder o whisper</string>
+    <string name="model_source_local_file_unchanged">Guardar una fuente solo cambia metadatos. El archivo instalado no se modifica.</string>
+    <string name="model_source_invalid_link">Introduce un enlace HTTPS o a un archivo de Hugging Face válido.</string>
+    <string name="model_source_choose_link">Elige un enlace guardado o añade una fuente nueva.</string>
+    <string name="model_source_save_link">Guardar fuente</string>
+    <string name="model_source_saved">Fuente guardada</string>
+    <string name="model_source_save_failed">No se pudo guardar la fuente: %1$s</string>
+    <string name="whisper_import_options_title">Importar modelo Whisper</string>
+    <string name="whisper_import_options_desc">Elige una fuente de descarga opcional para %1$s antes de importar el archivo local.</string>
+    <string name="onnx_import_options_title">Importar paquete ONNX</string>
+    <string name="onnx_import_options_desc">Elige cómo registrar este paquete de directorio antes de importar %1$s.</string>
+    <string name="onnx_directory_mapping_required">Una carpeta contiene varios archivos. Selecciona un miembro instalado antes de vincular un archivo; cada compañero conserva su propia fuente.</string>
+    <string name="onnx_import_source_mapping_heading">Asignar esta fuente a un archivo instalado</string>
+    <string name="onnx_import_source_mapping_help">Una carpeta contiene varios archivos. Selecciona el miembro relativo exacto que representa este enlace directo.</string>
+    <string name="onnx_import_source_member_empty">No hay archivos normales disponibles para asignar.</string>
+    <string name="onnx_import_source_member_choose">Miembro del archivo fuente</string>
+    <string name="onnx_import_source_member_required">Selecciona el archivo instalado que representa este enlace de fuente.</string>
+    <string name="onnx_import_source_member_truncated">Esta carpeta tiene más de 512 archivos; se muestran los primeros 512. Usa una carpeta de importación más pequeña para asignar otro miembro.</string>
+    <string name="model_source_directory_empty">No se encontraron archivos normales en esta carpeta de modelo.</string>
+    <string name="model_source_directory_choose_file">Selecciona el archivo instalado cuya fuente quieres editar.</string>
+    <string name="model_source_directory_truncated">Esta carpeta tiene más de 512 archivos; se muestran los primeros 512. Para otros archivos, importa o vincula una carpeta más pequeña.</string>
+</resources>

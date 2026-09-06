@@ -28,7 +28,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -89,6 +89,8 @@ import com.example.llamadroid.ui.components.DraftIntTextField
 import com.example.llamadroid.ui.components.AppAdvancedSection
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.navigation.Screen
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.google.gson.Gson
 import java.io.File
 
@@ -98,6 +100,7 @@ fun LlamaServerListScreen(
     navController: NavController
 ) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val settingsRepository = remember { SettingsRepository(context.applicationContext) }
     val database = AppDatabase.getDatabase(context)
     val knowledgeBaseRepository = remember { KnowledgeBaseRepository(context, database) }
@@ -153,7 +156,9 @@ fun LlamaServerListScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding),
+                    .padding(padding)
+                    .walkthroughTarget("llama.servers")
+                    .walkthroughTarget("llama.server_selection"),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
@@ -162,6 +167,8 @@ fun LlamaServerListScreen(
                         server = server,
                         onConnect = {
                             viewModel.selectServer(server)
+                            walkthroughTargets?.recordEvent("llama.server_card")
+                            walkthroughTargets?.recordEvent("llama.server_selection")
                             navController.navigate(Screen.LlamaChatList.route)
                         },
                         onEdit = { serverToEdit = server },

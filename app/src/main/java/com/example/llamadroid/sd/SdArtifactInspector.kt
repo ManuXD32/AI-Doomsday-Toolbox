@@ -473,6 +473,7 @@ class SdArtifactInspector {
     private data class Evidence(
         val format: SdArtifactFormat,
         val family: SdModelFamily?,
+        val variant: String?,
         val role: SdArtifactRole?,
         val layout: SdMainLayout,
         val containsDiffusion: Boolean,
@@ -481,6 +482,9 @@ class SdArtifactInspector {
         val containsClipG: Boolean,
         val containsT5xxl: Boolean,
         val containsLlm: Boolean,
+        val containsAudioVae: Boolean,
+        val containsEmbeddingsConnectors: Boolean,
+        val containsMotionModule: Boolean,
         val confidence: SdInspectionConfidence,
         val metadata: Map<String, String>
     ) {
@@ -497,6 +501,7 @@ class SdArtifactInspector {
         ): SdArtifactInspection = SdArtifactInspection(
             format = format,
             detectedFamily = family,
+            detectedVariant = variant,
             detectedRole = role,
             containsDiffusion = containsDiffusion,
             containsVae = containsVae,
@@ -504,6 +509,9 @@ class SdArtifactInspector {
             containsClipG = containsClipG,
             containsT5xxl = containsT5xxl,
             containsLlm = containsLlm,
+            containsAudioVae = containsAudioVae,
+            containsEmbeddingsConnectors = containsEmbeddingsConnectors,
+            containsMotionModule = containsMotionModule,
             tensorCount = tensorCount,
             confidence = confidence,
             warnings = warnings.take(MAX_WARNINGS),
@@ -538,7 +546,10 @@ class SdArtifactInspector {
             !looksLikeLoraTensor(it) && predicate(it)
         }
 
-        val containsVae = anyBaseName(::looksLikeVaeTensor)
+        val containsAudioVae = anyBaseName(::looksLikeAudioVaeTensor)
+        val containsEmbeddingsConnectors = anyBaseName(::looksLikeEmbeddingsConnectorsTensor)
+        val containsMotionModule = anyBaseName(::looksLikeMotionModuleTensor)
+        val containsVae = anyBaseName(::looksLikeVaeTensor) && !containsAudioVae
         val containsTae = anyBaseName(::looksLikeTaeTensor)
 
         // Some converted CLIP-G artifacts retain the generic
@@ -580,13 +591,28 @@ class SdArtifactInspector {
             (anyBaseName(::looksLikeLlmTensor) ||
             metadataText.contains("llama") || metadataText.contains("qwen")
             )
-        val containsDiffusion = anyBaseName(::looksLikeDiffusionTensor)
+        val containsDiffusion = anyBaseName {
+            looksLikeDiffusionTensor(it) && !looksLikeMotionModuleTensor(it)
+        }
+
+        // These signatures mirror the pinned native model_loader.cpp. Video
+        // family detection is tensor/metadata based; filenameText is never
+        // consulted by this branch.
+        val videoEvidence = detectVideoFamily(normalizedNames, metadataText)
+        val videoFamily = videoEvidence?.first
+        val videoVariant = videoEvidence?.second
+        val videoRole = when {
+            containsMotionModule && !containsDiffusion -> SdArtifactRole.MOTION_MODULE
+            containsEmbeddingsConnectors && !containsDiffusion -> SdArtifactRole.EMBEDDINGS_CONNECTORS
+            containsAudioVae && !containsDiffusion -> SdArtifactRole.AUDIO_VAE
+            else -> null
+        }
 
         val sd3TensorEvidence = anyBaseName(::looksLikeSd3Tensor)
         val fluxTensorEvidence = anyBaseName(::looksLikeFluxTensor)
         val classicTensorEvidence = anyBaseName(::looksLikeClassicCheckpointTensor)
 
-        val familyFromStructure = when {
+        val imageFamilyFromStructure = when {
             sd3TensorEvidence -> SdModelFamily.SD3
             fluxTensorEvidence -> familyFromText(metadataText, filenameText, default = SdModelFamily.FLUX_1)
             classicTensorEvidence -> SdModelFamily.CHECKPOINT
@@ -610,6 +636,7 @@ class SdArtifactInspector {
             filenameText.contains("sd2") -> SdModelFamily.CHECKPOINT
             else -> null
         }
+        val familyFromStructure = videoFamily ?: imageFamilyFromStructure
         val family = familyFromStructure ?: familyFromMetadata ?: familyFromFilename
         val tensorRoleEvidence = anyBaseName(::looksLikeVaeTensor) ||
             anyBaseName(::looksLikeTaeTensor) ||
@@ -626,7 +653,8 @@ class SdArtifactInspector {
         // SafeTensors file selected from the generic SD import entry is not
         // falsely rejected as a standalone model.
         val bundledFullModelEvidence = containsDiffusion && (
-            containsVae || containsClipL || containsClipG || containsT5 || classicTensorEvidence
+            containsVae || containsClipL || containsClipG || containsT5 || classicTensorEvidence ||
+                (videoFamily != null && (containsLlm || containsAudioVae || containsEmbeddingsConnectors))
             )
         val role = when {
             bundledFullModelEvidence -> SdArtifactRole.FULL_MODEL
@@ -641,6 +669,7 @@ class SdArtifactInspector {
             containsClipG && !containsClipL && !containsT5 -> SdArtifactRole.CLIP_G
             containsT5 && !containsClipL && !containsClipG -> SdArtifactRole.T5XXL
             containsLlm && !containsDiffusion -> SdArtifactRole.LLM
+            videoRole != null -> videoRole
             else -> null
         }
         val layout = when {
@@ -659,6 +688,7 @@ class SdArtifactInspector {
         return Evidence(
             format = format,
             family = family,
+            variant = videoVariant,
             role = role,
             layout = layout,
             containsDiffusion = containsDiffusion,
@@ -667,9 +697,70 @@ class SdArtifactInspector {
             containsClipG = containsClipG,
             containsT5xxl = containsT5,
             containsLlm = containsLlm,
+            containsAudioVae = containsAudioVae,
+            containsEmbeddingsConnectors = containsEmbeddingsConnectors,
+            containsMotionModule = containsMotionModule,
             confidence = confidence,
             metadata = metadata
         )
+    }
+
+    /**
+     * Return a video family only from native tensor signatures or captured
+     * architecture metadata.  In particular, a filename such as
+     * `wan.safetensors` is intentionally insufficient evidence.
+     */
+    private fun detectVideoFamily(
+        tensorNames: List<String>,
+        metadataText: String
+    ): Pair<SdModelFamily, String?>? {
+        fun has(fragment: String): Boolean = tensorNames.any { it.contains(fragment) }
+        val family = when {
+            has("model.diffusion_model.txt_in.individual_token_refiner.blocks.0.adaln_modulation.1.weight") ||
+                metadataText.contains("hunyuan_video") || metadataText.contains("hunyuan video") ->
+                SdModelFamily.HUNYUAN_VIDEO
+            has("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") ||
+                metadataText.contains("ltx-video") || metadataText.contains("ltx video") ->
+                SdModelFamily.LTX_VIDEO
+            has("model.diffusion_model.video_patch_proj.weight") &&
+                has("model.diffusion_model.audio_patch_proj.weight") ||
+                metadataText.contains("minimax-h3") || metadataText.contains("minimax h3") ->
+                SdModelFamily.MINIMAX_H3
+            has("model.diffusion_model.patch_embedder.weight") ||
+                metadataText.contains("lingbot") ->
+                SdModelFamily.LINGBOT_VIDEO
+            has("model.diffusion_model.input_blocks.8.0.time_mixer.mix_factor") ||
+                metadataText.contains("stable video diffusion") || metadataText.contains("svd") ->
+                SdModelFamily.SVD
+            has("model.diffusion_model.blocks.0.cross_attn.norm_k.weight") ||
+                metadataText.contains("wan2") || metadataText.contains("wan 2") ->
+                SdModelFamily.WAN
+            tensorNames.any(::looksLikeMotionModuleTensor) || metadataText.contains("animatediff") ->
+                SdModelFamily.ANIMATEDIFF
+            else -> null
+        } ?: return null
+
+        val variant = when (family) {
+            SdModelFamily.WAN -> when {
+                metadataText.contains("2.2") &&
+                    (metadataText.contains("ti2v") || metadataText.contains("t2i")) -> "wan2_2_ti2v"
+                metadataText.contains("2.2") -> "wan2_2"
+                metadataText.contains("2.1") -> "wan2_1"
+                else -> null
+            }
+            SdModelFamily.HUNYUAN_VIDEO -> "1.5".takeIf { metadataText.contains("1.5") }
+            SdModelFamily.LINGBOT_VIDEO -> when {
+                metadataText.contains("dense_1.3b") || metadataText.contains("dense 1.3b") -> "dense_1.3b"
+                else -> null
+            }
+            SdModelFamily.LTX_VIDEO -> when {
+                metadataText.contains("2.5") -> "2.5"
+                metadataText.contains("2.3") -> "2.3"
+                else -> null
+            }
+            else -> null
+        }
+        return family to variant
     }
 
     private fun familyFromText(text: String, filename: String, default: SdModelFamily): SdModelFamily = when {
@@ -683,7 +774,7 @@ class SdArtifactInspector {
 
     private fun looksLikeVaeTensor(name: String): Boolean {
         val n = name.lowercase(Locale.US)
-        if (n.contains("text_model") || n.contains("clip") || n.contains("t5")) return false
+        if (n.contains("text_model") || n.contains("clip") || n.contains("t5") || n.contains("audio_vae")) return false
         return n.contains("first_stage_model.encoder") ||
             n.contains("first_stage_model.decoder") ||
             n.startsWith("vae.") || n.contains(".vae.") ||
@@ -696,6 +787,28 @@ class SdArtifactInspector {
     private fun looksLikeTaeTensor(name: String): Boolean {
         val n = name.lowercase(Locale.US)
         return n.contains("taesd") || n.startsWith("tae.") || n.contains(".tae.")
+    }
+
+    private fun looksLikeAudioVaeTensor(name: String): Boolean {
+        val n = name.lowercase(Locale.US)
+        return n.contains("audio_vae") || n.contains("audio.vae") ||
+            n.contains("audio_vae.") || n.contains("audio_encoder") ||
+            n.contains("audio_decoder")
+    }
+
+    private fun looksLikeEmbeddingsConnectorsTensor(name: String): Boolean {
+        val n = name.lowercase(Locale.US)
+        // LTX stores these as `video_embeddings_connector` and
+        // `audio_embeddings_connector`; standalone bundles may use the
+        // plural CLI spelling or a dotted namespace.
+        return n.contains("embeddings_connector") || n.contains("embedding_connector") ||
+            n.contains("embeddings.connector")
+    }
+
+    private fun looksLikeMotionModuleTensor(name: String): Boolean {
+        val n = name.lowercase(Locale.US)
+        return n.contains("motion_module") || n.contains("motion_modules") ||
+            n.contains("temporal_transformer") || n.contains("temporal_transformer_blocks")
     }
 
     private fun looksLikeClipLTensor(name: String): Boolean {
@@ -814,7 +927,12 @@ class SdArtifactInspector {
             normalized.contains("model_type") || normalized.contains("architecture") ||
             normalized.contains("stable_diffusion") || normalized.contains("sd3") ||
             normalized.contains("flux") || normalized.contains("qwen") ||
-            normalized.contains("chroma") || normalized.contains("z_image")
+            normalized.contains("chroma") || normalized.contains("z_image") ||
+            normalized.contains("wan") || normalized.contains("hunyuan") ||
+            normalized.contains("lingbot") || normalized.contains("ltx") ||
+            normalized.contains("minimax") || normalized.contains("svd") ||
+            normalized.contains("animatediff") || normalized.contains("audio_vae") ||
+            normalized.contains("motion_module") || normalized.contains("connector")
     }
 
     private class GgufReader(
@@ -970,6 +1088,9 @@ class SdArtifactInspector {
             ModelType.SD_T5XXL -> SdArtifactRole.T5XXL
             ModelType.SD_LORA -> SdArtifactRole.LORA
             ModelType.SD_CONTROLNET -> SdArtifactRole.CONTROLNET
+            ModelType.SD_AUDIO_VAE -> SdArtifactRole.AUDIO_VAE
+            ModelType.SD_EMBEDDINGS_CONNECTORS -> SdArtifactRole.EMBEDDINGS_CONNECTORS
+            ModelType.SD_MOTION_MODULE -> SdArtifactRole.MOTION_MODULE
             ModelType.LLM -> SdArtifactRole.LLM
             ModelType.VISION_PROJECTOR -> SdArtifactRole.LLM_VISION
             else -> null

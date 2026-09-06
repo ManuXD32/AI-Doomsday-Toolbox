@@ -78,6 +78,8 @@ import com.example.llamadroid.tama.data.occupiedLivestockCount
 import com.example.llamadroid.tama.data.storedLivestockOutput
 import com.example.llamadroid.tama.game.FarmRepository
 import com.example.llamadroid.tama.game.TamaGameEngine
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import java.util.Locale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -127,6 +129,7 @@ private fun FarmLivestockScreen(
     val resources = LocalResources.current
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
+    val walkthroughTargets = LocalWalkthroughTargets.current
     var feedModeEnabled by rememberSaveable(type.id) { mutableStateOf(false) }
     var now by remember(type.id) { mutableLongStateOf(System.currentTimeMillis()) }
     val allLivestock by farmRepository.observeLivestock(pet.id).collectAsState(initial = emptyList())
@@ -183,12 +186,14 @@ private fun FarmLivestockScreen(
                         } else {
                             stringResource(R.string.tama_farm_coop_title)
                         },
+                        modifier = Modifier.weight(1f),
                         color = MaterialTheme.colorScheme.onSurface,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
                 }
             }
         }
@@ -222,7 +227,8 @@ private fun FarmLivestockScreen(
                     colors = CardDefaults.cardColors(
                         containerColor = Color(0xFFF7EFD8).copy(alpha = 0.88f)
                     ),
-                    shape = RoundedCornerShape(14.dp)
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.walkthroughTarget("tama.livestock.header")
                 ) {
                     Column(
                         modifier = Modifier
@@ -323,8 +329,10 @@ private fun FarmLivestockScreen(
                                 modifier = Modifier
                                     .heightIn(min = 48.dp)
                                     .clickable {
-                                    feedModeEnabled = !feedModeEnabled
+                                        feedModeEnabled = !feedModeEnabled
+                                        walkthroughTargets?.recordEvent("tama.livestock.feed")
                                     }
+                                    .walkthroughTarget("tama.livestock.feed")
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),

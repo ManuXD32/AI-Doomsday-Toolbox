@@ -1,6 +1,7 @@
 package com.example.llamadroid.ui.agent
 
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 
 import android.content.Intent
 import androidx.compose.foundation.background
@@ -144,6 +145,7 @@ fun AgentTopBar(
             }
         },
         actions = {
+            com.example.llamadroid.ui.walkthrough.FeatureGuideAction()
             Box {
                 IconButton(onClick = { showMenu = !showMenu }) {
                     Icon(Icons.Default.MoreVert, stringResource(R.string.action_more))
@@ -1249,8 +1251,11 @@ fun AgentInputBar(
     canAttachImage: Boolean = false,
     hasImageAttachment: Boolean = false,
     keyboardPadding: Dp = 0.dp,
-    onAttachImage: (() -> Unit)? = null
+    onAttachImage: (() -> Unit)? = null,
+    walkthroughTargetId: String? = null,
+    walkthroughEventId: String? = null
 ) {
+    val walkthroughTargets = LocalWalkthroughTargets.current
     Surface(
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 6.dp,
@@ -1294,7 +1299,9 @@ fun AgentInputBar(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = onInputTextChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .then(walkthroughTargetId?.let { Modifier.walkthroughTarget(it) } ?: Modifier),
                 placeholder = {
                     Text(
                         if (canSend) stringResource(R.string.agent_type_msg) else stringResource(R.string.agent_thinking),
@@ -1317,7 +1324,10 @@ fun AgentInputBar(
 
             if (isLoading) {
                 FilledIconButton(
-                    onClick = onSend,
+                    onClick = {
+                        onSend()
+                        walkthroughEventId?.let { eventId -> walkthroughTargets?.recordEvent(eventId) }
+                    },
                     modifier = Modifier.size(48.dp),
                     enabled = inputText.isNotBlank() && canSend,
                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -1342,7 +1352,10 @@ fun AgentInputBar(
                 }
             } else {
                 FilledIconButton(
-                    onClick = onSend,
+                    onClick = {
+                        onSend()
+                        walkthroughEventId?.let { eventId -> walkthroughTargets?.recordEvent(eventId) }
+                    },
                     modifier = Modifier.size(48.dp),
                     enabled = canSend && inputText.isNotBlank(),
                     colors = IconButtonDefaults.filledIconButtonColors(

@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
 import com.example.llamadroid.ui.walkthrough.WalkthroughInsetHost
 import com.example.llamadroid.ui.walkthrough.walkthroughTarget
+import com.example.llamadroid.ui.walkthrough.FeatureGuideAction
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -166,6 +167,7 @@ fun SoftStudioAppScaffold(
                                 }
                                 }
                             }
+                            if (currentRoute != AppRootDestination.Home.route) FeatureGuideAction()
                             IconButton(onClick = onSettings, modifier = Modifier.testTag("soft_studio_settings").walkthroughTarget("shell.settings")) {
                                 Icon(Icons.Default.Settings, stringResource(R.string.settings_title))
                             }

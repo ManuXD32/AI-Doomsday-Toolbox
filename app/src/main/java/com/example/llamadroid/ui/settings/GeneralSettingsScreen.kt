@@ -1,5 +1,7 @@
 package com.example.llamadroid.ui.settings
 
+import com.example.llamadroid.ui.walkthrough.WalkthroughAlertDialog as AlertDialog
+
 import android.os.Build
 import android.content.Intent
 import android.widget.Toast
@@ -39,6 +41,8 @@ import com.example.llamadroid.data.db.DatabaseBackupManager
 import com.example.llamadroid.quadtrix.QuadtrixWorkspaceManager
 import com.example.llamadroid.ui.components.AppScreenScaffold
 import com.example.llamadroid.ui.components.AppChromeDefaults
+import com.example.llamadroid.ui.walkthrough.LocalWalkthroughTargets
+import com.example.llamadroid.ui.walkthrough.walkthroughTarget
 import com.example.llamadroid.util.AccelerationWorkload
 import com.example.llamadroid.util.CpuFeatures
 import com.example.llamadroid.util.CustomBinaryFamily
@@ -59,6 +63,7 @@ import kotlinx.coroutines.withContext
 @Composable
 fun GeneralSettingsScreen(navController: NavController) {
     val context = LocalContext.current
+    val walkthroughTargets = LocalWalkthroughTargets.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val settingsRepo = remember { SettingsRepository(context) }
@@ -141,7 +146,8 @@ fun GeneralSettingsScreen(navController: NavController) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .walkthroughTarget("settings.settings_general"),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Output Folder
@@ -283,7 +289,10 @@ fun GeneralSettingsScreen(navController: NavController) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Box {
                             OutlinedButton(
-                                onClick = { themeMenuExpanded = true },
+                                onClick = {
+                                    walkthroughTargets?.recordEvent("settings.appearance")
+                                    themeMenuExpanded = true
+                                },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
@@ -305,6 +314,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
+                                            walkthroughTargets?.recordEvent("settings.appearance")
                                             settingsRepo.setThemeMode(mode)
                                             themeMenuExpanded = false
                                         }
@@ -369,7 +379,10 @@ fun GeneralSettingsScreen(navController: NavController) {
                         
                         Box {
                             OutlinedButton(
-                                onClick = { expanded = true },
+                                onClick = {
+                                    walkthroughTargets?.recordEvent("settings.language")
+                                    expanded = true
+                                },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(currentLanguageName)
@@ -385,6 +398,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                                     DropdownMenuItem(
                                         text = { Text(name) },
                                         onClick = {
+                                            walkthroughTargets?.recordEvent("settings.language")
                                             settingsRepo.setSelectedLanguage(code)
                                             expanded = false
                                             // Restart the app to apply the new locale
@@ -1027,6 +1041,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         ) {
                             Button(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     backupFilePicker.launch(DatabaseBackupManager.generateBackupFilename())
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1044,6 +1059,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                             OutlinedButton(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     restoreFilePicker.launch(arrayOf("application/zip"))
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1079,6 +1095,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                         ) {
                             Button(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     nativeBackupExportPicker.launch(NativeChatNotesBackupManager.generateBackupFilename())
                                 },
                                 modifier = Modifier.weight(1f),
@@ -1096,6 +1113,7 @@ fun GeneralSettingsScreen(navController: NavController) {
                             }
                             OutlinedButton(
                                 onClick = {
+                                    walkthroughTargets?.recordEvent("settings.backups")
                                     nativeBackupImportPicker.launch(
                                         arrayOf(
                                             "application/zip",
